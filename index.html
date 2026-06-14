@@ -639,6 +639,21 @@
   .node .tag{font-family:var(--sans); font-size:8.5px; letter-spacing:.16em; text-transform:uppercase; opacity:0; transition:opacity .15s}
   .node:hover .tag,.node.sel .tag{opacity:.85}
   .node .usedchk{font-family:var(--sans); font-size:12.5px; font-weight:700; fill:#2f9e44}
+  /* unified wiki-book indicator: grey on select, green if woven in this section, dark yellow if in another */
+  .node .wbook{opacity:0; color:var(--ink-faint); cursor:pointer; pointer-events:none; transition:opacity .15s}
+  .node.sel .wbook{opacity:.85; pointer-events:auto}
+  .node .wbook.cur{opacity:1; color:#2f9e44; pointer-events:auto}
+  .node .wbook.other{opacity:1; color:#b8860b; pointer-events:auto}
+  .node .wbook:hover{color:var(--ink)}
+  body.eink .node .wbook.cur{color:#1f7a33}
+  body.eink .node .wbook.other{color:#8a6d0f}
+  body.eink .node.sel .wbook{opacity:1; color:#000}
+  .fp-book{display:inline-flex; align-items:center; color:var(--ink-faint); cursor:pointer; margin-right:3px; vertical-align:-2px}
+  .fp-book.cur{color:#2f9e44}
+  .fp-book.other{color:#b8860b}
+  .fp-book:hover{color:var(--ink)}
+  body.eink .fp-book.cur{color:#1f7a33}
+  body.eink .fp-book.other{color:#8a6d0f}
   .achk{fill:#2f9e44; font-weight:700; font-style:normal}
   body.eink .node .usedchk,body.eink .achk{fill:#1f7a33}
   #skyEmpty{
@@ -3750,21 +3765,41 @@ function textHasWord(lc, word){
     return new RegExp('(^|[^a-z])' + escRe(st) + FUZZ_SUF + '([^a-z]|$)').test(lc);
   });
 }
+// lowercased prose split by the editor's <h3 data-frame> section dividers → { frameIdx: text }
+function sectionTextsLC(){
+  const ed = $('editor'); const out = { 0: '' }; let cur = 0;
+  if (ed) Array.from(ed.childNodes).forEach(node => {
+    if (node.nodeType === 1 && node.tagName === 'H3' && node.dataset && node.dataset.frame != null){
+      cur = parseInt(node.dataset.frame, 10) || 0; if (out[cur] == null) out[cur] = ''; return;
+    }
+    out[cur] = (out[cur] || '') + ' ' + (node.textContent || '');
+  });
+  Object.keys(out).forEach(k => { out[k] = out[k].toLowerCase(); });
+  return out;
+}
 function calcUsage(){
   const res = { count: 0, total: 0, lc: '' };
   if (!state.prompt) return res;
   const lc = editorText().toLowerCase();
   res.lc = lc;
+  const secs = sectionTextsLC();
+  const curF = state.frameIdx || 0;
   state.prompt.words.forEach(w => {
     if (w.role === 'constraint') return;
     res.total++;
     const idParts = w.identity && w.identity.length ? w.identity : null;
-    const partHit = pw => {
+    const partHitIn = (pw, txt) => {
       const hm = pw.match(/^(.+?) \((.+?) \+ (.+?)\)$/);
-      return hm ? (textHasWord(lc, hm[1]) || textHasWord(lc, hm[2]) || textHasWord(lc, hm[3])) : textHasWord(lc, pw);
+      return hm ? (textHasWord(txt, hm[1]) || textHasWord(txt, hm[2]) || textHasWord(txt, hm[3])) : textHasWord(txt, pw);
     };
-    w._hit = !!(w.used || (idParts ? idParts.some(p => partHit(p.word)) : textHasWord(lc, w.word)) || (w.name && textHasWord(lc, w.name)));
+    const hitIn = txt => !!txt && ((idParts ? idParts.some(p => partHitIn(p.word, txt)) : textHasWord(txt, w.word)) || (w.name && textHasWord(txt, w.name)));
+    w._hit = !!(w.used || hitIn(lc));
     if (w._hit) res.count++;
+    // section-aware: 1 = woven in the current section, 2 = woven in another section
+    let ws = 0;
+    if (w.used || hitIn(secs[curF])) ws = 1;
+    else { for (const k in secs){ if (+k !== curF && hitIn(secs[k])){ ws = 2; break; } } }
+    w._wstate = ws;
     (w.attrs || []).forEach(a => {
       res.total++;
       const hyM = a.word.match(/^(.+?) \((.+?) \+ (.+?)\)$/);
@@ -5429,13 +5464,15 @@ function renderConstellation(){
       if (nd.frame < (state.frameIdx || 0)) g.classList.add('past');
       else if (nd.frame === (state.frameIdx || 0)) g.classList.add('now');
     }
-    if (wRef0 && wRef0._hit){
-      const uc = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-      uc.setAttribute('class', 'usedchk');
-      uc.setAttribute('x', Math.max(20, nd.word.length * 4.6 + 10));
-      uc.setAttribute('y', -10);
-      uc.textContent = '\u2713';
-      g.appendChild(uc);
+    if (wRef0 && (nd.role === 'being' || nd.role === 'word')){
+      const ws = wRef0._wstate || 0;
+      const bx = Math.max(20, nd.word.length * 4.6 + 14);
+      const wb = makeLucide('book-open', { cls: 'wbook ' + (ws === 1 ? 'cur' : ws === 2 ? 'other' : 'none'), color: 'currentColor', x: bx, y: -9, scale: 0.5, sw: 2 });
+      const wbt = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+      wbt.textContent = ws === 1 ? 'Woven into this section \u2014 open its wiki' : ws === 2 ? 'Woven into another section \u2014 open its wiki' : 'Open this element\u2019s wiki';
+      wb.appendChild(wbt);
+      wb.addEventListener('click', ev => { ev.stopPropagation(); openElementWiki(i); });
+      g.appendChild(wb);
     }
     if (nd.role === 'being' && (state.tablePeers || []).length){
       const peer = state.tablePeers.find(p => p.being === nd.word);
@@ -5529,10 +5566,6 @@ function renderConstellation(){
     const rrlHit = mkHit(POS.edit, 'ctl-hit rrl-hit', 12); rrlHit.addEventListener('click', onReroll); g.appendChild(rrlHit);
     const rrl = mkGlyph(POS.edit, 'rrl', '\u21BB', 'Edit \u2014 search to change, or Generate a new one'); rrl.addEventListener('click', onReroll); g.appendChild(rrl);
 
-    const onMark = ev => { ev.stopPropagation(); const wm = state.prompt && state.prompt.words[i]; if (!wm) return; wm.used = !wm.used; renderConstellation(); if (state.session){ state.session.words = state.prompt.words; scheduleAutosave(); } };
-    const chkHit = mkHit(POS.chk, 'ctl-hit rrl-hit', 12); chkHit.addEventListener('click', onMark); g.appendChild(chkHit);
-    const chk = mkGlyph(POS.chk, 'chk' + ((state.prompt && state.prompt.words[i] && state.prompt.words[i].used) ? ' on' : ''), '\u2713', 'Mark as used by hand \u2014 for handwritten (ink) sessions'); chk.addEventListener('click', onMark); g.appendChild(chk);
-
     const onName = ev => { ev.stopPropagation(); nameElement(i); };
     const penHit = mkHit(POS.name, 'ctl-hit rrl-hit', 12); penHit.addEventListener('click', onName); g.appendChild(penHit);
     const pen = mkGlyph(POS.name, 'rrl pen', '\u270E', 'Name this element (or double-click it)'); pen.addEventListener('click', onName); g.appendChild(pen);
@@ -5542,11 +5575,6 @@ function renderConstellation(){
     const fcsHit = mkHit(POS.focus, 'ctl-hit rrl-hit', 12); fcsHit.addEventListener('click', onFcs); g.appendChild(fcsHit);
     const fcs = mkGlyph(POS.focus, 'rrl fcs' + (inFocus ? ' infocus' : ''), inFocus ? '\u25C9' : '\u25CE', inFocus ? 'Remove from the Writing Focus' : 'Add to the Writing Focus'); fcs.addEventListener('click', onFcs); g.appendChild(fcs);
 
-    const onWiki = ev => { ev.stopPropagation(); openElementWiki(i); };
-    const wikiHit = mkHit(POS.wiki, 'ctl-hit rrl-hit', 12); wikiHit.addEventListener('click', onWiki); g.appendChild(wikiHit);
-    const wikiIc = makeLucide('book-open', { cls: 'lnk wiki-ic', color: 'currentColor', x: POS.wiki.x, y: POS.wiki.y, scale: 0.56, sw: 2 });
-    const wikiTt = document.createElementNS(NSx, 'title'); wikiTt.textContent = 'Open this element\u2019s wiki'; wikiIc.appendChild(wikiTt);
-    wikiIc.addEventListener('click', onWiki); g.appendChild(wikiIc);
 
     const onLnkDown = ev => { ev.stopPropagation(); ev.preventDefault(); startLinkDrag(i, ev); };
     const lnkHit = mkHit(POS.link, 'ctl-hit', 14); lnkHit.addEventListener('pointerdown', onLnkDown); g.appendChild(lnkHit);
@@ -5590,7 +5618,7 @@ function renderConstellation(){
     g.addEventListener('click', ev => {
       if (state.lastDrag && Date.now() - state.lastDrag < 250) return;
       if (nd.locked) return;
-      if (ev.target.closest && (ev.target.closest('.del') || ev.target.closest('.lnk') || ev.target.closest('.meeple'))) return;
+      if (ev.target.closest && (ev.target.closest('.del') || ev.target.closest('.lnk') || ev.target.closest('.wbook') || ev.target.closest('.meeple'))) return;
       ev.stopPropagation();
       state.selNode = state.selNode === i ? null : i;
       if (table.on && nd.role === 'being' && state.selNode === i){
@@ -5729,8 +5757,8 @@ function renderConstellation(){
       try { wlen = w.getComputedTextLength(); } catch (err) {}
       if (wlen > 0){
         const half = wlen / 2;
-        const uc2 = g.querySelector('.usedchk');
-        if (uc2) uc2.setAttribute('x', half + 11);
+        const uc2 = g.querySelector('.wbook');
+        if (uc2) uc2.setAttribute('transform', 'translate(' + (half + 15) + ',-9) scale(0.5) translate(-12,-12)');
         const fa2 = g.querySelector('.fold-arrow');
         if (fa2) fa2.setAttribute('x', -(half + 15));
         const fh2 = g.querySelector('.fold-hit');
@@ -5904,6 +5932,14 @@ function renderFrameBar(){
 }
 
 function wordKey(w){ return (w.set || 0) + '|' + w.cat + '|' + w.word; }
+function focusBook(i, wstate){
+  const span = document.createElement('span');
+  span.className = 'fp-book ' + (wstate === 1 ? 'cur' : wstate === 2 ? 'other' : 'none');
+  span.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' + (LUCIDE['book-open'] || '') + '</svg>';
+  span.title = wstate === 1 ? 'Woven into this section — open its wiki' : wstate === 2 ? 'Woven into another section — open its wiki' : 'Open this element’s wiki';
+  span.addEventListener('click', ev => { ev.stopPropagation(); openElementWiki(i); });
+  return span;
+}
 function renderFocus(){
   const fl = $('focusList');
   if (!fl) return;
@@ -5917,12 +5953,7 @@ function renderFocus(){
       const w = words[i];
       const it = document.createElement('div');
       it.className = 'fp-item fp-event';
-      const um = document.createElement('span');
-      um.className = 'fp-chk' + (w._hit ? ' on' : '');
-      um.textContent = '\u2713';
-      um.title = w._hit ? 'Woven in' : 'Mark as woven in by hand';
-      um.addEventListener('click', ev => { ev.stopPropagation(); w.used = !w.used; renderConstellation(); if (state.session){ state.session.words = state.prompt.words; scheduleAutosave(); } });
-      it.appendChild(um);
+      it.appendChild(focusBook(i, w._wstate || 0));
       it.appendChild(document.createTextNode(w.name || w.word));
       const c = document.createElement('span');
       c.className = 'fb-cat';
@@ -5957,17 +5988,7 @@ function renderFocus(){
     if (w._hit) hits++;
     const it = document.createElement('div');
     it.className = 'fp-item';
-    const um = document.createElement('span');
-    um.className = 'fp-chk' + (w._hit ? ' on' : '');
-    um.textContent = '\u2713';
-    um.title = w._hit ? 'Woven in' : 'Mark as woven in by hand (for ink sessions)';
-    um.addEventListener('click', ev => {
-      ev.stopPropagation();
-      w.used = !w.used;
-      renderConstellation();
-      if (state.session){ state.session.words = state.prompt.words; scheduleAutosave(); }
-    });
-    it.appendChild(um);
+    it.appendChild(focusBook(i, w._wstate || 0));
     it.appendChild(document.createTextNode(w.word));
     if (w.name){
       const nm = document.createElement('span');
@@ -7129,6 +7150,7 @@ async function extractImport(){
     IMP.elements.push({ cat, name, summary: String(el.summary || '').trim(), exists: wordExistsSystem(cat, name), include: true, sys: false });
   });
   $('importGo').disabled = false;
+  $('importConfirm').disabled = false;
   $('importTitle').value = IMP.title;
   $('importOverview').value = IMP.overview;
   renderImportReview();
@@ -7188,6 +7210,7 @@ async function confirmImport(){
   const dest = (document.querySelector('input[name=impdest]:checked') || {}).value || 'new';
   const asSection = dest === 'section' && state.session && (editorText().trim() || (state.prompt && state.prompt.words && state.prompt.words.length));
   $('importConfirm').disabled = true;
+  try {
   const ed = $('editor');
   if (asSection){
     // append a new timeline section to the current story
@@ -7231,6 +7254,7 @@ async function confirmImport(){
   layoutConstellation(); renderConstellation(); renderTimeline(); saveSession();
   closeImport();
   flashStatus(asSection ? ('Added a section — ' + added + ' element' + (added === 1 ? '' : 's')) : ('Imported — ' + added + ' element' + (added === 1 ? '' : 's') + ' added to the map'));
+  } catch (e){ console.warn('import build error:', e); $('importConfirm').disabled = false; flashStatus('Couldn’t build: ' + e.message); }
 }
 
 /* ---------------- story wiki (deterministic; AI rollups layer later) ---------------- */
@@ -8024,6 +8048,7 @@ function init(){
       }
       return;
     }
+    if (e.target.closest && e.target.closest('.wbook')) return;
     if (e.target.classList && (e.target.classList.contains('del') || e.target.classList.contains('lnk') || e.target.classList.contains('ctl-hit') || e.target.classList.contains('wscale') || e.target.classList.contains('rrl') || e.target.classList.contains('attr-rrl') || e.target.classList.contains('attr-del') || e.target.classList.contains('chk') || e.target.classList.contains('attr-add') || e.target.classList.contains('lock-badge'))) return;
     if (linkDragActive()) return;
     const iLk = +g.dataset.node;
