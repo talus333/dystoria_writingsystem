@@ -35,9 +35,22 @@ async function handleAI(request, env) {
   if (system) messages.push({ role: 'system', content: system });
   messages.push({ role: 'user', content: prompt });
 
+  const maxTokens = Math.min(Math.max(parseInt(body.max_tokens, 10) || 600, 64), 4096);
+  const base = { messages, max_tokens: maxTokens, temperature: 0.4 };
+  const model = body.model || MODEL;
+
   try {
-    const resp = await env.AI.run(body.model || MODEL, { messages, max_tokens: 600, temperature: 0.4 });
-    const text = ((resp && (resp.response || resp.result || '')) || '').toString().trim();
+    let resp;
+    if (body.json) {
+      // JSON mode where the model supports it; fall back gracefully otherwise
+      try { resp = await env.AI.run(model, { ...base, response_format: { type: 'json_object' } }); }
+      catch (e) { resp = await env.AI.run(model, base); }
+    } else {
+      resp = await env.AI.run(model, base);
+    }
+    let text = (resp && (resp.response || resp.result)) || '';
+    if (text && typeof text === 'object') text = JSON.stringify(text); // json mode can return an object
+    text = (text || '').toString().trim();
     return new Response(JSON.stringify({ text }), { headers });
   } catch (e) {
     return new Response(JSON.stringify({ error: 'AI error: ' + String(e) }), { status: 502, headers });
