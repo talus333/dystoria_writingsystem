@@ -6170,26 +6170,40 @@ function updateAccountUI(){
     $('authTitle').textContent = 'Sign in to Dystoria';
   }
 }
+function cloudDocOf(sess){
+  const doc = Object.assign({}, sess);
+  // internal/runtime-only fields never belong in the stored document
+  delete doc._owner; delete doc._shared; delete doc._baton; delete doc._collabs; delete doc._inserting;
+  return doc;
+}
 async function cloudSave(sess){
   if (!sess) return;
   if (!supa){ flashStatus('Cloud: SDK not loaded'); return; }
   if (!cloud.user){ flashStatus('Cloud: not signed in (reopen Sign In)'); return; }
+  // If a first insert for this story is already in flight, skip — otherwise rapid
+  // autosaves (e.g. typing a title fast) race and create duplicate cloud rows.
+  if (!sess.cloudId && sess._inserting) return;
   try {
-    const doc = Object.assign({}, sess);
-    // internal/runtime-only fields never belong in the stored document
-    delete doc._owner; delete doc._shared; delete doc._baton; delete doc._collabs;
     const title = sess.name || 'Untitled story';
     const now = new Date().toISOString();
     if (sess.cloudId){
       // Update without touching `owner` — a collaborator saving a shared story must not seize ownership.
-      const { error } = await supa.from('stories').update({ title, doc, updated_at: now }).eq('id', sess.cloudId);
+      const { error } = await supa.from('stories').update({ title, doc: cloudDocOf(sess), updated_at: now }).eq('id', sess.cloudId);
       if (error){ console.warn('cloud update error:', error); flashStatus('Cloud: ' + error.message); }
     } else {
-      const { data, error } = await supa.from('stories').insert({ owner: cloud.user.id, title, doc, updated_at: now }).select('id').single();
+      sess._inserting = true;
+      const { data, error } = await supa.from('stories').insert({ owner: cloud.user.id, title, doc: cloudDocOf(sess), updated_at: now }).select('id').single();
+      sess._inserting = false;
       if (error){ console.warn('cloud insert error:', error); flashStatus('Cloud: ' + error.message); return; }
-      if (data){ sess.cloudId = data.id; sess._owner = cloud.user.id; sess._shared = false; const list = loadSessions(); const i = list.findIndex(x => x.id === sess.id); if (i >= 0){ list[i].cloudId = data.id; persistSessions(list); } flashStatus('Saved to cloud'); }
+      if (data){
+        sess.cloudId = data.id; sess._owner = cloud.user.id; sess._shared = false;
+        const list = loadSessions(); const i = list.findIndex(x => x.id === sess.id); if (i >= 0){ list[i].cloudId = data.id; persistSessions(list); }
+        flashStatus('Saved to cloud');
+        // Flush anything typed during the insert window so the cloud row matches local state.
+        supa.from('stories').update({ title: sess.name || 'Untitled story', doc: cloudDocOf(sess), updated_at: new Date().toISOString() }).eq('id', data.id).then(() => {}, () => {});
+      }
     }
-  } catch (e){ console.warn('cloud save threw:', e); flashStatus('Cloud error: ' + e.message); }
+  } catch (e){ sess._inserting = false; console.warn('cloud save threw:', e); flashStatus('Cloud error: ' + e.message); }
 }
 async function cloudPull(){
   if (!cloudReady()) return;
@@ -6222,6 +6236,11 @@ async function shareStory(sess){
   if (!cloudReady()){ flashStatus('Sign in to share a story'); return; }
   if (!sess || !sess.cloudId){ flashStatus('Save the story to the cloud first, then share'); return; }
   if (sess._shared){ flashStatus('Only the story owner can invite other writers'); return; }
+  // Push the latest local content to the exact row being shared, so the collaborator
+  // always receives the current title/prose/map (not an earlier autosave snapshot).
+  try {
+    await supa.from('stories').update({ title: sess.name || 'Untitled story', doc: cloudDocOf(sess), updated_at: new Date().toISOString() }).eq('id', sess.cloudId);
+  } catch (e){}
   const email = prompt('Share “' + (sess.name || 'this story') + '” with another writer.\nEnter their Dystoria account email (they must already have signed up):');
   if (!email || !email.trim()) return;
   const { data, error } = await supa.rpc('share_story', { sid: sess.cloudId, invitee_email: email.trim() });
