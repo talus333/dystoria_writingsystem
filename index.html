@@ -236,7 +236,14 @@
   .ir-el.sys .ir-gen:hover{border-color:var(--ink-faint); color:var(--ink)}
   .ir-addel{font-family:var(--sans); font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--ink-soft); border:1px dashed var(--line); border-radius:8px; padding:8px 12px; background:transparent; cursor:pointer; width:100%; margin:2px 0 12px}
   .ir-addel:hover{border-color:var(--ink-faint); color:var(--ink)}
+  #importDestRow{display:flex; flex-direction:column; gap:5px; margin-top:10px; font-family:var(--serif); font-size:13px; color:var(--ink-soft)}
+  #importDestRow label{display:flex; align-items:center; gap:7px; cursor:pointer}
+  #importDestRow b{color:var(--ink)}
   body.eink #importCard{border:2px solid #000; box-shadow:none}
+  /* spinning spiral for in-progress work */
+  @keyframes dyspin{to{transform:rotate(360deg)}}
+  .spin{display:inline-block; width:13px; height:13px; vertical-align:-2px; margin-right:7px; border:2px solid var(--line); border-top-color:var(--ink-soft); border-radius:50%; animation:dyspin .7s linear infinite}
+  body.eink .spin{border-color:#bbb; border-top-color:#000}
   body.eink #recapCard{border:2px solid #000}
   #seal{width:44px; height:44px; flex:none; color:var(--ink)}
   header h1{font-family:var(--script); font-weight:700; font-size:54px; letter-spacing:.02em; line-height:1; transform:translateY(2px); width:278px; margin-left:-26px; text-align:center; flex:none}
@@ -946,8 +953,12 @@
     <input id="importTitle" placeholder="Story title (optional)">
     <textarea id="importText" rows="9" placeholder="Paste your story’s prose here…"></textarea>
     <div class="ic-row"><label class="ic-file" for="importFile">Or choose a .txt / .md file</label><input type="file" id="importFile" accept=".txt,.md,text/plain,text/markdown" hidden><span id="importStatus"></span></div>
-    <div class="ic-actions"><button id="importGo">Read with AI →</button></div>
-    <p class="ic-note">The AI reads your prose and proposes the beings, places, objects, and events. You review and approve them before the story is built. Extracted elements stay in this story unless you mark them for all stories.</p>
+    <div id="importDestRow" style="display:none">
+      <label><input type="radio" name="impdest" value="new" checked> Create a new story</label>
+      <label><input type="radio" name="impdest" value="section"> Add to <b id="importDestName"></b> as a new section</label>
+    </div>
+    <div class="ic-actions"><button id="importGo">Read &amp; Ingest →</button></div>
+    <p class="ic-note">Reads your prose and proposes the beings, places, objects, and events to review and approve before the story is built. For a longer work, ingest one chapter or part at a time — each becomes a section on the timeline. Elements stay in this story unless you mark them for all stories.</p>
   </div>
   <div id="importReview" style="display:none">
     <div class="ir-block"><div class="ir-lbl">Story summary</div><textarea id="importOverview" rows="3" placeholder="story summary"></textarea></div>
@@ -6304,7 +6315,7 @@ function showRecap(){
     h += '<div class="rc-updated">In the wiki: ' + wovenEls.slice(0, 8).map(e => esc(e.name || e.word)).join(', ') + (wovenEls.length > 8 ? '\u2026' : '') + '</div>';
   }
   h += '<div class="rc-wikilink" id="rcWikiLink">Open the Story Wiki \u2192</div>';
-  if (wrote) h += '<div class="rc-ai" id="rcAi"><div class="rc-ai-lbl">This session</div><div class="rc-ai-text wk-empty">summarizing\u2026</div></div>';
+  if (wrote) h += '<div class="rc-ai" id="rcAi"><div class="rc-ai-lbl">This session</div><div class="rc-ai-text wk-empty"><span class="spin"></span>Summarizing\u2026</div></div>';
   b.innerHTML = h;
   document.body.classList.add('recap');
   const wl = $('rcWikiLink'); if (wl) wl.addEventListener('click', () => { document.body.classList.remove('recap'); openWiki(); });
@@ -7053,6 +7064,13 @@ function openImport(){
   closeLibrary();
   $('importTitle').value = ''; $('importText').value = ''; $('importStatus').textContent = ''; $('importGo').disabled = false;
   importShow('entry');
+  // offer "add as a new section" only when a story is already open with content
+  const hasStory = !!(state.session && (editorText().trim() || (state.prompt && state.prompt.words && state.prompt.words.length)));
+  $('importDestRow').style.display = hasStory ? 'flex' : 'none';
+  if (hasStory){
+    $('importDestName').textContent = (state.session.name || (($('storyName').value || '').trim()) || 'this story');
+    const r = document.querySelector('input[name=impdest][value=new]'); if (r) r.checked = true;
+  }
   $('importBackdrop').classList.add('show'); $('importCard').classList.add('show');
   setTimeout(() => $('importText').focus(), 60);
 }
@@ -7071,14 +7089,14 @@ async function extractImport(){
   const prose = $('importText').value.trim();
   if (!prose){ $('importStatus').textContent = 'Paste some prose first.'; return; }
   IMP.prose = prose; IMP.title = $('importTitle').value.trim();
-  $('importGo').disabled = true; $('importStatus').textContent = 'Reading the story with AI…';
+  $('importGo').disabled = true; $('importStatus').innerHTML = '<span class="spin"></span>Reading &amp; ingesting…';
   let data = null;
   try {
     const sys = 'You analyze a story for a worldbuilding app and return ONLY valid minified JSON — no prose, no code fences. Schema: {"title":string,"overview":string,"elements":[{"type":"being"|"setting"|"object"|"event","name":string,"summary":string}]}. being = a named character or creature; setting = a place; object = a notable physical thing; event = a key happening. overview = 2 short sentences on what happens. summary = ONE short sentence grounded only in the text. Use names exactly as written. Up to 6 of each type. Keep it concise. Invent nothing.';
     const out = await aiCall(sys, 'Story:\n\n' + prose.slice(0, 14000) + '\n\nReturn the JSON.', { maxTokens: 2400, json: true });
     data = parseJsonLoose(out);
   } catch (e){ $('importGo').disabled = false; $('importStatus').textContent = aiErrMsg(e); return; }
-  if (!data || !Array.isArray(data.elements)){ $('importGo').disabled = false; $('importStatus').textContent = 'The AI couldn’t structure this — try again, or shorten the text.'; return; }
+  if (!data || !Array.isArray(data.elements)){ $('importGo').disabled = false; $('importStatus').textContent = 'Couldn’t read the structure — try again, or shorten the text.'; return; }
   IMP.overview = data.overview || '';
   if (data.title && !IMP.title) IMP.title = String(data.title).slice(0, 80);
   IMP.elements = [];
@@ -7132,28 +7150,48 @@ function addImportEl(){
 }
 async function generalizeDesc(el, ta){
   const old = ta.value.trim();
-  ta.disabled = true; const prev = ta.value; ta.value = 'generalizing…';
+  const card = ta.closest('.ir-el'); const gbtn = card ? card.querySelector('.ir-gen') : null;
+  ta.disabled = true; const prev = ta.value;
+  if (gbtn) gbtn.innerHTML = '<span class="spin"></span>working…';
   try {
     const sys = 'Rewrite the description as a short, generic, reusable definition of this kind of story element — not tied to any specific character, place, or plot, and using no proper names. One sentence, present tense.';
     const out = await aiCall(sys, ((getCat(el.cat) || {}).name || el.cat) + ' named "' + el.name + '"\nStory-specific description: ' + old + '\n\nGeneric definition:', { maxTokens: 120 });
     el.summary = (out || '').trim() || old; ta.value = el.summary;
   } catch (e){ ta.value = prev; flashStatus(aiErrMsg(e)); }
   ta.disabled = false;
+  if (gbtn) gbtn.innerHTML = '✦ generalize';
 }
 async function confirmImport(){
   IMP.overview = $('importOverview').value.trim();
   IMP.title = $('importTitle').value.trim();
+  const dest = (document.querySelector('input[name=impdest]:checked') || {}).value || 'new';
+  const asSection = dest === 'section' && state.session && (editorText().trim() || (state.prompt && state.prompt.words && state.prompt.words.length));
   $('importConfirm').disabled = true;
-  newSession();
-  $('storyName').value = IMP.title || 'Imported story'; updateWmTitle();
-  const ed = $('editor'); ed.innerHTML = '';
-  IMP.prose.split(/\n{2,}/).forEach(p => { const x = document.createElement('div'); x.textContent = p.trim(); ed.appendChild(x); });
-  if (!state.prompt){ state.prompt = { words: [], sets: 1, links: [], removedLinks: [] }; state.frames = [{ gap: null, prompt: state.prompt }]; state.frameIdx = 0; state.activeSet = 0; }
+  const ed = $('editor');
+  if (asSection){
+    // append a new timeline section to the current story
+    pushUndo();
+    if (!state.frames){ state.frames = [{ gap: null, prompt: state.prompt, stage: 0 }]; state.frameIdx = 0; }
+    const idx = state.frames.length;
+    const newPrompt = { words: [], sets: 1, links: [], removedLinks: [] };
+    state.frames.push({ gap: 'later', prompt: newPrompt, stage: idx, stageName: IMP.title || '' });
+    state.frameIdx = idx; state.prompt = newPrompt; state.activeSet = 0;
+    const mark = document.createElement('div'); mark.className = 'sec-mark'; mark.contentEditable = 'false'; mark.innerHTML = '<span class="dia"><span>' + (idx + 1) + '</span></span>';
+    const h = document.createElement('h3'); h.dataset.frame = idx; h.textContent = IMP.title || ('Section ' + (idx + 1));
+    ed.appendChild(mark); ed.appendChild(h);
+    IMP.prose.split(/\n{2,}/).forEach(p => { const x = document.createElement('div'); x.textContent = p.trim(); ed.appendChild(x); });
+  } else {
+    newSession();
+    $('storyName').value = IMP.title || 'Imported story'; updateWmTitle();
+    ed.innerHTML = '';
+    IMP.prose.split(/\n{2,}/).forEach(p => { const x = document.createElement('div'); x.textContent = p.trim(); ed.appendChild(x); });
+    if (!state.prompt){ state.prompt = { words: [], sets: 1, links: [], removedLinks: [] }; state.frames = [{ gap: null, prompt: state.prompt }]; state.frameIdx = 0; state.activeSet = 0; }
+  }
   ensureSession();
   state.session.text = editorText(); state.session.html = ed.innerHTML; state.session.frames = state.frames; state.session.words = state.prompt.words;
   state.session.customWords = state.session.customWords || {};
   state.session.wikiAI = state.session.wikiAI || {};
-  if (IMP.overview) state.session.wikiOverview = IMP.overview;
+  if (IMP.overview){ state.session.wikiOverview = asSection && state.session.wikiOverview ? (state.session.wikiOverview + ' ' + IMP.overview) : IMP.overview; }
   let added = 0;
   IMP.elements.forEach(el => {
     if (!el.include) return;
@@ -7168,10 +7206,10 @@ async function confirmImport(){
   });
   rebuildPools();
   setMode('type'); updateWordCount();
-  if (added){ $('skyEmpty').style.display = 'none'; layoutConstellation(); }
-  renderConstellation(); saveSession();
+  if (added || asSection){ $('skyEmpty').style.display = 'none'; }
+  layoutConstellation(); renderConstellation(); renderTimeline(); saveSession();
   closeImport();
-  flashStatus('Imported — ' + added + ' element' + (added === 1 ? '' : 's') + ' added to the map');
+  flashStatus(asSection ? ('Added a section — ' + added + ' element' + (added === 1 ? '' : 's')) : ('Imported — ' + added + ' element' + (added === 1 ? '' : 's') + ' added to the map'));
 }
 
 /* ---------------- story wiki (deterministic; AI rollups layer later) ---------------- */
@@ -7423,10 +7461,10 @@ async function aiCall(system, prompt, opts){
 }
 function aiErrMsg(e){
   const m = String((e && e.message) || e || '');
-  if (/not configured|AI not/i.test(m)) return 'AI isn’t set up yet — add the Workers AI binding in Cloudflare and redeploy.';
-  if (/Failed to fetch|HTTP 404|Load failed/i.test(m)) return 'AI endpoint unreachable — this works on dystoria.net once the function is deployed.';
-  if (/quota|rate|429/i.test(m)) return 'Gemini free limit reached for now — try again later.';
-  return 'AI error: ' + m;
+  if (/not configured|AI not/i.test(m)) return 'Summaries aren’t set up yet — add the Workers AI binding in Cloudflare and redeploy.';
+  if (/Failed to fetch|HTTP 404|Load failed/i.test(m)) return 'Summaries are unavailable — this works on dystoria.net once deployed.';
+  if (/quota|rate|429/i.test(m)) return 'The summary service is busy — try again shortly.';
+  return 'Couldn’t summarize: ' + m;
 }
 function aiSig(el){ const q = wikiAppearances(el); return q.length + ':' + q.join(' ').length; }
 async function aiRollup(el){
@@ -7455,15 +7493,15 @@ function renderWikiAI(wrap, el){
     ref.addEventListener('click', () => runAIRollup(el, wrap));
     wrap.appendChild(ref);
   } else {
-    const btn = document.createElement('button'); btn.className = 'wk-aibtn'; btn.textContent = 'Summarize with AI ✦';
+    const btn = document.createElement('button'); btn.className = 'wk-aibtn'; btn.textContent = 'Summarize ✦';
     btn.addEventListener('click', () => runAIRollup(el, wrap));
     wrap.appendChild(btn);
-    const note = document.createElement('div'); note.className = 'wk-ainote'; note.textContent = 'Sends this element’s prose excerpts to the AI for summarizing.';
+    const note = document.createElement('div'); note.className = 'wk-ainote'; note.textContent = 'Summarizes this element from where it appears in your prose.';
     wrap.appendChild(note);
   }
 }
 async function runAIRollup(el, wrap){
-  wrap.innerHTML = '<div class="wk-aitext wk-empty">summarizing…</div>';
+  wrap.innerHTML = '<div class="wk-aitext wk-empty"><span class="spin"></span>Summarizing…</div>';
   try {
     const text = await aiRollup(el);
     if (!state.session) ensureSession();
@@ -7506,7 +7544,7 @@ async function runAIOverview(){
   const wrap = $('wikiOverview');
   const text = editorText().trim();
   if (!text){ flashStatus('Write some prose first'); return; }
-  wrap.innerHTML = '<div class="wk-aitext wk-empty">summarizing the story so far…</div>';
+  wrap.innerHTML = '<div class="wk-aitext wk-empty"><span class="spin"></span>Summarizing the story so far…</div>';
   try {
     const sys = 'You summarize a work-in-progress story for the writer’s own reference. Use ONLY what the prose contains; do not invent. Refer to parts as "Section N", not "timeframe". 3–5 sentences, neutral and clear, no preamble.';
     const out = await aiCall(sys, 'Story so far:\n\n' + text.slice(0, 18000) + '\n\nSummarize what has happened and the current situation:');
@@ -7525,7 +7563,7 @@ function renderWikiOverview(text){
     const p = document.createElement('div'); p.id = 'wikiOverviewText'; p.textContent = text; wrap.appendChild(p);
     const ref = document.createElement('span'); ref.className = 'wk-airefresh'; ref.textContent = 'refresh overview'; ref.addEventListener('click', runAIOverview); wrap.appendChild(ref);
   } else {
-    const b = document.createElement('button'); b.className = 'wk-aibtn'; b.textContent = 'AI overview of the story ✦'; b.addEventListener('click', runAIOverview); wrap.appendChild(b);
+    const b = document.createElement('button'); b.className = 'wk-aibtn'; b.textContent = 'Summarize the story ✦'; b.addEventListener('click', runAIOverview); wrap.appendChild(b);
   }
 }
 
