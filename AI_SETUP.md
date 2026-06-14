@@ -1,36 +1,35 @@
 # Dystoria — AI wiki (Cloudflare Workers AI) setup
 
-The AI summaries run through a Cloudflare Pages Function (`functions/ai.js`) that uses
-**Cloudflare Workers AI** — no API key, no Google account. You just bind Workers AI to the
-Pages project once.
+Your `dystoria` deploy is a **Cloudflare Worker with static assets** (not a Pages project),
+so the AI lives in `worker.js`, configured by `wrangler.jsonc`. The Worker:
+- serves the whole site through the `ASSETS` binding, and
+- handles `POST /ai` using **Workers AI** (binding `AI`) — no API key, no Google account.
 
-## 1. Add the Workers AI binding
-- Cloudflare dashboard → **Workers & Pages** → your `dystoria` Pages project.
-- **Settings → Functions** (or **Bindings**) → **Add binding** → choose **Workers AI**.
-- Set the **Variable name** to exactly **`AI`** → Save.
-- Add it for **Production** (and Preview if you use preview deploys).
+## Setup: just push
+The AI binding and assets config are declared in `wrangler.jsonc`, so there is **no dashboard
+step**. Commit & push these files in GitHub Desktop:
+- `worker.js` (new)
+- `wrangler.jsonc` (new)
+- `.assetsignore` (new — keeps `.git`, docs, etc. out of the public site)
+- deletion of `functions/ai.js`
 
-## 2. Deploy
-- Commit & push (`functions/ai.js` + the updated `index.html`) in GitHub Desktop.
-- Cloudflare redeploys and exposes `functions/ai.js` as the `/ai` endpoint.
-- Bindings take effect on the next deploy — if you added the binding after your last push,
-  push again or trigger a redeploy.
+Cloudflare builds and deploys on push, the same way your other changes have been going live.
 
-## 3. Test
-- Open dystoria.net → **Story Wiki** (hamburger menu) → expand an element →
-  **Summarize with AI ✦**. You should get a short, grounded summary.
-- Or use **AI overview of the story ✦** at the top of the panel.
+## Test
+- dystoria.net → **Story Wiki** → expand an element → **Summarize with AI ✦**
+  (or **AI overview of the story ✦** at the top).
+- Direct check: visiting **https://dystoria.net/ai** in a browser should now show
+  `{"error":"POST only"}` (405) instead of a 404 — that means the route is live.
 
-### If it errors
-- *"AI isn’t set up yet"* → the `AI` binding is missing or the deploy predates it.
-  Re-check step 1 (variable name must be exactly `AI`), then redeploy.
-- *"AI endpoint unreachable"* → the function didn’t deploy. Confirm `functions/` is at the
-  repo root and the push succeeded. Only works on the live site, not a local file.
+## If it still 404s after deploying
+The build's deploy command is `npx wrangler versions upload`, which uploads a version. If your
+production traffic isn't picking up new versions automatically:
+- Cloudflare → your `dystoria` Worker → **Settings → Build** → set the **Deploy command** to
+  `npx wrangler deploy` → save → redeploy. (`wrangler deploy` pushes straight to production.)
 
 ## Notes
-- Free tier is **10,000 "neurons"/day**, plenty for summarizing elements. Summaries are
-  **cached** in the story and only offer a refresh when the prose changes.
-- Each summary sends **only that element’s prose excerpts** (or, for the overview, the story
-  text) to Workers AI. The UI discloses this; mention it to beta users.
-- Model is `@cf/meta/llama-3.1-8b-instruct`. To change it, edit `MODEL` in `functions/ai.js`
-  (any Workers AI text-generation model id works).
+- Free tier: **10,000 "neurons"/day** — ample, and summaries are cached in the story (refresh
+  only offered when the prose changes).
+- Each summary sends only that element's prose excerpts (or, for the overview, the story text)
+  to Workers AI. The UI discloses this.
+- Model is `@cf/meta/llama-3.1-8b-instruct` — change `MODEL` in `worker.js` to swap it.
