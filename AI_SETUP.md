@@ -32,4 +32,6 @@ production traffic isn't picking up new versions automatically:
   only offered when the prose changes).
 - Each summary sends only that element's prose excerpts (or, for the overview, the story text)
   to Workers AI. The UI discloses this.
-- Model is `@cf/meta/llama-3.1-8b-instruct` — change `MODEL` in `worker.js` to swap it.
+- Model is `@cf/meta/llama-3.3-70b-instruct-fp8-fast` (current, good quality). For lower
+  neuron cost, swap `MODEL` in `worker.js` to `@cf/meta/llama-3.1-8b-instruct-fast`.
+  See the live catalog: https://developers.cloudflare.com/workers-ai/models/

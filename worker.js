@@ -4,7 +4,8 @@
 // dashboard setup needed. Deploys on git push like the rest of the site.
 
 const ALLOWED = ['https://dystoria.net', 'https://www.dystoria.net'];
-const MODEL = '@cf/meta/llama-3.1-8b-instruct';
+// Current Workers AI model. Lighter/cheaper alternative: '@cf/meta/llama-3.1-8b-instruct-fast'
+const MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
 
 function cors(origin) {
   const ok = !origin || ALLOWED.includes(origin) || origin.endsWith('.pages.dev') || origin.endsWith('.workers.dev');
