@@ -110,6 +110,31 @@
   #recapClose{margin-top:14px; font-size:10.5px; letter-spacing:.18em; text-transform:uppercase;
     border:1px solid var(--line); border-radius:14px; padding:6px 18px; color:var(--ink-soft)}
   #recapClose:hover{border-color:var(--ink-faint); color:var(--ink)}
+  /* ---------- story wiki panel ---------- */
+  #wikiPanel{position:fixed; top:0; right:0; height:100vh; width:360px; max-width:92vw; z-index:140;
+    background:var(--paper); border-left:1px solid var(--line); box-shadow:-8px 0 30px rgba(0,0,0,.10);
+    transform:translateX(102%); transition:transform .22s ease; display:flex; flex-direction:column}
+  #wikiPanel.show{transform:translateX(0)}
+  .wk-head{display:flex; align-items:center; justify-content:space-between; padding:16px 18px 12px; border-bottom:1px solid var(--line)}
+  .wk-title{font-family:var(--ancient); font-size:22px; color:var(--ink)}
+  #wikiClose{font-size:20px; color:var(--ink-faint); line-height:1; padding:0 4px; background:none}
+  #wikiMeta{padding:9px 18px; font-family:var(--sans); font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--ink-faint); border-bottom:1px solid var(--line)}
+  #wikiBody{flex:1; overflow-y:auto; padding:6px 0 24px}
+  .wk-group{font-family:var(--sans); font-size:9.5px; font-weight:700; letter-spacing:.2em; text-transform:uppercase; color:var(--ink-faint); padding:14px 18px 4px}
+  .wk-item{padding:7px 18px; cursor:pointer; border-bottom:1px solid #efece6}
+  .wk-item:hover{background:#f3f0ea}
+  .wk-item .wk-name{font-family:var(--serif); font-size:15px; color:var(--ink)}
+  .wk-item .wk-noun{font-family:var(--serif); font-style:italic; color:#7d3550; margin-right:5px}
+  .wk-item .wk-chk{color:#2f9e44; margin-left:6px; font-size:12px}
+  .wk-item .wk-cat{font-family:var(--sans); font-size:9px; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-faint); margin-left:7px}
+  .wk-detail{padding:4px 18px 12px; font-family:var(--serif); font-size:13.5px; line-height:1.6; color:var(--ink-soft)}
+  .wk-detail .wk-desc{font-style:italic; color:var(--ink); margin-bottom:8px}
+  .wk-detail .wk-lbl{font-family:var(--sans); font-size:9px; font-weight:700; letter-spacing:.16em; text-transform:uppercase; color:var(--ink-faint); margin:10px 0 3px}
+  .wk-detail .wk-rel{margin:1px 0}
+  .wk-detail .wk-quote{border-left:2px solid var(--line); padding:2px 0 2px 10px; margin:4px 0; color:var(--ink)}
+  .wk-detail .wk-empty{color:var(--ink-faint); font-style:italic}
+  .wk-detail .wk-ai{margin-top:10px}
+  body.eink #wikiPanel{border-left:2px solid #000; box-shadow:none}
   body.eink #recapCard{border:2px solid #000}
   #seal{width:44px; height:44px; flex:none; color:var(--ink)}
   header h1{font-family:var(--script); font-weight:700; font-size:54px; letter-spacing:.02em; line-height:1; transform:translateY(2px); width:278px; margin-left:-26px; text-align:center; flex:none}
@@ -761,6 +786,7 @@
     <button class="hbtn" id="exportBtn" title="Download this session as markdown (+ ink .svg)">Export</button>
     <button class="hbtn sub" id="autoExpBtn" title="Write a markdown copy of the session to a folder of your choice on every save">Auto-Export<span class="sw"></span></button>
     <button class="hbtn" id="libraryBtn">Archives</button>
+    <button class="hbtn" id="wikiBtn" title="A living wiki of your story — every element, its links, and where it appears in your prose">Story Wiki</button>
     <button class="hbtn sub" id="backupBtn" title="Download every story — maps, timelines, writing, ink — as one .json file">Back Up All</button>
     <button class="hbtn sub" id="restoreBtn" title="Restore stories from a backup file (merges with what is here)">Restore</button>
     <input type="file" id="restoreFile" accept=".json,application/json" hidden>
@@ -773,6 +799,11 @@
       <select id="timerLen"><option value="0">none</option><option value="2" selected>2 min</option><option value="5">5 min</option><option value="10">10 min</option><option value="15">15 min</option><option value="20">20 min</option><option value="30">30 min</option><option value="45">45 min</option><option value="60">60 min</option></select></div>
   </div>
 </header>
+<div id="wikiPanel">
+  <div class="wk-head"><span class="wk-title">Story Wiki</span><button id="wikiClose" title="Close">×</button></div>
+  <div id="wikiMeta"></div>
+  <div id="wikiBody"></div>
+</div>
 
 <div id="welcome"><div class="wl-card">
   <h2>Welcome to Dystoria</h2>
@@ -6722,6 +6753,96 @@ function esc(s){ return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': 
 function openLibrary(){ renderLibrary(); $('library').classList.add('open'); }
 function closeLibrary(){ $('library').classList.remove('open'); }
 
+/* ---------------- story wiki (deterministic; AI rollups layer later) ---------------- */
+const wikiState = { open: new Set() };
+function wikiFrames(){ return state.frames || (state.prompt ? [{ prompt: state.prompt }] : []); }
+function wikiGather(){
+  const byKey = {};
+  wikiFrames().forEach((fr, fi) => {
+    ((fr.prompt && fr.prompt.words) || []).forEach(w => {
+      if (w.role !== 'being' && w.role !== 'word') return;     // skip frame/constraint/relation nodes
+      const key = w.cat + '|' + w.word;
+      if (!byKey[key]) byKey[key] = { word: w.word, cat: w.cat, sub: w.sub, name: w.name || '', ref: w, frames: new Set(), attrs: w.attrs || [] };
+      byKey[key].frames.add(fi + 1);
+      if (w.name && !byKey[key].name) byKey[key].name = w.name;
+      if ((w.attrs || []).length > (byKey[key].attrs || []).length) byKey[key].attrs = w.attrs;
+    });
+  });
+  const order = { being: 0, setting: 1, object: 2, theme: 3, event: 4 };
+  return Object.values(byKey).sort((a, b) => (order[a.cat] != null ? order[a.cat] : 9) - (order[b.cat] != null ? order[b.cat] : 9) || a.word.localeCompare(b.word));
+}
+function wikiRelations(el){
+  const out = [];
+  wikiFrames().forEach(fr => {
+    const words = (fr.prompt && fr.prompt.words) || [], links = (fr.prompt && fr.prompt.links) || [];
+    links.forEach(l => {
+      const ai = l.a != null ? l.a : l[0], bi = l.b != null ? l.b : l[1];
+      const A = words[ai], B = words[bi]; if (!A || !B) return;
+      let other, isA;
+      if (A.word === el.word && A.cat === el.cat){ other = B; isA = true; }
+      else if (B.word === el.word && B.cat === el.cat){ other = A; isA = false; }
+      else return;
+      const arrow = l.dir === 'both' ? '↔' : l.dir === 'ba' ? (isA ? '←' : '→') : l.dir === 'ab' ? (isA ? '→' : '←') : '—';
+      const otherName = other.name ? ('“' + other.name + '” (' + other.word + ')') : other.word;
+      out.push((l.rel ? l.rel + ' ' : '') + arrow + ' ' + otherName);
+    });
+  });
+  return [...new Set(out)];
+}
+function wikiAppearances(el){
+  const text = editorText(); if (!text.trim()) return [];
+  const sentences = text.replace(/\s+/g, ' ').split(/(?<=[.!?…])\s+/);
+  const terms = [el.word]; if (el.name) terms.push(el.name);
+  const hits = [];
+  sentences.forEach(s => { const lc = s.toLowerCase(); if (terms.some(t => textHasWord(lc, t))) hits.push(s.trim()); });
+  return hits;
+}
+function wikiCatName(cat){ const c = getCat(cat); return c ? c.name : cat; }
+function renderWiki(){
+  const body = $('wikiBody'); if (!body) return;
+  const els = wikiGather();
+  const lcAll = editorText().toLowerCase();
+  const woven = els.filter(e => textHasWord(lcAll, e.word) || (e.name && textHasWord(lcAll, e.name))).length;
+  const wc = lcAll.trim() ? lcAll.trim().split(/\s+/).length : 0;
+  $('wikiMeta').textContent = els.length + ' elements · ' + woven + ' woven in · ' + wc + ' words';
+  body.innerHTML = '';
+  if (!els.length){ body.innerHTML = '<div style="padding:26px 18px;color:var(--ink-faint);font-style:italic;font-family:var(--serif)">Add elements to your map and write — they’ll gather here, linked to where they appear in your prose.</div>'; return; }
+  let lastCat = null;
+  els.forEach(el => {
+    if (el.cat !== lastCat){ lastCat = el.cat; const g = document.createElement('div'); g.className = 'wk-group'; g.textContent = wikiCatName(el.cat); body.appendChild(g); }
+    const key = el.cat + '|' + el.word;
+    const woke = textHasWord(lcAll, el.word) || (el.name && textHasWord(lcAll, el.name));
+    const item = document.createElement('div'); item.className = 'wk-item';
+    item.innerHTML = (el.name ? '<span class="wk-noun">“' + esc(el.name) + '”</span>' : '') +
+      '<span class="wk-name">' + esc(el.word) + '</span>' + (woke ? '<span class="wk-chk">✓</span>' : '') +
+      '<span class="wk-cat">' + esc((el.sub || '')) + '</span>';
+    body.appendChild(item);
+    const detail = document.createElement('div'); detail.className = 'wk-detail'; detail.style.display = wikiState.open.has(key) ? 'block' : 'none';
+    if (wikiState.open.has(key)) buildWikiDetail(detail, el);
+    body.appendChild(detail);
+    item.addEventListener('click', () => {
+      if (wikiState.open.has(key)){ wikiState.open.delete(key); detail.style.display = 'none'; detail.innerHTML = ''; }
+      else { wikiState.open.add(key); detail.style.display = 'block'; buildWikiDetail(detail, el); }
+    });
+  });
+}
+function buildWikiDetail(detail, el){
+  detail.innerHTML = '';
+  const add = (html) => { const d = document.createElement('div'); d.innerHTML = html; detail.appendChild(d); };
+  const desc = descFor(el.ref); if (desc) add('<div class="wk-desc">' + esc(desc) + '</div>');
+  if (el.attrs && el.attrs.length){ add('<div class="wk-lbl">Characteristics</div>'); add(el.attrs.map(a => esc(a.word)).join(' · ')); }
+  const rels = wikiRelations(el);
+  if (rels.length){ add('<div class="wk-lbl">Relationships</div>'); rels.forEach(r => add('<div class="wk-rel">' + esc(r) + '</div>')); }
+  add('<div class="wk-lbl">Appears in</div>');
+  add('Timeframe' + (el.frames.size > 1 ? 's ' : ' ') + [...el.frames].sort((a, b) => a - b).map(f => '§' + f).join(', '));
+  const quotes = wikiAppearances(el);
+  add('<div class="wk-lbl">In your prose</div>');
+  if (!quotes.length) add('<div class="wk-empty">Not yet woven into the writing.</div>');
+  else quotes.slice(0, 20).forEach(q => add('<div class="wk-quote">' + esc(q) + '</div>'));
+}
+function openWiki(){ renderWiki(); $('wikiPanel').classList.add('show'); }
+function closeWiki(){ $('wikiPanel').classList.remove('show'); }
+
 /* ---------------- export ---------------- */
 function exportSession(s){
   s = s || state.session;
@@ -7231,6 +7352,8 @@ function init(){
   $('exportBtn').addEventListener('click', () => exportSession());
   $('libraryBtn').addEventListener('click', openLibrary);
   $('libClose').addEventListener('click', closeLibrary);
+  $('wikiBtn').addEventListener('click', () => { $('appMenu').classList.remove('show'); openWiki(); });
+  $('wikiClose').addEventListener('click', closeWiki);
   $('newSessionBtn').addEventListener('click', newSession);
   $('einkBtn').addEventListener('click', () => setEink(!document.body.classList.contains('eink')));
   $('tableBtn').addEventListener('click', tableToggle);
