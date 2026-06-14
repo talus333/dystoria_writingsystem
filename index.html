@@ -843,7 +843,7 @@
 
 <div id="welcome"><div class="wl-card">
   <h2>Welcome to Dystoria</h2>
-  <p>Build a world from prompts — beings, places, and the ideas that move them — then race a quiet clock to weave them into prose. A <b>Story Wiki</b> grows from your writing, with AI summaries of each element and of every session.</p>
+  <p>Create stories with a world-generating engine using prompts and mindmaps. A <b>Story Wiki</b> grows from your writing, with summaries of each element and of every session.</p>
   <p><b>Sign in</b> from the menu to save your stories to your account, open them on any device, and <b>share a story</b> with another writer to build it together, live.</p>
   <p>Signed out, stories save <b>in this browser</b> — use <b>Back Up</b> or <b>Auto-Export</b> in the menu to keep copies on your computer.</p>
   <p class="wl-soon">An early beta — things will keep changing.</p>
@@ -6136,7 +6136,7 @@ function showRecap(){
   b.innerHTML = h;
   document.body.classList.add('recap');
   const wl = $('rcWikiLink'); if (wl) wl.addEventListener('click', () => { document.body.classList.remove('recap'); openWiki(); });
-  if (wrote) runSessionSummary(wovenEls.map(e => e.name || e.word));
+  if (wrote){ runSessionSummary(wovenEls.map(e => e.name || e.word)); autoSummarizeElements(); }
 }
 async function runSessionSummary(wovenNames){
   const wrap = $('rcAi'); if (!wrap) return;
@@ -7091,8 +7091,12 @@ async function aiRollup(el){
   const rels = wikiRelations(el); if (rels.length) facts.push('Relationships: ' + rels.join('; '));
   if (el.frames && el.frames.size) facts.push('Appears in: ' + [...el.frames].sort((a, b) => a - b).map(f => wikiSectionLabel(f - 1)).join('; '));
   const quotes = wikiAppearances(el);
+  const prior = (state.session && state.session.wikiAI && state.session.wikiAI[el.cat + '|' + el.word]) ? state.session.wikiAI[el.cat + '|' + el.word].text : '';
   const sys = 'You are a story-wiki assistant for a writer. Write a short, grounded encyclopedia-style entry for ONE story element using ONLY the facts and prose excerpts given. Never invent events, names, or traits that are not present. If the prose reveals little, stay brief and say what is known. Refer to parts of the story as "Section N" (never "timeframe"); a section may have a name or event you can mention. 2–4 sentences, third person, present tense, no preamble.';
-  const prompt = facts.join('\n') + '\n\nProse excerpts where it appears:\n' + (quotes.length ? quotes.map(q => '- ' + q).join('\n') : '(none yet)') + '\n\nWrite the entry:';
+  const prompt = facts.join('\n')
+    + (prior ? ('\n\nPrevious summary (revise it to fit the latest prose; keep what still holds, fold in what is new):\n' + prior) : '')
+    + '\n\nProse excerpts where it appears:\n' + (quotes.length ? quotes.map(q => '- ' + q).join('\n') : '(none yet)')
+    + '\n\nWrite the entry:';
   return aiCall(sys, prompt);
 }
 function renderWikiAI(wrap, el){
@@ -7129,6 +7133,30 @@ async function runAIRollup(el, wrap){
     const btn = document.createElement('button'); btn.className = 'wk-aibtn'; btn.textContent = 'Try again';
     btn.addEventListener('click', () => runAIRollup(el, wrap)); wrap.appendChild(btn);
   }
+}
+// At session end: refresh the summary of every element woven into the prose, but only
+// those whose prose context actually changed (keeps everything current, spends little).
+let _autoSumRunning = false;
+async function autoSummarizeElements(){
+  if (_autoSumRunning || !state.session) return;
+  _autoSumRunning = true;
+  try {
+    const lcAll = editorText().toLowerCase();
+    const els = wikiGather().filter(e => textHasWord(lcAll, e.word) || (e.name && textHasWord(lcAll, e.name)));
+    state.session.wikiAI = state.session.wikiAI || {};
+    for (const el of els){
+      const key = el.cat + '|' + el.word;
+      const cache = state.session.wikiAI[key];
+      const sig = aiSig(el);
+      if (cache && cache.sig === sig) continue;   // unchanged since last time → skip
+      try {
+        const text = await aiRollup(el);
+        state.session.wikiAI[key] = { text, sig };
+        scheduleAutosave(1500);
+        if ($('wikiPanel') && $('wikiPanel').classList.contains('show')) renderWiki();
+      } catch (e){ break; }   // AI unavailable — stop quietly, try again next session
+    }
+  } finally { _autoSumRunning = false; }
 }
 async function runAIOverview(){
   const wrap = $('wikiOverview');
