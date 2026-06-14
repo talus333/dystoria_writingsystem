@@ -6175,21 +6175,27 @@ async function cloudSave(sess){
   if (!supa){ flashStatus('Cloud: SDK not loaded'); return; }
   if (!cloud.user){ flashStatus('Cloud: not signed in (reopen Sign In)'); return; }
   try {
-    const row = { owner: cloud.user.id, title: sess.name || 'Untitled story', doc: sess, updated_at: new Date().toISOString() };
+    const doc = Object.assign({}, sess);
+    // internal/runtime-only fields never belong in the stored document
+    delete doc._owner; delete doc._shared; delete doc._baton; delete doc._collabs;
+    const title = sess.name || 'Untitled story';
+    const now = new Date().toISOString();
     if (sess.cloudId){
-      const { error } = await supa.from('stories').update(row).eq('id', sess.cloudId);
+      // Update without touching `owner` — a collaborator saving a shared story must not seize ownership.
+      const { error } = await supa.from('stories').update({ title, doc, updated_at: now }).eq('id', sess.cloudId);
       if (error){ console.warn('cloud update error:', error); flashStatus('Cloud: ' + error.message); }
     } else {
-      const { data, error } = await supa.from('stories').insert(row).select('id').single();
+      const { data, error } = await supa.from('stories').insert({ owner: cloud.user.id, title, doc, updated_at: now }).select('id').single();
       if (error){ console.warn('cloud insert error:', error); flashStatus('Cloud: ' + error.message); return; }
-      if (data){ sess.cloudId = data.id; const list = loadSessions(); const i = list.findIndex(x => x.id === sess.id); if (i >= 0){ list[i].cloudId = data.id; persistSessions(list); } flashStatus('Saved to cloud'); }
+      if (data){ sess.cloudId = data.id; sess._owner = cloud.user.id; sess._shared = false; const list = loadSessions(); const i = list.findIndex(x => x.id === sess.id); if (i >= 0){ list[i].cloudId = data.id; persistSessions(list); } flashStatus('Saved to cloud'); }
     }
   } catch (e){ console.warn('cloud save threw:', e); flashStatus('Cloud error: ' + e.message); }
 }
 async function cloudPull(){
   if (!cloudReady()) return;
   try {
-    const { data, error } = await supa.from('stories').select('id,doc').eq('owner', cloud.user.id);
+    // No owner filter: row-level security returns stories I own AND stories shared with me.
+    const { data, error } = await supa.from('stories').select('id,owner,doc,planning_baton');
     if (error){ console.warn('cloud pull error:', error); flashStatus('Cloud pull: ' + error.message); return; }
     if (!data) return;
     const list = loadSessions();
@@ -6197,6 +6203,9 @@ async function cloudPull(){
     data.forEach(r => {
       const d = r.doc; if (!d || !d.id) return;
       d.cloudId = r.id;
+      d._owner = r.owner;
+      d._shared = (r.owner !== cloud.user.id);
+      d._baton = r.planning_baton || r.owner;
       if (!byId[d.id] || (d.updated || '') >= (byId[d.id].updated || '')) byId[d.id] = d;
     });
     const merged = Object.values(byId).sort((a, b) => (b.updated || '').localeCompare(a.updated || ''));
@@ -6207,6 +6216,37 @@ async function cloudPull(){
     const blank = !state.session && !state.prompt && !editorText().trim() && !inkHasContent();
     if (blank && merged.length) openSession(merged[0].id);
   } catch (e) {}
+}
+/* ---------------- sharing a story with another writer ---------------- */
+async function shareStory(sess){
+  if (!cloudReady()){ flashStatus('Sign in to share a story'); return; }
+  if (!sess || !sess.cloudId){ flashStatus('Save the story to the cloud first, then share'); return; }
+  if (sess._shared){ flashStatus('Only the story owner can invite other writers'); return; }
+  const email = prompt('Share “' + (sess.name || 'this story') + '” with another writer.\nEnter their Dystoria account email (they must already have signed up):');
+  if (!email || !email.trim()) return;
+  const { data, error } = await supa.rpc('share_story', { sid: sess.cloudId, invitee_email: email.trim() });
+  if (error){ flashStatus('Share failed: ' + error.message); return; }
+  const msg = {
+    ok: 'Shared with ' + email.trim() + ' — it appears in their library on next sign-in',
+    no_user: 'No Dystoria account uses that email yet — ask them to sign up first',
+    self: 'That’s your own account',
+    not_owner: 'Only the owner can share this story'
+  }[data] || ('Share: ' + data);
+  flashStatus(msg);
+  if (data === 'ok') renderLibrary();
+}
+async function listCollaborators(cloudId){
+  if (!cloudReady() || !cloudId) return [];
+  const { data, error } = await supa.from('story_collaborators').select('user_id,email').eq('story_id', cloudId);
+  if (error){ console.warn('collab list error:', error); return []; }
+  return data || [];
+}
+async function unshareStory(sess, userId){
+  if (!cloudReady() || !sess.cloudId) return;
+  const { error } = await supa.rpc('unshare_story', { sid: sess.cloudId, collaborator: userId });
+  if (error){ flashStatus('Could not remove collaborator: ' + error.message); return; }
+  flashStatus('Collaborator removed');
+  renderLibrary();
 }
 function loadSessions(){ try { return JSON.parse(localStorage.getItem(LS_SESSIONS)) || []; } catch (e){ return []; } }
 function persistSessions(list){ localStorage.setItem(LS_SESSIONS, JSON.stringify(list)); }
@@ -6400,6 +6440,12 @@ function renderLibrary(){
     const wc = (s.text || '').trim() ? (s.text.trim().split(/\s+/).length + ' words') : (s.ink ? 'ink' : '—');
     d.innerHTML = `<div class="t">${esc(s.name)}</div>` +
       `<div class="m">${new Date(s.created).toLocaleDateString([], { year: 'numeric', month: 'short', day: 'numeric' })} · ${wc}</div>`;
+    if (s._shared){
+      const bd = document.createElement('div');
+      bd.textContent = 'shared with you';
+      bd.style.cssText = 'font-family:var(--sans);font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:#4a6a8a;margin-top:3px';
+      d.appendChild(bd);
+    }
     const chips = document.createElement('div'); chips.className = 'cats';
     (s.categories || []).forEach(cid => {
       const c = getCat(cid); if (!c) return;
@@ -6415,7 +6461,14 @@ function renderLibrary(){
     xb.addEventListener('click', e => { e.stopPropagation(); exportSession(s); });
     const db = document.createElement('button'); db.textContent = 'Delete';
     db.addEventListener('click', e => { e.stopPropagation(); if (confirm('Delete "' + s.name + '"?')) deleteSession(s.id); });
-    ra.appendChild(ob); ra.appendChild(xb); ra.appendChild(db);
+    ra.appendChild(ob); ra.appendChild(xb);
+    if (cloud.user && s.cloudId && !s._shared){
+      const sb = document.createElement('button'); sb.textContent = 'Share';
+      sb.title = 'Invite another writer to work in this story';
+      sb.addEventListener('click', e => { e.stopPropagation(); shareStory(s); });
+      ra.appendChild(sb);
+    }
+    ra.appendChild(db);
     d.appendChild(ra);
     d.addEventListener('click', () => openSession(s.id));
     wrap.appendChild(d);
