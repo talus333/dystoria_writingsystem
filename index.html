@@ -565,6 +565,17 @@
   }
   #storyName:focus{border-bottom-color:var(--line)}
   #storyName::placeholder{color:#bdbab3; font-style:italic; font-weight:400}
+  #shareNote{
+    position:absolute; left:calc(50% + 139px); transform:translateX(-50%); top:46px;
+    font-family:var(--serif); font-style:italic; font-size:11.5px; letter-spacing:.03em;
+    color:#4a6a8a; white-space:nowrap; display:none; pointer-events:none;
+  }
+  body.eink #shareNote{color:#2f4a66}
+  #authUser,#profUser{width:100%; box-sizing:border-box; font-family:var(--serif); font-size:14px; color:var(--ink);
+    border:none; border-bottom:1px solid var(--line); background:transparent; padding:6px 2px; margin-bottom:9px; outline:none}
+  .prof-row{display:flex; gap:8px; align-items:center; margin:2px 0 10px}
+  .prof-row input{margin:0}
+  .prof-row button{font-family:var(--sans); font-size:10px; letter-spacing:.14em; text-transform:uppercase; border-radius:14px; padding:7px 12px; background:var(--ink); color:var(--paper)}
   .menu-sep{border-top:1px solid var(--line); margin:6px 4px}
   .menu-label{font-size:9px; letter-spacing:.22em; text-transform:uppercase; color:var(--ink-faint); padding:2px 13px}
   .menu-row{display:flex; align-items:center; justify-content:space-between; gap:12px; padding:5px 13px; font-size:11px;
@@ -735,14 +746,16 @@
 <header>
   <h1 id="brandTitle">Dystoria</h1>
   <input id="storyName" placeholder="Untitled story" autocomplete="off" title="The story's title — this is what the Archives keep">
+  <div id="shareNote"></div>
   <span id="tableInfo"></span>
   <span class="spacer"></span>
   <span id="deathTally" title="Your story's death count"></span>
   <div id="deathScroll"><div class="ds-head">The Roll of the Dead</div><div id="dsList"></div></div>
-  <button class="hbtn small" id="clearMapBtn">New Story</button>
   <button class="hbtn" id="menuBtn" title="Menu">☰</button>
   <div id="appMenu">
     <button class="hbtn" id="accountBtn">Sign In</button>
+    <div class="menu-sep"></div>
+    <button class="hbtn" id="clearMapBtn">New Story</button>
     <div class="menu-sep"></div>
     <button class="hbtn" id="saveBtn">Save</button>
     <button class="hbtn" id="exportBtn" title="Download this session as markdown (+ ink .svg)">Export</button>
@@ -867,11 +880,13 @@
   <div class="ec-head"><span id="authTitle">Sign in to Dystoria</span><button id="authClose" title="Close">×</button></div>
   <div id="authedView" style="display:none">
     <p class="auth-who"></p>
-    <p class="auth-note">Your stories sync to your account and follow you to any device.</p>
+    <p class="auth-note">Your username is how collaborators see you when you share a story.</p>
+    <div class="prof-row"><input id="profUser" type="text" placeholder="username" maxlength="24"><button id="profSave">Save</button></div>
     <button id="authSignOut">Sign out</button>
   </div>
   <div id="authForm">
     <input id="authEmail" type="email" autocomplete="email" placeholder="email">
+    <input id="authUser" type="text" autocomplete="username" placeholder="username (for sharing)" maxlength="24">
     <input id="authPass" type="password" autocomplete="current-password" placeholder="password">
     <div class="auth-actions"><button id="authSignIn">Sign in</button><button id="authSignUp" class="ghost">Create account</button></div>
     <p class="auth-msg"></p>
@@ -5961,8 +5976,11 @@ function setupTimer(){
   $('timerDisplay').textContent = mins ? fmtTime(mins * 60) : '';
   updateClockArc();
   updateEndBtn();
+  if (typeof live !== 'undefined' && live.on){ liveScheduleTrack(); liveApplyProseLock(); }
 }
 function startTimerIfArmed(){
+  // Don't start a sprint on a timeframe a collaborator is already sprinting.
+  if (typeof live !== 'undefined' && live.on && liveSprintingPeerOnFrame()){ liveApplyProseLock(); return; }
   if (state.timer.len && !state.timer.started){
     state.timer.started = true; state.timer.running = true;
     state.timer.handle = setInterval(tickTimer, 1000);
@@ -5972,6 +5990,7 @@ function startTimerIfArmed(){
       woven: (state.usage && state.usage.count) || 0
     };
     updateEndBtn();
+    if (typeof live !== 'undefined' && live.on){ liveScheduleTrack(); liveApplyProseLock(); }
   }
 }
 function tickTimer(){
@@ -5999,6 +6018,7 @@ function tickTimer(){
     clearInterval(state.timer.handle);
     state.timer.handle = null;
     state.timer.running = false;
+    if (typeof live !== 'undefined' && live.on) liveScheduleTrack();
     gentleClose();
     updateEndBtn();
     setTimeout(() => {
@@ -6038,6 +6058,7 @@ function endWritingSession(){
   if (hadRun) showRecap();
   setupTimer();
   updateEndBtn();
+  if (typeof live !== 'undefined' && live.on){ liveScheduleTrack(); liveApplyProseLock(); }
   if (hadRun && editorText().trim()) appendBeginPrompt('Continue\u2026');
   flashStatus('Session ended \u2014 add elements, then begin writing to start the next');
 }
@@ -6155,15 +6176,39 @@ let supa = null;
 try { if (window.supabase && window.supabase.createClient) supa = window.supabase.createClient(SUPA_URL, SUPA_KEY); } catch (e){ console.warn('supabase init threw:', e); }
 console.log('Dystoria cloud — SDK loaded:', !!(window.supabase && window.supabase.createClient), '· client:', !!supa);
 window.__supa = () => ({ sdk: !!window.supabase, client: !!supa, user: cloud.user });
-const cloud = { user: null };
+const cloud = { user: null, username: '' };
 function cloudReady(){ return !!(supa && cloud.user); }
+function myDisplayName(){ return cloud.username || (cloud.user && (cloud.user.email || '').split('@')[0]) || 'Writer'; }
+async function loadMyProfile(){
+  cloud.username = '';
+  if (!cloudReady()) return;
+  try {
+    const { data } = await supa.from('profiles').select('username').eq('id', cloud.user.id).single();
+    cloud.username = (data && data.username) || '';
+  } catch (e){}
+  updateAccountUI();
+  if (live.on) liveScheduleTrack();
+}
+async function saveMyUsername(){
+  if (!cloudReady()) return;
+  const name = ($('profUser').value || '').trim().slice(0, 24);
+  if (!name){ flashStatus('Pick a username'); return; }
+  const { error } = await supa.from('profiles').update({ username: name }).eq('id', cloud.user.id);
+  if (error){ flashStatus('Username: ' + error.message); return; }
+  cloud.username = name;
+  updateAccountUI();
+  flashStatus('Username saved');
+  if (live.on) liveScheduleTrack();
+  if (state.session && state.session.cloudId) loadStoryPeople(state.session);
+}
 function updateAccountUI(){
   const btn = $('accountBtn');
-  if (btn) btn.textContent = cloud.user ? (cloud.user.email || 'Account') : 'Sign In';
+  if (btn) btn.textContent = cloud.user ? (myDisplayName()) : 'Sign In';
   const av = $('authedView'), fm = $('authForm');
   if (cloud.user){
     if (av){ av.style.display = 'block'; av.querySelector('.auth-who').textContent = 'Signed in as ' + (cloud.user.email || 'you'); }
     if (fm) fm.style.display = 'none';
+    const pu = $('profUser'); if (pu && document.activeElement !== pu) pu.value = cloud.username || '';
     $('authTitle').textContent = 'Your account';
   } else {
     if (av) av.style.display = 'none';
@@ -6230,6 +6275,7 @@ async function cloudPull(){
     // if nothing is open yet, surface the most recent story so sign-in shows your work
     const blank = !state.session && !state.prompt && !editorText().trim() && !inkHasContent();
     if (blank && merged.length) openSession(merged[0].id);
+    else if (state.session && state.session.cloudId && cloud.user){ if (!live.on) liveJoin(state.session); loadStoryPeople(state.session); }
   } catch (e) {}
 }
 /* ---------------- sharing a story with another writer ---------------- */
@@ -6253,7 +6299,7 @@ async function shareStory(sess){
     not_owner: 'Only the owner can share this story'
   }[data] || ('Share: ' + data);
   flashStatus(msg);
-  if (data === 'ok') renderLibrary();
+  if (data === 'ok'){ renderLibrary(); if (state.session && state.session.cloudId === sess.cloudId) loadStoryPeople(sess); }
 }
 async function listCollaborators(cloudId){
   if (!cloudReady() || !cloudId) return [];
@@ -6268,12 +6314,38 @@ async function unshareStory(sess, userId){
   flashStatus('Collaborator removed');
   renderLibrary();
 }
+async function loadStoryPeople(sess){
+  if (!cloudReady() || !sess || !sess.cloudId){ renderShareNote(null); return; }
+  try {
+    const { data, error } = await supa.rpc('story_people', { sid: sess.cloudId });
+    renderShareNote(error ? null : (data || []));
+  } catch (e){ renderShareNote(null); }
+}
+function renderShareNote(people){
+  const el = $('shareNote'); if (!el) return;
+  const nameOf = p => p ? (p.username || (p.email || '').split('@')[0] || 'someone') : 'someone';
+  if (!people || !cloud.user){ el.textContent = ''; el.style.display = 'none'; return; }
+  const me = cloud.user.id;
+  const owner = people.find(p => p.role === 'owner');
+  const collabs = people.filter(p => p.role === 'collaborator');
+  let txt = '';
+  if (owner && owner.user_id === me){
+    if (collabs.length) txt = 'being shared with ' + collabs.map(nameOf).join(', ');
+  } else if (owner){
+    txt = 'shared by ' + nameOf(owner);
+  }
+  el.textContent = txt;
+  el.style.display = txt ? 'block' : 'none';
+}
 /* ---------------- live session (two writers, one story, in real time) ---------------- */
 const live = { on:false, channel:null, cloudId:null, peers:[], lastDoc:'', applying:false };
 function liveBusy(){
   return (typeof linkDragActive === 'function' && linkDragActive()) || (state.lastDrag && Date.now() - state.lastDrag < 500);
 }
 function liveAmWriting(){ return !!(state.lastWriteAt && Date.now() - state.lastWriteAt < 4000); }
+// A "sprint" = the session clock is actually running. While someone sprints, the other
+// writer can't write that timeframe (the single focus-timer lock).
+function liveAmSprinting(){ return !!(state.timer && state.timer.started && state.timer.running); }
 // The shared document: the map/timeline/prose. View-only and per-device fields are stripped
 // so moving between timeframes or handwriting never travels to the other writer.
 function liveDocStr(){
@@ -6299,10 +6371,11 @@ function liveLeave(){
   if (live.channel){ try { live.channel.unsubscribe(); if (supa && supa.removeChannel) supa.removeChannel(live.channel); } catch (e){} }
   live.channel = null; live.on = false; live.cloudId = null; live.peers = [];
   liveRenderPresence();
+  liveApplyProseLock();
 }
 function liveTrack(){
   if (!live.channel || !live.on || !cloud.user) return;
-  try { live.channel.track({ id: cloud.user.id, name: cloud.user.email || 'Writer', frame: (state.frameIdx || 0), writing: liveAmWriting() }); } catch (e){}
+  try { live.channel.track({ id: cloud.user.id, name: myDisplayName(), frame: (state.frameIdx || 0), writing: liveAmSprinting() }); } catch (e){}
 }
 let liveTrackTimer = null;
 function liveScheduleTrack(){ clearTimeout(liveTrackTimer); liveTrackTimer = setTimeout(liveTrack, 250); }
@@ -6312,6 +6385,48 @@ function liveRefreshPeers(){
   Object.values(live.channel.presenceState()).forEach(arr => arr.forEach(p => { if (p && p.id && p.id !== (cloud.user && cloud.user.id)) peers.push(p); }));
   live.peers = peers;
   liveRenderPresence();
+  liveApplyProseLock();
+}
+/* ---- focus-timer lock: one writer per timeframe during a timed sprint ---- */
+let _liveLockBanner = null;
+function liveLockBanner(){
+  if (!_liveLockBanner){
+    _liveLockBanner = document.createElement('div');
+    _liveLockBanner.id = 'liveLockBanner';
+    _liveLockBanner.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);bottom:18px;z-index:300;background:#7d3550;color:#fff;font-family:var(--sans);font-size:12px;letter-spacing:.03em;padding:9px 17px;border-radius:16px;box-shadow:0 4px 16px rgba(0,0,0,.28);display:none;max-width:90vw;text-align:center';
+    document.body.appendChild(_liveLockBanner);
+  }
+  return _liveLockBanner;
+}
+function liveSprintingPeerOnFrame(){
+  if (!live.on) return null;
+  // Prose is still one shared document, so ANY peer's timed sprint holds the page.
+  // (When prose becomes per-timeframe, scope this to the same frame for true parallel writing.)
+  return live.peers.find(p => p.writing) || null;
+}
+function liveApplyProseLock(){
+  const ed = $('editor'); if (!ed) return;
+  let peer = liveSprintingPeerOnFrame();
+  // Both sprinting the same timeframe at once → deterministic tie-break: the greater id yields.
+  if (peer && liveAmSprinting() && cloud.user && cloud.user.id > peer.id){
+    state.timer.running = false;
+    clearInterval(state.timer.handle); state.timer.handle = null;
+    if (typeof updateEndBtn === 'function') updateEndBtn();
+    liveScheduleTrack();
+  } else if (peer && liveAmSprinting()){
+    peer = null; // I hold the sprint; don't lock myself
+  }
+  if (peer){
+    ed.setAttribute('contenteditable', 'false');
+    document.body.classList.add('prose-locked');
+    const b = liveLockBanner();
+    b.textContent = (peer.name || 'Another writer') + ' is writing §' + ((peer.frame || 0) + 1) + ' — the page is held until their sprint ends';
+    b.style.display = 'block';
+  } else {
+    if (!state.inkMode && ed.getAttribute('contenteditable') === 'false' && !(typeof state.pageLocked !== 'undefined' && state.pageLocked)) ed.setAttribute('contenteditable', 'true');
+    document.body.classList.remove('prose-locked');
+    if (_liveLockBanner) _liveLockBanner.style.display = 'none';
+  }
 }
 function liveRenderPresence(){
   const el = $('tableInfo'); if (!el) return;
@@ -6469,7 +6584,7 @@ function openSession(id){
   updateWordCount(); updateMeta();
   closeLibrary();
   flashStatus('Opened · ' + s.name);
-  if (cloud.user && state.session && state.session.cloudId) liveJoin(state.session); else liveLeave();
+  if (cloud.user && state.session && state.session.cloudId){ liveJoin(state.session); loadStoryPeople(state.session); } else { liveLeave(); renderShareNote(null); }
 }
 function updateDeaths(){
   const el = $('deathTally');
@@ -6504,6 +6619,7 @@ function toggleDeathScroll(){
 function newSession(){
   saveSession();
   liveLeave();
+  renderShareNote(null);
   state.session = null; state.prompt = null; state.nodes = []; state.edges = [];
   state.frames = null; state.frameIdx = 0;
   state.deaths = 0; state.deathLog = []; state.ruinsLog = []; updateDeaths();
@@ -6930,7 +7046,9 @@ function init(){
   $('authSignUp').addEventListener('click', async () => {
     if (!supa) return;
     authMsg('');
-    const { error } = await supa.auth.signUp({ email: $('authEmail').value.trim(), password: $('authPass').value });
+    const username = ($('authUser').value || '').trim().slice(0, 24);
+    if (!username){ authMsg('Choose a username — it’s how collaborators will see you.'); return; }
+    const { error } = await supa.auth.signUp({ email: $('authEmail').value.trim(), password: $('authPass').value, options: { data: { username } } });
     if (error) authMsg(error.message); else authMsg('Account created — check your email if confirmation is on, then sign in.');
   });
   $('authSignOut').addEventListener('click', async () => {
@@ -6939,6 +7057,8 @@ function init(){
     $('authCard').classList.remove('show');
     flashStatus('Signed out');
   });
+  $('profSave').addEventListener('click', saveMyUsername);
+  $('profUser').addEventListener('keydown', e => { if (e.key === 'Enter') saveMyUsername(); });
   document.addEventListener('mousedown', e => {
     const c = $('authCard');
     if (c.classList.contains('show') && !c.contains(e.target) && e.target.id !== 'accountBtn') c.classList.remove('show');
@@ -6947,12 +7067,12 @@ function init(){
     supa.auth.onAuthStateChange((_evt, session) => {
       cloud.user = session ? session.user : null;
       updateAccountUI();
-      if (cloud.user) cloudPull(); else liveLeave();
+      if (cloud.user){ loadMyProfile(); cloudPull(); } else { cloud.username = ''; liveLeave(); renderShareNote(null); }
     });
     supa.auth.getSession().then(({ data }) => {
       cloud.user = (data && data.session) ? data.session.user : null;
       updateAccountUI();
-      if (cloud.user) cloudPull();
+      if (cloud.user){ loadMyProfile(); cloudPull(); }
     });
   }
   buildRail();
@@ -7022,6 +7142,7 @@ function init(){
   });
   inkInit();
   $('clearMapBtn').addEventListener('click', () => {
+    $('appMenu').classList.remove('show');
     if (!confirm('Start a new story? The current one stays in your Library.')) return;
     newSession();
   });
