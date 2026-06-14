@@ -231,15 +231,24 @@
   .ed-global button{font-family:var(--sans); font-size:9.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-soft); border:1px solid var(--line); border-radius:13px; padding:5px 10px; background:transparent; cursor:pointer}
   .ed-global #edApproveAll:hover{color:#2f6f4f; border-color:#2f6f4f}
   .ed-global #edRejectAll:hover{color:#a05c4d; border-color:#a05c4d}
-  /* Per-suggestion popover */
-  #sgPop{position:fixed; z-index:170; display:none; background:var(--paper); border:1px solid var(--line); border-radius:10px; box-shadow:0 4px 16px rgba(0,0,0,.18); padding:8px 10px; max-width:240px}
-  #sgPop.show{display:block}
-  #sgPop .sp-lbl{font-family:var(--sans); font-size:9px; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-faint); margin-bottom:6px}
+  /* Per-suggestion popover — a small card in the site style */
+  #sgPop{position:fixed; z-index:170; display:none; width:248px; background:var(--paper);
+    border:1px solid var(--line); border-radius:13px; box-shadow:0 8px 30px rgba(28,27,25,.16); padding:13px 14px 12px}
+  #sgPop.show{display:block; animation:sgPopIn .14s ease}
+  @keyframes sgPopIn{from{opacity:0; transform:translateY(-4px)}to{opacity:1; transform:none}}
+  #sgPop .sp-lbl{font-family:var(--sans); font-size:8.5px; letter-spacing:.16em; text-transform:uppercase; color:var(--ink-faint); margin-bottom:8px}
+  #sgPop .sp-prev{font-family:var(--serif); font-size:13.5px; line-height:1.5; color:var(--ink); margin-bottom:11px; border-left:2px solid var(--line); padding-left:9px}
+  #sgPop .sp-old{color:#a05c4d; text-decoration:line-through; opacity:.75}
+  #sgPop .sp-new{color:#2f6f4f}
+  #sgPop .sp-arrow{color:var(--ink-faint); margin:0 3px}
   #sgPop .sp-acts{display:flex; gap:6px}
-  #sgPop button{font-family:var(--sans); font-size:10px; letter-spacing:.04em; border:1px solid var(--line); border-radius:8px; padding:5px 9px; cursor:pointer; background:transparent; color:var(--ink-soft)}
-  #sgPop .sp-ok:hover{color:#2f6f4f; border-color:#2f6f4f}
-  #sgPop .sp-no:hover{color:#a05c4d; border-color:#a05c4d}
+  #sgPop button{flex:1; font-family:var(--sans); font-size:9.5px; letter-spacing:.08em; text-transform:uppercase;
+    border:1px solid var(--line); border-radius:16px; padding:7px 0; cursor:pointer; background:transparent; color:var(--ink-soft)}
+  #sgPop .sp-ok:hover{color:#fff; background:#2f6f4f; border-color:#2f6f4f}
+  #sgPop .sp-no:hover{color:#fff; background:#a05c4d; border-color:#a05c4d}
   #sgPop .sp-ed:hover{color:var(--ink); border-color:var(--ink-faint)}
+  #sgPop .sp-wait{font-family:var(--serif); font-style:italic; font-size:12.5px; color:var(--ink-faint)}
+  body.eink #sgPop{border-width:2px; box-shadow:none}
   /* Locked prose (written in a finished Focus session) — read-only in the pad */
   #editor .lk{position:relative; background:rgba(120,110,95,.05)}
   #editor .lk:hover{background:rgba(120,110,95,.09)}
@@ -7709,6 +7718,7 @@ function buildEditMode(){
   tmp.innerHTML = editorHTML();
   tmp.querySelectorAll('div.ph').forEach(d => { if (!d.textContent.trim()) d.remove(); });
   $('editBody').innerHTML = tmp.innerHTML;
+  normalizeSuggestions();
   $('edDirectWrap').style.display = amOwner() ? '' : 'none';
   if (!amOwner() && $('edDirect')) $('edDirect').checked = false;
   applyEditEditable();
@@ -7800,6 +7810,14 @@ function doSg(kind){
   renderPending(); renderNotes();
 }
 /* ----- resolving suggestions (approve / reject / edit) ----- */
+// Backfill ids on suggestions made before grouping existed, so they stay resolvable.
+function normalizeSuggestions(root){
+  const r = root || $('editBody'); if (!r) return;
+  r.querySelectorAll('.sg-ins,.sg-del').forEach(s => {
+    if (!s.dataset.sg) s.dataset.sg = 's' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    if (!s.dataset.grp) s.dataset.grp = s.dataset.sg;
+  });
+}
 function unwrapSpan(s){ const p = s.parentNode; if (!p) return; while (s.firstChild) p.insertBefore(s.firstChild, s); p.removeChild(s); }
 function sgGroupSpans(grp){ return Array.from($('editBody').querySelectorAll('.sg-ins[data-grp="' + grp + '"], .sg-del[data-grp="' + grp + '"]')); }
 function allSgGroups(){ const set = new Set(); $('editBody').querySelectorAll('.sg-ins[data-grp], .sg-del[data-grp]').forEach(s => set.add(s.dataset.grp)); return Array.from(set); }
@@ -7837,16 +7855,28 @@ function openSgPop(span){
   const hasDel = spans.some(s => s.classList.contains('sg-del'));
   const kind = (hasIns && hasDel) ? 'Replacement' : (hasIns ? 'Insertion' : 'Deletion');
   const owner = amOwner(), mine = (au === sgAuthor());
+  const esc = s => (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const clip = s => { s = (s || '').trim(); return s.length > 60 ? esc(s.slice(0, 57)) + '…' : esc(s); };
+  const delTxt = spans.filter(s => s.classList.contains('sg-del')).map(s => s.textContent).join('');
+  const insTxt = spans.filter(s => s.classList.contains('sg-ins')).map(s => s.textContent).join('');
+  let prev;
+  if (hasIns && hasDel) prev = '<span class="sp-old">' + clip(delTxt) + '</span><span class="sp-arrow">→</span><span class="sp-new">' + clip(insTxt) + '</span>';
+  else if (hasIns) prev = '<span class="sp-new">＋ ' + clip(insTxt) + '</span>';
+  else prev = '<span class="sp-old">' + clip(delTxt) + '</span>';
   let acts;
   if (owner) acts = '<button class="sp-ok">Approve</button><button class="sp-no">Reject</button><button class="sp-ed">Edit</button>';
   else if (mine) acts = '<button class="sp-ed">Edit</button><button class="sp-no">Withdraw</button>';
-  else acts = '<span class="sp-lbl" style="margin:0">Awaiting the owner</span>';
+  else acts = '<span class="sp-wait">Awaiting the owner’s review</span>';
   const p = $('sgPop');
-  p.innerHTML = '<div class="sp-lbl">' + kind + ' · ' + au + '</div><div class="sp-acts">' + acts + '</div>';
-  const rect = span.getBoundingClientRect();
+  p.innerHTML = '<div class="sp-lbl">' + kind + ' · ' + esc(au) + '</div><div class="sp-prev">' + prev + '</div><div class="sp-acts">' + acts + '</div>';
   p.classList.add('show');
-  p.style.left = Math.max(8, Math.min(window.innerWidth - 250, rect.left)) + 'px';
-  p.style.top = (rect.bottom + 6) + 'px';
+  const rect = span.getBoundingClientRect();
+  const pw = p.offsetWidth || 248, ph = p.offsetHeight || 120;
+  let left = Math.max(8, Math.min(window.innerWidth - pw - 8, rect.left));
+  let top = rect.bottom + 6;
+  if (top + ph > window.innerHeight - 8) top = Math.max(8, rect.top - ph - 6);
+  p.style.left = left + 'px';
+  p.style.top = top + 'px';
   const ok = p.querySelector('.sp-ok'), no = p.querySelector('.sp-no'), ed = p.querySelector('.sp-ed');
   if (ok) ok.onclick = () => { resolveGroup(grp, true); closeSgPop(); commitEdit(); renderPending(); renderNotes(); };
   if (no) no.onclick = () => { resolveGroup(grp, false); closeSgPop(); commitEdit(); renderPending(); renderNotes(); };
