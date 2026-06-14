@@ -145,6 +145,7 @@
   .wk-detail .wk-quote{border-left:2px solid var(--line); padding:2px 0 2px 10px; margin:4px 0; color:var(--ink)}
   .wk-detail .wk-empty{color:var(--ink-faint); font-style:italic}
   .wk-detail .wk-ai{margin-top:12px; border-top:1px dashed var(--line); padding-top:8px}
+  .wk-detail .wk-ai.wk-ai-lead{margin-top:0; border-top:none; padding-top:2px}
   .wk-aitext{font-style:italic; color:var(--ink); line-height:1.65; margin:3px 0}
   .wk-aibtn{font-family:var(--sans); font-size:9.5px; letter-spacing:.14em; text-transform:uppercase; border:1px solid var(--line); border-radius:14px; padding:6px 12px; color:var(--ink-soft); background:transparent; cursor:pointer}
   .wk-aibtn:hover{border-color:var(--ink-faint); color:var(--ink)}
@@ -240,6 +241,10 @@
   #writeFrameBar{display:none; flex-wrap:wrap; gap:4px 18px; align-items:center; position:relative;
     min-height:52px; box-sizing:border-box; padding:8px 26px; border-bottom:1px solid var(--line); background:var(--bg2)}
   body.writing #writeFrameBar:not(.empty){display:flex}
+  #wmTitleBar{display:none}
+  body.writing #wmTitleBar{display:flex; align-items:center; justify-content:center; padding:14px 20px 8px;
+    font-family:var(--ancient); font-weight:700; font-size:22px; letter-spacing:.04em; color:var(--ink);
+    text-align:center; border-bottom:1px solid var(--line-soft)}
   .wf-item{font-family:var(--serif); font-size:15.5px; color:var(--ink)}
   .wf-item .wf-cat{font-family:var(--sans); font-size:8px; letter-spacing:.14em; text-transform:uppercase; margin-left:5px}
   .wf-stage{position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); white-space:nowrap;
@@ -888,6 +893,7 @@
       <button id="recapClose">Continue</button>
     </div>
     <div id="lowerMain">
+    <div id="wmTitleBar"></div>
     <div id="writeFrameBar"></div>
     <div id="deskbar">
       <span id="sessionMeta"></span>
@@ -6140,7 +6146,7 @@ async function runSessionSummary(wovenNames){
   if (start && full.startsWith(start)) chunk = full.slice(start.length).trim();
   if (!chunk) chunk = full;
   try {
-    const sys = 'You recap a writing session for the writer\u2019s own notes. Use ONLY the passage given; do not invent. 1\u20132 sentences, past tense, plain and clear, no preamble.';
+    const sys = 'You recap a writing session for the writer\u2019s own notes. Use ONLY the passage given; do not invent. Refer to parts as "Section N", not "timeframe". 1\u20132 sentences, past tense, plain and clear, no preamble.';
     const prompt = 'Passage written this session:\n\n' + chunk.slice(0, 12000) + '\n\nRecap what happened in it:';
     const text = await aiCall(sys, prompt);
     const el = $('rcAi'); if (!el) return;
@@ -6873,8 +6879,32 @@ function wikiAppearances(el){
   return hits;
 }
 function wikiCatName(cat){ const c = getCat(cat); return c ? c.name : cat; }
+function plotStageName(fi){
+  if (typeof findPlotWord !== 'function') return '';
+  const pw = findPlotWord(); if (!pw || typeof PLOT_STAGES === 'undefined') return '';
+  const stages = PLOT_STAGES[pw.word]; if (!stages) return '';
+  const fr = (state.frames || [])[fi];
+  const st = Math.min(typeof frameStage === 'function' ? frameStage(fr, fi) : fi, stages.length - 1);
+  return stages[st] || '';
+}
+// "Section N" with the section's name and/or events — never "timeframe"
+function wikiSectionLabel(fi){
+  let label = 'Section ' + (fi + 1);
+  const fr = (state.frames || [])[fi];
+  if (fr){
+    const extras = [];
+    const nm = fr.stageName || plotStageName(fi);
+    if (nm) extras.push(nm);
+    const evs = ((fr.prompt && fr.prompt.words) || []).filter(w => w.cat === 'event' && w.role === 'word').map(w => w.name || w.word);
+    if (evs.length) extras.push(evs.join(', '));
+    if (extras.length) label += ' (' + extras.join(' — ') + ')';
+  }
+  return label;
+}
 function renderWiki(){
   const body = $('wikiBody'); if (!body) return;
+  const titEl = document.querySelector('#wikiPanel .wk-title');
+  if (titEl) titEl.textContent = (state.session && state.session.name) || (($('storyName').value || '').trim()) || 'Story Wiki';
   const els = wikiGather();
   const lcAll = editorText().toLowerCase();
   const woven = els.filter(e => textHasWord(lcAll, e.word) || (e.name && textHasWord(lcAll, e.name))).length;
@@ -6905,18 +6935,18 @@ function renderWiki(){
 function buildWikiDetail(detail, el){
   detail.innerHTML = '';
   const add = (html) => { const d = document.createElement('div'); d.innerHTML = html; detail.appendChild(d); };
-  const desc = descFor(el.ref); if (desc) add('<div class="wk-desc">' + esc(desc) + '</div>');
+  // the summary (drawn from the prose) leads — no database description
+  const aiWrap = document.createElement('div'); aiWrap.className = 'wk-ai wk-ai-lead'; detail.appendChild(aiWrap);
+  renderWikiAI(aiWrap, el);
   if (el.attrs && el.attrs.length){ add('<div class="wk-lbl">Characteristics</div>'); add(el.attrs.map(a => esc(a.word)).join(' · ')); }
   const rels = wikiRelations(el);
   if (rels.length){ add('<div class="wk-lbl">Relationships</div>'); rels.forEach(r => add('<div class="wk-rel">' + esc(r) + '</div>')); }
   add('<div class="wk-lbl">Appears in</div>');
-  add('Timeframe' + (el.frames.size > 1 ? 's ' : ' ') + [...el.frames].sort((a, b) => a - b).map(f => '§' + f).join(', '));
+  [...el.frames].sort((a, b) => a - b).forEach(f => add('<div>' + esc(wikiSectionLabel(f - 1)) + '</div>'));
   const quotes = wikiAppearances(el);
   add('<div class="wk-lbl">In your prose</div>');
   if (!quotes.length) add('<div class="wk-empty">Not yet woven into the writing.</div>');
   else quotes.slice(0, 20).forEach(q => add('<div class="wk-quote">' + esc(q) + '</div>'));
-  const aiWrap = document.createElement('div'); aiWrap.className = 'wk-ai'; detail.appendChild(aiWrap);
-  renderWikiAI(aiWrap, el);
 }
 function openWiki(){ renderWiki(); $('wikiPanel').classList.add('show'); }
 function closeWiki(){ $('wikiPanel').classList.remove('show'); }
@@ -6995,14 +7025,13 @@ function buildWikiMarkdown(els, story){
     const L = ['---'];
     L.push('title: ' + (el.name ? (el.name + ' (' + el.word + ')') : el.word));
     L.push('type: ' + wikiCatName(el.cat) + (el.sub ? (' · ' + el.sub) : ''));
-    L.push('timeframes: ' + [...el.frames].sort((a, b) => a - b).map(f => '§' + f).join(', '));
+    L.push('sections: ' + [...el.frames].sort((a, b) => a - b).map(f => wikiSectionLabel(f - 1)).join('; '));
     L.push('---', '', '# ' + (el.name ? ('“' + el.name + '” — ' + el.word) : el.word), '');
-    const d = descFor(el.ref); if (d) L.push('*' + d + '*', '');
+    const cache = (state.session && state.session.wikiAI) ? state.session.wikiAI[el.cat + '|' + el.word] : null;
+    if (cache && cache.text) L.push(cache.text, '');
     if (el.attrs && el.attrs.length) L.push('**Characteristics:** ' + el.attrs.map(a => a.word).join(', '), '');
     const rels = wikiRelLinks(el, byKey);
     if (rels.length){ L.push('## Relationships', ''); rels.forEach(r => L.push('- ' + r)); L.push(''); }
-    const cache = (state.session && state.session.wikiAI) ? state.session.wikiAI[el.cat + '|' + el.word] : null;
-    if (cache && cache.text) L.push('## Summary', '', cache.text, '');
     const qs = wikiAppearances(el);
     L.push('## In the prose', '');
     if (!qs.length) L.push('_Not yet woven into the writing._', '');
@@ -7060,14 +7089,14 @@ async function aiRollup(el){
   const facts = ['Element: ' + el.word + (el.name ? ' (named “' + el.name + '”)' : '') + ' — ' + wikiCatName(el.cat) + (el.sub ? ' · ' + el.sub : '')];
   if (el.attrs && el.attrs.length) facts.push('Traits: ' + el.attrs.map(a => a.word).join(', '));
   const rels = wikiRelations(el); if (rels.length) facts.push('Relationships: ' + rels.join('; '));
-  if (el.frames && el.frames.size) facts.push('Appears in timeframes: ' + [...el.frames].sort((a, b) => a - b).map(f => '§' + f).join(', '));
+  if (el.frames && el.frames.size) facts.push('Appears in: ' + [...el.frames].sort((a, b) => a - b).map(f => wikiSectionLabel(f - 1)).join('; '));
   const quotes = wikiAppearances(el);
-  const sys = 'You are a story-wiki assistant for a writer. Write a short, grounded encyclopedia-style entry for ONE story element using ONLY the facts and prose excerpts given. Never invent events, names, or traits that are not present. If the prose reveals little, stay brief and say what is known. 2–4 sentences, third person, present tense, no preamble.';
+  const sys = 'You are a story-wiki assistant for a writer. Write a short, grounded encyclopedia-style entry for ONE story element using ONLY the facts and prose excerpts given. Never invent events, names, or traits that are not present. If the prose reveals little, stay brief and say what is known. Refer to parts of the story as "Section N" (never "timeframe"); a section may have a name or event you can mention. 2–4 sentences, third person, present tense, no preamble.';
   const prompt = facts.join('\n') + '\n\nProse excerpts where it appears:\n' + (quotes.length ? quotes.map(q => '- ' + q).join('\n') : '(none yet)') + '\n\nWrite the entry:';
   return aiCall(sys, prompt);
 }
 function renderWikiAI(wrap, el){
-  wrap.innerHTML = '<div class="wk-lbl">AI summary</div>';
+  wrap.innerHTML = '';
   const key = el.cat + '|' + el.word;
   const cache = (state.session && state.session.wikiAI) ? state.session.wikiAI[key] : null;
   const sig = aiSig(el);
@@ -7086,7 +7115,7 @@ function renderWikiAI(wrap, el){
   }
 }
 async function runAIRollup(el, wrap){
-  wrap.innerHTML = '<div class="wk-lbl">AI summary</div><div class="wk-aitext wk-empty">summarizing…</div>';
+  wrap.innerHTML = '<div class="wk-aitext wk-empty">summarizing…</div>';
   try {
     const text = await aiRollup(el);
     if (!state.session) ensureSession();
@@ -7095,7 +7124,7 @@ async function runAIRollup(el, wrap){
     scheduleAutosave(500);
     renderWikiAI(wrap, el);
   } catch (e){
-    wrap.innerHTML = '<div class="wk-lbl">AI summary</div>';
+    wrap.innerHTML = '';
     const msg = document.createElement('div'); msg.className = 'wk-empty'; msg.textContent = aiErrMsg(e); wrap.appendChild(msg);
     const btn = document.createElement('button'); btn.className = 'wk-aibtn'; btn.textContent = 'Try again';
     btn.addEventListener('click', () => runAIRollup(el, wrap)); wrap.appendChild(btn);
@@ -7107,7 +7136,7 @@ async function runAIOverview(){
   if (!text){ flashStatus('Write some prose first'); return; }
   wrap.innerHTML = '<div class="wk-aitext wk-empty">summarizing the story so far…</div>';
   try {
-    const sys = 'You summarize a work-in-progress story for the writer’s own reference. Use ONLY what the prose contains; do not invent. 3–5 sentences, neutral and clear, no preamble.';
+    const sys = 'You summarize a work-in-progress story for the writer’s own reference. Use ONLY what the prose contains; do not invent. Refer to parts as "Section N", not "timeframe". 3–5 sentences, neutral and clear, no preamble.';
     const out = await aiCall(sys, 'Story so far:\n\n' + text.slice(0, 18000) + '\n\nSummarize what has happened and the current situation:');
     if (state.session){ state.session.wikiOverview = out; scheduleAutosave(500); }
     renderWikiOverview(out);
@@ -7414,12 +7443,14 @@ function updateWordCount(){
 }
 
 /* ---------------- wire up ---------------- */
+function updateWmTitle(){ const el = $('wmTitleBar'); if (el) el.textContent = (($('storyName').value || '').trim()) || 'Untitled story'; }
 function setWriting(on){
   document.body.classList.toggle('writing', on);
   const b = $('writeModeBtn');
   b.textContent = on ? 'Exit Focus' : 'Focus';
   b.classList.toggle('on', on);
   if (on){
+    updateWmTitle();
     renderWriteFrame();
     if (state.timer.started) state.timer.running = true;
     if (!state.inkMode) $('editor').focus();
@@ -7677,7 +7708,7 @@ function init(){
       if ((u.count + '/' + u.total) !== state.usageKey) renderConstellation();
     }, 800);
   });
-  $('storyName').addEventListener('input', scheduleAutosave);
+  $('storyName').addEventListener('input', () => { scheduleAutosave(); updateWmTitle(); });
   $('sectionTitle').addEventListener('input', scheduleAutosave);
   $('timerLen').addEventListener('change', () => {
     const p = getPrefs(); p.timerLen = $('timerLen').value;
