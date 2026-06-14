@@ -209,6 +209,24 @@
   #importGo{font-family:var(--sans); font-size:11px; letter-spacing:.14em; text-transform:uppercase; border-radius:16px; padding:9px 18px; background:var(--ink); color:var(--paper); cursor:pointer}
   #importGo[disabled]{opacity:.5; cursor:default}
   #importCard .ic-note{font-family:var(--serif); font-style:italic; font-size:12px; color:var(--ink-faint); line-height:1.5; margin:12px 0 0}
+  #importGo[disabled],#importConfirm[disabled]{opacity:.5; cursor:default}
+  #importConfirm{font-family:var(--sans); font-size:11px; letter-spacing:.14em; text-transform:uppercase; border-radius:16px; padding:9px 18px; background:var(--ink); color:var(--paper); cursor:pointer}
+  #importBack{font-family:var(--sans); font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--ink-soft); background:none; border:1px solid var(--line); border-radius:14px; padding:8px 13px; margin-right:8px; cursor:pointer}
+  .ir-block{margin-bottom:12px}
+  .ir-lbl{font-family:var(--sans); font-size:9px; font-weight:700; letter-spacing:.14em; text-transform:uppercase; color:var(--ink-faint); margin:6px 0 5px}
+  #importOverview,.ir-name,.ir-sum{width:100%; box-sizing:border-box; font-family:var(--serif); color:var(--ink); border:1px solid var(--line); border-radius:7px; background:var(--bg2); padding:7px 9px; outline:none; resize:vertical}
+  #importOverview{font-style:italic; font-size:13px; line-height:1.5}
+  #importElements{max-height:42vh; overflow-y:auto; margin-bottom:4px}
+  .ir-el{border:1px solid var(--line); border-radius:9px; padding:9px 10px; margin-bottom:8px; background:var(--paper)}
+  .ir-el.off{opacity:.45}
+  .ir-el-top{display:flex; align-items:center; gap:8px}
+  .ir-inc{flex:none}
+  .ir-dot{width:9px; height:9px; border-radius:50%; flex:none}
+  .ir-catname{font-family:var(--sans); font-size:9px; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-faint); flex:none; width:58px}
+  .ir-name{font-size:14px; font-weight:600; padding:5px 8px}
+  .ir-exists{flex:none; color:#9a7b1e; font-size:13px; cursor:default}
+  .ir-sum{font-size:12.5px; font-style:italic; line-height:1.5; margin-top:6px}
+  .ir-scope{display:flex; align-items:center; gap:6px; font-family:var(--sans); font-size:9.5px; letter-spacing:.05em; color:var(--ink-faint); margin-top:6px; cursor:pointer}
   body.eink #importCard{border:2px solid #000; box-shadow:none}
   body.eink #recapCard{border:2px solid #000}
   #seal{width:44px; height:44px; flex:none; color:var(--ink)}
@@ -914,12 +932,20 @@
 <div id="drawerBackdrop"></div>
 <div id="importBackdrop"></div>
 <div id="importCard">
-  <div class="ic-head"><span>Import a story</span><button id="importClose" title="Close">×</button></div>
-  <input id="importTitle" placeholder="Story title (optional)">
-  <textarea id="importText" rows="9" placeholder="Paste your story’s prose here…"></textarea>
-  <div class="ic-row"><label class="ic-file" for="importFile">Or choose a .txt / .md file</label><input type="file" id="importFile" accept=".txt,.md,text/plain,text/markdown" hidden><span id="importStatus"></span></div>
-  <div class="ic-actions"><button id="importGo">Import &amp; extract</button></div>
-  <p class="ic-note">Creates a new story with your prose, then draws out its beings, places, objects, and events onto the map with AI. Extracted elements stay in this story only.</p>
+  <div class="ic-head"><span id="importHeadTitle">Import a story</span><button id="importClose" title="Close">×</button></div>
+  <div id="importEntry">
+    <input id="importTitle" placeholder="Story title (optional)">
+    <textarea id="importText" rows="9" placeholder="Paste your story’s prose here…"></textarea>
+    <div class="ic-row"><label class="ic-file" for="importFile">Or choose a .txt / .md file</label><input type="file" id="importFile" accept=".txt,.md,text/plain,text/markdown" hidden><span id="importStatus"></span></div>
+    <div class="ic-actions"><button id="importGo">Read with AI →</button></div>
+    <p class="ic-note">The AI reads your prose and proposes the beings, places, objects, and events. You review and approve them before the story is built. Extracted elements stay in this story unless you mark them for all stories.</p>
+  </div>
+  <div id="importReview" style="display:none">
+    <div class="ir-block"><div class="ir-lbl">Story summary</div><textarea id="importOverview" rows="3" placeholder="story summary"></textarea></div>
+    <div class="ir-lbl">Elements found — uncheck to skip · edit names &amp; summaries · ✦ already in the library</div>
+    <div id="importElements"></div>
+    <div class="ic-actions"><button id="importBack" class="ghost">Back</button><button id="importConfirm">Confirm &amp; build story</button></div>
+  </div>
 </div>
 <div id="wikiPanel">
   <div class="wk-head"><span class="wk-title">Story Wiki</span><div class="wk-head-actions"><button id="wikiExport" title="Write the wiki as organized, cross-linked .md files">Export .md</button><button id="wikiClose" title="Close">×</button></div></div>
@@ -7006,55 +7032,104 @@ function parseJsonLoose(s){
   if (a >= 0 && b > a) t = t.slice(a, b + 1);
   try { return JSON.parse(t); } catch (e){ return null; }
 }
+const IMP = { title: '', prose: '', overview: '', elements: [] };
+const IMP_TMAP = { being: 'being', character: 'being', creature: 'being', person: 'being', monster: 'being', animal: 'being', setting: 'setting', place: 'setting', location: 'setting', object: 'object', item: 'object', thing: 'object', artifact: 'object', event: 'event', happening: 'event', moment: 'event', scene: 'event' };
+function importShow(view){
+  $('importEntry').style.display = view === 'entry' ? 'block' : 'none';
+  $('importReview').style.display = view === 'review' ? 'block' : 'none';
+  $('importHeadTitle').textContent = view === 'review' ? 'Review the story’s elements' : 'Import a story';
+}
 function openImport(){
   closeLibrary();
   $('importTitle').value = ''; $('importText').value = ''; $('importStatus').textContent = ''; $('importGo').disabled = false;
+  importShow('entry');
   $('importBackdrop').classList.add('show'); $('importCard').classList.add('show');
   setTimeout(() => $('importText').focus(), 60);
 }
 function closeImport(){ $('importCard').classList.remove('show'); $('importBackdrop').classList.remove('show'); }
-async function importStory(){
+function wordExistsInCat(cat, word){ const lc = (word || '').toLowerCase(); return ecPoolWords(cat).some(p => p.word.toLowerCase() === lc); }
+async function extractImport(){
   const prose = $('importText').value.trim();
   if (!prose){ $('importStatus').textContent = 'Paste some prose first.'; return; }
-  const title = $('importTitle').value.trim();
-  $('importGo').disabled = true; $('importStatus').textContent = 'Creating story…';
+  IMP.prose = prose; IMP.title = $('importTitle').value.trim();
+  $('importGo').disabled = true; $('importStatus').textContent = 'Reading the story with AI…';
+  let data = null;
+  try {
+    const sys = 'You analyze a story for a worldbuilding app and return ONLY valid minified JSON — no prose, no code fences. Schema: {"title":string,"overview":string,"elements":[{"type":"being"|"setting"|"object"|"event","name":string,"summary":string}]}. being = a named character or creature; setting = a place; object = a notable physical thing; event = a key happening. overview = 2–3 neutral sentences on what happens. summary = 1–2 sentences grounded ONLY in the text. Use names exactly as written. Up to 8 of each type. Invent nothing.';
+    const out = await aiCall(sys, 'Story:\n\n' + prose.slice(0, 16000) + '\n\nReturn the JSON.');
+    data = parseJsonLoose(out);
+  } catch (e){ $('importGo').disabled = false; $('importStatus').textContent = aiErrMsg(e); return; }
+  if (!data || !Array.isArray(data.elements)){ $('importGo').disabled = false; $('importStatus').textContent = 'The AI couldn’t structure this — try again, or shorten the text.'; return; }
+  IMP.overview = data.overview || '';
+  if (data.title && !IMP.title) IMP.title = String(data.title).slice(0, 80);
+  IMP.elements = [];
+  data.elements.forEach(el => {
+    if (!el || !el.name) return;
+    const cat = IMP_TMAP[String(el.type || '').toLowerCase()];
+    if (!cat) return;
+    const name = String(el.name).trim().slice(0, 60); if (!name) return;
+    IMP.elements.push({ cat, name, summary: String(el.summary || '').trim(), exists: wordExistsInCat(cat, name), include: true, sys: false });
+  });
+  $('importGo').disabled = false;
+  $('importTitle').value = IMP.title;
+  $('importOverview').value = IMP.overview;
+  renderImportReview();
+  importShow('review');
+}
+function renderImportReview(){
+  const wrap = $('importElements'); wrap.innerHTML = '';
+  if (!IMP.elements.length){ wrap.innerHTML = '<div class="ir-lbl" style="color:var(--ink-faint)">No elements found — you can still build the story from the prose.</div>'; return; }
+  IMP.elements.forEach(el => {
+    const d = document.createElement('div'); d.className = 'ir-el' + (el.include ? '' : ' off');
+    d.innerHTML =
+      '<div class="ir-el-top">' +
+      '<label class="ir-inc"><input type="checkbox" class="ir-i"' + (el.include ? ' checked' : '') + '></label>' +
+      '<span class="ir-dot" style="background:' + catColor(el.cat) + '"></span>' +
+      '<span class="ir-catname">' + esc((getCat(el.cat) || {}).name || el.cat) + '</span>' +
+      '<input class="ir-name" value="' + esc(el.name) + '">' +
+      (el.exists ? '<span class="ir-exists" title="Already in the library — edits make a story-specific variation">✦</span>' : '') +
+      '</div>' +
+      '<textarea class="ir-sum" rows="2" placeholder="summary">' + esc(el.summary) + '</textarea>' +
+      '<label class="ir-scope"><input type="checkbox" class="ir-sys"' + (el.sys ? ' checked' : '') + '> available in all stories</label>';
+    const inc = d.querySelector('.ir-i'); inc.addEventListener('change', () => { el.include = inc.checked; d.classList.toggle('off', !inc.checked); });
+    const nm = d.querySelector('.ir-name'); nm.addEventListener('input', () => { el.name = nm.value; el.exists = wordExistsInCat(el.cat, nm.value.trim()); });
+    d.querySelector('.ir-sum').addEventListener('input', e => { el.summary = e.target.value; });
+    d.querySelector('.ir-sys').addEventListener('change', e => { el.sys = e.target.checked; });
+    wrap.appendChild(d);
+  });
+}
+async function confirmImport(){
+  IMP.overview = $('importOverview').value.trim();
+  IMP.title = $('importTitle').value.trim();
+  $('importConfirm').disabled = true;
   newSession();
-  $('storyName').value = title || 'Imported story'; updateWmTitle();
+  $('storyName').value = IMP.title || 'Imported story'; updateWmTitle();
   const ed = $('editor'); ed.innerHTML = '';
-  prose.split(/\n{2,}/).forEach(p => { const d = document.createElement('div'); d.textContent = p.trim(); ed.appendChild(d); });
+  IMP.prose.split(/\n{2,}/).forEach(p => { const x = document.createElement('div'); x.textContent = p.trim(); ed.appendChild(x); });
   if (!state.prompt){ state.prompt = { words: [], sets: 1, links: [], removedLinks: [] }; state.frames = [{ gap: null, prompt: state.prompt }]; state.frameIdx = 0; state.activeSet = 0; }
   ensureSession();
   state.session.text = editorText(); state.session.html = ed.innerHTML; state.session.frames = state.frames; state.session.words = state.prompt.words;
-  setMode('type'); updateWordCount(); saveSession();
-  $('importStatus').textContent = 'Reading the story with AI…';
-  let data = null;
-  try {
-    const sys = 'You extract the key story elements from prose for a worldbuilding app. Respond with ONLY valid minified JSON — no prose, no markdown fences. Shape: {"title":"","beings":[],"settings":[],"objects":[],"events":[]}. beings = named characters or creatures; settings = places; objects = notable physical things; events = key happenings. Use names exactly as they appear in the text. Up to 12 per list; use [] if none.';
-    const out = await aiCall(sys, 'Story:\n\n' + prose.slice(0, 16000) + '\n\nReturn the JSON:');
-    data = parseJsonLoose(out);
-  } catch (e){}
+  state.session.customWords = state.session.customWords || {};
+  state.session.wikiAI = state.session.wikiAI || {};
+  if (IMP.overview) state.session.wikiOverview = IMP.overview;
   let added = 0;
-  if (data){
-    state.session.customWords = state.session.customWords || {};
-    [['being', data.beings], ['setting', data.settings], ['object', data.objects], ['event', data.events]].forEach(pair => {
-      const cat = pair[0], arr = Array.isArray(pair[1]) ? pair[1] : [];
-      arr.slice(0, 12).forEach(nm => {
-        const word = String(nm && nm.name ? nm.name : nm || '').trim().slice(0, 60);
-        if (!word) return;
-        state.prompt.words.push(makeElementItem(cat, word, 0));
-        const sub = (cat === 'being') ? 'Archetype' : (((getCat(cat).subcategories[0]) || {}).name || '');
-        state.session.customWords[cat] = state.session.customWords[cat] || [];
-        if (!state.session.customWords[cat].some(e => e.word === word)) state.session.customWords[cat].push({ word, sub, desc: '', g: [] });
-        added++;
-      });
-    });
-    if (data.title && !title){ $('storyName').value = String(data.title).slice(0, 80); updateWmTitle(); }
-    rebuildPools();
-    if (added){ $('skyEmpty').style.display = 'none'; layoutConstellation(); }
-    renderConstellation(); saveSession();
-  }
+  IMP.elements.forEach(el => {
+    if (!el.include) return;
+    const word = el.name.trim().slice(0, 60); if (!word) return;
+    state.prompt.words.push(makeElementItem(el.cat, word, 0));
+    const sub = (el.cat === 'being') ? 'Archetype' : (((getCat(el.cat).subcategories[0]) || {}).name || '');
+    const entry = { word, sub, desc: el.summary, g: [] };
+    if (el.sys){ const cw = loadCustomWords(); cw[el.cat] = cw[el.cat] || []; if (!cw[el.cat].some(e => e.word === word)) cw[el.cat].push(entry); localStorage.setItem(LS_CUSTOM, JSON.stringify(cw)); }
+    else { state.session.customWords[el.cat] = state.session.customWords[el.cat] || []; if (!state.session.customWords[el.cat].some(e => e.word === word)) state.session.customWords[el.cat].push(entry); }
+    if (el.summary) state.session.wikiAI[el.cat + '|' + word] = { text: el.summary, sig: 0 };
+    added++;
+  });
+  rebuildPools();
+  setMode('type'); updateWordCount();
+  if (added){ $('skyEmpty').style.display = 'none'; layoutConstellation(); }
+  renderConstellation(); saveSession();
   closeImport();
-  flashStatus(added ? ('Imported — ' + added + ' elements drawn from the prose') : (data ? 'Imported the prose (no elements found)' : 'Imported the prose; AI extraction wasn’t available'));
+  flashStatus('Imported — ' + added + ' element' + (added === 1 ? '' : 's') + ' added to the map');
 }
 
 /* ---------------- story wiki (deterministic; AI rollups layer later) ---------------- */
@@ -7917,7 +7992,9 @@ function init(){
   $('drawerBackdrop').addEventListener('click', closeDrawers);
   window.__closeDrawers = closeDrawers;
   $('libClose').addEventListener('click', closeLibrary);
-  $('importGo').addEventListener('click', importStory);
+  $('importGo').addEventListener('click', extractImport);
+  $('importConfirm').addEventListener('click', confirmImport);
+  $('importBack').addEventListener('click', () => importShow('entry'));
   $('importClose').addEventListener('click', closeImport);
   $('importBackdrop').addEventListener('click', closeImport);
   $('importFile').addEventListener('change', () => {
