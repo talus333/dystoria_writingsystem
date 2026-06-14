@@ -3909,6 +3909,7 @@ function switchFrame(k){
   renderTimeline();
   syncFramesToSession();
   if (moved && k > 0) insertStageDivider(k);
+  if (typeof live !== 'undefined' && live.on) liveScheduleTrack();
 }
 function appendBeginPrompt(word){
   if (state.inkMode) return;
@@ -6267,6 +6268,105 @@ async function unshareStory(sess, userId){
   flashStatus('Collaborator removed');
   renderLibrary();
 }
+/* ---------------- live session (two writers, one story, in real time) ---------------- */
+const live = { on:false, channel:null, cloudId:null, peers:[], lastDoc:'', applying:false };
+function liveBusy(){
+  return (typeof linkDragActive === 'function' && linkDragActive()) || (state.lastDrag && Date.now() - state.lastDrag < 500);
+}
+function liveAmWriting(){ return !!(state.lastWriteAt && Date.now() - state.lastWriteAt < 4000); }
+// The shared document: the map/timeline/prose. View-only and per-device fields are stripped
+// so moving between timeframes or handwriting never travels to the other writer.
+function liveDocStr(){
+  if (!state.session) return '';
+  const d = cloudDocOf(state.session);
+  delete d.ink; delete d.frameIdx; delete d.focusKeys; delete d.game;
+  return JSON.stringify(d);
+}
+function liveJoin(sess){
+  liveLeave();
+  if (!supa || !cloud.user || !sess || !sess.cloudId) return;
+  live.cloudId = sess.cloudId;
+  live.channel = supa.channel('story-' + sess.cloudId, { config: { presence: { key: cloud.user.id }, broadcast: { self: false } } });
+  live.channel
+    .on('presence', { event: 'sync' }, liveRefreshPeers)
+    .on('presence', { event: 'join' }, () => { liveRefreshPeers(); liveBroadcast(true); })
+    .on('broadcast', { event: 'doc' }, ({ payload }) => { if (payload && typeof payload.doc === 'string') liveApplyRemote(payload.doc); })
+    .subscribe((status) => {
+      if (status === 'SUBSCRIBED'){ live.on = true; live.lastDoc = liveDocStr(); liveTrack(); }
+    });
+}
+function liveLeave(){
+  if (live.channel){ try { live.channel.unsubscribe(); if (supa && supa.removeChannel) supa.removeChannel(live.channel); } catch (e){} }
+  live.channel = null; live.on = false; live.cloudId = null; live.peers = [];
+  liveRenderPresence();
+}
+function liveTrack(){
+  if (!live.channel || !live.on || !cloud.user) return;
+  try { live.channel.track({ id: cloud.user.id, name: cloud.user.email || 'Writer', frame: (state.frameIdx || 0), writing: liveAmWriting() }); } catch (e){}
+}
+let liveTrackTimer = null;
+function liveScheduleTrack(){ clearTimeout(liveTrackTimer); liveTrackTimer = setTimeout(liveTrack, 250); }
+function liveRefreshPeers(){
+  if (!live.channel) return;
+  const peers = [];
+  Object.values(live.channel.presenceState()).forEach(arr => arr.forEach(p => { if (p && p.id && p.id !== (cloud.user && cloud.user.id)) peers.push(p); }));
+  live.peers = peers;
+  liveRenderPresence();
+}
+function liveRenderPresence(){
+  const el = $('tableInfo'); if (!el) return;
+  if (!live.on || !live.peers.length){ el.textContent = ''; return; }
+  el.textContent = '● ' + live.peers.map(p => (p.name || 'Writer').split('@')[0] + (p.writing ? ' ✎' : '') + ' · §' + ((p.frame || 0) + 1)).join('   ');
+}
+function liveBroadcast(force){
+  if (!live.on || !live.channel || live.applying) return;
+  const cur = liveDocStr();
+  if (!force && cur === live.lastDoc) return;
+  live.lastDoc = cur;
+  try { live.channel.send({ type: 'broadcast', event: 'doc', payload: { doc: cur } }); } catch (e){}
+}
+function liveApplyRemote(raw){
+  if (!live.on || liveBusy() || raw === live.lastDoc) return;
+  let d; try { d = JSON.parse(raw); } catch (e){ return; }
+  if (!d) return;
+  live.lastDoc = raw;
+  live.applying = true;
+  try {
+    if (d.frames && d.frames.length){
+      state.frames = d.frames;
+      state.frameIdx = Math.min(state.frameIdx || 0, state.frames.length - 1); // keep MY timeframe view
+      state.prompt = state.frames[state.frameIdx].prompt;
+      state.selNode = null; state.linkFrom = null;
+      if (state.prompt && state.session) state.session.words = state.prompt.words;
+      refreshSky(); renderTimeline();
+    }
+    if (typeof d.name === 'string' && $('storyName').value !== d.name) $('storyName').value = d.name;
+    if (typeof d.section === 'string' && $('sectionTitle') && $('sectionTitle').value !== d.section && document.activeElement !== $('sectionTitle')) $('sectionTitle').value = d.section;
+    // Don't pull prose out from under someone actively typing — last-write-wins resolves on idle.
+    const typing = liveAmWriting() || document.activeElement === $('editor');
+    if (!typing && typeof d.html === 'string' && d.html !== $('editor').innerHTML){ $('editor').innerHTML = d.html; updateWordCount(); }
+    if (state.session){
+      Object.assign(state.session, {
+        name: ($('storyName').value.trim() || 'Untitled story'),
+        section: $('sectionTitle') ? $('sectionTitle').value.trim() : state.session.section,
+        html: $('editor').innerHTML, text: editorText(),
+        frames: state.frames,
+        plotGaps: d.plotGaps || state.session.plotGaps,
+        deaths: (d.deaths != null ? d.deaths : state.session.deaths),
+        deathLog: d.deathLog || state.session.deathLog,
+        ruinsLog: d.ruinsLog || state.session.ruinsLog,
+        updated: new Date().toISOString()
+      });
+      state.plotGaps = state.session.plotGaps || {};
+      state.deaths = state.session.deaths || 0; state.deathLog = state.session.deathLog || []; state.ruinsLog = state.session.ruinsLog || [];
+      updateDeaths();
+      const list = loadSessions(); const i = list.findIndex(x => x.id === state.session.id);
+      if (i >= 0) list[i] = state.session; else list.unshift(state.session);
+      persistSessions(list);
+    }
+  } catch (e){ console.warn('live apply error:', e); }
+  live.applying = false;
+}
 function loadSessions(){ try { return JSON.parse(localStorage.getItem(LS_SESSIONS)) || []; } catch (e){ return []; } }
 function persistSessions(list){ localStorage.setItem(LS_SESSIONS, JSON.stringify(list)); }
 function ensureSession(){
@@ -6286,7 +6386,9 @@ let autosaveHandle = null;
 function scheduleAutosave(delay){
   $('saveStatus').textContent = '…';
   clearTimeout(autosaveHandle);
-  autosaveHandle = setTimeout(saveSession, delay || 1400);
+  // In a live session, save (and therefore broadcast) sooner so edits feel real-time.
+  const d = (typeof live !== 'undefined' && live.on) ? Math.min(delay || 1400, 600) : (delay || 1400);
+  autosaveHandle = setTimeout(saveSession, d);
 }
 function saveSession(){
   if (!state.session){
@@ -6321,6 +6423,7 @@ function saveSession(){
   }
   catch (e){ flashStatus('Storage full — export your work'); }
   updateMeta();
+  if (typeof live !== 'undefined' && live.on && !live.applying){ liveBroadcast(); liveScheduleTrack(); }
 }
 function openSession(id){
   const s = loadSessions().find(x => x.id === id);
@@ -6366,6 +6469,7 @@ function openSession(id){
   updateWordCount(); updateMeta();
   closeLibrary();
   flashStatus('Opened · ' + s.name);
+  if (cloud.user && state.session && state.session.cloudId) liveJoin(state.session); else liveLeave();
 }
 function updateDeaths(){
   const el = $('deathTally');
@@ -6399,6 +6503,7 @@ function toggleDeathScroll(){
 }
 function newSession(){
   saveSession();
+  liveLeave();
   state.session = null; state.prompt = null; state.nodes = []; state.edges = [];
   state.frames = null; state.frameIdx = 0;
   state.deaths = 0; state.deathLog = []; state.ruinsLog = []; updateDeaths();
@@ -6842,7 +6947,7 @@ function init(){
     supa.auth.onAuthStateChange((_evt, session) => {
       cloud.user = session ? session.user : null;
       updateAccountUI();
-      if (cloud.user) cloudPull();
+      if (cloud.user) cloudPull(); else liveLeave();
     });
     supa.auth.getSession().then(({ data }) => {
       cloud.user = (data && data.session) ? data.session.user : null;
@@ -7029,6 +7134,7 @@ function init(){
   $('editor').addEventListener('input', () => {
     state.lastWriteAt = Date.now();
     startTimerIfArmed(); updateWordCount(); scheduleAutosave();
+    if (typeof live !== 'undefined' && live.on) liveScheduleTrack();
     clearTimeout(usageTimer);
     usageTimer = setTimeout(() => {
       if (!state.prompt) return;
