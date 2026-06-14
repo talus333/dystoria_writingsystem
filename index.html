@@ -214,9 +214,9 @@
   .nt{cursor:auto}
   #editBody .nt{background:rgba(200,160,40,.16); border-bottom:1px dashed #b8860b; cursor:pointer}
   /* Edit columns + notes sidebar */
-  #editCols{flex:1; min-height:0; position:relative}
+  #editCols{flex:1; min-height:0; position:relative; overflow:hidden}
   #editScroll{height:100%; overflow-y:auto; box-sizing:border-box; padding:8px 24px 90px; width:100%; max-width:760px; margin:0 auto}
-  #notesPanel{position:absolute; top:0; right:0; height:100%; width:280px; overflow:hidden; border-left:1px solid var(--line); background:var(--paper)}
+  #notesPanel{position:absolute; top:0; left:calc(50% + 384px); height:100%; width:256px; overflow:hidden; border-left:1px solid var(--line); background:var(--paper)}
   .np-head{font-family:var(--sans); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--ink-faint); padding:16px 16px 8px}
   #notesList{padding:0 14px 24px; overflow-y:auto; height:calc(100% - 40px)}
   .np-item{border:1px solid var(--line); border-radius:8px; padding:9px 10px; margin-bottom:9px; cursor:pointer; background:var(--paper)}
@@ -250,6 +250,21 @@
   #sgPop .sp-ed:hover{color:var(--ink); border-color:var(--ink-faint)}
   #sgPop .sp-wait{font-family:var(--serif); font-style:italic; font-size:12.5px; color:var(--ink-faint)}
   body.eink #sgPop{border-width:2px; box-shadow:none}
+  /* In-site text prompt (replaces the browser prompt) */
+  #inPrompt{position:fixed; inset:0; z-index:180; display:none; align-items:center; justify-content:center; background:rgba(28,27,25,.28)}
+  #inPrompt.show{display:flex; animation:sgPopIn .14s ease}
+  #inPrompt .ip-card{width:380px; max-width:calc(100vw - 32px); background:var(--paper); border:1px solid var(--line);
+    border-radius:14px; box-shadow:0 14px 44px rgba(28,27,25,.24); padding:18px 18px 15px}
+  #inPrompt .ip-lbl{font-family:var(--sans); font-size:9.5px; letter-spacing:.16em; text-transform:uppercase; color:var(--ink-faint); margin-bottom:9px}
+  #inPrompt #ipField{width:100%; box-sizing:border-box; font-family:var(--serif); font-size:15.5px; line-height:1.5; color:var(--ink);
+    background:var(--bg2); border:1px solid var(--line); border-radius:9px; padding:9px 11px; outline:none; resize:vertical; min-height:42px}
+  #inPrompt #ipField:focus{border-color:var(--ink-faint)}
+  #inPrompt .ip-acts{display:flex; justify-content:flex-end; gap:8px; margin-top:12px}
+  #inPrompt .ip-acts button{font-family:var(--sans); font-size:9.5px; letter-spacing:.1em; text-transform:uppercase;
+    border:1px solid var(--line); border-radius:16px; padding:7px 15px; cursor:pointer; background:transparent; color:var(--ink-soft)}
+  #inPrompt #ipCancel:hover{color:var(--ink); border-color:var(--ink-faint)}
+  #inPrompt #ipOk:hover{color:#fff; background:var(--ink); border-color:var(--ink)}
+  body.eink #inPrompt .ip-card{border-width:2px; box-shadow:none}
   /* Locked prose (written in a finished Focus session) — read-only in the pad */
   #editor .lk{position:relative; background:rgba(120,110,95,.05)}
   #editor .lk:hover{background:rgba(120,110,95,.09)}
@@ -1113,7 +1128,7 @@
 </div>
 
 <div id="readMode">
-  <div class="rd-head"><span class="rd-title">Reading</span><div class="rd-head-actions"><button id="readSugToggle" class="rd-switch" style="display:none" title="Show the original or the suggested version">Suggested</button><button id="readToEdit" class="rd-switch" title="Switch to edit mode">Edit ✎</button><button id="readClose" title="Close">×</button></div></div>
+  <div class="rd-head"><span class="rd-title">Reading</span><div class="rd-head-actions"><button id="readSugToggle" class="rd-switch" style="display:none" title="Show the original or the suggested version">Suggested</button><button id="readToEdit" class="rd-switch" title="Switch to edit mode">Edit</button><button id="readClose" title="Close">×</button></div></div>
   <div id="readBody"></div>
   <button id="readTop" title="Back to the top">↑ Top</button>
 </div>
@@ -1125,7 +1140,7 @@
       <span id="edPending" class="ed-pending"></span>
       <span id="edGlobal" class="ed-global" style="display:none"><button id="edApproveAll" title="Approve every suggestion">Approve all</button><button id="edRejectAll" title="Reject every suggestion">Reject all</button></span>
       <span id="edDirectWrap" class="ed-direct" style="display:none"><label><input type="checkbox" id="edDirect"> Edit directly</label></span>
-      <button id="editToRead" class="rd-switch" title="Switch to reading mode">Read ▢</button>
+      <button id="editToRead" class="rd-switch" title="Switch to reading mode">Read</button>
       <button id="editClose" title="Close">×</button>
     </div>
   </div>
@@ -1145,6 +1160,12 @@
   <div id="sgPop"></div>
   <button id="editTop" title="Back to the top">↑ Top</button>
 </div>
+
+<div id="inPrompt"><div class="ip-card">
+  <div class="ip-lbl" id="ipLbl"></div>
+  <textarea id="ipField" rows="2" spellcheck="false"></textarea>
+  <div class="ip-acts"><button id="ipCancel">Cancel</button><button id="ipOk">Save</button></div>
+</div></div>
 
 <div id="welcome"><div class="wl-card">
   <h2>Welcome to Dystoria</h2>
@@ -7664,6 +7685,23 @@ function overlaySwitch(fn){
 }
 
 /* ---------------- locking + edit mode ---------------- */
+// A styled in-site replacement for window.prompt — returns a Promise of the text, or null if cancelled.
+let _ipResolve = null;
+function sitePrompt(label, initial, okText){
+  return new Promise(resolve => {
+    _ipResolve = resolve;
+    $('ipLbl').textContent = label || '';
+    const f = $('ipField'); f.value = initial || '';
+    $('ipOk').textContent = okText || 'Save';
+    $('inPrompt').classList.add('show');
+    setTimeout(() => { f.focus(); f.select(); }, 20);
+  });
+}
+function ipClose(val){
+  $('inPrompt').classList.remove('show');
+  const r = _ipResolve; _ipResolve = null;
+  if (r) r(val);
+}
 function amOwner(){ return !(state.session && state.session._shared); }
 function sgAuthor(){ return (typeof myDisplayName === 'function' ? myDisplayName() : 'Writer'); }
 // Re-assert read-only on prose that was locked in a finished Focus session.
@@ -7790,34 +7828,34 @@ function onEditSelect(){
   sb.style.top = Math.max(8, rect.top - 44) + 'px';
   sb.classList.add('show');
 }
-function doSg(kind){
+async function doSg(kind){
   const body = $('editBody'); if (!body) return;
   const sel = window.getSelection(); if (!sel || !sel.rangeCount) return;
-  const r = sel.getRangeAt(0);
-  if (!body.contains(r.commonAncestorContainer)){ return; }
+  const r0 = sel.getRangeAt(0);
+  if (!body.contains(r0.commonAncestorContainer)) return;
+  const rng = r0.cloneRange();          // hold the spot — the styled prompt steals focus
   const direct = amOwner() && $('edDirect') && $('edDirect').checked;
+  $('sgBar').classList.remove('show');
   if (kind === 'delete'){
-    if (r.collapsed) return;
-    if (direct) r.deleteContents(); else sgWrap(r, 'sg-del');
+    if (rng.collapsed) return;
+    if (direct) rng.deleteContents(); else sgWrap(rng, 'sg-del');
   } else if (kind === 'replace'){
-    if (r.collapsed) return;
-    const nt = prompt('Suggested wording:'); if (nt == null) return;
-    if (direct){ r.deleteContents(); r.insertNode(document.createTextNode(nt)); }
-    else { const del = sgWrap(r, 'sg-del'); del.after(sgSpanText('sg-ins', nt, del.dataset.grp)); }
+    if (rng.collapsed) return;
+    const nt = await sitePrompt('Suggested wording', rng.toString()); if (nt == null || nt === '') return;
+    if (direct){ rng.deleteContents(); rng.insertNode(document.createTextNode(nt)); }
+    else { const del = sgWrap(rng, 'sg-del'); del.after(sgSpanText('sg-ins', nt, del.dataset.grp)); }
   } else if (kind === 'insert'){
-    const nt = prompt('Insert text:'); if (nt == null || nt === '') return;
-    const at = r.cloneRange(); at.collapse(false);
+    const nt = await sitePrompt('Insert text'); if (nt == null || nt === '') return;
+    const at = rng.cloneRange(); at.collapse(false);
     if (direct) at.insertNode(document.createTextNode(' ' + nt));
     else at.insertNode(sgSpanText('sg-ins', ' ' + nt));
   } else if (kind === 'note'){
-    if (r.collapsed) return;
-    const nt = prompt('Note:'); if (nt == null || nt === '') return;
+    if (rng.collapsed) return;
+    const nt = await sitePrompt('Note'); if (nt == null || nt === '') return;
     const s = document.createElement('span'); s.className = 'nt'; sgMeta(s); s.dataset.note = nt;
-    s.appendChild(r.extractContents()); r.insertNode(s);
-    $('editMode').classList.add('show-notes');
+    s.appendChild(rng.extractContents()); rng.insertNode(s);
   }
-  $('sgBar').classList.remove('show');
-  sel.removeAllRanges();
+  const sel2 = window.getSelection(); if (sel2) sel2.removeAllRanges();
   commitEdit();
   renderPending(); renderNotes();
 }
@@ -7840,11 +7878,11 @@ function resolveGroup(grp, accept){
     else { if (ins) s.remove(); else unwrapSpan(s); }            // reject: drop insertions, restore deleted text
   });
 }
-function editGroup(grp){
+async function editGroup(grp){
   const spans = sgGroupSpans(grp);
   let ins = spans.find(s => s.classList.contains('sg-ins'));
   const cur = ins ? ins.textContent.replace(/^\s+/, '') : '';
-  const nt = prompt('Edit the suggested text:', cur); if (nt == null) return;
+  const nt = await sitePrompt('Edit the suggested text', cur); if (nt == null) return;
   if (ins) ins.textContent = (/^\s/.test(ins.textContent) ? ' ' : '') + nt;
   else { const del = spans.find(s => s.classList.contains('sg-del')); if (del) del.after(sgSpanText('sg-ins', ' ' + nt, grp)); }
 }
@@ -7892,7 +7930,7 @@ function openSgPop(span){
   const ok = p.querySelector('.sp-ok'), no = p.querySelector('.sp-no'), ed = p.querySelector('.sp-ed');
   if (ok) ok.onclick = () => { resolveGroup(grp, true); closeSgPop(); commitEdit(); renderPending(); renderNotes(); };
   if (no) no.onclick = () => { resolveGroup(grp, false); closeSgPop(); commitEdit(); renderPending(); renderNotes(); };
-  if (ed) ed.onclick = () => { editGroup(grp); closeSgPop(); commitEdit(); renderPending(); };
+  if (ed) ed.onclick = async () => { closeSgPop(); await editGroup(grp); commitEdit(); renderPending(); };
 }
 /* ----- notes sidebar ----- */
 function renderNotes(){
@@ -7927,7 +7965,7 @@ function setReadSug(view){
   const rb = $('readBody'); if (!rb) return;
   rb.classList.remove('sug-suggested', 'sug-original');
   rb.classList.add(view === 'original' ? 'sug-original' : 'sug-suggested');
-  const b = $('readSugToggle'); if (b) b.textContent = (view === 'original' ? 'Original' : 'Suggested');
+  const b = $('readSugToggle'); if (b) b.textContent = (view === 'original' ? 'Show Suggestions' : 'Show Original');
   state._readSug = view;
 }
 /* Solo-section view — the writing pad shows only the current timeline section */
@@ -8751,6 +8789,13 @@ function init(){
   $('edApproveAll').addEventListener('click', () => resolveAllSg(true));
   $('edRejectAll').addEventListener('click', () => resolveAllSg(false));
   $('readSugToggle').addEventListener('click', () => setReadSug(state._readSug === 'original' ? 'suggested' : 'original'));
+  $('ipOk').addEventListener('click', () => ipClose($('ipField').value));
+  $('ipCancel').addEventListener('click', () => ipClose(null));
+  $('ipField').addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); ipClose($('ipField').value); }
+    else if (e.key === 'Escape'){ e.preventDefault(); ipClose(null); }
+  });
+  $('inPrompt').addEventListener('mousedown', e => { if (e.target === $('inPrompt')) ipClose(null); });
   $('newSessionBtn').addEventListener('click', newSession);
   $('einkBtn').addEventListener('click', () => setEink(!document.body.classList.contains('eink')));
   window.addEventListener('pointerdown', e => {
