@@ -133,7 +133,14 @@
   .wk-detail .wk-rel{margin:1px 0}
   .wk-detail .wk-quote{border-left:2px solid var(--line); padding:2px 0 2px 10px; margin:4px 0; color:var(--ink)}
   .wk-detail .wk-empty{color:var(--ink-faint); font-style:italic}
-  .wk-detail .wk-ai{margin-top:10px}
+  .wk-detail .wk-ai{margin-top:12px; border-top:1px dashed var(--line); padding-top:8px}
+  .wk-aitext{font-style:italic; color:var(--ink); line-height:1.65; margin:3px 0}
+  .wk-aibtn{font-family:var(--sans); font-size:9.5px; letter-spacing:.14em; text-transform:uppercase; border:1px solid var(--line); border-radius:14px; padding:6px 12px; color:var(--ink-soft); background:transparent; cursor:pointer}
+  .wk-aibtn:hover{border-color:var(--ink-faint); color:var(--ink)}
+  .wk-ainote{font-family:var(--serif); font-style:italic; font-size:11px; color:var(--ink-faint); margin-top:5px}
+  .wk-airefresh{font-family:var(--sans); font-size:9px; letter-spacing:.1em; text-transform:uppercase; color:#4a6a8a; cursor:pointer; margin-left:8px}
+  #wikiOverview{margin:8px 18px 0}
+  #wikiOverviewText{font-family:var(--serif); font-style:italic; font-size:13px; line-height:1.6; color:var(--ink); margin:6px 0}
   body.eink #wikiPanel{border-left:2px solid #000; box-shadow:none}
   body.eink #recapCard{border:2px solid #000}
   #seal{width:44px; height:44px; flex:none; color:var(--ink)}
@@ -802,6 +809,7 @@
 <div id="wikiPanel">
   <div class="wk-head"><span class="wk-title">Story Wiki</span><button id="wikiClose" title="Close">×</button></div>
   <div id="wikiMeta"></div>
+  <div id="wikiOverview"></div>
   <div id="wikiBody"></div>
 </div>
 
@@ -6805,6 +6813,7 @@ function renderWiki(){
   const woven = els.filter(e => textHasWord(lcAll, e.word) || (e.name && textHasWord(lcAll, e.name))).length;
   const wc = lcAll.trim() ? lcAll.trim().split(/\s+/).length : 0;
   $('wikiMeta').textContent = els.length + ' elements · ' + woven + ' woven in · ' + wc + ' words';
+  renderWikiOverview(state.session && state.session.wikiOverview);
   body.innerHTML = '';
   if (!els.length){ body.innerHTML = '<div style="padding:26px 18px;color:var(--ink-faint);font-style:italic;font-family:var(--serif)">Add elements to your map and write — they’ll gather here, linked to where they appear in your prose.</div>'; return; }
   let lastCat = null;
@@ -6839,9 +6848,99 @@ function buildWikiDetail(detail, el){
   add('<div class="wk-lbl">In your prose</div>');
   if (!quotes.length) add('<div class="wk-empty">Not yet woven into the writing.</div>');
   else quotes.slice(0, 20).forEach(q => add('<div class="wk-quote">' + esc(q) + '</div>'));
+  const aiWrap = document.createElement('div'); aiWrap.className = 'wk-ai'; detail.appendChild(aiWrap);
+  renderWikiAI(aiWrap, el);
 }
 function openWiki(){ renderWiki(); $('wikiPanel').classList.add('show'); }
 function closeWiki(){ $('wikiPanel').classList.remove('show'); }
+
+/* ---------------- story wiki — Gemini AI rollups ---------------- */
+const AI_ENDPOINT = '/ai';
+async function aiCall(system, prompt){
+  const r = await fetch(AI_ENDPOINT, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ system, prompt }) });
+  let data; try { data = await r.json(); } catch (e){ throw new Error('HTTP ' + r.status); }
+  if (!r.ok || data.error) throw new Error(data.error || ('HTTP ' + r.status));
+  return (data.text || '').trim();
+}
+function aiErrMsg(e){
+  const m = String((e && e.message) || e || '');
+  if (/not configured|AI not/i.test(m)) return 'AI isn’t set up yet — add the Gemini key in Cloudflare and redeploy.';
+  if (/Failed to fetch|HTTP 404|Load failed/i.test(m)) return 'AI endpoint unreachable — this works on dystoria.net once the function is deployed.';
+  if (/quota|rate|429/i.test(m)) return 'Gemini free limit reached for now — try again later.';
+  return 'AI error: ' + m;
+}
+function aiSig(el){ const q = wikiAppearances(el); return q.length + ':' + q.join(' ').length; }
+async function aiRollup(el){
+  const facts = ['Element: ' + el.word + (el.name ? ' (named “' + el.name + '”)' : '') + ' — ' + wikiCatName(el.cat) + (el.sub ? ' · ' + el.sub : '')];
+  if (el.attrs && el.attrs.length) facts.push('Traits: ' + el.attrs.map(a => a.word).join(', '));
+  const rels = wikiRelations(el); if (rels.length) facts.push('Relationships: ' + rels.join('; '));
+  if (el.frames && el.frames.size) facts.push('Appears in timeframes: ' + [...el.frames].sort((a, b) => a - b).map(f => '§' + f).join(', '));
+  const quotes = wikiAppearances(el);
+  const sys = 'You are a story-wiki assistant for a writer. Write a short, grounded encyclopedia-style entry for ONE story element using ONLY the facts and prose excerpts given. Never invent events, names, or traits that are not present. If the prose reveals little, stay brief and say what is known. 2–4 sentences, third person, present tense, no preamble.';
+  const prompt = facts.join('\n') + '\n\nProse excerpts where it appears:\n' + (quotes.length ? quotes.map(q => '- ' + q).join('\n') : '(none yet)') + '\n\nWrite the entry:';
+  return aiCall(sys, prompt);
+}
+function renderWikiAI(wrap, el){
+  wrap.innerHTML = '<div class="wk-lbl">AI summary</div>';
+  const key = el.cat + '|' + el.word;
+  const cache = (state.session && state.session.wikiAI) ? state.session.wikiAI[key] : null;
+  const sig = aiSig(el);
+  if (cache && cache.text){
+    const p = document.createElement('div'); p.className = 'wk-aitext'; p.textContent = cache.text; wrap.appendChild(p);
+    const ref = document.createElement('span'); ref.className = 'wk-airefresh';
+    ref.textContent = cache.sig !== sig ? 'prose changed — refresh' : 'refresh';
+    ref.addEventListener('click', () => runAIRollup(el, wrap));
+    wrap.appendChild(ref);
+  } else {
+    const btn = document.createElement('button'); btn.className = 'wk-aibtn'; btn.textContent = 'Summarize with AI ✦';
+    btn.addEventListener('click', () => runAIRollup(el, wrap));
+    wrap.appendChild(btn);
+    const note = document.createElement('div'); note.className = 'wk-ainote'; note.textContent = 'Sends this element’s prose excerpts to Google Gemini.';
+    wrap.appendChild(note);
+  }
+}
+async function runAIRollup(el, wrap){
+  wrap.innerHTML = '<div class="wk-lbl">AI summary</div><div class="wk-aitext wk-empty">summarizing…</div>';
+  try {
+    const text = await aiRollup(el);
+    if (!state.session) ensureSession();
+    state.session.wikiAI = state.session.wikiAI || {};
+    state.session.wikiAI[el.cat + '|' + el.word] = { text, sig: aiSig(el) };
+    scheduleAutosave(500);
+    renderWikiAI(wrap, el);
+  } catch (e){
+    wrap.innerHTML = '<div class="wk-lbl">AI summary</div>';
+    const msg = document.createElement('div'); msg.className = 'wk-empty'; msg.textContent = aiErrMsg(e); wrap.appendChild(msg);
+    const btn = document.createElement('button'); btn.className = 'wk-aibtn'; btn.textContent = 'Try again';
+    btn.addEventListener('click', () => runAIRollup(el, wrap)); wrap.appendChild(btn);
+  }
+}
+async function runAIOverview(){
+  const wrap = $('wikiOverview');
+  const text = editorText().trim();
+  if (!text){ flashStatus('Write some prose first'); return; }
+  wrap.innerHTML = '<div class="wk-aitext wk-empty">summarizing the story so far…</div>';
+  try {
+    const sys = 'You summarize a work-in-progress story for the writer’s own reference. Use ONLY what the prose contains; do not invent. 3–5 sentences, neutral and clear, no preamble.';
+    const out = await aiCall(sys, 'Story so far:\n\n' + text.slice(0, 18000) + '\n\nSummarize what has happened and the current situation:');
+    if (state.session){ state.session.wikiOverview = out; scheduleAutosave(500); }
+    renderWikiOverview(out);
+  } catch (e){
+    wrap.innerHTML = '';
+    const m = document.createElement('div'); m.className = 'wk-aitext wk-empty'; m.textContent = aiErrMsg(e); wrap.appendChild(m);
+    const b = document.createElement('button'); b.className = 'wk-aibtn'; b.textContent = 'Try again'; b.addEventListener('click', runAIOverview); wrap.appendChild(b);
+  }
+}
+function renderWikiOverview(text){
+  const wrap = $('wikiOverview'); if (!wrap) return;
+  wrap.innerHTML = '';
+  if (text){
+    const p = document.createElement('div'); p.id = 'wikiOverviewText'; p.textContent = text; wrap.appendChild(p);
+    const ref = document.createElement('span'); ref.className = 'wk-airefresh'; ref.textContent = 'refresh overview'; ref.addEventListener('click', runAIOverview); wrap.appendChild(ref);
+  } else {
+    const b = document.createElement('button'); b.className = 'wk-aibtn'; b.textContent = 'AI overview of the story ✦'; b.addEventListener('click', runAIOverview); wrap.appendChild(b);
+  }
+}
 
 /* ---------------- export ---------------- */
 function exportSession(s){
