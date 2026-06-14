@@ -226,7 +226,16 @@
   .ir-name{font-size:14px; font-weight:600; padding:5px 8px}
   .ir-exists{flex:none; color:#9a7b1e; font-size:13px; cursor:default}
   .ir-sum{font-size:12.5px; font-style:italic; line-height:1.5; margin-top:6px}
-  .ir-scope{display:flex; align-items:center; gap:6px; font-family:var(--sans); font-size:9.5px; letter-spacing:.05em; color:var(--ink-faint); margin-top:6px; cursor:pointer}
+  .ir-scope{display:flex; align-items:center; gap:6px; font-family:var(--sans); font-size:9.5px; letter-spacing:.05em; color:var(--ink-faint); cursor:pointer; flex:none}
+  .ir-type{font-family:var(--sans); font-size:9px; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-soft); border:1px solid var(--line); border-radius:6px; background:var(--paper); padding:3px 4px; flex:none}
+  .ir-exists{flex:none; color:#9a7b1e; font-family:var(--sans); font-size:9px; letter-spacing:.08em; text-transform:uppercase; cursor:default}
+  .ir-scope-row{display:flex; align-items:center; gap:10px; margin-top:6px; flex-wrap:wrap}
+  .ir-genhint,.ir-gen{display:none}
+  .ir-el.sys .ir-genhint{display:inline; font-family:var(--serif); font-style:italic; font-size:11px; color:var(--ink-faint)}
+  .ir-el.sys .ir-gen{display:inline-block; font-family:var(--sans); font-size:9px; letter-spacing:.08em; text-transform:uppercase; color:#4a6a8a; border:1px solid var(--line); border-radius:12px; padding:4px 9px; cursor:pointer; background:transparent}
+  .ir-el.sys .ir-gen:hover{border-color:var(--ink-faint); color:var(--ink)}
+  .ir-addel{font-family:var(--sans); font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--ink-soft); border:1px dashed var(--line); border-radius:8px; padding:8px 12px; background:transparent; cursor:pointer; width:100%; margin:2px 0 12px}
+  .ir-addel:hover{border-color:var(--ink-faint); color:var(--ink)}
   body.eink #importCard{border:2px solid #000; box-shadow:none}
   body.eink #recapCard{border:2px solid #000}
   #seal{width:44px; height:44px; flex:none; color:var(--ink)}
@@ -944,6 +953,7 @@
     <div class="ir-block"><div class="ir-lbl">Story summary</div><textarea id="importOverview" rows="3" placeholder="story summary"></textarea></div>
     <div class="ir-lbl">Elements found — uncheck to skip · edit names &amp; summaries · ✦ already in the library</div>
     <div id="importElements"></div>
+    <button id="importAddEl" class="ir-addel" type="button">+ add element</button>
     <div class="ic-actions"><button id="importBack" class="ghost">Back</button><button id="importConfirm">Confirm &amp; build story</button></div>
   </div>
 </div>
@@ -7047,7 +7057,16 @@ function openImport(){
   setTimeout(() => $('importText').focus(), 60);
 }
 function closeImport(){ $('importCard').classList.remove('show'); $('importBackdrop').classList.remove('show'); }
-function wordExistsInCat(cat, word){ const lc = (word || '').toLowerCase(); return ecPoolWords(cat).some(p => p.word.toLowerCase() === lc); }
+// Does this word already exist in the SHARED library (built-in pool or system-wide custom),
+// ignoring words that only exist because of the currently-open story?
+function wordExistsSystem(cat, word){
+  const lc = (word || '').trim().toLowerCase(); if (!lc) return false;
+  const sysCustom = loadCustomWords()[cat] || [];
+  if (sysCustom.some(e => e.word.toLowerCase() === lc)) return true;
+  const injected = (state._injected || []).some(j => j.cat === cat && j.word.toLowerCase() === lc);
+  const inPool = ecPoolWords(cat).some(p => p.word.toLowerCase() === lc);
+  return inPool && !injected;   // a built-in word (not one injected by a story)
+}
 async function extractImport(){
   const prose = $('importText').value.trim();
   if (!prose){ $('importStatus').textContent = 'Paste some prose first.'; return; }
@@ -7068,7 +7087,7 @@ async function extractImport(){
     const cat = IMP_TMAP[String(el.type || '').toLowerCase()];
     if (!cat) return;
     const name = String(el.name).trim().slice(0, 60); if (!name) return;
-    IMP.elements.push({ cat, name, summary: String(el.summary || '').trim(), exists: wordExistsInCat(cat, name), include: true, sys: false });
+    IMP.elements.push({ cat, name, summary: String(el.summary || '').trim(), exists: wordExistsSystem(cat, name), include: true, sys: false });
   });
   $('importGo').disabled = false;
   $('importTitle').value = IMP.title;
@@ -7076,27 +7095,50 @@ async function extractImport(){
   renderImportReview();
   importShow('review');
 }
+const IMP_CATS = [['being', 'Being'], ['setting', 'Setting'], ['object', 'Object'], ['event', 'Event'], ['theme', 'Theme']];
 function renderImportReview(){
   const wrap = $('importElements'); wrap.innerHTML = '';
-  if (!IMP.elements.length){ wrap.innerHTML = '<div class="ir-lbl" style="color:var(--ink-faint)">No elements found — you can still build the story from the prose.</div>'; return; }
+  if (!IMP.elements.length){ wrap.innerHTML = '<div class="ir-lbl" style="color:var(--ink-faint)">No elements found — add some below, or build the story from the prose alone.</div>'; }
   IMP.elements.forEach(el => {
-    const d = document.createElement('div'); d.className = 'ir-el' + (el.include ? '' : ' off');
+    const d = document.createElement('div'); d.className = 'ir-el' + (el.include ? '' : ' off') + (el.sys ? ' sys' : '');
+    const opts = IMP_CATS.map(c => '<option value="' + c[0] + '"' + (c[0] === el.cat ? ' selected' : '') + '>' + c[1] + '</option>').join('');
     d.innerHTML =
       '<div class="ir-el-top">' +
       '<label class="ir-inc"><input type="checkbox" class="ir-i"' + (el.include ? ' checked' : '') + '></label>' +
       '<span class="ir-dot" style="background:' + catColor(el.cat) + '"></span>' +
-      '<span class="ir-catname">' + esc((getCat(el.cat) || {}).name || el.cat) + '</span>' +
-      '<input class="ir-name" value="' + esc(el.name) + '">' +
-      (el.exists ? '<span class="ir-exists" title="Already in the library — edits make a story-specific variation">✦</span>' : '') +
+      '<select class="ir-type">' + opts + '</select>' +
+      '<input class="ir-name" value="' + esc(el.name) + '" placeholder="name">' +
+      '<span class="ir-exists"' + (el.exists ? '' : ' style="display:none"') + ' title="Already in the shared library — editing here makes a story-specific variation">✦ in library</span>' +
       '</div>' +
       '<textarea class="ir-sum" rows="2" placeholder="summary">' + esc(el.summary) + '</textarea>' +
-      '<label class="ir-scope"><input type="checkbox" class="ir-sys"' + (el.sys ? ' checked' : '') + '> available in all stories</label>';
+      '<div class="ir-scope-row"><label class="ir-scope"><input type="checkbox" class="ir-sys"' + (el.sys ? ' checked' : '') + '> available in all stories</label>' +
+      '<span class="ir-genhint">becomes the description everywhere — keep it generic</span>' +
+      '<button type="button" class="ir-gen">✦ generalize</button></div>';
     const inc = d.querySelector('.ir-i'); inc.addEventListener('change', () => { el.include = inc.checked; d.classList.toggle('off', !inc.checked); });
-    const nm = d.querySelector('.ir-name'); nm.addEventListener('input', () => { el.name = nm.value; el.exists = wordExistsInCat(el.cat, nm.value.trim()); });
-    d.querySelector('.ir-sum').addEventListener('input', e => { el.summary = e.target.value; });
-    d.querySelector('.ir-sys').addEventListener('change', e => { el.sys = e.target.checked; });
+    d.querySelector('.ir-type').addEventListener('change', e => { el.cat = e.target.value; renderImportReview(); });
+    const nm = d.querySelector('.ir-name'); const ex = d.querySelector('.ir-exists');
+    nm.addEventListener('input', () => { el.name = nm.value; el.exists = wordExistsSystem(el.cat, nm.value.trim()); ex.style.display = el.exists ? '' : 'none'; });
+    const ta = d.querySelector('.ir-sum'); ta.addEventListener('input', () => { el.summary = ta.value; });
+    d.querySelector('.ir-sys').addEventListener('change', e => { el.sys = e.target.checked; d.classList.toggle('sys', el.sys); });
+    d.querySelector('.ir-gen').addEventListener('click', () => generalizeDesc(el, ta));
     wrap.appendChild(d);
   });
+}
+function addImportEl(){
+  IMP.elements.push({ cat: 'being', name: '', summary: '', exists: false, include: true, sys: false });
+  renderImportReview();
+  const cards = $('importElements').querySelectorAll('.ir-el');
+  const last = cards[cards.length - 1]; if (last){ last.scrollIntoView({ block: 'nearest' }); const n = last.querySelector('.ir-name'); if (n) n.focus(); }
+}
+async function generalizeDesc(el, ta){
+  const old = ta.value.trim();
+  ta.disabled = true; const prev = ta.value; ta.value = 'generalizing…';
+  try {
+    const sys = 'Rewrite the description as a short, generic, reusable definition of this kind of story element — not tied to any specific character, place, or plot, and using no proper names. One sentence, present tense.';
+    const out = await aiCall(sys, ((getCat(el.cat) || {}).name || el.cat) + ' named "' + el.name + '"\nStory-specific description: ' + old + '\n\nGeneric definition:', { maxTokens: 120 });
+    el.summary = (out || '').trim() || old; ta.value = el.summary;
+  } catch (e){ ta.value = prev; flashStatus(aiErrMsg(e)); }
+  ta.disabled = false;
 }
 async function confirmImport(){
   IMP.overview = $('importOverview').value.trim();
@@ -7998,6 +8040,7 @@ function init(){
   $('libClose').addEventListener('click', closeLibrary);
   $('importGo').addEventListener('click', extractImport);
   $('importConfirm').addEventListener('click', confirmImport);
+  $('importAddEl').addEventListener('click', addImportEl);
   $('importBack').addEventListener('click', () => importShow('entry'));
   $('importClose').addEventListener('click', closeImport);
   $('importBackdrop').addEventListener('click', closeImport);
