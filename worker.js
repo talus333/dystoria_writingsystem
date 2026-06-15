@@ -6,6 +6,8 @@
 const ALLOWED = ['https://dystoria.net', 'https://www.dystoria.net'];
 // Current Workers AI model. Lighter/cheaper alternative: '@cf/meta/llama-3.1-8b-instruct-fast'
 const MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
+// Vision model — OCR + handwriting recognition. Used when the request carries an image.
+const VISION_MODEL = '@cf/google/gemma-4-26b-a4b-it';
 
 function cors(origin) {
   const ok = !origin || ALLOWED.includes(origin) || origin.endsWith('.pages.dev') || origin.endsWith('.workers.dev');
@@ -29,15 +31,23 @@ async function handleAI(request, env) {
 
   const system = String(body.system || '').slice(0, 4000);
   const prompt = String(body.prompt || '').slice(0, 24000);
-  if (!prompt) return new Response(JSON.stringify({ error: 'no prompt' }), { status: 400, headers });
+  const image = typeof body.image === 'string' ? body.image : '';   // data URL (e.g. data:image/png;base64,...)
+  if (!prompt && !image) return new Response(JSON.stringify({ error: 'no prompt' }), { status: 400, headers });
 
   const messages = [];
   if (system) messages.push({ role: 'system', content: system });
-  messages.push({ role: 'user', content: prompt });
+  if (image) {
+    const content = [];
+    if (prompt) content.push({ type: 'text', text: prompt });
+    content.push({ type: 'image_url', image_url: { url: image } });
+    messages.push({ role: 'user', content });
+  } else {
+    messages.push({ role: 'user', content: prompt });
+  }
 
   const maxTokens = Math.min(Math.max(parseInt(body.max_tokens, 10) || 600, 64), 4096);
-  const base = { messages, max_tokens: maxTokens, temperature: 0.4 };
-  const model = body.model || MODEL;
+  const base = { messages, max_tokens: maxTokens, temperature: image ? 0.1 : 0.4 };
+  const model = body.model || (image ? VISION_MODEL : MODEL);
 
   try {
     let resp;

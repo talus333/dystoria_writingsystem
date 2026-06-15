@@ -419,9 +419,11 @@
   .fb-item .fb-flag.on{display:inline; color:#a05c4d}
   .fb-item.flagged{border-color:#cfa9a0; background:rgba(176,137,122,.08)}
   body.eink .fb-item.flagged{border:2px solid #000}
-  #focusPanel > :not(#focusList){flex:none}
-  #focusList{display:flex; flex-direction:column; gap:6px; width:100%;
+  #focusPanel > :not(#focusScroll){flex:none}
+  /* everything between the timer and the Focus button scrolls as one; the button stays pinned */
+  #focusScroll{display:flex; flex-direction:column; gap:6px; width:100%;
     flex:1 1 auto; min-height:0; overflow-y:auto; scrollbar-width:thin}
+  #focusList{display:flex; flex-direction:column; gap:6px; width:100%; flex:none}
   .fp-item{font-family:var(--serif); font-size:15.5px; color:var(--ink); display:flex; align-items:baseline; gap:7px;
     padding:4px 10px; border:1px solid var(--line); border-radius:8px; background:var(--paper); cursor:pointer; width:100%}
   .fp-item .fb-cat{font-family:var(--sans); font-size:8px; letter-spacing:.14em; text-transform:uppercase}
@@ -1217,10 +1219,12 @@
       <div id="timerWrap"><span id="timerDisplay" hidden></span><span id="digitalTime"></span><button id="clockEdit" title="Change the session length">✎</button><span id="overrunLbl"></span><span id="gensLbl"></span></div>
       <div id="clockMenu"></div>
       <button id="endSessionBtn" style="display:none" title="End this writing session \u2014 the clock resets and elements can be added again">End Session</button>
-      <div id="focusBlocks"></div>
-      <div id="constraintBar"></div>
-      <div id="focusList"></div>
-      <div id="focusCounts"><span class="wordcount" id="wordCountLbl"></span><span class="wordcount" id="promptScore" title="Prompt words woven into the writing \u2014 \u2713 marks them on the map"></span></div>
+      <div id="focusScroll">
+        <div id="focusBlocks"></div>
+        <div id="constraintBar"></div>
+        <div id="focusList"></div>
+        <div id="focusCounts"><span class="wordcount" id="wordCountLbl"></span><span class="wordcount" id="promptScore" title="Prompt words woven into the writing \u2014 \u2713 marks them on the map"></span></div>
+      </div>
       <button id="writeModeBtn" title="Full-screen focused writing \u2014 Esc to return">Focus</button>
     </div>
     <div id="recapCard">
@@ -1268,6 +1272,7 @@
         <button id="extendBtn">+ Space</button>
         <button id="clearInkBtn">Clear</button>
         <button id="fingerBtn" title="Allow finger drawing (off = pen only, palm rejected)">Pen only</button>
+        <button id="inkTranscribe" title="Read your handwriting and add it as text to this section's Type page">Transcribe</button>
       </div>
     </div>
     <div id="actionbar">
@@ -8314,11 +8319,14 @@ async function exportWikiFiles(){
 
 /* ---------------- story wiki — Gemini AI rollups ---------------- */
 const AI_ENDPOINT = '/ai';
+const AI_VISION_MODEL = '@cf/google/gemma-4-26b-a4b-it';
 async function aiCall(system, prompt, opts){
   opts = opts || {};
   const body = { system, prompt };
   if (opts.maxTokens) body.max_tokens = opts.maxTokens;
   if (opts.json) body.json = true;
+  if (opts.image) body.image = opts.image;
+  if (opts.model) body.model = opts.model;
   const r = await fetch(AI_ENDPOINT, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
   let data; try { data = await r.json(); } catch (e){ throw new Error('HTTP ' + r.status); }
   if (!r.ok || data.error) throw new Error(data.error || ('HTTP ' + r.status));
@@ -8690,6 +8698,69 @@ function inkToSVG(inkData){
   }).join('\n  ');
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${inkData.width} ${cropH}" width="${inkData.width}" height="${cropH}">\n  <rect width="100%" height="100%" fill="#fbfaf8"/>\n  ${paths}\n</svg>`;
 }
+// Flatten the strokes onto a white raster (dark ink, high contrast) for the vision model.
+function inkToPNG(inkData, maxW){
+  const cropH = inkContentHeight(inkData);
+  const scale = Math.min(1, (maxW || 1200) / inkData.width);
+  const cv = document.createElement('canvas');
+  cv.width = Math.max(1, Math.round(inkData.width * scale));
+  cv.height = Math.max(1, Math.round(cropH * scale));
+  const ctx = cv.getContext('2d');
+  ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, cv.width, cv.height);
+  ctx.scale(scale, scale);
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.strokeStyle = '#0f0f0f';
+  (inkData.strokes || []).forEach(s => {
+    const pts = s.points; if (!pts || pts.length < 2) return;
+    ctx.globalCompositeOperation = s.tool === 'eraser' ? 'destination-out' : 'source-over';
+    for (let i = 1; i < pts.length; i++){
+      ctx.beginPath();
+      ctx.lineWidth = strokeWidth(s.tool, (pts[i][2] + pts[i - 1][2]) / 2);
+      ctx.moveTo(pts[i - 1][0], pts[i - 1][1]);
+      ctx.lineTo(pts[i][0], pts[i][1]);
+      ctx.stroke();
+    }
+  });
+  ctx.globalCompositeOperation = 'source-over';
+  return cv.toDataURL('image/png');
+}
+// The sec-mark that begins the section AFTER the current one (insert transcription before it).
+function currentSectionEndMark(){
+  const ed = $('editor'); if (!ed) return null;
+  const marks = Array.from(ed.children).filter(c => c.classList && c.classList.contains('sec-mark'));
+  return marks[state.frameIdx || 0] || null;   // marks[j] starts frame j+1
+}
+function insertProseInCurrentSection(text){
+  const ed = $('editor'); if (!ed) return;
+  const before = currentSectionEndMark();
+  const paras = text.replace(/\r/g, '').split(/\n{2,}/).map(s => s.trim()).filter(Boolean);
+  paras.forEach(p => {
+    const div = document.createElement('div');
+    p.split('\n').forEach((ln, i) => { if (i) div.appendChild(document.createElement('br')); div.appendChild(document.createTextNode(ln)); });
+    if (before) ed.insertBefore(div, before); else ed.appendChild(div);
+  });
+}
+async function transcribeInk(){
+  if (!inkHasContent()){ flashStatus('Nothing to transcribe yet — write something first'); return; }
+  const btn = $('inkTranscribe');
+  if (btn){ btn.disabled = true; btn.dataset.label = btn.textContent; btn.innerHTML = '<span class="spin"></span>Reading…'; }
+  flashStatus('Reading your handwriting…');
+  try {
+    const png = inkToPNG({ width: ink.w, height: ink.h, strokes: ink.strokes }, 1200);
+    const sys = 'You transcribe handwriting into plain text. Output ONLY the transcribed text, exactly as written, preserving line and paragraph breaks. Do not add commentary, headings, or quotation marks. Write [?] for any word you cannot read.';
+    const text = await aiCall(sys, 'Transcribe the handwriting in this image.', { image: png, model: AI_VISION_MODEL, maxTokens: 2000 });
+    if (!text){ flashStatus('No text was found in the writing'); return; }
+    insertProseInCurrentSection(text);
+    setMode('type');
+    paintSectionFocus();
+    if (state.session){ state.session.html = editorHTML(); state.session.text = editorText(); }
+    scheduleAutosave();
+    flashStatus('Transcribed to the Type page — review and edit');
+  } catch (e){
+    flashStatus(aiErrMsg(e));
+  } finally {
+    if (btn){ btn.disabled = false; btn.textContent = btn.dataset.label || 'Transcribe'; }
+  }
+}
 
 /* ---------------- modes / e-ink ---------------- */
 function setMode(m){
@@ -9054,6 +9125,7 @@ function init(){
   $('eraserBtn').addEventListener('click', () => { state.tool = 'eraser'; $('eraserBtn').classList.add('active'); $('penBtn').classList.remove('active'); });
   $('undoBtn').addEventListener('click', () => { ink.strokes.pop(); inkRedraw(); scheduleAutosave(); });
   $('clearInkBtn').addEventListener('click', () => { if (!ink.strokes.length || confirm('Clear all ink?')){ ink.strokes = []; inkRedraw(); scheduleAutosave(); } });
+  $('inkTranscribe').addEventListener('click', transcribeInk);
   $('extendBtn').addEventListener('click', () => { ink.h += 600; inkResize(); });
   $('fingerBtn').addEventListener('click', () => {
     state.penOnly = !state.penOnly;
