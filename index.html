@@ -4459,6 +4459,7 @@ function switchFrame(k){
   state.frameIdx = k;
   state.prompt = state.frames[k].prompt;
   state.selNode = null; state.linkFrom = null; state.activeSet = 0;
+  inkShowFrame(k);          // each timeframe has its own e-ink page(s)
   refreshSky();
   renderTimeline();
   syncFramesToSession();
@@ -6079,8 +6080,6 @@ function renderConstellation(){
       try { wlen = w.getComputedTextLength(); } catch (err) {}
       if (wlen > 0){
         const half = wlen / 2;
-        const uc2 = g.querySelector('.wbook');
-        if (uc2) uc2.setAttribute('transform', 'translate(' + (half + 15) + ',-9) scale(0.5) translate(-12,-12)');
         const fa2 = g.querySelector('.fold-arrow');
         if (fa2) fa2.setAttribute('x', -(half + 15));
         const fh2 = g.querySelector('.fold-hit');
@@ -7258,7 +7257,10 @@ function saveSession(){
   s.game = state.game
     ? { on: true, gens: state.game.gens, earnedKeys: state.game.earnedKeys, over: state.game.over }
     : null;
-  s.ink = inkHasContent() ? { width: ink.w, height: ink.h, strokes: ink.strokes } : null;
+  inkSyncPage();
+  s.inkPages = inkPagesArr();
+  const anyInk = s.inkPages.some(p => p.strokes && p.strokes.length);
+  s.ink = anyInk ? { width: ink.w, height: (ink.pageRef && ink.pageRef.h) || 1100, strokes: (ink.pageRef && ink.pageRef.strokes) || [] } : null;
   const list = loadSessions();
   const i = list.findIndex(x => x.id === s.id);
   if (i >= 0) list[i] = s; else list.unshift(s);
@@ -7311,10 +7313,15 @@ function openSession(id){
     ? { on: true, gens: s.game.gens || 0, earnedKeys: s.game.earnedKeys || [], over: (s.game.over != null ? s.game.over : 120), closed: false }
     : null;
   updateGameUI();
-  ink.strokes = (s.ink && s.ink.strokes) ? s.ink.strokes : [];
-  if (s.ink && s.ink.height) ink.h = s.ink.height;
-  inkResize(); inkRedraw();
-  setMode(ink.strokes.length && !(s.text || '').trim() ? 'ink' : 'type');
+  // migrate any legacy single-canvas ink into one page, then load the current frame's page
+  if (!Array.isArray(state.session.inkPages)){
+    state.session.inkPages = (s.ink && s.ink.strokes && s.ink.strokes.length)
+      ? [{ frame: 0, strokes: s.ink.strokes, h: s.ink.height || 1100, locked: false }] : [];
+  }
+  ink.pageRef = null;
+  inkShowFrame(state.frameIdx || 0);
+  const hadInk = inkPagesArr().some(p => p.strokes && p.strokes.length);
+  setMode(hadInk && !(s.text || '').trim() ? 'ink' : 'type');
   setupTimer();
   updateWordCount(); updateMeta();
   closeLibrary();
@@ -7374,7 +7381,9 @@ function newSession(){
   renderTimeline();
   $('storyName').value = ''; $('sectionTitle').value = ''; $('editor').innerHTML = '';
   $('skySvg').innerHTML = ''; $('skyEmpty').style.display = 'flex';
-  ink.strokes = []; ink.h = 1100; inkResize(); inkRedraw();
+  ink.pageRef = null; ink.strokes = []; ink.h = 1100; ink.viewLocked = false;
+  if (state.session) state.session.inkPages = [];
+  inkResize(); inkRedraw(); updateInkNav();
   setMode('type'); setupTimer(); updateWordCount(); updateMeta();
   closeLibrary();
 }
@@ -8626,7 +8635,46 @@ function download(name, content, type){
 }
 
 /* ---------------- ink engine ---------------- */
-const ink = { canvas: null, ctx: null, w: 760, h: 1100, strokes: [], current: null, drawing: false };
+const ink = { canvas: null, ctx: null, w: 760, h: 1100, strokes: [], current: null, drawing: false, pageRef: null, viewLocked: false };
+/* ---- e-ink pages: one page per writing session, scoped to a timeframe ----
+   Each page = { frame, strokes, h, locked }. A finished session's page is locked
+   (read-only, never re-transcribed); the writer always gets a fresh page next. */
+function inkPagesArr(){ if (!state.session) return []; if (!Array.isArray(state.session.inkPages)) state.session.inkPages = []; return state.session.inkPages; }
+function inkFrameKey(){ return state.frameIdx || 0; }
+function inkActivePage(frame){
+  const pages = inkPagesArr();
+  for (let i = pages.length - 1; i >= 0; i--){ if (pages[i].frame === frame && !pages[i].locked) return pages[i]; }
+  const p = { frame, strokes: [], h: 1100, locked: false };
+  pages.push(p); return p;
+}
+function inkLoadPage(page){
+  ink.pageRef = page;
+  ink.strokes = page.strokes;          // same array reference → drawing mutates the page
+  ink.h = page.h || 1100;
+  ink.viewLocked = !!page.locked;
+  document.body.classList.toggle('inklocked', ink.viewLocked);
+  inkResize();
+  updateInkNav();
+}
+function inkSyncPage(){ if (ink.pageRef){ ink.pageRef.strokes = ink.strokes; ink.pageRef.h = ink.h; } }
+function inkShowFrame(frame){ if (!state.session) return; inkSyncPage(); inkLoadPage(inkActivePage(frame)); }
+function inkFramePages(){ return inkPagesArr().filter(p => p.frame === inkFrameKey()); }
+function updateInkNav(){
+  const nav = $('inkNav'); if (!nav) return;
+  const pages = inkFramePages(); const idx = pages.indexOf(ink.pageRef);
+  if (pages.length <= 1 && !ink.viewLocked){ nav.style.display = 'none'; return; }
+  nav.style.display = '';
+  $('inkNavLbl').textContent = 'Page ' + (idx + 1) + ' / ' + pages.length + (ink.viewLocked ? ' · saved' : '');
+  $('inkPrev').disabled = idx <= 0;
+  $('inkNext').disabled = idx >= pages.length - 1;
+}
+function inkNavGo(dir){
+  inkSyncPage();
+  const pages = inkFramePages(); let idx = pages.indexOf(ink.pageRef);
+  if (idx < 0) idx = pages.length - 1;
+  idx = Math.max(0, Math.min(pages.length - 1, idx + dir));
+  if (pages[idx]) inkLoadPage(pages[idx]);
+}
 function inkInit(){
   ink.canvas = $('inkCanvas');
   ink.ctx = ink.canvas.getContext('2d', { desynchronized: true }) || ink.canvas.getContext('2d');
@@ -8672,6 +8720,7 @@ function inkDown(e){
     }
   }
   if (!allowPointer(e)) return;
+  if (ink.viewLocked) return;          // a saved page — read-only, no drawing
   e.preventDefault();
   if (ink.canvas.setPointerCapture){ try { ink.canvas.setPointerCapture(e.pointerId); } catch (err) {} }
   ink.drawing = true;
@@ -8852,7 +8901,7 @@ function setMode(m){
   $('fmtBar').style.display = state.inkMode ? 'none' : 'flex';
   $('inkWrap').classList.toggle('show', state.inkMode);
   $('inkTools').classList.toggle('show', state.inkMode);
-  if (state.inkMode) inkResize();
+  if (state.inkMode){ if (!ink.pageRef) inkShowFrame(inkFrameKey()); inkResize(); updateInkNav(); }
 }
 function setEink(on){
   document.body.classList.toggle('eink', on);
