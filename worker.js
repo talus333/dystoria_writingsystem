@@ -9,6 +9,53 @@ const MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
 // Vision model — OCR + handwriting recognition. Used when the request carries an image.
 const VISION_MODEL = '@cf/google/gemma-4-26b-a4b-it';
 
+// data:image/png;base64,xxxx  ->  Array of byte values (Workers AI vision input)
+function dataUrlToBytes(dataUrl) {
+  const b64 = dataUrl.includes(',') ? dataUrl.split(',')[1] : dataUrl;
+  const bin = atob(b64);
+  const arr = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+  return arr;
+}
+function extractText(resp) {
+  if (!resp) return '';
+  let t = resp.response || resp.result || resp.description || resp.text || '';
+  if (!t && resp.choices && resp.choices[0]) {
+    t = (resp.choices[0].message && resp.choices[0].message.content) || resp.choices[0].text || '';
+  }
+  if (t && typeof t === 'object') t = JSON.stringify(t);
+  return (t || '').toString().trim();
+}
+// Vision models on the binding take an `image` byte array (+ `prompt`). Try that first,
+// then fall back to the OpenAI-style image_url message shape. Returns { text, raw }.
+async function runVision(env, model, system, prompt, dataUrl, maxTokens) {
+  const visionPrompt = (system ? system + '\n\n' : '') + (prompt || 'Transcribe the text in this image.');
+  let bytes = null;
+  try { bytes = dataUrlToBytes(dataUrl); } catch (e) {}
+  const attempts = [];
+  if (bytes) attempts.push(() => env.AI.run(model, { prompt: visionPrompt, image: Array.from(bytes), max_tokens: maxTokens }));
+  attempts.push(() => env.AI.run(model, {
+    messages: [
+      ...(system ? [{ role: 'system', content: system }] : []),
+      { role: 'user', content: [
+        { type: 'text', text: prompt || 'Transcribe the text in this image.' },
+        { type: 'image_url', image_url: { url: dataUrl } },
+      ] },
+    ],
+    max_tokens: maxTokens,
+  }));
+  let raw = null;
+  for (const run of attempts) {
+    try {
+      const resp = await run();
+      raw = resp;
+      const text = extractText(resp);
+      if (text) return { text, raw };
+    } catch (e) { raw = { error: String(e) }; }
+  }
+  return { text: '', raw };
+}
+
 function cors(origin) {
   const ok = !origin || ALLOWED.includes(origin) || origin.endsWith('.pages.dev') || origin.endsWith('.workers.dev');
   return {
@@ -34,20 +81,26 @@ async function handleAI(request, env) {
   const image = typeof body.image === 'string' ? body.image : '';   // data URL (e.g. data:image/png;base64,...)
   if (!prompt && !image) return new Response(JSON.stringify({ error: 'no prompt' }), { status: 400, headers });
 
-  const messages = [];
-  if (system) messages.push({ role: 'system', content: system });
+  const maxTokens = Math.min(Math.max(parseInt(body.max_tokens, 10) || 600, 64), 4096);
+  const model = body.model || (image ? VISION_MODEL : MODEL);
+
+  // ---- image (vision / OCR / handwriting) ----
   if (image) {
-    const content = [];
-    if (prompt) content.push({ type: 'text', text: prompt });
-    content.push({ type: 'image_url', image_url: { url: image } });
-    messages.push({ role: 'user', content });
-  } else {
-    messages.push({ role: 'user', content: prompt });
+    try {
+      const { text, raw } = await runVision(env, model, system, prompt, image, maxTokens);
+      const out = { text };
+      if (!text) out.debug = (() => { try { return JSON.stringify(raw).slice(0, 700); } catch (e) { return String(raw); } })();
+      return new Response(JSON.stringify(out), { headers });
+    } catch (e) {
+      return new Response(JSON.stringify({ error: 'AI vision error: ' + String(e) }), { status: 502, headers });
+    }
   }
 
-  const maxTokens = Math.min(Math.max(parseInt(body.max_tokens, 10) || 600, 64), 4096);
-  const base = { messages, max_tokens: maxTokens, temperature: image ? 0.1 : 0.4 };
-  const model = body.model || (image ? VISION_MODEL : MODEL);
+  // ---- text ----
+  const messages = [];
+  if (system) messages.push({ role: 'system', content: system });
+  messages.push({ role: 'user', content: prompt });
+  const base = { messages, max_tokens: maxTokens, temperature: 0.4 };
 
   try {
     let resp;
@@ -58,9 +111,7 @@ async function handleAI(request, env) {
     } else {
       resp = await env.AI.run(model, base);
     }
-    let text = (resp && (resp.response || resp.result)) || '';
-    if (text && typeof text === 'object') text = JSON.stringify(text); // json mode can return an object
-    text = (text || '').toString().trim();
+    const text = extractText(resp);
     return new Response(JSON.stringify({ text }), { headers });
   } catch (e) {
     return new Response(JSON.stringify({ error: 'AI error: ' + String(e) }), { status: 502, headers });
