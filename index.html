@@ -5738,10 +5738,30 @@ function renderTerrainRegion(w, layer){
     fg.appendChild(terrainGlyph(st.glyph, x, y, 1.3 + rng() * 0.8, 0)); } }
   layer.appendChild(fg);
 }
+function smoothOpenPath(p){
+  if (!p || p.length < 2) return '';
+  if (p.length === 2) return 'M ' + p[0][0] + ' ' + p[0][1] + ' L ' + p[1][0] + ' ' + p[1][1];
+  let d = 'M ' + p[0][0].toFixed(1) + ' ' + p[0][1].toFixed(1) + ' ';
+  for (let i = 0; i < p.length - 1; i++){
+    const p0 = p[i - 1] || p[i], p1 = p[i], p2 = p[i + 1], p3 = p[i + 2] || p2;
+    const c1x = p1[0] + (p2[0] - p0[0]) / 6, c1y = p1[1] + (p2[1] - p0[1]) / 6;
+    const c2x = p2[0] - (p3[0] - p1[0]) / 6, c2y = p2[1] - (p3[1] - p1[1]) / 6;
+    d += 'C ' + c1x.toFixed(1) + ' ' + c1y.toFixed(1) + ' ' + c2x.toFixed(1) + ' ' + c2y.toFixed(1) + ' ' + p2[0].toFixed(1) + ' ' + p2[1].toFixed(1) + ' ';
+  }
+  return d;
+}
+function renderLineFeature(w, layer){
+  const st = w.lstyle || { stroke: '#5a86a8', width: 3.4 };
+  const d = smoothOpenPath(w.line); if (!d) return;
+  // a soft paper-toned halo under the line so it reads over busy terrain, then the line itself
+  layer.appendChild(tEl('path', { d, fill: 'none', stroke: '#f3ecdd', 'stroke-width': (st.width + 2.6).toFixed(1), 'stroke-linecap': 'round', 'stroke-linejoin': 'round', opacity: '0.55' }));
+  layer.appendChild(tEl('path', { d, fill: 'none', stroke: st.stroke, 'stroke-width': st.width.toFixed(1), 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }));
+}
 function renderTerrains(svg){
   const words = (state.prompt && state.prompt.words) || [];
   const layer = tEl('g', { 'class': 'terrain-layer' });
   words.forEach(w => { if (w.terrain && w.poly) renderTerrainRegion(w, layer); });
+  words.forEach(w => { if (w.line) renderLineFeature(w, layer); });   // lines sit on top of fills
   svg.appendChild(layer);
 }
 // A drawn region becomes a real Natural — Large element, pinned (fx/fy) at the region centroid,
@@ -5800,7 +5820,15 @@ function initTerrainTool(){
 
 /* ===== Placement: after an interactive roll/add, drop the new element on the map (point),
    or draw its boundary for an area setting (Natural — Large). ===== */
-function isAreaWord(w){ return !!(w && w.cat === 'setting' && (w.sub === 'Terrain' || w.tstyle)); }
+function isAreaWord(w){ return !!(w && w.cat === 'setting' && (w.sub === 'Terrain' || w.tstyle) && !isLineWord(w)); }
+// rivers, paths, roads and connectors are drawn as a free line, not a filled region
+const LINE_WORDS = new Set(['River','Riverlands','Stream','Creek','Brook','Canal','Tributary','Waterway']);
+function isLineWord(w){ return !!(w && w.cat === 'setting' && (w.sub === 'Connector' || LINE_WORDS.has(w.word) || w.line)); }
+function lineStyleForWord(word, sub){
+  const s = (word || '').toLowerCase();
+  if (sub !== 'Connector' && /river|stream|creek|brook|canal|tributar|riverland|waterway|water/.test(s)) return { stroke: '#5a86a8', width: 3.6 };
+  return { stroke: '#9a7747', width: 3.2 };   // paths / roads / connectors
+}
 function terrainStyleForWord(word){
   if (TERRAIN_STYLE_OF[word]) return TERRAIN_STYLE_OF[word];
   const s = (word || '').toLowerCase();
@@ -5818,7 +5846,7 @@ function placementPrompt(){
   if (state.placing == null){ banner.hidden = true; return; }
   const w = state.prompt && state.prompt.words[state.placing];
   const name = (w && (w.name || w.word)) || 'element';
-  const verb = isAreaWord(w) ? 'Draw the boundary of ' : 'Click the map to place ';
+  const verb = isLineWord(w) ? 'Draw the line of ' : isAreaWord(w) ? 'Draw the boundary of ' : 'Click the map to place ';
   document.getElementById('placeBannerText').textContent = verb + name;
   banner.hidden = false;
 }
@@ -5850,6 +5878,18 @@ function commitAreaPlacement(idx, pts){
   w.terrain = true; w.tstyle = w.tstyle || terrainStyleForWord(w.word);
   w.poly = pts.map(q => [Math.round(q[0]), Math.round(q[1])]);
   w.fx = Math.round(cx); w.fy = Math.round(cy); delete w.needsPlace;
+  if (state.session) state.session.words = state.prompt.words;
+  layoutConstellation();
+  scheduleAutosave();
+  placeNext();
+}
+function commitLinePlacement(idx, pts){
+  const w = state.prompt && state.prompt.words[idx]; if (!w){ placeNext(); return; }
+  const mid = pts[Math.floor(pts.length / 2)] || pts[0];
+  w.line = pts.map(q => [Math.round(q[0]), Math.round(q[1])]);
+  w.lstyle = lineStyleForWord(w.word, w.sub);
+  delete w.terrain; delete w.poly;
+  w.fx = Math.round(mid[0]); w.fy = Math.round(mid[1]); delete w.needsPlace;
   if (state.session) state.session.words = state.prompt.words;
   layoutConstellation();
   scheduleAutosave();
@@ -6029,8 +6069,9 @@ function renderConstellation(){
       }
     }
     const w = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-    w.setAttribute('class', nd.terrain ? 'w w-terrain' : 'w'); w.setAttribute('text-anchor', 'middle');
+    w.setAttribute('class', (nd.terrain || nd.line) ? 'w w-terrain' : 'w'); w.setAttribute('text-anchor', 'middle');
     if (nd.terrain){ const ts = terrainStyleFor(nd); w.setAttribute('fill', terrainDarken(ts.fill, 0.5)); }
+    else if (nd.line){ w.setAttribute('fill', terrainDarken((nd.lstyle && nd.lstyle.stroke) || '#5a86a8', 0.25)); }
     w.textContent = (nd.cat === 'concept' && nd.role !== 'frame') ? '\u27E8 ' + nd.word + ' \u27E9' : nd.word;
     w.addEventListener('mouseenter', ev => { let d = descFor(nd); if (nd.destroyed && nd.destroyedCause) d = '\u2620 Destroyed \u2014 ' + nd.destroyedCause + (d ? '  \u00B7  ' + d : ''); if (d) showTip(d, ev); });
     w.addEventListener('mouseleave', hideTip);
@@ -6269,7 +6310,7 @@ function renderConstellation(){
     lnk.addEventListener('mouseleave', hideTip);
     g.appendChild(lnk);
     if (nd.role !== 'frame'){
-      if (nd.cat === 'setting' && !nd.terrain && nd.sub !== 'Terrain'){ const mo = makeMotif(nd); if (mo) g.appendChild(mo); }
+      if (nd.cat === 'setting' && !nd.terrain && !nd.line && nd.sub !== 'Terrain' && nd.sub !== 'Connector'){ const mo = makeMotif(nd); if (mo) g.appendChild(mo); }
       else if (nd.cat === 'object'){ g.appendChild(makeObjectIcon(nd)); }
       else if (nd.cat === 'event'){ g.appendChild(makeEventBurst(nd)); }
     }
@@ -6643,8 +6684,29 @@ function renderFocus(){
       fl.appendChild(it);
     });
   }
+  // stakes show in the writing focus like events: story-wide stakes always, section stakes in their frame
+  const stkIdxs = words.map((w, i) => (w.cat === 'stakes' && w.role === 'word' &&
+    (w.scope === 'story' || (w.frame == null ? cf === 0 : w.frame === cf))) ? i : -1).filter(i => i >= 0);
+  if (stkIdxs.length){
+    stkIdxs.forEach(i => {
+      const w = words[i];
+      const it = document.createElement('div');
+      it.className = 'fp-item fp-event';
+      it.appendChild(focusBook(i, w._wstate || 0));
+      it.appendChild(document.createTextNode(w.name || w.word));
+      const c = document.createElement('span');
+      c.className = 'fb-cat';
+      c.style.color = catColor('stakes');
+      c.textContent = 'Stake';
+      it.appendChild(c);
+      it.title = descFor(w) || 'Stake';
+      it.addEventListener('mouseenter', ev => { const d = descFor(w); if (d) showTip(d, ev); });
+      it.addEventListener('mouseleave', hideTip);
+      fl.appendChild(it);
+    });
+  }
   const hasFocus = (state.focusKeys || []).some(k => words.some(w => wordKey(w) === k));
-  const engaged = hasFocus || evIdxs.length || words.some(w => w.role === 'constraint');
+  const engaged = hasFocus || evIdxs.length || stkIdxs.length || words.some(w => w.role === 'constraint');
   if (!hasFocus){
     if (!engaged){
       const ht = document.createElement('div');
@@ -9475,19 +9537,22 @@ function init(){
   function terrainEnd(commit){
     if (!terrainDrawing) return;
     if (terrainPreview){ terrainPreview.setAttribute('opacity', '0'); terrainPreview.removeAttribute('d'); }
-    const pts = terrainDrawing.pts; const placeIdx = terrainDrawing.placeIdx; terrainDrawing = null;
-    if (commit && pts.length >= 3){
-      if (placeIdx != null) commitAreaPlacement(placeIdx, pts);
-      else if (state.terrainDraw) createTerrainElement(pts, state.terrainDraw.word, state.terrainDraw.style);
+    const pts = terrainDrawing.pts; const placeIdx = terrainDrawing.placeIdx; const isLine = terrainDrawing.line; terrainDrawing = null;
+    if (commit){
+      if (isLine && placeIdx != null && pts.length >= 2) commitLinePlacement(placeIdx, pts);
+      else if (pts.length >= 3){
+        if (placeIdx != null) commitAreaPlacement(placeIdx, pts);
+        else if (state.terrainDraw) createTerrainElement(pts, state.terrainDraw.word, state.terrainDraw.style);
+      }
     }
     state.lastDrag = Date.now();
   }
   sky.addEventListener('pointerdown', e => {
     if (state.placing != null){
       const wp = state.prompt && state.prompt.words[state.placing];
-      if (isAreaWord(wp)){
+      if (isLineWord(wp) || isAreaWord(wp)){
         const p = skyPt(e);
-        terrainDrawing = { pts: [[p.x, p.y]], pid: e.pointerId, placeIdx: state.placing };
+        terrainDrawing = { pts: [[p.x, p.y]], pid: e.pointerId, placeIdx: state.placing, line: isLineWord(wp) };
         if (!terrainPreview){ terrainPreview = tEl('path', { fill: 'none', stroke: '#6a6253', 'stroke-width': '1.5', 'stroke-dasharray': '4 4' }); }
         sky.appendChild(terrainPreview); terrainPreview.setAttribute('opacity', '0.9');
         try { sky.setPointerCapture(e.pointerId); } catch (err) {}
