@@ -949,6 +949,13 @@
   #inkTools button{font-size:11px; letter-spacing:.1em; text-transform:uppercase; padding:6px 12px; border-radius:16px; color:var(--ink-soft)}
   #inkTools button.active{background:var(--ink); color:var(--paper)}
   #inkTools button:hover:not(.active){background:var(--bg2)}
+  #inkNav{display:inline-flex; align-items:center; gap:4px; margin-left:4px; padding-left:8px; border-left:1px solid var(--line)}
+  #inkNav #inkNavLbl{font-family:var(--sans); font-size:9.5px; letter-spacing:.08em; text-transform:uppercase; color:var(--ink-faint); white-space:nowrap}
+  #inkNav button{padding:5px 9px; font-size:11px}
+  #inkNav button:disabled{opacity:.3; cursor:default}
+  /* a saved (locked) e-ink page reads slightly dimmed */
+  body.inklocked #inkCanvas{opacity:.62}
+  body.inklocked #penBtn,body.inklocked #eraserBtn,body.inklocked #undoBtn,body.inklocked #clearInkBtn,body.inklocked #extendBtn,body.inklocked #inkTranscribe{opacity:.4; pointer-events:none}
 
   /* ---------- footer actions ---------- */
   #actionbar{
@@ -1299,6 +1306,7 @@
         <button id="clearInkBtn">Clear</button>
         <button id="fingerBtn" title="Allow finger drawing (off = pen only, palm rejected)">Pen only</button>
         <button id="inkTranscribe" title="Read your handwriting and add it as text to this section's Type page">Transcribe</button>
+        <span id="inkNav" style="display:none"><button id="inkPrev" title="Earlier page">◀</button><span id="inkNavLbl"></span><button id="inkNext" title="Later page">▶</button></span>
       </div>
     </div>
     <div id="actionbar">
@@ -6785,6 +6793,11 @@ function endWritingSession(){
   if (typeof live !== 'undefined' && live.on){ liveScheduleTrack(); liveApplyProseLock(); }
   if (hadRun && editorText().trim()) appendBeginPrompt('Continue\u2026');
   if (hadRun){ paintSectionFocus(); if (state.session){ state.session.html = editorHTML(); } scheduleAutosave(); }
+  // auto-transcribe this session's e-ink page, then lock it and open a fresh one
+  if (hadRun && ink.pageRef && !ink.pageRef.locked && ink.pageRef.strokes && ink.pageRef.strokes.length){
+    flashStatus('Saving your handwriting\u2026');
+    transcribeCurrentInk({ silent: true });
+  }
   flashStatus('Session ended \u2014 add elements, then begin writing to start the next');
 }
 function fmtTime(s){ return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }
@@ -7082,7 +7095,7 @@ function liveAmSprinting(){ return !!(state.timer && state.timer.started && stat
 function liveDocStr(){
   if (!state.session) return '';
   const d = cloudDocOf(state.session);
-  delete d.ink; delete d.frameIdx; delete d.focusKeys; delete d.game;
+  delete d.ink; delete d.inkPages; delete d.frameIdx; delete d.focusKeys; delete d.game;
   return JSON.stringify(d);
 }
 function liveJoin(sess){
@@ -7257,6 +7270,7 @@ function saveSession(){
   s.game = state.game
     ? { on: true, gens: state.game.gens, earnedKeys: state.game.earnedKeys, over: state.game.over }
     : null;
+  if (!ink.pageRef && ink.strokes.length){ const p = { frame: state.frameIdx || 0, strokes: ink.strokes, h: ink.h, locked: false }; inkPagesArr().push(p); ink.pageRef = p; }
   inkSyncPage();
   s.inkPages = inkPagesArr();
   const anyInk = s.inkPages.some(p => p.strokes && p.strokes.length);
@@ -8806,7 +8820,7 @@ function inkResize(){
   ink.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   inkRedraw();
 }
-function inkHasContent(){ return ink.strokes.length > 0; }
+function inkHasContent(){ return ink.strokes.length > 0 || inkPagesArr().some(p => p.strokes && p.strokes.length); }
 function inkContentHeight(inkData){
   let maxY = 0;
   (inkData.strokes || []).forEach(st => {
@@ -9278,10 +9292,12 @@ function init(){
 
   $('penBtn').addEventListener('click', () => { state.tool = 'pen'; $('penBtn').classList.add('active'); $('eraserBtn').classList.remove('active'); });
   $('eraserBtn').addEventListener('click', () => { state.tool = 'eraser'; $('eraserBtn').classList.add('active'); $('penBtn').classList.remove('active'); });
-  $('undoBtn').addEventListener('click', () => { ink.strokes.pop(); inkRedraw(); scheduleAutosave(); });
-  $('clearInkBtn').addEventListener('click', async () => { if (!ink.strokes.length || (await siteConfirm('Clear all ink?', 'Clear'))){ ink.strokes = []; inkRedraw(); scheduleAutosave(); } });
+  $('undoBtn').addEventListener('click', () => { if (ink.viewLocked) return; ink.strokes.pop(); inkRedraw(); scheduleAutosave(); });
+  $('clearInkBtn').addEventListener('click', async () => { if (ink.viewLocked){ flashStatus('This page is saved — go to the latest page to write'); return; } if (!ink.strokes.length || (await siteConfirm('Clear all ink?', 'Clear'))){ ink.strokes = []; if (ink.pageRef) ink.pageRef.strokes = ink.strokes; inkRedraw(); scheduleAutosave(); } });
   $('inkTranscribe').addEventListener('click', transcribeInk);
-  $('extendBtn').addEventListener('click', () => { ink.h += 600; inkResize(); });
+  $('extendBtn').addEventListener('click', () => { if (ink.viewLocked) return; ink.h += 600; inkResize(); });
+  $('inkPrev').addEventListener('click', () => inkNavGo(-1));
+  $('inkNext').addEventListener('click', () => inkNavGo(1));
   $('fingerBtn').addEventListener('click', () => {
     state.penOnly = !state.penOnly;
     $('fingerBtn').textContent = state.penOnly ? 'Pen only' : 'Finger ok';
