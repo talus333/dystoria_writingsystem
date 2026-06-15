@@ -4,6 +4,34 @@
 // dashboard setup needed. Deploys on git push like the rest of the site.
 
 const ALLOWED = ['https://dystoria.net', 'https://www.dystoria.net'];
+// Supabase (public values) — used to verify the caller is a signed-in Dystoria user so the
+// AI endpoint can't be hit anonymously to burn Workers AI neurons.
+const SUPABASE_URL = 'https://gurwhrypskhzdledxeqk.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_bb709imkZ55IGfwcAqVGgQ_vTLHGodY';
+const _tokCache = new Map();   // access token -> { user, t }
+const _rate = new Map();       // user id -> [timestamps] (per-isolate soft limit)
+async function verifyUser(token) {
+  if (!token) return null;
+  const now = Date.now();
+  const c = _tokCache.get(token);
+  if (c && now - c.t < 60000) return c.user;
+  try {
+    const r = await fetch(SUPABASE_URL + '/auth/v1/user', { headers: { Authorization: 'Bearer ' + token, apikey: SUPABASE_ANON_KEY } });
+    if (!r.ok) return null;
+    const u = await r.json();
+    const user = u && u.id ? u.id : null;
+    if (user) { _tokCache.set(token, { user, t: now }); if (_tokCache.size > 600) _tokCache.clear(); }
+    return user;
+  } catch (e) { return null; }
+}
+function rateOk(user, limit) {
+  const now = Date.now();
+  const arr = (_rate.get(user) || []).filter(t => now - t < 60000);
+  if (arr.length >= limit) { _rate.set(user, arr); return false; }
+  arr.push(now); _rate.set(user, arr);
+  if (_rate.size > 3000) _rate.clear();
+  return true;
+}
 // Current Workers AI model. Lighter/cheaper alternative: '@cf/meta/llama-3.1-8b-instruct-fast'
 const MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
 // Vision model — OCR + handwriting recognition. Used when the request carries an image.
@@ -59,7 +87,7 @@ function cors(origin) {
   const ok = !origin || ALLOWED.includes(origin) || origin.endsWith('.pages.dev') || origin.endsWith('.workers.dev');
   return {
     'Access-Control-Allow-Origin': ok ? (origin || 'https://dystoria.net') : 'https://dystoria.net',
-    'Access-Control-Allow-Headers': 'content-type',
+    'Access-Control-Allow-Headers': 'content-type, authorization',
     'Access-Control-Allow-Methods': 'POST, OPTIONS',
     'Content-Type': 'application/json',
   };
@@ -79,6 +107,12 @@ async function handleAI(request, env) {
   const prompt = String(body.prompt || '').slice(0, 24000);
   const image = typeof body.image === 'string' ? body.image : '';   // data URL (e.g. data:image/png;base64,...)
   if (!prompt && !image) return new Response(JSON.stringify({ error: 'no prompt' }), { status: 400, headers });
+
+  // Require a signed-in Dystoria user (verified Supabase token), then throttle per user.
+  const token = (request.headers.get('authorization') || '').replace(/^Bearer\s+/i, '').trim();
+  const user = await verifyUser(token);
+  if (!user) return new Response(JSON.stringify({ error: 'Sign in to use the AI features' }), { status: 401, headers });
+  if (!rateOk(user, image ? 12 : 45)) return new Response(JSON.stringify({ error: 'Too many AI requests — give it a moment' }), { status: 429, headers });
 
   const maxTokens = Math.min(Math.max(parseInt(body.max_tokens, 10) || 600, 64), 4096);
   const model = body.model || (image ? VISION_MODEL : MODEL);

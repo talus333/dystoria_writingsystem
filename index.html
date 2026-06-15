@@ -4077,13 +4077,30 @@ function textHasWord(lc, word){
   });
 }
 // lowercased prose split by the editor's <h3 data-frame> section dividers → { frameIdx: text }
-function sectionTextsLC(){
-  const ed = $('editor'); const out = { 0: '' }; let cur = 0;
-  if (ed) Array.from(ed.childNodes).forEach(node => {
-    if (node.nodeType === 1 && node.tagName === 'H3' && node.dataset && node.dataset.frame != null){
-      cur = parseInt(node.dataset.frame, 10) || 0; if (out[cur] == null) out[cur] = ''; return;
+// THE single source of truth for which timeframe each top-level editor node belongs to.
+// Rule: an <h3 data-frame=k> opens frame k; a .sec-mark belongs to the frame of the h3 that
+// follows it; anything before the first divider is frame 0. All section logic derives from this.
+function editorNodeFrames(){
+  const ed = $('editor'); if (!ed) return [];
+  const kids = Array.from(ed.childNodes);
+  let cur = 0;
+  return kids.map((c, i) => {
+    if (c.nodeType === 1 && c.tagName === 'H3' && c.dataset && c.dataset.frame != null) cur = parseInt(c.dataset.frame, 10) || 0;
+    let frame = cur;
+    if (c.nodeType === 1 && c.classList && c.classList.contains('sec-mark')){
+      const n = kids[i + 1];
+      if (n && n.nodeType === 1 && n.tagName === 'H3' && n.dataset && n.dataset.frame != null) frame = parseInt(n.dataset.frame, 10) || 0;
     }
-    out[cur] = (out[cur] || '') + ' ' + (node.textContent || '');
+    return { node: c, frame };
+  });
+}
+function sectionTextsLC(){
+  const out = { 0: '' };
+  editorNodeFrames().forEach(({ node, frame }) => {
+    if (out[frame] == null) out[frame] = '';
+    // section dividers (the diamond + the title) aren't prose — don't count them as "woven in"
+    if (node.nodeType === 1 && (node.tagName === 'H3' || (node.classList && node.classList.contains('sec-mark')))) return;
+    out[frame] += ' ' + (node.textContent || '');
   });
   Object.keys(out).forEach(k => { out[k] = out[k].toLowerCase(); });
   return out;
@@ -4589,19 +4606,17 @@ function addFrame(){
   switchFrame(at);
   flashStatus('Timeframe ' + (at + 1) + ' \u2014 inserted after ' + (src + 1));
 }
-// Map each top-level editor node to the frame it belongs to (a sec-mark belongs to the
-// frame of the h3 that follows it; nodes before the first h3 belong to frame 0).
-function nodeFrameMap(ed){
-  const kids = Array.from(ed.children); const m = new Map(); let cur = 0;
-  kids.forEach(c => { if (c.tagName === 'H3' && c.dataset && c.dataset.frame != null) cur = parseInt(c.dataset.frame, 10) || 0; m.set(c, cur); });
-  kids.forEach((c, i) => { if (c.classList && c.classList.contains('sec-mark')){ const n = kids[i + 1]; if (n && n.tagName === 'H3' && n.dataset && n.dataset.frame != null) m.set(c, parseInt(n.dataset.frame, 10) || 0); } });
+// node → frame as a Map, derived from the canonical editorNodeFrames().
+function nodeFrameMap(){
+  const m = new Map();
+  editorNodeFrames().forEach(({ node, frame }) => m.set(node, frame));
   return m;
 }
 // Pull a deleted timeframe's prose out of the editor (by frame index, not position) so Read/Edit
 // and the pad stay in sync and no orphan section is left behind to be "recalled" later.
 function removeSectionProse(k){
   const ed = $('editor'); if (!ed) return;
-  const fm = nodeFrameMap(ed);
+  const fm = nodeFrameMap();
   Array.from(ed.children).forEach(c => { if (fm.get(c) === k) c.remove(); });
   if (k === 0){
     // the old frame 1 becomes the new frame 0, which carries no inline header (it uses #firstMark/#sectionTitle)
@@ -6990,7 +7005,7 @@ let supa = null;
 try { if (window.supabase && window.supabase.createClient) supa = window.supabase.createClient(SUPA_URL, SUPA_KEY); } catch (e){ console.warn('supabase init threw:', e); }
 console.log('Dystoria cloud — SDK loaded:', !!(window.supabase && window.supabase.createClient), '· client:', !!supa);
 window.__supa = () => ({ sdk: !!window.supabase, client: !!supa, user: cloud.user });
-const cloud = { user: null, username: '' };
+const cloud = { user: null, username: '', token: '' };
 function cloudReady(){ return !!(supa && cloud.user); }
 function myDisplayName(){ return cloud.username || (cloud.user && (cloud.user.email || '').split('@')[0]) || 'Writer'; }
 async function loadMyProfile(){
@@ -7171,7 +7186,11 @@ function liveAmSprinting(){ return !!(state.timer && state.timer.started && stat
 function liveDocStr(){
   if (!state.session) return '';
   const d = cloudDocOf(state.session);
+  // per-device / per-session fields never travel live…
   delete d.ink; delete d.inkPages; delete d.frameIdx; delete d.focusKeys; delete d.game;
+  // …and neither do heavy, regenerable caches — they'd bloat every keystroke broadcast.
+  // (They still sync via the periodic full cloud save, so a collaborator gets them on reload.)
+  delete d.wikiAI; delete d.wikiOverview; delete d.sessionLog;
   return JSON.stringify(d);
 }
 function liveJoin(sess){
@@ -8134,14 +8153,9 @@ function normalizeLocks(){
 function lockWrittenInSection(){
   const ed = $('editor'); if (!ed) return;
   const k = state.frameIdx || 0;
-  const kids = Array.from(ed.children);
-  let cur = 0;
-  const fr = kids.map(c => { if (c.tagName === 'H3' && c.dataset && c.dataset.frame != null) cur = parseInt(c.dataset.frame, 10) || 0; return cur; });
-  kids.forEach((c, i) => {
-    if (c.classList && c.classList.contains('sec-mark')){ const n = kids[i + 1]; if (n && n.tagName === 'H3' && n.dataset && n.dataset.frame != null) fr[i] = parseInt(n.dataset.frame, 10) || 0; }
-  });
-  kids.forEach((c, i) => {
-    if (fr[i] !== k) return;
+  const fm = nodeFrameMap();          // canonical node → frame
+  Array.from(ed.children).forEach(c => {
+    if (fm.get(c) !== k) return;
     if (c.tagName === 'H3') return;                                   // leave the title editable
     if (c.classList && c.classList.contains('sec-mark')) return;      // leave the diamond
     if (c.classList && c.classList.contains('ph') && !c.textContent.trim()) return;
@@ -8426,19 +8440,8 @@ function paintSectionFocus(){
     return;
   }
   const k = state.frameIdx || 0;
-  // assign each top-level child to a frame (h3[data-frame] starts a new frame; its sec-mark belongs to it)
-  let cur = 0;
-  const fr = kids.map(c => {
-    if (c.tagName === 'H3' && c.dataset && c.dataset.frame != null) cur = parseInt(c.dataset.frame, 10) || 0;
-    return cur;
-  });
-  kids.forEach((c, i) => {
-    if (c.classList && c.classList.contains('sec-mark')){
-      const n = kids[i + 1];
-      if (n && n.tagName === 'H3' && n.dataset && n.dataset.frame != null) fr[i] = parseInt(n.dataset.frame, 10) || 0;
-    }
-  });
-  kids.forEach((c, i) => { c.style.display = (fr[i] === k) ? '' : 'none'; });
+  const fm = nodeFrameMap();          // canonical node → frame
+  kids.forEach(c => { c.style.display = (fm.get(c) === k) ? '' : 'none'; });
   if (wrap) wrap.classList.add('solo');
   // section 1's header (firstMark diamond + sectionTitle) belongs to frame 0 only
   const ft = $('firstMark'); if (ft) ft.style.display = (k === 0) ? '' : 'none';
@@ -8566,6 +8569,8 @@ async function exportWikiFiles(){
 /* ---------------- story wiki — Gemini AI rollups ---------------- */
 const AI_ENDPOINT = '/ai';
 const AI_VISION_MODEL = '@cf/google/gemma-4-26b-a4b-it';
+// AI requests carry the signed-in user's Supabase token so the worker can reject anonymous abuse.
+function aiHeaders(){ const h = { 'content-type': 'application/json' }; if (cloud.token) h.Authorization = 'Bearer ' + cloud.token; return h; }
 async function aiCall(system, prompt, opts){
   opts = opts || {};
   const body = { system, prompt };
@@ -8573,16 +8578,17 @@ async function aiCall(system, prompt, opts){
   if (opts.json) body.json = true;
   if (opts.image) body.image = opts.image;
   if (opts.model) body.model = opts.model;
-  const r = await fetch(AI_ENDPOINT, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const r = await fetch(AI_ENDPOINT, { method: 'POST', headers: aiHeaders(), body: JSON.stringify(body) });
   let data; try { data = await r.json(); } catch (e){ throw new Error('HTTP ' + r.status); }
   if (!r.ok || data.error) throw new Error(data.error || ('HTTP ' + r.status));
   return (data.text || '').trim();
 }
 function aiErrMsg(e){
   const m = String((e && e.message) || e || '');
+  if (/sign in|401/i.test(m)) return 'Sign in to use the AI features.';
   if (/not configured|AI not/i.test(m)) return 'Summaries aren’t set up yet — add the Workers AI binding in Cloudflare and redeploy.';
   if (/Failed to fetch|HTTP 404|Load failed/i.test(m)) return 'Summaries are unavailable — this works on dystoria.net once deployed.';
-  if (/quota|rate|429/i.test(m)) return 'The summary service is busy — try again shortly.';
+  if (/too many|quota|rate|429/i.test(m)) return 'Too many AI requests — give it a moment and try again.';
   return 'Couldn’t summarize: ' + m;
 }
 function aiSig(el){ const q = wikiAppearances(el); return q.length + ':' + q.join(' ').length; }
@@ -9038,7 +9044,7 @@ async function transcribeCurrentInk(opts){
   try {
     const png = inkToPNG({ width: ink.w, height: page.h || 1100, strokes: page.strokes }, 1200);
     const sys = 'You are a strict handwriting transcriber. Read ONLY the handwriting actually visible in the image and output exactly that text, preserving line breaks. Never invent, summarize, translate, or imagine content that is not written. If the image contains no legible handwriting, reply with exactly: [no legible text]';
-    const r = await fetch(AI_ENDPOINT, { method: 'POST', headers: { 'content-type': 'application/json' },
+    const r = await fetch(AI_ENDPOINT, { method: 'POST', headers: aiHeaders(),
       body: JSON.stringify({ system: sys, prompt: 'Transcribe the handwriting in this image, word for word.', image: png, model: AI_VISION_MODEL, max_tokens: 2000 }) });
     let data; try { data = await r.json(); } catch (e){ throw new Error('HTTP ' + r.status); }
     if (!r.ok || data.error) throw new Error(data.error || ('HTTP ' + r.status));
@@ -9154,11 +9160,13 @@ function init(){
   if (supa){
     supa.auth.onAuthStateChange((_evt, session) => {
       cloud.user = session ? session.user : null;
+      cloud.token = session ? session.access_token : '';
       updateAccountUI();
       if (cloud.user){ loadMyProfile(); cloudPull(); } else { cloud.username = ''; liveLeave(); renderShareNote(null); }
     });
     supa.auth.getSession().then(({ data }) => {
       cloud.user = (data && data.session) ? data.session.user : null;
+      cloud.token = (data && data.session) ? data.session.access_token : '';
       updateAccountUI();
       if (cloud.user){ loadMyProfile(); cloudPull(); }
     });
