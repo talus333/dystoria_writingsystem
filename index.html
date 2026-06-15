@@ -539,7 +539,7 @@
   body.addslock .cat-add,body.addslock .cat-gen,body.addslock .fb-addplot,
   body.addslock #aspectMenu button,body.addslock .tl-add,
   body.addslock .tl-dot.ghost{opacity:.35; cursor:not-allowed}
-  body.addslock .attr-add{opacity:.25; cursor:not-allowed}
+  body.addslock .attr-add,body.addslock .trait-pill{opacity:.25; cursor:not-allowed}
   .cat-add:hover{color:var(--ink); border-color:var(--ink-faint)}
   .cat-toggle{width:30px; height:17px; border-radius:10px; background:#d6d4cf; position:relative; flex:none; transition:background .2s}
   .cat-toggle::after{content:''; position:absolute; top:2px; left:2px; width:13px; height:13px; border-radius:50%; background:var(--paper); transition:left .2s; box-shadow:0 1px 2px rgba(0,0,0,.18)}
@@ -710,7 +710,6 @@
   .wscale:hover{fill:var(--ink)}
   .node.sel .del{opacity:.95; font-size:15.5px}
   .node.sel .lnk{opacity:.95}
-  .node.sel .tag{opacity:1}
   .node.rel .w{font-size:15.5px; font-style:italic; fill:var(--ink-soft)}
   .node.adjective .w{font-size:13.5px; font-style:italic; fill:var(--ink-soft)}
   .node.concept .w{font-size:12.5px; letter-spacing:.16em; text-transform:uppercase; fill:#6e6788}
@@ -788,7 +787,7 @@
   .set-label{font-family:var(--sans); font-size:9px; letter-spacing:.18em; fill:var(--ink-faint); cursor:pointer}
   .set-label.active{fill:var(--ink); font-weight:600}
   .node .tag{font-family:var(--sans); font-size:8.5px; letter-spacing:.16em; text-transform:uppercase; opacity:0; transition:opacity .15s}
-  .node:hover .tag,.node.sel .tag{opacity:.85}
+  .node:hover:not(.sel) .tag{opacity:.85}
   .node .usedchk{font-family:var(--sans); font-size:12.5px; font-weight:700; fill:#2f9e44}
   /* unified wiki-book indicator: grey on select, green if woven in this section, dark yellow if in another */
   .node .wbook{opacity:0; color:var(--ink-faint); cursor:pointer; pointer-events:none; transition:opacity .15s}
@@ -1050,6 +1049,13 @@
   .attr-add{font-family:var(--sans); font-size:16px; fill:var(--ink-faint); cursor:pointer}
   .attr-add:hover{fill:var(--ink)}
   body.eink .attr-add{font-size:19px; fill:#000}
+  .trait-pill{cursor:pointer}
+  .trait-pill-bg{fill:var(--paper); stroke:var(--line); stroke-width:1}
+  .trait-pill:hover .trait-pill-bg{stroke:var(--ink-faint)}
+  .trait-pill-tx{font-family:var(--sans); font-size:8px; letter-spacing:.12em; text-transform:uppercase; fill:var(--ink-faint)}
+  .trait-pill:hover .trait-pill-tx{fill:var(--ink)}
+  body.eink .trait-pill-bg{stroke:#000; stroke-width:2}
+  body.eink .trait-pill-tx{fill:#000}
 
   /* ---------- guideline tooltip ---------- */
   #tip{position:fixed; max-width:240px; background:var(--ink); color:#f0efec; font-size:12px; line-height:1.45;
@@ -4182,7 +4188,9 @@ function commitWord(word, sub, catId){
   pushUndo();
   if (!state.prompt){ state.prompt = { words: [], sets: 1, links: [], removedLinks: [] }; state.activeSet = 0; state.frames = [{ gap: null, prompt: state.prompt }]; state.frameIdx = 0; }
   const s = Math.min(state.activeSet || 0, (state.prompt.sets || 1) - 1);
-  state.prompt.words.push(ecBuildItem(word, sub, s, catId));
+  const built = ecBuildItem(word, sub, s, catId);
+  state.prompt.words.push(built);
+  bumpTimerForGuideWord(built);
   $('skyEmpty').style.display = 'none';
   layoutConstellation();
   ensureSession();
@@ -4908,6 +4916,7 @@ function addFromCategory(catId, subName){
       }
       if (catId === 'stakes') item.scope = 'story';
       words.push(item);
+      bumpTimerForGuideWord(item);
     }
   }
   $('skyEmpty').style.display = 'none';
@@ -4929,6 +4938,7 @@ function removeNode(idx){
   if (!state.prompt) return;
   pushUndo();
   const words = state.prompt.words;
+  dropTimerForGuideWord(words[idx]);     // give back the time a removed guide/exercise had added
   const toRemove = new Set([idx]);
   words.forEach((w, j) => { if (w.role === 'rel' && (w.fromIdx === idx || w.toIdx === idx)) toRemove.add(j); });
   const map = {};
@@ -5310,6 +5320,25 @@ function makeLucide(name, opts){
   g.setAttribute('transform', 'translate(' + (opts.x || 0) + ',' + (opts.y || 0) + ') scale(' + sc + ') translate(-12,-12)');
   g.innerHTML = LUCIDE[name] || '';
   return g;
+}
+// A little white pill (like the rail's Add/Roll buttons) drawn in SVG, centered at (cx,cy).
+function makeTraitPill(cx, cy, onClick, title){
+  const NS = 'http://www.w3.org/2000/svg';
+  const grp = document.createElementNS(NS, 'g');
+  grp.setAttribute('class', 'trait-pill');
+  grp.setAttribute('transform', 'translate(' + cx + ',' + cy + ')');
+  const w = 50, h = 17;
+  const rect = document.createElementNS(NS, 'rect');
+  rect.setAttribute('class', 'trait-pill-bg');
+  rect.setAttribute('x', -w / 2); rect.setAttribute('y', -h / 2); rect.setAttribute('width', w); rect.setAttribute('height', h); rect.setAttribute('rx', h / 2);
+  grp.appendChild(rect);
+  const t = document.createElementNS(NS, 'text');
+  t.setAttribute('class', 'trait-pill-tx'); t.setAttribute('text-anchor', 'middle'); t.setAttribute('y', 3.1);
+  t.textContent = '+ Trait';
+  grp.appendChild(t);
+  if (title){ const tt = document.createElementNS(NS, 'title'); tt.textContent = title; grp.appendChild(tt); }
+  grp.addEventListener('click', onClick);
+  return grp;
 }
 const SETTING_ICON_WORDS = {
   Forest:'tree-pine','Old-Growth Forest':'tree-pine','Bamboo Forest':'tree-pine',
@@ -5986,44 +6015,13 @@ function renderConstellation(){
         cap.addEventListener('click', onTg);
         g.appendChild(cap);
       });
-      const aaHit = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-      aaHit.setAttribute('class', 'ctl-hit');
-      aaHit.setAttribute('cx', 0); aaHit.setAttribute('cy', addY - 5); aaHit.setAttribute('r', 13);
-      g.appendChild(aaHit);
-      const aa = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-      aa.setAttribute('class', 'attr-add');
-      aa.setAttribute('x', 0); aa.setAttribute('y', addY);
-      aa.setAttribute('text-anchor', 'middle');
-      aa.textContent = '+';
-      const aat = document.createElementNS('http://www.w3.org/2000/svg', 'title');
-      aat.textContent = 'Add a characteristic (max 10)';
-      aa.appendChild(aat);
-      const onAdd = ev => {
-        ev.stopPropagation();
-        openAspectMenu(i, ev.clientX || 200, ev.clientY || 200);
-      };
-      aa.addEventListener('click', onAdd);
-      aaHit.addEventListener('click', onAdd);
-      g.appendChild(aa);
+      const onAdd = ev => { ev.stopPropagation(); openAspectMenu(i, ev.clientX || 200, ev.clientY || 200); };
+      g.appendChild(makeTraitPill(0, addY - 4, onAdd, 'Add a characteristic (max 10)'));
     }
     if (i === state.selNode && nd.role === 'word' && (nd.cat === 'setting' || nd.cat === 'object')){
       const addY2 = tagY + 17;
-      const aaHit2 = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-      aaHit2.setAttribute('class', 'ctl-hit');
-      aaHit2.setAttribute('cx', 0); aaHit2.setAttribute('cy', addY2 - 5); aaHit2.setAttribute('r', 13);
-      g.appendChild(aaHit2);
-      const aa2 = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-      aa2.setAttribute('class', 'attr-add');
-      aa2.setAttribute('x', 0); aa2.setAttribute('y', addY2);
-      aa2.setAttribute('text-anchor', 'middle');
-      aa2.textContent = '+';
-      const aat2 = document.createElementNS('http://www.w3.org/2000/svg', 'title');
-      aat2.textContent = 'Add a characteristic';
-      aa2.appendChild(aat2);
       const onAdd2 = ev => { ev.stopPropagation(); openAspectMenu(i, ev.clientX || 200, ev.clientY || 200); };
-      aa2.addEventListener('click', onAdd2);
-      aaHit2.addEventListener('click', onAdd2);
-      g.appendChild(aa2);
+      g.appendChild(makeTraitPill(0, addY2 - 4, onAdd2, 'Add a characteristic'));
     }
     if (i === state.selNode && nd.cat === 'setting' && nd.role === 'word'){
       const NS = 'http://www.w3.org/2000/svg';
@@ -6666,6 +6664,39 @@ function updateClockArc(){
   if (!dg) return;
   dg.textContent = $('timerDisplay').textContent;
   dg.classList.toggle('done', $('timerDisplay').classList.contains('done'));
+}
+// Set the session clock to an arbitrary number of minutes (adding a select option if needed).
+function setSessionMinutes(m){
+  m = Math.max(0, Math.min(180, Math.round(m)));
+  const sel = $('timerLen'); if (!sel) return;
+  if (![...sel.options].some(o => +o.value === m)){
+    const opt = document.createElement('option'); opt.value = String(m); opt.textContent = m + ' min';
+    let placed = false;
+    for (const o of sel.options){ if (+o.value > m){ sel.insertBefore(opt, o); placed = true; break; } }
+    if (!placed) sel.appendChild(opt);
+  }
+  sel.value = String(m);
+  const p = getPrefs(); p.timerLen = String(m); localStorage.setItem(LS_PREFS, JSON.stringify(p));
+  if (!state.timer || !state.timer.started) setupTimer();
+}
+function isGuideWord(w){ return !!(w && w.role === 'constraint' && (w.cat === 'exercise' || GUIDE_IDS.has(w.cat))); }
+function guideSuggestMinutes(w){ return (w && w.cat === 'exercise') ? 5 : 3; }   // exercises ask for more focus than guides
+// Adding a guide/exercise raises the suggested clock time (first sets it, more add to it).
+function bumpTimerForGuideWord(w){
+  if (!isGuideWord(w)) return;
+  if (state.timer && state.timer.started) return;          // never change a running session
+  const guides = (state.prompt ? state.prompt.words : []).filter(isGuideWord);
+  const sugg = guideSuggestMinutes(w);
+  const cur = parseInt($('timerLen').value, 10) || 0;
+  const target = (guides.length <= 1) ? sugg : cur + sugg;
+  setSessionMinutes(target);
+  flashStatus('Clock set to ' + target + ' min for this focus — adjust it anytime');
+}
+function dropTimerForGuideWord(w){
+  if (!isGuideWord(w)) return;
+  if (state.timer && state.timer.started) return;
+  const cur = parseInt($('timerLen').value, 10) || 0;
+  setSessionMinutes(Math.max(0, cur - guideSuggestMinutes(w)));
 }
 function setupTimer(){
   clearInterval(state.timer.handle);
@@ -9312,7 +9343,7 @@ function init(){
     $('restoreFile').value = '';
   });
   $('recapClose').addEventListener('click', () => document.body.classList.remove('recap'));
-  const LOCK_SEL = '.cat-add, .cat-gen, .fb-addplot, .attr-add, #aspectMenu button, .tl-add, .tl-dot.ghost';
+  const LOCK_SEL = '.cat-add, .cat-gen, .fb-addplot, .attr-add, .trait-pill, #aspectMenu button, .tl-add, .tl-dot.ghost';
   document.addEventListener('mouseover', ev => {
     if (!addsLocked() || !ev.target.closest) return;
     if (ev.target.closest(LOCK_SEL)) showTip('Locked until the writing session ends', ev);
