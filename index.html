@@ -8865,32 +8865,42 @@ function insertProseInCurrentSection(text){
     if (before) ed.insertBefore(div, before); else ed.appendChild(div);
   });
 }
-async function transcribeInk(){
-  if (!inkHasContent()){ flashStatus('Nothing to transcribe yet — write something first'); return; }
+// Send the current page's strokes to the transcriber. On success: insert the text into the
+// section, LOCK the page (saved, never re-sent), and open a fresh page for the next session.
+async function transcribeCurrentInk(opts){
+  opts = opts || {};
+  const page = ink.pageRef;
+  if (!page || page.locked){ if (!opts.silent) flashStatus('This page is saved — go to the latest page to write'); return false; }
+  if (!page.strokes || !page.strokes.length){ if (!opts.silent) flashStatus('Nothing to transcribe yet — write something first'); return false; }
   const btn = $('inkTranscribe');
-  if (btn){ btn.disabled = true; btn.dataset.label = btn.textContent; btn.innerHTML = '<span class="spin"></span>Reading…'; }
-  flashStatus('Reading your handwriting…');
+  if (btn && !opts.silent){ btn.disabled = true; btn.dataset.label = btn.textContent; btn.innerHTML = '<span class="spin"></span>Reading…'; }
+  if (!opts.silent) flashStatus('Reading your handwriting…');
   try {
-    const png = inkToPNG({ width: ink.w, height: ink.h, strokes: ink.strokes }, 1200);
+    const png = inkToPNG({ width: ink.w, height: page.h || 1100, strokes: page.strokes }, 1200);
     const sys = 'You are a strict handwriting transcriber. Read ONLY the handwriting actually visible in the image and output exactly that text, preserving line breaks. Never invent, summarize, translate, or imagine content that is not written. If the image contains no legible handwriting, reply with exactly: [no legible text]';
     const r = await fetch(AI_ENDPOINT, { method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ system: sys, prompt: 'Transcribe the handwriting in this image, word for word.', image: png, model: AI_VISION_MODEL, max_tokens: 2000 }) });
     let data; try { data = await r.json(); } catch (e){ throw new Error('HTTP ' + r.status); }
     if (!r.ok || data.error) throw new Error(data.error || ('HTTP ' + r.status));
     const text = (data.text || '').trim();
-    if (!text || /^\[no legible text\]$/i.test(text)){ console.warn('Transcribe returned no usable text. Model debug:', data.debug || text); flashStatus('Couldn’t read the handwriting this time — try darker, larger writing'); return; }
+    if (!text || /^\[no legible text\]$/i.test(text)){ console.warn('Transcribe returned no usable text. Model debug:', data.debug || text); if (!opts.silent) flashStatus('Couldn’t read the handwriting this time — try darker, larger writing'); return false; }
     insertProseInCurrentSection(text);
-    setMode('type');
+    // lock this page and open a fresh one for the same timeframe
+    page.locked = true; page.transcribed = true;
+    inkLoadPage(inkActivePage(page.frame));
     paintSectionFocus();
     if (state.session){ state.session.html = editorHTML(); state.session.text = editorText(); }
     scheduleAutosave();
-    flashStatus('Transcribed to the Type page — review and edit');
+    if (!opts.silent){ setMode('type'); flashStatus('Transcribed — page saved, a fresh page is ready'); }
+    return true;
   } catch (e){
-    flashStatus(aiErrMsg(e));
+    if (!opts.silent) flashStatus(aiErrMsg(e));
+    return false;
   } finally {
-    if (btn){ btn.disabled = false; btn.textContent = btn.dataset.label || 'Transcribe'; }
+    if (btn && !opts.silent){ btn.disabled = false; btn.textContent = btn.dataset.label || 'Transcribe'; }
   }
 }
+function transcribeInk(){ return transcribeCurrentInk({ silent: false }); }
 
 /* ---------------- modes / e-ink ---------------- */
 function setMode(m){
