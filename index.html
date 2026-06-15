@@ -250,7 +250,18 @@
   #sgPop .sp-ed:hover{color:var(--ink); border-color:var(--ink-faint)}
   #sgPop .sp-wait{font-family:var(--serif); font-style:italic; font-size:12.5px; color:var(--ink-faint)}
   body.eink #sgPop{border-width:2px; box-shadow:none}
-  /* In-site text prompt (replaces the browser prompt) */
+  /* In-site confirm + text prompt (replace the browser dialogs) — centered, branded */
+  #confirmModal{position:fixed; inset:0; z-index:185; display:none; align-items:center; justify-content:center; background:rgba(28,27,25,.28)}
+  #confirmModal.show{display:flex; animation:sgPopIn .14s ease}
+  #confirmModal .cm-card{width:362px; max-width:calc(100vw - 32px); background:var(--paper); border:1px solid var(--line);
+    border-radius:14px; box-shadow:0 14px 44px rgba(28,27,25,.24); padding:20px 20px 16px}
+  #confirmModal .cm-msg{font-family:var(--serif); font-size:15.5px; line-height:1.5; color:var(--ink); margin-bottom:17px}
+  #confirmModal .cm-acts{display:flex; justify-content:flex-end; gap:8px}
+  #confirmModal .cm-acts button{font-family:var(--sans); font-size:9.5px; letter-spacing:.1em; text-transform:uppercase;
+    border:1px solid var(--line); border-radius:16px; padding:8px 16px; cursor:pointer; background:transparent; color:var(--ink-soft)}
+  #confirmModal #cmCancel:hover{color:var(--ink); border-color:var(--ink-faint)}
+  #confirmModal #cmOk:hover{color:#fff; background:var(--ink); border-color:var(--ink)}
+  body.eink #confirmModal .cm-card{border-width:2px; box-shadow:none}
   #inPrompt{position:fixed; inset:0; z-index:180; display:none; align-items:center; justify-content:center; background:rgba(28,27,25,.28)}
   #inPrompt.show{display:flex; animation:sgPopIn .14s ease}
   #inPrompt .ip-card{width:380px; max-width:calc(100vw - 32px); background:var(--paper); border:1px solid var(--line);
@@ -1172,6 +1183,11 @@
   <div id="sgPop"></div>
   <button id="editTop" title="Back to the top">↑ Top</button>
 </div>
+
+<div id="confirmModal"><div class="cm-card">
+  <div class="cm-msg" id="cmMsg"></div>
+  <div class="cm-acts"><button id="cmCancel">Cancel</button><button id="cmOk">OK</button></div>
+</div></div>
 
 <div id="inPrompt"><div class="ip-card">
   <div class="ip-lbl" id="ipLbl"></div>
@@ -4229,10 +4245,10 @@ function addAspect(i, subName){
 }
 
 /* ---------------- nouns: give an element a proper name ---------------- */
-function nameElement(i){
+async function nameElement(i){
   const w = state.prompt && state.prompt.words[i];
   if (!w) return;
-  const name = prompt('Name this ' + ((getCat(w.cat) || {}).name || 'element') + ':', w.name || '');
+  const name = await sitePrompt('Name this ' + ((getCat(w.cat) || {}).name || 'element'), w.name || '');
   if (name === null) return;
   pushUndo();
   const trimmed = name.trim();
@@ -4562,9 +4578,9 @@ function reconcileSections(){
   while (n){ const next = n.nextSibling; n.remove(); n = next; }
   renumberSections();
 }
-function removeFrame(k){
+async function removeFrame(k){
   if (!state.frames || state.frames.length <= 1) return;
-  if (!confirm('Remove timeframe ' + (k + 1) + '? Its map and writing are lost.')) return;
+  if (!(await siteConfirm('Remove timeframe ' + (k + 1) + '? Its map and writing are lost.', 'Remove'))) return;
   removeSectionProse(k);
   state.frames.splice(k, 1);
   if (state.frames.length) state.frames[0].gap = null;
@@ -4573,7 +4589,7 @@ function removeFrame(k){
   if (state.session){ state.session.html = editorHTML(); state.session.text = editorText(); }
   scheduleAutosave();
 }
-function editStageName(k){
+async function editStageName(k){
   if (!state.prompt){
     state.prompt = { words: [], sets: 1, links: [], removedLinks: [] };
     state.activeSet = 0;
@@ -4586,14 +4602,14 @@ function editStageName(k){
   const cur = (state.frames[k].stageName != null && state.frames[k].stageName !== '')
     ? state.frames[k].stageName
     : ((stages && stages[frameStage(state.frames[k], k)]) || '');
-  const g = prompt('Name this stage', cur);
+  const g = await sitePrompt('Name this stage', cur);
   if (g === null) return;
   state.frames[k].stageName = g.trim();
   renderTimeline();
   syncFramesToSession();
 }
-function editGap(k){
-  const g = prompt('How much time passes before frame ' + (k + 1) + '?', state.frames[k].gap || 'later');
+async function editGap(k){
+  const g = await sitePrompt('How much time passes before frame ' + (k + 1) + '?', state.frames[k].gap || 'later');
   if (g === null) return;
   state.frames[k].gap = g || 'later';
   renderTimeline();
@@ -4666,9 +4682,9 @@ function extendToStage(idx){
   }
   switchFrame(idx);
 }
-function editPlotGap(k){
+async function editPlotGap(k){
   const cur = (state.plotGaps && state.plotGaps[k]) || 'later';
-  const g = prompt('How much time passes before \u201C' + (PLOT_STAGES[findPlotWord().word][k] || 'stage ' + (k + 1)) + '\u201D?', cur);
+  const g = await sitePrompt('How much time passes before \u201C' + (PLOT_STAGES[findPlotWord().word][k] || 'stage ' + (k + 1)) + '\u201D?', cur);
   if (g === null) return;
   if (!state.plotGaps) state.plotGaps = {};
   state.plotGaps[k] = g || 'later';
@@ -5805,11 +5821,11 @@ function renderConstellation(){
 
     const isBeing = nd.role === 'being';
     const isSetting = nd.cat === 'setting' && nd.role === 'word';
-    const onDel = ev => {
+    const onDel = async ev => {
       ev.stopPropagation();
       if (isBeing){
         const who = nd.name || nd.word;
-        const cause = prompt('How did ' + who + ' die?', '');
+        const cause = await sitePrompt('How did ' + who + ' die?', '');
         if (cause === null) return;
         state.deaths = (state.deaths || 0) + 1;
         state.deathLog = state.deathLog || [];
@@ -5822,7 +5838,7 @@ function renderConstellation(){
       if (isSetting && !nd.destroyed){
         const w0 = state.prompt && state.prompt.words[i];
         const place = (w0 && w0.name) || nd.word;
-        const cause = prompt('How was ' + place + ' destroyed?', '');
+        const cause = await sitePrompt('How was ' + place + ' destroyed?', '');
         if (cause === null) return;
         if (w0){ w0.destroyed = true; w0.destroyedCause = cause.trim() || 'cause unknown'; }
         if (state.nodes[i]) state.nodes[i].destroyed = true;
@@ -7004,7 +7020,7 @@ async function shareStory(sess){
   try {
     await supa.from('stories').update({ title: sess.name || 'Untitled story', doc: cloudDocOf(sess), updated_at: new Date().toISOString() }).eq('id', sess.cloudId);
   } catch (e){}
-  const email = prompt('Share “' + (sess.name || 'this story') + '” with another writer.\nEnter their Dystoria account email (they must already have signed up):');
+  const email = await sitePrompt('Share “' + (sess.name || 'this story') + '” — enter the writer’s Dystoria account email (they must already have signed up)', '', 'Share');
   if (!email || !email.trim()) return;
   const { data, error } = await supa.rpc('share_story', { sid: sess.cloudId, invitee_email: email.trim() });
   if (error){ flashStatus('Share failed: ' + error.message); return; }
@@ -7442,7 +7458,7 @@ function renderLibrary(){
     const xb = document.createElement('button'); xb.textContent = 'Export';
     xb.addEventListener('click', e => { e.stopPropagation(); exportSession(s); });
     const db = document.createElement('button'); db.textContent = 'Delete';
-    db.addEventListener('click', e => { e.stopPropagation(); if (confirm('Delete "' + s.name + '"?')) deleteSession(s.id); });
+    db.addEventListener('click', async e => { e.stopPropagation(); if (await siteConfirm('Delete “' + s.name + '”? This removes it from your library.', 'Delete')) deleteSession(s.id); });
     ra.appendChild(ob); ra.appendChild(wb); ra.appendChild(xb);
     if (cloud.user && s.cloudId && !s._shared){
       const sb = document.createElement('button'); sb.textContent = 'Share';
@@ -7898,6 +7914,18 @@ function overlaySwitch(fn){
 
 /* ---------------- locking + edit mode ---------------- */
 // A styled in-site replacement for window.prompt — returns a Promise of the text, or null if cancelled.
+let _cmResolve = null;
+// Branded, centered replacement for window.confirm — returns a Promise<boolean>.
+function siteConfirm(message, okText){
+  return new Promise(resolve => {
+    _cmResolve = resolve;
+    $('cmMsg').textContent = message || 'Are you sure?';
+    $('cmOk').textContent = okText || 'OK';
+    $('confirmModal').classList.add('show');
+    setTimeout(() => $('cmOk').focus(), 20);
+  });
+}
+function cmClose(val){ $('confirmModal').classList.remove('show'); const r = _cmResolve; _cmResolve = null; if (r) r(val); }
 let _ipResolve = null;
 function sitePrompt(label, initial, okText, ctxHTML){
   return new Promise(resolve => {
@@ -8132,9 +8160,9 @@ async function editGroup(grp){
   if (ins) ins.textContent = (/^\s/.test(ins.textContent) ? ' ' : '') + nt;
   else { const del = spans.find(s => s.classList.contains('sg-del')); if (del) del.after(sgSpanText('sg-ins', ' ' + nt, grp)); }
 }
-function resolveAllSg(accept){
+async function resolveAllSg(accept){
   if (!allSgGroups().length) return;
-  if (!confirm((accept ? 'Approve' : 'Reject') + ' all suggestions?')) return;
+  if (!(await siteConfirm((accept ? 'Approve' : 'Reject') + ' all suggestions?', accept ? 'Approve all' : 'Reject all'))) return;
   allSgGroups().forEach(g => resolveGroup(g, accept));
   closeSgPop(); commitEdit(); renderPending(); renderNotes();
 }
@@ -8795,13 +8823,13 @@ async function transcribeInk(){
   flashStatus('Reading your handwriting…');
   try {
     const png = inkToPNG({ width: ink.w, height: ink.h, strokes: ink.strokes }, 1200);
-    const sys = 'You transcribe handwriting into plain text. Output ONLY the transcribed text, exactly as written, preserving line and paragraph breaks. Do not add commentary, headings, or quotation marks. Write [?] for any word you cannot read.';
+    const sys = 'You are a strict handwriting transcriber. Read ONLY the handwriting actually visible in the image and output exactly that text, preserving line breaks. Never invent, summarize, translate, or imagine content that is not written. If the image contains no legible handwriting, reply with exactly: [no legible text]';
     const r = await fetch(AI_ENDPOINT, { method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ system: sys, prompt: 'Transcribe the handwriting in this image.', image: png, model: AI_VISION_MODEL, max_tokens: 2000 }) });
+      body: JSON.stringify({ system: sys, prompt: 'Transcribe the handwriting in this image, word for word.', image: png, model: AI_VISION_MODEL, max_tokens: 2000 }) });
     let data; try { data = await r.json(); } catch (e){ throw new Error('HTTP ' + r.status); }
     if (!r.ok || data.error) throw new Error(data.error || ('HTTP ' + r.status));
     const text = (data.text || '').trim();
-    if (!text){ console.warn('Transcribe returned no text. Model debug:', data.debug); flashStatus('Couldn’t read the handwriting this time — try darker, larger writing'); return; }
+    if (!text || /^\[no legible text\]$/i.test(text)){ console.warn('Transcribe returned no usable text. Model debug:', data.debug || text); flashStatus('Couldn’t read the handwriting this time — try darker, larger writing'); return; }
     insertProseInCurrentSection(text);
     setMode('type');
     paintSectionFocus();
@@ -9055,8 +9083,8 @@ function init(){
   $('drawerBackdrop').addEventListener('click', closeDrawers);
   window.__closeDrawers = closeDrawers;
   $('libClose').addEventListener('click', closeLibrary);
-  $('libNewBtn').addEventListener('click', () => {
-    if (state.session && !confirm('Start a new story? The current one stays in your Library.')) return;
+  $('libNewBtn').addEventListener('click', async () => {
+    if (state.session && !(await siteConfirm('Start a new story? The current one stays in your Library.', 'New story'))) return;
     newSession(); closeLibrary();
   });
   $('libImportBtn').addEventListener('click', openImport);
@@ -9099,6 +9127,14 @@ function init(){
   $('edApproveAll').addEventListener('click', () => resolveAllSg(true));
   $('edRejectAll').addEventListener('click', () => resolveAllSg(false));
   $('readSugToggle').addEventListener('click', () => setReadSug(state._readSug === 'original' ? 'suggested' : 'original'));
+  $('cmOk').addEventListener('click', () => cmClose(true));
+  $('cmCancel').addEventListener('click', () => cmClose(false));
+  $('confirmModal').addEventListener('mousedown', e => { if (e.target === $('confirmModal')) cmClose(false); });
+  document.addEventListener('keydown', e => {
+    if (!$('confirmModal').classList.contains('show')) return;
+    if (e.key === 'Escape'){ e.preventDefault(); cmClose(false); }
+    else if (e.key === 'Enter'){ e.preventDefault(); cmClose(true); }
+  });
   $('ipOk').addEventListener('click', () => ipClose($('ipField').value));
   $('ipCancel').addEventListener('click', () => ipClose(null));
   $('ipField').addEventListener('keydown', e => {
@@ -9143,6 +9179,8 @@ function init(){
     }, 800);
   });
   $('storyName').addEventListener('input', () => { scheduleAutosave(); updateWmTitle(); });
+  $('wmTitleBar').addEventListener('input', () => { $('storyName').value = $('wmTitleBar').textContent.replace(/\s+/g, ' ').replace(/^ /, ''); scheduleAutosave(); });
+  $('wmTitleBar').addEventListener('keydown', e => { if (e.key === 'Enter'){ e.preventDefault(); $('wmTitleBar').blur(); } });
   $('sectionTitle').addEventListener('input', scheduleAutosave);
   $('timerLen').addEventListener('change', () => {
     const p = getPrefs(); p.timerLen = $('timerLen').value;
@@ -9182,7 +9220,7 @@ function init(){
   $('penBtn').addEventListener('click', () => { state.tool = 'pen'; $('penBtn').classList.add('active'); $('eraserBtn').classList.remove('active'); });
   $('eraserBtn').addEventListener('click', () => { state.tool = 'eraser'; $('eraserBtn').classList.add('active'); $('penBtn').classList.remove('active'); });
   $('undoBtn').addEventListener('click', () => { ink.strokes.pop(); inkRedraw(); scheduleAutosave(); });
-  $('clearInkBtn').addEventListener('click', () => { if (!ink.strokes.length || confirm('Clear all ink?')){ ink.strokes = []; inkRedraw(); scheduleAutosave(); } });
+  $('clearInkBtn').addEventListener('click', async () => { if (!ink.strokes.length || (await siteConfirm('Clear all ink?', 'Clear'))){ ink.strokes = []; inkRedraw(); scheduleAutosave(); } });
   $('inkTranscribe').addEventListener('click', transcribeInk);
   $('extendBtn').addEventListener('click', () => { ink.h += 600; inkResize(); });
   $('fingerBtn').addEventListener('click', () => {

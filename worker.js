@@ -33,33 +33,25 @@ function looksEchoed(text, instr) {
   const p = (instr || '').toLowerCase().replace(/\s+/g, ' ').trim();
   return p.length > 8 && t.includes(p.slice(0, Math.min(p.length, 28)));
 }
-// Vision input. Use the chat-template (messages) form first so the instruction is followed,
-// not echoed, with the image attached as a byte array; then try OpenAI image_url; raw last.
+// Vision input. Gemma (and OpenAI-compatible models) take the image as an `image_url` part
+// inside the message content — NOT a top-level `image` param (which it ignores and then
+// hallucinates). This is the documented schema for @cf/google/gemma-4-26b-a4b-it.
 async function runVision(env, model, system, prompt, dataUrl, maxTokens) {
   const instr = prompt || 'Transcribe the text in this image.';
-  let bytes = null;
-  try { bytes = dataUrlToBytes(dataUrl); } catch (e) {}
-  const img = bytes ? Array.from(bytes) : null;
-  const sysMsg = system ? [{ role: 'system', content: system }] : [];
-  const attempts = [];
-  if (img) attempts.push(() => env.AI.run(model, { messages: [...sysMsg, { role: 'user', content: instr }], image: img, max_tokens: maxTokens }));
-  attempts.push(() => env.AI.run(model, {
-    messages: [...sysMsg, { role: 'user', content: [
-      { type: 'text', text: instr },
-      { type: 'image_url', image_url: { url: dataUrl } },
-    ] }],
-    max_tokens: maxTokens,
-  }));
-  if (img) attempts.push(() => env.AI.run(model, { prompt: (system ? system + '\n\n' : '') + instr, image: img, max_tokens: maxTokens }));
+  const messages = [];
+  if (system) messages.push({ role: 'system', content: system });
+  messages.push({ role: 'user', content: [
+    { type: 'text', text: instr },
+    { type: 'image_url', image_url: { url: dataUrl } },
+  ] });
   let raw = null;
-  for (const run of attempts) {
-    try {
-      const resp = await run();
-      const text = extractText(resp);
-      if (text && !looksEchoed(text, instr)) return { text, raw: resp };
-      raw = text ? { echoed: text.slice(0, 160) } : resp;
-    } catch (e) { raw = { error: String(e) }; }
-  }
+  try {
+    const resp = await env.AI.run(model, { messages, max_tokens: maxTokens, temperature: 0.1 });
+    raw = resp;
+    const text = extractText(resp);
+    if (text && !looksEchoed(text, instr)) return { text, raw: resp };
+    raw = text ? { suspect: text.slice(0, 200) } : resp;
+  } catch (e) { raw = { error: String(e) }; }
   return { text: '', raw };
 }
 
