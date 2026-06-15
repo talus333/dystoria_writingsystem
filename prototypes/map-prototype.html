@@ -25,6 +25,11 @@
   .panel{ background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:12px 14px; }
   .panel h2{ font-size:15px; font-weight:600; margin:0 0 4px; }
   .panel p{ font-family:system-ui,sans-serif; font-size:12px; color:var(--faint); line-height:1.5; margin:0 0 8px; }
+  .dials{ display:grid; grid-template-columns:repeat(auto-fit,minmax(185px,1fr)); gap:11px 20px; margin-top:4px; font-family:system-ui,sans-serif; }
+  .dial{ display:flex; flex-direction:column; gap:3px; }
+  .dial label{ font-size:11.5px; color:#6a6253; display:flex; justify-content:space-between; }
+  .dial label b{ font-weight:600; color:#3a352c; font-variant-numeric:tabular-nums; }
+  .dial input[type=range]{ width:100%; accent-color:#6a6253; margin:0; }
   #three{ width:100%; height:230px; border-radius:8px; background:#efe7d6; display:block; cursor:grab; }
   #three:active{ cursor:grabbing; }
   #map{ touch-action:none; }
@@ -61,11 +66,14 @@
       <defs>
         <filter id="wc" x="-25%" y="-25%" width="150%" height="150%">
           <feTurbulence type="fractalNoise" baseFrequency="0.011" numOctaves="4" seed="7" result="n"/>
-          <feDisplacementMap in="SourceGraphic" in2="n" scale="22" xChannelSelector="R" yChannelSelector="G"/>
+          <feDisplacementMap id="wcdisp" in="SourceGraphic" in2="n" scale="22" xChannelSelector="R" yChannelSelector="G"/>
         </filter>
         <filter id="wc2" x="-25%" y="-25%" width="150%" height="150%">
           <feTurbulence type="fractalNoise" baseFrequency="0.02" numOctaves="3" seed="21" result="n"/>
-          <feDisplacementMap in="SourceGraphic" in2="n" scale="13"/>
+          <feDisplacementMap id="wcdisp2" in="SourceGraphic" in2="n" scale="13"/>
+        </filter>
+        <filter id="feather" x="-30%" y="-30%" width="160%" height="160%">
+          <feGaussianBlur id="featherblur" stdDeviation="11"/>
         </filter>
         <filter id="pencil" x="-12%" y="-12%" width="124%" height="124%">
           <feTurbulence type="fractalNoise" baseFrequency="0.045" numOctaves="2" seed="4" result="n"/>
@@ -86,6 +94,18 @@
       <rect x="0" y="0" width="1000" height="620" filter="url(#grain)" opacity="0.5" pointer-events="none"/>
     </svg>
     <div class="maphint" id="hint">Tip: choose Forest, then drag-draw a loop on the map.</div>
+  </div>
+
+  <div class="panel" style="margin-top:14px">
+    <h2>Texture dials</h2>
+    <p>Drag a slider and any terrain you've already drawn redraws live. Current value shows at the right of each label.</p>
+    <div class="dials">
+      <div class="dial"><label>Glyph density <b id="v-dens">1.00×</b></label><input type="range" id="d-dens" min="0.2" max="2" step="0.05" value="1"></div>
+      <div class="dial"><label>Glyph opacity <b id="v-op">0.50</b></label><input type="range" id="d-op" min="0.1" max="0.9" step="0.05" value="0.5"></div>
+      <div class="dial"><label>Glyph darkness <b id="v-dark">0.42</b></label><input type="range" id="d-dark" min="0.15" max="0.65" step="0.01" value="0.42"></div>
+      <div class="dial"><label>Settlement grey <b id="v-grey">69%</b></label><input type="range" id="d-grey" min="35" max="90" step="1" value="69"></div>
+      <div class="dial"><label>Watercolor bleed <b id="v-wc">22</b></label><input type="range" id="d-wc" min="6" max="40" step="1" value="22"></div>
+    </div>
   </div>
 
   <div class="row">
@@ -218,36 +238,56 @@
   function darken(hex, f){ const n = parseInt(hex.slice(1), 16);
     const r = Math.round(((n>>16)&255)*(1-f)), g = Math.round(((n>>8)&255)*(1-f)), b = Math.round((n&255)*(1-f));
     return "#" + ((1<<24)+(r<<16)+(g<<8)+b).toString(16).slice(1); }
+  function greyHex(l){ const h = Math.round(l/100*255).toString(16).padStart(2,"0"); return "#"+h+h+h; }
+
+  // live, slider-driven texture settings
+  const CFG = { densMul:1, glyphOp:0.5, glyphDark:0.42, settleL:69 };
+  let regionUid = 0;
 
   const drawn = [];
   function addRegion(envId, pts){
     const env = ENVS[envId]; const d = (document.getElementById("smooth").checked ? smoothClosed(pts) : rawClosed(pts));
-    const building = env.glyph === "building";
+    const settle = (envId === "settle");
+    const fill = settle ? greyHex(CFG.settleL) : env.fill;
     const wash = el("g", {});
-    wash.appendChild(el("path", { d, fill:env.fill, "fill-opacity":env.op, filter:"url(#wc)" }));
-    wash.appendChild(el("path", { d, fill:env.fill, "fill-opacity":(env.op*0.5).toFixed(2), filter:"url(#wc2)" }));
-    regionsG.appendChild(wash);
-    const fg = el("g", { stroke: building ? "#5d564a" : darken(env.fill, 0.42), "stroke-width": building ? "1.3" : "1.0",
-      fill:"none", filter:"url(#pencil)", "stroke-linecap":"round", "stroke-linejoin":"round", opacity: building ? "0.8" : "0.5" });
-    let minx=1e9,miny=1e9,maxx=-1e9,maxy=-1e9; pts.forEach(([x,y])=>{ minx=Math.min(minx,x);miny=Math.min(miny,y);maxx=Math.max(maxx,x);maxy=Math.max(maxy,y); });
-    const count = Math.max(3, Math.round((maxx-minx)*(maxy-miny)*env.density));
-    // a wandering street first, so buildings sit on top of it
-    if (env.paths){
-      const road = [];
-      for (let t = 0; t < 50 && road.length < 5; t++){ const x = minx + Math.random()*(maxx-minx), y = miny + Math.random()*(maxy-miny);
-        if (inPoly(x, y, pts)) road.push([x, y]); }
-      if (road.length >= 2){ road.sort((a,b)=> a[0]-b[0]);
-        fg.appendChild(el("path", { d:"M " + road.map(p => p[0].toFixed(1)+" "+p[1].toFixed(1)).join(" L "), fill:"none", stroke:"#a3906c", "stroke-width":"2.6", "stroke-linecap":"round", opacity:"0.5" })); }
+    if (settle){
+      // opaque ground that hides terrain beneath, with edges feathered to transparent
+      const uid = "stl" + (++regionUid);
+      const mask = el("mask", { id:uid, maskUnits:"userSpaceOnUse" });
+      mask.appendChild(el("path", { d, fill:"#fff", filter:"url(#feather)" }));
+      wash.appendChild(mask);
+      wash.appendChild(el("path", { d, fill, "fill-opacity":"1", mask:"url(#"+uid+")" }));
+    } else {
+      wash.appendChild(el("path", { d, fill, "fill-opacity":env.op, filter:"url(#wc)" }));
+      wash.appendChild(el("path", { d, fill, "fill-opacity":(env.op*0.5).toFixed(2), filter:"url(#wc2)" }));
     }
-    let placed = 0, tries = 0;
-    while (placed < count && tries < count*8){ tries++;
-      const x = minx + Math.random()*(maxx-minx), y = miny + Math.random()*(maxy-miny);
-      if (!inPoly(x, y, pts)) continue;
-      const sc = building ? (1.2 + Math.random()*0.5) : (1.3 + Math.random()*0.8);
-      const rot = building ? (Math.random()-0.5)*16 : 0;
-      fg.appendChild(glyph(env.glyph, x, y, sc, rot)); placed++; }
+    regionsG.appendChild(wash);
+    const fg = el("g", { stroke: darken(fill, CFG.glyphDark), "stroke-width":"1.0",
+      fill:"none", filter:"url(#pencil)", "stroke-linecap":"round", "stroke-linejoin":"round", opacity: CFG.glyphOp.toFixed(2) });
+    let minx=1e9,miny=1e9,maxx=-1e9,maxy=-1e9; pts.forEach(([x,y])=>{ minx=Math.min(minx,x);miny=Math.min(miny,y);maxx=Math.max(maxx,x);maxy=Math.max(maxy,y); });
+    // even spacing: lay a jittered grid (cell size from target density), keep cells inside the polygon
+    const w = maxx-minx, h = maxy-miny;
+    const target = Math.max(2, w*h*env.density*CFG.densMul);
+    const cell = Math.max(7, Math.sqrt((w*h)/target));
+    const jit = cell*0.38;
+    for (let gy = miny + cell/2; gy < maxy; gy += cell){
+      for (let gx = minx + cell/2; gx < maxx; gx += cell){
+        const x = gx + (Math.random()-0.5)*2*jit, y = gy + (Math.random()-0.5)*2*jit;
+        if (!inPoly(x, y, pts)) continue;
+        fg.appendChild(glyph(env.glyph, x, y, 1.3 + Math.random()*0.8, 0)); } }
     featuresG.appendChild(fg);
-    drawn.push({ wash, fg });
+    drawn.push({ envId, pts, wash, fg });
+    liftSettlements();
+  }
+  // settlements always render above natural terrain (re-append moves them to the end)
+  function liftSettlements(){
+    drawn.forEach(r => { if (r.envId === "settle"){ regionsG.appendChild(r.wash); featuresG.appendChild(r.fg); } });
+  }
+  function rerenderAll(){
+    const items = drawn.map(r => ({ envId:r.envId, pts:r.pts }));
+    drawn.forEach(r => { r.wash.remove(); r.fg.remove(); });
+    drawn.length = 0;
+    items.forEach(it => addRegion(it.envId, it.pts));
   }
 
   /* ---------- interaction: draw OR drag, by mode ---------- */
@@ -264,6 +304,21 @@
       hint.textContent = (mode === "select") ? "Select mode — drag a pawn to another place." : ("Drawing " + b.textContent.toLowerCase() + " — drag a loop on the map; release to fill.");
     } else if (b.id === "undo"){ const last = drawn.pop(); if (last){ last.wash.remove(); last.fg.remove(); } }
     else if (b.id === "clear"){ drawn.forEach(r => { r.wash.remove(); r.fg.remove(); }); drawn.length = 0; }
+  });
+
+  // ---- texture dials ----
+  function bindDial(id, valId, fmt, apply){
+    const inp = document.getElementById(id), out = document.getElementById(valId);
+    const upd = () => { const v = parseFloat(inp.value); apply(v); out.textContent = fmt(v); };
+    inp.addEventListener("input", upd);
+  }
+  bindDial("d-dens", "v-dens", v => v.toFixed(2) + "×", v => { CFG.densMul = v; rerenderAll(); });
+  bindDial("d-op",   "v-op",   v => v.toFixed(2),       v => { CFG.glyphOp = v; rerenderAll(); });
+  bindDial("d-dark", "v-dark", v => v.toFixed(2),       v => { CFG.glyphDark = v; rerenderAll(); });
+  bindDial("d-grey", "v-grey", v => v + "%",            v => { CFG.settleL = v; rerenderAll(); });
+  bindDial("d-wc",   "v-wc",   v => v.toFixed(0),       v => {
+    document.getElementById("wcdisp").setAttribute("scale", v);
+    document.getElementById("wcdisp2").setAttribute("scale", (v * 0.6).toFixed(0));
   });
 
   svg.addEventListener("pointerdown", e => {
