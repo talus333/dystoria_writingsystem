@@ -37,7 +37,7 @@
     border-bottom:1px solid var(--line); background:var(--bg); flex:none; position:relative;
   }
   #menuBtn,#libIconBtn{font-size:15px; width:42px; height:32px; padding:0; display:inline-flex; align-items:center; justify-content:center; box-sizing:border-box}
-  #libIconBtn svg{width:16px; height:16px; display:block}
+  #libIconBtn svg,#menuBtn svg{width:16px; height:16px; display:block}
   #welcome{position:fixed; inset:0; z-index:200; display:none; align-items:center; justify-content:center;
     background:rgba(43,42,40,.42); padding:20px}
   #welcome.show{display:flex}
@@ -953,7 +953,9 @@
   #library .lib-head{display:flex; align-items:center; padding:18px 26px; border-bottom:1px solid var(--line-soft); width:100%; max-width:1120px; margin:0 auto; box-sizing:border-box}
   #library .lib-head h2{font-family:var(--ancient); font-weight:500; font-size:21px; letter-spacing:.14em; text-transform:uppercase; flex:1}
   #library .lib-head .lib-tool{flex:none; margin-left:8px}
-  #library .lib-head #libClose{flex:none; margin-left:8px}
+  #library .lib-head #libClose{flex:none; margin-left:12px; font-size:20px; line-height:1; color:var(--ink-faint); background:none; border:none; padding:0 4px}
+  #library .lib-head #libClose:hover{color:var(--ink)}
+  #library > #newSessionBtn{display:none}
   .lib-new{align-items:center; justify-content:center; text-align:center; border-style:dashed; min-height:118px; color:var(--ink-faint)}
   .lib-new:hover{color:var(--ink); border-color:var(--ink-faint); background:var(--bg2)}
   .lib-new-plus{font-family:var(--ancient); font-size:36px; line-height:.9}
@@ -1091,7 +1093,7 @@
   <span id="tableInfo"></span>
   <span class="spacer"></span>
   <button class="hbtn" id="libIconBtn" title="Library — all your stories"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m16 6 4 14"/><path d="M12 6v14"/><path d="M8 8v12"/><path d="M4 4v16"/></svg></button>
-  <button class="hbtn" id="menuBtn" title="Menu">☰</button>
+  <button class="hbtn" id="menuBtn" title="Menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/></svg></button>
   <div id="appMenu">
     <button class="hbtn" id="accountBtn">Sign In</button>
     <div class="menu-sep"></div>
@@ -1289,10 +1291,12 @@
 
 <div id="library">
   <div class="lib-head"><h2>Library</h2>
+    <button class="hbtn lib-tool" id="libNewBtn" title="Start a new story">+ New Story</button>
+    <button class="hbtn lib-tool" id="libImportBtn" title="Import a story from its prose">Import Story</button>
     <button class="hbtn lib-tool" id="backupBtn" title="Download every story — maps, timelines, writing, ink — as one .json file">Back Up</button>
     <button class="hbtn lib-tool" id="restoreBtn" title="Restore stories from a backup file (merges with what is here)">Restore</button>
     <input type="file" id="restoreFile" accept=".json,application/json" hidden>
-    <button class="hbtn" id="libClose">Close</button>
+    <button id="libClose" title="Close">×</button>
   </div>
   <div id="libList"></div>
   <button id="newSessionBtn">+ New Session</button>
@@ -1531,6 +1535,7 @@ const $ = id => document.getElementById(id);
 const CATS = DYSTORIA_DATA.categories;
 const LS_SESSIONS = 'dystoria.sessions';
 const LS_PREFS = 'dystoria.prefs';
+const LS_DELETED = 'dystoria.deleted';   // tombstoned story ids — never re-shown in the library
 
 /* ---------------- state ---------------- */
 let state = {
@@ -4497,6 +4502,7 @@ function addFrame(){
     state.frameIdx = 0;
   }
   pushUndo();
+  reconcileSections();          // clear any orphan dividers so the new section can't "recall" a deleted one
   const src = state.frameIdx;
   const at = src + 1;
   const copy = pruneEventsFromCopy(JSON.parse(JSON.stringify(state.frames[src].prompt)));
@@ -4505,23 +4511,29 @@ function addFrame(){
   switchFrame(at);
   flashStatus('Timeframe ' + (at + 1) + ' \u2014 inserted after ' + (src + 1));
 }
-// Pull a section's prose out of the editor when its timeframe is deleted, then renumber
-// the remaining section dividers so Read/Edit (and the pad) stay in sync with the timeline.
+// Map each top-level editor node to the frame it belongs to (a sec-mark belongs to the
+// frame of the h3 that follows it; nodes before the first h3 belong to frame 0).
+function nodeFrameMap(ed){
+  const kids = Array.from(ed.children); const m = new Map(); let cur = 0;
+  kids.forEach(c => { if (c.tagName === 'H3' && c.dataset && c.dataset.frame != null) cur = parseInt(c.dataset.frame, 10) || 0; m.set(c, cur); });
+  kids.forEach((c, i) => { if (c.classList && c.classList.contains('sec-mark')){ const n = kids[i + 1]; if (n && n.tagName === 'H3' && n.dataset && n.dataset.frame != null) m.set(c, parseInt(n.dataset.frame, 10) || 0); } });
+  return m;
+}
+// Pull a deleted timeframe's prose out of the editor (by frame index, not position) so Read/Edit
+// and the pad stay in sync and no orphan section is left behind to be "recalled" later.
 function removeSectionProse(k){
   const ed = $('editor'); if (!ed) return;
-  const secs = [[]]; let cur = secs[0];
-  Array.from(ed.children).forEach(c => {
-    if (c.classList && c.classList.contains('sec-mark')){ cur = []; secs.push(cur); }
-    cur.push(c);
-  });
-  if (k < 0 || k >= secs.length) return;
-  secs[k].forEach(n => n.remove());
-  if (k === 0 && secs.length > 1){
-    // the old section 1 becomes the new frame 0, which carries no inline header (it uses #firstMark/#sectionTitle)
-    const s1 = secs[1];
-    const mark = s1[0], h3 = s1[1];
-    if (mark && mark.classList && mark.classList.contains('sec-mark')) mark.remove();
-    if (h3 && h3.tagName === 'H3'){ const t = (h3.textContent || '').trim(); if (t && $('sectionTitle')) $('sectionTitle').value = t; h3.remove(); }
+  const fm = nodeFrameMap(ed);
+  Array.from(ed.children).forEach(c => { if (fm.get(c) === k) c.remove(); });
+  if (k === 0){
+    // the old frame 1 becomes the new frame 0, which carries no inline header (it uses #firstMark/#sectionTitle)
+    const kids = Array.from(ed.children);
+    const mi = kids.findIndex(c => c.classList && c.classList.contains('sec-mark'));
+    if (mi >= 0){
+      const mark = kids[mi], h3 = kids[mi + 1];
+      mark.remove();
+      if (h3 && h3.tagName === 'H3'){ const t = (h3.textContent || '').trim(); if (t && $('sectionTitle') && !$('sectionTitle').value.trim()) $('sectionTitle').value = t; h3.remove(); }
+    }
   }
   renumberSections();
 }
@@ -4537,12 +4549,26 @@ function renumberSections(){
     }
   });
 }
+// Clean up orphan section dividers left by old deletions: if the editor holds more sections
+// than the timeline has frames, strip the extras (and their prose) from the end.
+function reconcileSections(){
+  const ed = $('editor'); if (!ed) return;
+  renumberSections();
+  const nFrames = (state.frames && state.frames.length) || 1;
+  const maxSec = Math.max(0, nFrames - 1);          // frame 0 has no inline sec-mark
+  const marks = Array.from(ed.children).filter(c => c.classList && c.classList.contains('sec-mark'));
+  if (marks.length <= maxSec) return;
+  let n = marks[maxSec];                             // first orphan section divider
+  while (n){ const next = n.nextSibling; n.remove(); n = next; }
+  renumberSections();
+}
 function removeFrame(k){
   if (!state.frames || state.frames.length <= 1) return;
   if (!confirm('Remove timeframe ' + (k + 1) + '? Its map and writing are lost.')) return;
   removeSectionProse(k);
   state.frames.splice(k, 1);
   if (state.frames.length) state.frames[0].gap = null;
+  reconcileSections();
   switchFrame(Math.min(k, state.frames.length - 1));
   if (state.session){ state.session.html = editorHTML(); state.session.text = editorText(); }
   scheduleAutosave();
@@ -6948,8 +6974,10 @@ async function cloudPull(){
     if (!data) return;
     const list = loadSessions();
     const byId = {}; list.forEach(x => { byId[x.id] = x; });
+    const dead = loadDeleted();
     data.forEach(r => {
       const d = r.doc; if (!d || !d.id) return;
+      if (dead.indexOf(d.id) >= 0) return;     // don't resurrect a story deleted from the library
       d.cloudId = r.id;
       d._owner = r.owner;
       d._shared = (r.owner !== cloud.user.id);
@@ -7261,6 +7289,7 @@ function openSession(id){
     state.nodes = []; state.edges = [];
     $('skySvg').innerHTML = ''; $('skyEmpty').style.display = 'flex';
   }
+  reconcileSections();          // self-heal any orphan sections left by older deletions
   renderTimeline();
   state.game = (s.game && s.game.on)
     ? { on: true, gens: s.game.gens || 0, earnedKeys: s.game.earnedKeys || [], over: (s.game.over != null ? s.game.over : 120), closed: false }
@@ -7333,10 +7362,21 @@ function newSession(){
   setMode('type'); setupTimer(); updateWordCount(); updateMeta();
   closeLibrary();
 }
+function loadDeleted(){ try { return JSON.parse(localStorage.getItem(LS_DELETED)) || []; } catch (e){ return []; } }
+function saveDeleted(arr){ try { localStorage.setItem(LS_DELETED, JSON.stringify(arr.slice(-500))); } catch (e){} }
 function deleteSession(id){
-  persistSessions(loadSessions().filter(x => x.id !== id));
+  const list = loadSessions();
+  const sess = list.find(x => x.id === id);
+  const cloudId = sess && sess.cloudId;
+  // tombstone the id so a later cloud pull can't resurrect it in the library
+  const dead = loadDeleted(); if (dead.indexOf(id) < 0){ dead.push(id); saveDeleted(dead); }
+  persistSessions(list.filter(x => x.id !== id));
   if (state.session && state.session.id === id) state.session = null;
   renderLibrary();
+  // best-effort hard delete from the cloud (the owner can; a collaborator just hides it locally)
+  if (cloudId && typeof supa !== 'undefined' && supa && cloud.user){
+    try { supa.from('stories').delete().eq('id', cloudId).then(({ error }) => { if (error) console.warn('cloud delete:', error.message); }); } catch (e){ console.warn('cloud delete threw:', e); }
+  }
 }
 function updateMeta(){
   const el = $('sessionMeta'); if (!el) return;
@@ -7372,18 +7412,7 @@ function normalizeLegacy(s){
 function renderLibrary(){
   const list = loadSessions();
   const wrap = $('libList'); wrap.innerHTML = '';
-  // + New Story card always leads the grid
-  const nc = document.createElement('div'); nc.className = 'lib-item lib-new';
-  nc.innerHTML = '<div class="lib-new-plus">+</div><div class="lib-new-label">New Story</div>';
-  nc.addEventListener('click', () => {
-    if (state.session && !confirm('Start a new story? The current one stays in your Library.')) return;
-    newSession(); closeLibrary();
-  });
-  wrap.appendChild(nc);
-  const ic = document.createElement('div'); ic.className = 'lib-item lib-new';
-  ic.innerHTML = '<div class="lib-new-plus">⇪</div><div class="lib-new-label">Import Story</div>';
-  ic.addEventListener('click', openImport);
-  wrap.appendChild(ic);
+  // New Story / Import Story now live as pills in the library header
   list.forEach(s => {
     const d = document.createElement('div');
     d.className = 'lib-item' + (state.session && state.session.id === s.id ? ' current' : '');
@@ -9026,6 +9055,11 @@ function init(){
   $('drawerBackdrop').addEventListener('click', closeDrawers);
   window.__closeDrawers = closeDrawers;
   $('libClose').addEventListener('click', closeLibrary);
+  $('libNewBtn').addEventListener('click', () => {
+    if (state.session && !confirm('Start a new story? The current one stays in your Library.')) return;
+    newSession(); closeLibrary();
+  });
+  $('libImportBtn').addEventListener('click', openImport);
   $('importGo').addEventListener('click', extractImport);
   $('importConfirm').addEventListener('click', confirmImport);
   $('importAddEl').addEventListener('click', addImportEl);

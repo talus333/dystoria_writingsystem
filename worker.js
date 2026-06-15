@@ -26,31 +26,38 @@ function extractText(resp) {
   if (t && typeof t === 'object') t = JSON.stringify(t);
   return (t || '').toString().trim();
 }
-// Vision models on the binding take an `image` byte array (+ `prompt`). Try that first,
-// then fall back to the OpenAI-style image_url message shape. Returns { text, raw }.
+// True if the model just parroted the instruction back instead of reading the image.
+function looksEchoed(text, instr) {
+  const t = (text || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  if (!t) return true;
+  const p = (instr || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  return p.length > 8 && t.includes(p.slice(0, Math.min(p.length, 28)));
+}
+// Vision input. Use the chat-template (messages) form first so the instruction is followed,
+// not echoed, with the image attached as a byte array; then try OpenAI image_url; raw last.
 async function runVision(env, model, system, prompt, dataUrl, maxTokens) {
-  const visionPrompt = (system ? system + '\n\n' : '') + (prompt || 'Transcribe the text in this image.');
+  const instr = prompt || 'Transcribe the text in this image.';
   let bytes = null;
   try { bytes = dataUrlToBytes(dataUrl); } catch (e) {}
+  const img = bytes ? Array.from(bytes) : null;
+  const sysMsg = system ? [{ role: 'system', content: system }] : [];
   const attempts = [];
-  if (bytes) attempts.push(() => env.AI.run(model, { prompt: visionPrompt, image: Array.from(bytes), max_tokens: maxTokens }));
+  if (img) attempts.push(() => env.AI.run(model, { messages: [...sysMsg, { role: 'user', content: instr }], image: img, max_tokens: maxTokens }));
   attempts.push(() => env.AI.run(model, {
-    messages: [
-      ...(system ? [{ role: 'system', content: system }] : []),
-      { role: 'user', content: [
-        { type: 'text', text: prompt || 'Transcribe the text in this image.' },
-        { type: 'image_url', image_url: { url: dataUrl } },
-      ] },
-    ],
+    messages: [...sysMsg, { role: 'user', content: [
+      { type: 'text', text: instr },
+      { type: 'image_url', image_url: { url: dataUrl } },
+    ] }],
     max_tokens: maxTokens,
   }));
+  if (img) attempts.push(() => env.AI.run(model, { prompt: (system ? system + '\n\n' : '') + instr, image: img, max_tokens: maxTokens }));
   let raw = null;
   for (const run of attempts) {
     try {
       const resp = await run();
-      raw = resp;
       const text = extractText(resp);
-      if (text) return { text, raw };
+      if (text && !looksEchoed(text, instr)) return { text, raw: resp };
+      raw = text ? { echoed: text.slice(0, 160) } : resp;
     } catch (e) { raw = { error: String(e) }; }
   }
   return { text: '', raw };
