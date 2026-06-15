@@ -1003,6 +1003,18 @@
   .lib-item{padding:15px 15px; border-radius:10px; cursor:pointer; border:1px solid var(--line); background:var(--bg2); display:flex; flex-direction:column}
   .lib-item:hover{border-color:var(--ink-faint)}
   .lib-item.current{border-color:var(--ink-soft); box-shadow:0 0 0 1px var(--ink-soft)}
+  .lib-item .lib-cover{position:relative; height:118px; margin:-15px -15px 12px; border-radius:10px 10px 0 0;
+    background:var(--bg) center/cover no-repeat; border-bottom:1px solid var(--line); overflow:hidden}
+  .lib-item .lib-cover:not(.has)::before{content:'cover'; position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+    font-family:var(--sans); font-size:9px; letter-spacing:.24em; text-transform:uppercase; color:var(--ink-faint); opacity:.45}
+  .lib-item .lib-cover-btn{position:absolute; left:8px; bottom:8px; z-index:1; font-family:var(--sans); font-size:8.5px;
+    letter-spacing:.1em; text-transform:uppercase; color:#fff; background:rgba(28,27,25,.55); border-radius:11px; padding:4px 9px; opacity:0; transition:opacity .15s}
+  .lib-item:hover .lib-cover-btn{opacity:1}
+  .lib-item .lib-cover:not(.has) .lib-cover-btn{color:var(--ink-soft); background:var(--paper); border:1px solid var(--line); opacity:.92}
+  .lib-item .lib-cover-rm{position:absolute; right:7px; top:7px; z-index:1; width:20px; height:20px; border-radius:50%;
+    background:rgba(28,27,25,.55); color:#fff; font-size:14px; line-height:1; opacity:0; transition:opacity .15s}
+  .lib-item:hover .lib-cover-rm{opacity:1}
+  body.eink .lib-item .lib-cover{border-bottom:2px solid #000}
   .lib-item .t{font-family:var(--serif); font-size:18px; line-height:1.25}
   .lib-item .m{font-size:11px; color:var(--ink-faint); margin-top:3px}
   .lib-item .cats{margin-top:6px; display:flex; flex-wrap:wrap; gap:4px}
@@ -1359,6 +1371,7 @@
     <button id="libClose" title="Close">×</button>
   </div>
   <div id="libList"></div>
+  <input type="file" id="coverFile" accept="image/*" hidden>
   <button id="newSessionBtn">+ New Session</button>
 </div>
 <div id="tip"></div>
@@ -7518,9 +7531,25 @@ function renderLibrary(){
   list.forEach(s => {
     const d = document.createElement('div');
     d.className = 'lib-item' + (state.session && state.session.id === s.id ? ' current' : '');
+    const cov = document.createElement('div');
+    cov.className = 'lib-cover' + (s.cover ? ' has' : '');
+    if (s.cover) cov.style.backgroundImage = 'url("' + s.cover + '")';
+    const covBtn = document.createElement('button'); covBtn.className = 'lib-cover-btn';
+    covBtn.textContent = s.cover ? 'Change cover' : '+ Cover';
+    covBtn.title = 'Set a cover image for this story';
+    covBtn.addEventListener('click', e => { e.stopPropagation(); pickCover(s.id); });
+    cov.appendChild(covBtn);
+    if (s.cover){
+      const rm = document.createElement('button'); rm.className = 'lib-cover-rm'; rm.textContent = '×'; rm.title = 'Remove cover';
+      rm.addEventListener('click', e => { e.stopPropagation(); setStoryCover(s.id, null); });
+      cov.appendChild(rm);
+    }
+    d.appendChild(cov);
     const wc = (s.text || '').trim() ? (s.text.trim().split(/\s+/).length + ' words') : (s.ink ? 'ink' : '—');
-    d.innerHTML = `<div class="t">${esc(s.name)}</div>` +
+    const body = document.createElement('div');
+    body.innerHTML = `<div class="t">${esc(s.name)}</div>` +
       `<div class="m">${new Date(s.created).toLocaleDateString([], { year: 'numeric', month: 'short', day: 'numeric' })} · ${wc}</div>`;
+    d.appendChild(body);
     if (s._shared){
       const bd = document.createElement('div');
       bd.textContent = 'shared with you';
@@ -7561,6 +7590,60 @@ function renderLibrary(){
 function esc(s){ return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 function openLibrary(){ if (window.__closeDrawers) window.__closeDrawers(); renderLibrary(); $('library').classList.add('open'); }
 function closeLibrary(){ $('library').classList.remove('open'); }
+
+/* ---------------- cover images (compressed → Supabase Storage; only a URL lives in the doc) ---------------- */
+const COVER_BUCKET = 'media';
+function compressImage(file, maxDim, quality){
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+      const w = Math.max(1, Math.round(img.width * scale)), h = Math.max(1, Math.round(img.height * scale));
+      const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+      cv.getContext('2d').drawImage(img, 0, 0, w, h);
+      cv.toBlob(b => b ? resolve(b) : reject(new Error('compress failed')), 'image/webp', quality || 0.82);
+    };
+    img.onerror = () => reject(new Error('that file is not an image'));
+    img.src = URL.createObjectURL(file);
+  });
+}
+async function uploadCover(file, storyId){
+  if (!supa || !cloud.user) throw new Error('sign in to add covers');
+  const blob = await compressImage(file, 720, 0.82);                 // ~40–120 KB
+  const path = cloud.user.id + '/' + storyId + '.webp';
+  const { error } = await supa.storage.from(COVER_BUCKET).upload(path, blob, { contentType: 'image/webp', upsert: true });
+  if (error) throw error;
+  const { data } = supa.storage.from(COVER_BUCKET).getPublicUrl(path);
+  return data.publicUrl + '?t=' + Date.now();                        // cache-bust a changed cover
+}
+let _coverTargetId = null;
+function pickCover(storyId){
+  if (!cloud.user){ flashStatus('Sign in to add a cover image'); return; }
+  _coverTargetId = storyId; const f = $('coverFile'); if (f){ f.value = ''; f.click(); }
+}
+async function setStoryCover(storyId, url){
+  // open story → save the live doc (avoids clobbering newer edits with a stale list copy)
+  if (state.session && state.session.id === storyId){
+    if (url) state.session.cover = url; else delete state.session.cover;
+    saveSession();
+    renderLibrary();
+    return;
+  }
+  const list = loadSessions();
+  const s = list.find(x => x.id === storyId); if (!s) return;
+  if (url) s.cover = url; else delete s.cover;
+  s.updated = new Date().toISOString();
+  persistSessions(list);
+  if (cloud.user && s.cloudId) cloudSave(s);
+  renderLibrary();
+}
+function coverErrMsg(e){
+  const m = String((e && e.message) || e || '');
+  if (/sign in/i.test(m)) return 'Sign in to add covers';
+  if (/bucket|not found|does not exist/i.test(m)) return 'Create the “media” storage bucket in Supabase first (see COVER_SETUP).';
+  if (/not an image/i.test(m)) return 'Please choose an image file';
+  return 'Cover upload failed: ' + m;
+}
 
 /* ---------------- import a story (prose → new story + AI element extraction) ---------------- */
 function makeElementItem(cat, word, set){
@@ -9224,6 +9307,13 @@ function init(){
   $('drawerBackdrop').addEventListener('click', closeDrawers);
   window.__closeDrawers = closeDrawers;
   $('libClose').addEventListener('click', closeLibrary);
+  $('coverFile').addEventListener('change', async () => {
+    const f = $('coverFile').files[0]; if (!f || !_coverTargetId) return;
+    const id = _coverTargetId; _coverTargetId = null;
+    flashStatus('Uploading cover…');
+    try { const url = await uploadCover(f, id); await setStoryCover(id, url); flashStatus('Cover set'); }
+    catch (e){ console.warn('cover upload:', e); flashStatus(coverErrMsg(e)); }
+  });
   $('libNewBtn').addEventListener('click', async () => {
     if (state.session && !(await siteConfirm('Start a new story? The current one stays in your Library.', 'New story'))) return;
     newSession(); closeLibrary();
