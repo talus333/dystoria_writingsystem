@@ -5009,6 +5009,12 @@ function addFromCategory(catId, subName){
     }
   }
   $('skyEmpty').style.display = 'none';
+  const placeIdxs = [];
+  for (let pi = startLen; pi < words.length; pi++){
+    const w = words[pi];
+    if (w && (w.role === 'being' || (w.role === 'word' && (w.cat === 'setting' || w.cat === 'object')))){ w.needsPlace = true; placeIdxs.push(pi); }
+  }
+  if (placeIdxs.length) startPlacement(placeIdxs);   // set placing first so the render below hides pending nodes
   layoutConstellation();
   ensureSession();
   state.session.words = words;
@@ -5021,12 +5027,6 @@ function addFromCategory(catId, subName){
   state.session.frameIdx = state.frameIdx;
   renderTimeline();
   scheduleAutosave();
-  const placeIdxs = [];
-  for (let pi = startLen; pi < words.length; pi++){
-    const w = words[pi];
-    if (w && (w.role === 'being' || (w.role === 'word' && (w.cat === 'setting' || w.cat === 'object')))){ w.needsPlace = true; placeIdxs.push(pi); }
-  }
-  if (placeIdxs.length) startPlacement(placeIdxs);
 }
 
 function removeNode(idx){
@@ -5472,7 +5472,7 @@ const SETTING_ICON_WORDS = {
 const SETTING_ICON_FAMILY = {
   'Human \u2014 Large': 'building-2',
   'Natural \u2014 Large': 'mountain',
-  'Natural Locations': 'triangle',
+  'Natural Locations': 'mountain',
   water: 'waves',
   'Other-Worldly': 'sparkles',
   Building: 'home',
@@ -5783,7 +5783,8 @@ function placementPrompt(){
   banner.hidden = false;
 }
 function startPlacement(idxs){
-  if (!idxs || !idxs.length || document.body.classList.contains('eink')) return;
+  if (!idxs || !idxs.length) return;
+  if (document.body.classList.contains('eink')){ idxs.forEach(i => { const w = state.prompt && state.prompt.words[i]; if (w) delete w.needsPlace; }); return; }
   state.placeQueue = (state.placeQueue || []).concat(idxs);
   if (state.placing == null) placeNext();
 }
@@ -5820,6 +5821,7 @@ function endPlacement(){
   state.placeQueue = []; state.placing = null;
   const sky = document.getElementById('skySvg'); if (sky) sky.style.cursor = '';
   placementPrompt();
+  if (state.prompt) layoutConstellation();   // reveal the auto-placed elements
   if (state.session){ state.session.words = state.prompt.words; scheduleAutosave(); }
 }
 function initPlaceBanner(){
@@ -5871,6 +5873,7 @@ function renderConstellation(){
   /* (setting watercolor "blots" + connector spans removed — terrain regions replace them) */
   state.spans = [];
   state.edges.forEach((e, ei) => {
+    if (state.placing != null && ((state.nodes[e[0]] && state.nodes[e[0]].needsPlace) || (state.nodes[e[1]] && state.nodes[e[1]].needsPlace))) return;
     const ln = document.createElementNS('http://www.w3.org/2000/svg', 'line');
     ln.setAttribute('class', 'edge');
     ln.dataset.edge = ei;
@@ -5925,6 +5928,7 @@ function renderConstellation(){
   state.nodes.forEach((nd, i) => {
     if (nd.role === 'frame' || nd.role === 'constraint') return;
     if (nd.cat === 'event' && nd.role === 'word') return;
+    if (nd.needsPlace && state.placing != null) return;   // hidden until the player places/draws it
     const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
     g.setAttribute('class', 'node ' + nd.role + ' ' + nd.cat + (i === state.linkFrom ? ' link-src' : '') + (i === state.selNode ? ' sel' : '') + (nd.destroyed ? ' destroyed' : '') + (nd.locked ? ' is-locked' : ''));
     g.dataset.node = i;
