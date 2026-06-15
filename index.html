@@ -1330,7 +1330,6 @@
         <button data-fmt="italic" title="Italic"><i>I</i></button>
         <button data-fmt="title" title="Section title">T</button>
         <button data-fmt="divider" title="New section with divider">―</button>
-        <button id="imgBtn" title="Insert an image"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9.5" r="1.6"/><path d="m21 16-5-5L5 20"/></svg></button>
         <span class="fmt-dots">
           <button class="fdot" data-color="#1c1b19" style="background:#1c1b19" title="Ink"></button>
           <button class="fdot" data-color="#6e6a63" style="background:#6e6a63" title="Grey"></button>
@@ -1346,7 +1345,6 @@
       </div>
     </div>
     <div id="writeArea">
-      <input type="file" id="storyImgFile" accept="image/*" hidden>
       <div id="graceBar" style="display:none"><span id="graceTxt">Time — finish your thought</span> <span id="graceNum">10</span></div>
       <div id="editorWrap"><div class="sec-mark" id="firstMark" style="display:none"><span class="dia"><span>1</span></span></div><input id="sectionTitle" placeholder="Section title" autocomplete="off"><div id="editor" contenteditable="true" spellcheck="false" data-ph="Begin…"></div></div>
       <div id="inkWrap"><canvas id="inkCanvas"></canvas></div>
@@ -7682,57 +7680,7 @@ function coverErrMsg(e){
   if (/not an image/i.test(m)) return 'Please choose an image file';
   return 'Image upload failed: ' + m;
 }
-/* ---- in-story images: same compress→Storage path, inserted as <img> in the prose ---- */
-async function uploadStoryImage(file, storyId){
-  if (!supa || !cloud.user) throw new Error('sign in to add images');
-  const blob = await compressImage(file, 1100, 0.84);
-  const path = cloud.user.id + '/' + storyId + '-img-' + Date.now().toString(36) + '.webp';
-  const { error } = await supa.storage.from(COVER_BUCKET).upload(path, blob, { contentType: 'image/webp', upsert: false });
-  if (error) throw error;
-  const { data } = supa.storage.from(COVER_BUCKET).getPublicUrl(path);
-  return data.publicUrl;
-}
-let _imgRange = null;
-function pickStoryImage(){
-  if (!cloud.user){ flashStatus('Sign in to add images'); return; }
-  if (state.inkMode){ flashStatus('Switch to Type mode to add an image'); return; }
-  const sel = window.getSelection();
-  _imgRange = (sel && sel.rangeCount && $('editor').contains(sel.getRangeAt(0).commonAncestorContainer)) ? sel.getRangeAt(0).cloneRange() : null;
-  const f = $('storyImgFile'); if (f){ f.value = ''; f.click(); }
-}
-// the top-level editor child that contains a node (so an image lands as a sibling in the
-// same section, not a stray node that solo-view might assign to the wrong frame)
-function topLevelChild(node){
-  const ed = $('editor'); if (!ed) return null;
-  while (node && node.parentNode && node.parentNode !== ed) node = node.parentNode;
-  return (node && node.parentNode === ed) ? node : null;
-}
-function insertStoryImage(url){
-  if (state.inkMode) setMode('type');               // images live on the Type page
-  const ed = $('editor');
-  const block = document.createElement('div'); block.className = 'story-img-block';
-  const img = document.createElement('img'); img.src = url; img.className = 'story-img'; img.alt = '';
-  block.appendChild(img);
-  const k = state.frameIdx || 0;
-  const fm = nodeFrameMap();
-  let anchor = (_imgRange && ed.contains(_imgRange.commonAncestorContainer)) ? topLevelChild(_imgRange.commonAncestorContainer) : null;
-  if (anchor && fm.get(anchor) !== k) anchor = null;   // ignore a stale caret that's in another (hidden) section
-  if (anchor && anchor !== ed){ anchor.after(block); }
-  else {
-    const before = currentSectionEndMark();   // end of the current section (or null = append)
-    if (before) ed.insertBefore(block, before); else ed.appendChild(block);
-  }
-  _imgRange = null;
-  // rebuild the editor from the canonical HTML so the live pad can't diverge from what's saved
-  const html = editorHTML();
-  ed.innerHTML = html;
-  normalizeLocks();
-  paintSectionFocus();
-  if (state.session){ state.session.html = html; state.session.text = editorText(); }
-  scheduleAutosave();
-  const placed = ed.querySelector('.story-img-block:last-of-type img');
-  if (placed && placed.scrollIntoView){ try { placed.scrollIntoView({ block: 'center' }); } catch (e){} }
-}
+/* in-story image insert was removed (buggy + unclear fit); book covers are unaffected. */
 
 /* ---------------- import a story (prose → new story + AI element extraction) ---------------- */
 function makeElementItem(cat, word, set){
@@ -9385,14 +9333,6 @@ function init(){
   $('drawerBackdrop').addEventListener('click', closeDrawers);
   window.__closeDrawers = closeDrawers;
   $('libClose').addEventListener('click', closeLibrary);
-  $('imgBtn').addEventListener('mousedown', e => { e.preventDefault(); pickStoryImage(); });
-  $('storyImgFile').addEventListener('change', async () => {
-    const f = $('storyImgFile').files[0]; if (!f) return;
-    ensureSession();
-    flashStatus('Uploading image…');
-    try { const url = await uploadStoryImage(f, state.session.id); insertStoryImage(url); flashStatus('Image added'); }
-    catch (e){ console.warn('image upload:', e); flashStatus(coverErrMsg(e)); }
-  });
   $('coverFile').addEventListener('change', async () => {
     const f = $('coverFile').files[0]; if (!f || !_coverTargetId) return;
     const id = _coverTargetId; _coverTargetId = null;
