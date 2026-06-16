@@ -68,6 +68,20 @@
   #appMenu .hbtn.active .sw::after{left:13px; background:var(--paper)}
   #mapLabel{position:absolute; top:13px; left:18px; z-index:5; pointer-events:none;
     font-family:var(--sans); font-size:10px; font-weight:700; letter-spacing:.24em; text-transform:uppercase; color:var(--ink-faint)}
+  #mapLevelWrap{position:absolute; left:16px; bottom:44px; z-index:6}
+  #mapLevelBtn{font-family:var(--sans); font-size:10px; font-weight:700; letter-spacing:.14em; text-transform:uppercase;
+    color:var(--ink-faint); background:rgba(251,250,248,.9); border:1px solid var(--line); border-radius:14px; padding:4px 11px; cursor:pointer}
+  #mapLevelBtn:hover{color:var(--ink)}
+  #mapLevelBtn.set{color:var(--accent); border-color:var(--accent)}
+  #mapLevelMenu{position:absolute; left:0; bottom:30px; background:var(--paper); border:1px solid var(--line); border-radius:10px;
+    box-shadow:var(--shadow); padding:5px; display:flex; flex-direction:column; gap:1px; min-width:150px}
+  #mapLevelMenu button{display:block; width:100%; text-align:left; font-family:var(--sans); font-size:12px; color:var(--ink);
+    background:none; border:none; border-radius:6px; padding:5px 9px; cursor:pointer}
+  #mapLevelMenu button:hover{background:rgba(0,0,0,.05)}
+  #mapLevelMenu button.on{font-weight:700}
+  .sub-seg .sub-div{flex-basis:100%; font-family:var(--sans); font-size:8px; font-weight:700; letter-spacing:.18em;
+    text-transform:uppercase; color:var(--ink-faint); opacity:.7; margin:3px 0 1px}
+  .sub-seg .seg-pill.overlay{opacity:.45}
   #mapTerrainWrap{position:absolute; left:16px; bottom:14px; z-index:6}
   #mapTerrainBtn{font-family:var(--sans); font-size:10px; font-weight:600; letter-spacing:.14em; text-transform:uppercase;
     color:var(--ink-faint); background:rgba(251,250,248,.9); border:1px solid var(--line); border-radius:14px; padding:4px 11px; cursor:pointer}
@@ -1321,6 +1335,10 @@
       <div id="timerBar"></div>
       <div id="placeBanner" hidden><span id="placeBannerText"></span><button id="placeBannerSkip" type="button">Auto-place</button></div>
       <div id="mapLabel">Map</div>
+      <div id="mapLevelWrap" hidden>
+        <button id="mapLevelBtn" type="button" title="The scale this section's map is drawn at — gates which places fit physically">Map level</button>
+        <div id="mapLevelMenu" hidden></div>
+      </div>
       <div id="mapTerrainWrap" hidden>
         <button id="mapTerrainBtn" type="button" title="Set the whole map to a base terrain">+ Map terrain</button>
         <div id="mapTerrainMenu" hidden></div>
@@ -1872,9 +1890,21 @@ function buildRail(){
     }
     const seg = document.createElement('div');
     seg.className = 'sub-seg';
-    cat.subcategories.forEach(sub => {
+    // settings: at a chosen map level, the subs that fit physically come first; the rest drop
+    // below a "mental space" divider (dimmed) — they're overlays for this scale, not placed here
+    let subList = cat.subcategories;
+    let dividerAt = -1;
+    if (cat.id === 'setting' && sectionLevel() !== 'open'){
+      const phys = cat.subcategories.filter(s => settingSubIsPhysical(s.name));
+      const ment = cat.subcategories.filter(s => !settingSubIsPhysical(s.name));
+      subList = phys.concat(ment);
+      dividerAt = phys.length;
+    }
+    subList.forEach((sub, idx) => {
+      if (idx === dividerAt){ const dv = document.createElement('span'); dv.className = 'sub-div'; dv.textContent = 'mental space'; seg.appendChild(dv); }
+      const overlay = (cat.id === 'setting' && sectionLevel() !== 'open' && !settingSubIsPhysical(sub.name));
       const p = document.createElement('button');
-      p.className = 'seg-pill' + (state.selection[cat.id].has(sub.name) ? ' on' : '');
+      p.className = 'seg-pill' + (state.selection[cat.id].has(sub.name) ? ' on' : '') + (overlay ? ' overlay' : '');
       p.textContent = sub.name;
       if (sub.guideline){
         p.addEventListener('mouseenter', e => showTip(sub.guideline, e));
@@ -4646,6 +4676,7 @@ function switchFrame(k){
   state.selNode = null; state.linkFrom = null; state.activeSet = 0;
   inkShowFrame(k);          // each timeframe has its own e-ink page(s)
   refreshSky();
+  buildRail();              // each section can sit at its own map level → re-order the setting subs
   renderTimeline();
   syncFramesToSession();
   if (moved && k > 0) insertStageDivider(k);
@@ -5892,6 +5923,47 @@ function toggleMapTerrainMenu(open){
   MAP_TERRAINS.forEach(t => menu.appendChild(mk(t[0], t[1])));
   menu.hidden = false;
 }
+// ---- per-section map level (scale): gates which SETTING subs sit physically on the map ----
+const MAP_LEVELS = [
+  { key: 'open',       label: 'Open · any scale', subs: null },
+  { key: 'terrain',    label: 'Terrain',     subs: ['Terrain', 'Natural Locations', 'Settlements', 'Places', 'Connector'] },
+  { key: 'settlement', label: 'Settlement',  subs: ['Building', 'Places', 'Connector'] },
+  { key: 'building',   label: 'Building',    subs: ['Intimate', 'Connector'] },
+  { key: 'room',       label: 'Room',        subs: [] }
+];
+function levelDef(key){ return MAP_LEVELS.find(l => l.key === key) || MAP_LEVELS[0]; }
+function sectionLevel(){ return (state.prompt && state.prompt.mapLevel) || 'open'; }
+function settingSubIsPhysical(sub){ const def = levelDef(sectionLevel()); return !def.subs || def.subs.indexOf(sub) >= 0; }
+function setMapLevel(key){
+  if (!state.prompt) return;
+  state.prompt.mapLevel = (key === 'open') ? null : key;
+  updateMapLevelPill();
+  if (typeof buildRail === 'function') buildRail();
+  renderConstellation();
+  if (state.session){ if (typeof syncFramesToSession === 'function') syncFramesToSession(); state.session.words = state.prompt.words; scheduleAutosave(); }
+}
+function updateMapLevelPill(){
+  const wrap = $('mapLevelWrap'); if (!wrap) return;
+  wrap.hidden = !state.prompt;
+  const btn = $('mapLevelBtn'); if (!btn) return;
+  const def = levelDef(sectionLevel());
+  btn.textContent = (def.key === 'open') ? 'Map level' : def.label;
+  btn.classList.toggle('set', def.key !== 'open');
+}
+function toggleMapLevelMenu(open){
+  const menu = $('mapLevelMenu'); if (!menu) return;
+  const show = open != null ? open : menu.hidden;
+  if (!show){ menu.hidden = true; return; }
+  const cur = sectionLevel();
+  menu.innerHTML = '';
+  MAP_LEVELS.forEach(l => {
+    const b = document.createElement('button'); b.type = 'button'; b.textContent = l.label;
+    if (l.key === cur) b.classList.add('on');
+    b.addEventListener('click', () => { setMapLevel(l.key); toggleMapLevelMenu(false); });
+    menu.appendChild(b);
+  });
+  menu.hidden = false;
+}
 function renderTerrains(svg){
   const words = (state.prompt && state.prompt.words) || [];
   const layer = tEl('g', { 'class': 'terrain-layer' });
@@ -5900,6 +5972,7 @@ function renderTerrains(svg){
   words.forEach(w => { if (w.line) renderLineFeature(w, layer); });   // lines sit on top of fills
   svg.appendChild(layer);
   updateMapTerrainPill();
+  updateMapLevelPill();
 }
 // A drawn region becomes a real Natural — Large element, pinned (fx/fy) at the region centroid,
 // so it links / wikis / shows in the legend like any element — it just isn't rolled.
@@ -7892,6 +7965,8 @@ function openSession(id){
   reconcileSections();          // self-heal any orphan sections left by older deletions
   renderTimeline();
   updateMapTerrainPill();
+  updateMapLevelPill();
+  buildRail();                  // reflect the loaded section's map level in the rail
   state.game = (s.game && s.game.on)
     ? { on: true, gens: s.game.gens || 0, earnedKeys: s.game.earnedKeys || [], over: (s.game.over != null ? s.game.over : 120), closed: false }
     : null;
@@ -7969,6 +8044,8 @@ function newSession(){
   state.usageKey = '';
   renderTimeline();
   updateMapTerrainPill();
+  updateMapLevelPill();
+  buildRail();
   $('storyName').value = ''; $('sectionTitle').value = ''; $('editor').innerHTML = '';
   $('skySvg').innerHTML = ''; $('skyEmpty').style.display = 'flex';
   ink.pageRef = null; ink.strokes = []; ink.h = 1100; ink.viewLocked = false;
@@ -9944,9 +10021,12 @@ function init(){
   });
   $('centerBtn').addEventListener('click', snapToBeing);
   $('mapTerrainBtn').addEventListener('click', e => { e.stopPropagation(); toggleMapTerrainMenu(); });
+  $('mapLevelBtn').addEventListener('click', e => { e.stopPropagation(); toggleMapLevelMenu(); });
   document.addEventListener('mousedown', e => {
     const w = $('mapTerrainWrap');
     if (w && !w.contains(e.target)){ const m = $('mapTerrainMenu'); if (m && !m.hidden) toggleMapTerrainMenu(false); }
+    const lw = $('mapLevelWrap');
+    if (lw && !lw.contains(e.target)){ const lm = $('mapLevelMenu'); if (lm && !lm.hidden) toggleMapLevelMenu(false); }
   });
   $('autoExpBtn').addEventListener('click', toggleAutoExport);
   if (getPrefs().autoExport){
