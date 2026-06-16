@@ -2095,18 +2095,51 @@ function syncSubChecks(div, cat){
     cb.checked = (state.selection[cat.id] && state.selection[cat.id].has(cat.subcategories[i].name)) || !!cat.subcategories[i].always;
   });
 }
-function showTip(text, e, accent, action){
-  const t = $("tip");
-  const esc = s => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  let body = esc(text);
-  if (accent) body = body.replace(/^([^/<]+? \/ )/, "<span style=\"color:" + accent + "\">$1</span>");   // "Sub / " in the category colour
-  if (action) body += " <span class=\"tip-act\">\u2014 " + esc(action) + "</span>";                          // appended instruction in light blue
-  t.innerHTML = body;
-  t.style.opacity = 1;
-  const x = Math.min(e.clientX + 14, window.innerWidth - 260);
-  t.style.left = x + "px"; t.style.top = (e.clientY + 14) + "px";
+/* ---- one tooltip system: the dark #tip box, shown after a short delay.
+   Native browser tooltips (grey, from title="" / <title>) are suppressed on hover
+   and re-shown through #tip, so every hover uses the same delayed dark box. ---- */
+let lastMouse = { x: 0, y: 0 };
+let tipTimer = null, tipExplicit = false, tipHost = null;
+const TIP_DELAY = 340;   // a touch quicker than the native ~500ms grey tooltip
+function tipEsc(s){ return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+function renderTipNow(html){
+  const t = $('tip'); if (!t) return;
+  t.innerHTML = html; t.style.opacity = 1;
+  t.style.left = Math.min(lastMouse.x + 14, window.innerWidth - 260) + 'px';
+  t.style.top = (lastMouse.y + 14) + 'px';
 }
-function hideTip(){ $('tip').style.opacity = 0; }
+function scheduleTip(html){ clearTimeout(tipTimer); tipTimer = setTimeout(() => renderTipNow(html), TIP_DELAY); }
+function showTip(text, e, accent, action){
+  if (text == null || text === '') return;
+  let body = tipEsc(text);
+  if (accent) body = body.replace(/^([^/<]+? \/ )/, "<span style=\"color:" + accent + "\">$1</span>");   // "Sub / " in the category colour
+  if (action) body += " <span class=\"tip-act\">\u2014 " + tipEsc(action) + "</span>";                       // appended instruction in light blue
+  tipExplicit = true;
+  if (e){ tipHost = e.currentTarget || e.target || tipHost; lastMouse.x = e.clientX; lastMouse.y = e.clientY; }
+  scheduleTip(body);
+}
+function hideTip(){ clearTimeout(tipTimer); const t = $('tip'); if (t) t.style.opacity = 0; tipExplicit = false; tipHost = null; }
+function _directTitleEl(n){ if (!n || !n.childNodes) return null; for (const c of n.childNodes){ if (c.nodeType === 1 && c.tagName && c.tagName.toLowerCase() === 'title') return c; } return null; }
+document.addEventListener('mousemove', e => { lastMouse.x = e.clientX; lastMouse.y = e.clientY; }, true);
+document.addEventListener('mouseover', e => {
+  let host = null, text = null;
+  for (let n = e.target; n && n.nodeType === 1; n = n.parentNode){
+    if (n.getAttribute){
+      const dt = n.getAttribute('data-tip');
+      if (dt){ host = n; text = dt; break; }
+      const ta = n.getAttribute('title');
+      if (ta){ n.setAttribute('data-tip', ta); n.removeAttribute('title'); host = n; text = ta; break; }   // suppress native, keep the text
+    }
+    const tt = _directTitleEl(n);
+    if (tt){ const txt = tt.textContent || ''; try { n.setAttribute('data-tip', txt); } catch (_){} if (tt.parentNode) tt.parentNode.removeChild(tt); host = n; text = txt; break; }   // suppress native SVG tooltip
+  }
+  if (host){ if (!tipHost) tipHost = host; if (text && !tipExplicit) scheduleTip(tipEsc(text)); }
+});
+document.addEventListener('mouseout', e => {
+  if (!tipHost) return;
+  const to = e.relatedTarget;
+  if (!to || !(tipHost.contains && tipHost.contains(to))) hideTip();
+});
 
 /* ---------------- prompt generation ---------------- */
 function pick(arr){ return arr[Math.floor(Math.random() * arr.length)]; }
