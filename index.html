@@ -751,8 +751,8 @@
   #relCard .rc-row>span:first-child{font-size:9px; letter-spacing:.08em; text-transform:uppercase; color:var(--ink-faint); flex:0 0 62px}
   #relCard .rc-typewrap{display:flex; gap:4px; flex:1; min-width:0}
   #relCard select{flex:1; min-width:0; font-family:var(--sans); font-size:11px; padding:3px 4px; border:1px solid var(--line); border-radius:5px; background:var(--paper); color:var(--ink)}
-  #relCard #rcRoll{border:1px solid var(--line); background:var(--paper); border-radius:5px; cursor:pointer; padding:0 7px; font-size:13px; color:var(--ink-faint)}
-  #relCard #rcRoll:hover{color:var(--ink)}
+  #relCard #rcRoll, #relCard .rc-roll{border:1px solid var(--line); background:var(--paper); border-radius:5px; cursor:pointer; padding:0 7px; font-size:13px; color:var(--ink-faint)}
+  #relCard #rcRoll:hover, #relCard .rc-roll:hover{color:var(--ink)}
   #relCard .rc-dots{display:flex; gap:5px}
   #relCard .rc-dot{width:12px; height:12px; border-radius:50%; border:1px solid var(--line); cursor:pointer; background:var(--paper)}
   #relCard .rc-dot.on{background:var(--ink-soft); border-color:var(--ink-soft)}
@@ -5668,13 +5668,15 @@ function openRelCard(a, b, side, from, to, opts){
   const pool = relPool(from, to).map(x => typeof x === 'string' ? x : x.w);
   if (draft.type && pool.indexOf(draft.type) < 0) pool.unshift(draft.type);
   const opts2 = pool.map(w => '<option value="' + esc(w) + '"' + (w === draft.type ? ' selected' : '') + '>' + esc(w) + '</option>').join('');
+  const stakePool = (((getCat('stakes') || {}).subcategories) || []).reduce((acc, s) => acc.concat(s.words || []), []).map(x => typeof x === 'string' ? x : x.w);
+  const stakeOpts = stakePool.map(w => '<option value="' + esc(w) + '"></option>').join('');
   card.innerHTML =
     '<div class="rc-head"><span class="rc-from">' + esc(nameOf(from)) + '</span> <span class="rc-arrow">→</span> <span class="rc-to">' + esc(nameOf(to)) + '</span><span class="rc-sub">' + esc(relSubName(from, to)) + '</span></div>' +
     '<label class="rc-row"><span>Type</span><span class="rc-typewrap"><select id="rcType">' + opts2 + '</select><button id="rcRoll" title="Roll another">↻</button></span></label>' +
     '<div class="rc-row"><span>Intensity</span><span id="rcInt" class="rc-dots"></span></div>' +
     '<div class="rc-row"><span>Valence</span><span id="rcVal" class="rc-seg"></span></div>' +
     '<div class="rc-row"><span>Knowledge</span><span id="rcSec" class="rc-seg"></span></div>' +
-    '<label class="rc-row"><span>Stake</span><input id="rcStake" type="text" maxlength="80" placeholder="what’s at risk…" value="' + esc(draft.stake || '') + '"></label>' +
+    '<div class="rc-row"><span>Stake</span><span class="rc-typewrap"><input id="rcStake" list="rcStakeList" type="text" maxlength="80" placeholder="what’s at risk…" value="' + esc(draft.stake || '') + '"><button id="rcStakeRoll" class="rc-roll" title="Roll a stake">↻</button></span><datalist id="rcStakeList">' + stakeOpts + '</datalist></div>' +
     '<div class="rc-btns"><button id="rcSet" class="rc-set">Set</button>' + ((link && link[side]) ? '<button id="rcRemove" class="rc-rm">Remove</button>' : '') + '<button id="rcCancel" class="rc-cancel">Cancel</button></div>';
   const drawInt = () => { const el = card.querySelector('#rcInt'); el.innerHTML = ''; for (let n = 1; n <= 4; n++){ const d = document.createElement('span'); d.className = 'rc-dot' + (n <= draft.intensity ? ' on' : ''); d.addEventListener('click', () => { draft.intensity = n; drawInt(); }); el.appendChild(d); } };
   const drawVal = () => { const el = card.querySelector('#rcVal'); el.innerHTML = ''; ['warm', 'neutral', 'cold'].forEach(v => { const b2 = document.createElement('button'); b2.textContent = REL_VAL_LABEL[v]; b2.className = (draft.valence === v ? 'on' : ''); b2.style.setProperty('--vh', REL_VAL_HUE[v]); b2.addEventListener('click', () => { draft.valence = v; drawVal(); }); el.appendChild(b2); }); };
@@ -5683,6 +5685,7 @@ function openRelCard(a, b, side, from, to, opts){
   card.querySelector('#rcType').addEventListener('change', e => { draft.type = e.target.value; });
   card.querySelector('#rcRoll').addEventListener('click', () => { const nw = rollRelType(from, to, draft.type); if (nw){ draft.type = nw; const sel = card.querySelector('#rcType'); if ([...sel.options].every(o => o.value !== nw)){ const o = document.createElement('option'); o.value = nw; o.textContent = nw; sel.appendChild(o); } sel.value = nw; } });
   card.querySelector('#rcStake').addEventListener('input', e => { draft.stake = e.target.value; });
+  card.querySelector('#rcStakeRoll').addEventListener('click', () => { if (!stakePool.length) return; const sw = stakePool[Math.floor(Math.random() * stakePool.length)]; draft.stake = sw; card.querySelector('#rcStake').value = sw; });
   card.querySelector('#rcSet').addEventListener('click', commitRelCard);
   card.querySelector('#rcCancel').addEventListener('click', cancelRelCard);
   const rm = card.querySelector('#rcRemove'); if (rm) rm.addEventListener('click', removeRelSide);
@@ -5712,8 +5715,21 @@ function removeRelSide(){
 }
 function cancelRelCard(){ closeRelCard(); }
 function dropLink(a, b){ if (!state.prompt) return; const lo = Math.min(a, b), hi = Math.max(a, b); state.prompt.links = (state.prompt.links || []).filter(l => !(l.a === lo && l.b === hi)); }
+function rebuildEdges(){
+  state.edges = [];
+  state.edgeMeta = [];
+  if (!state.prompt) return;
+  state.prompt.links = (state.prompt.links || []).map(normalizeLink);
+  const isEvt = j => state.nodes[j] && state.nodes[j].cat === 'event' && state.nodes[j].role === 'word';
+  state.prompt.links.forEach(l => {
+    if (state.nodes[l.a] && state.nodes[l.b] && !isEvt(l.a) && !isEvt(l.b)){
+      state.edges.push([l.a, l.b]);
+      state.edgeMeta.push(l);
+    }
+  });
+}
 function saveLinksAndRender(){
-  if (state.prompt) renderConstellation();
+  if (state.prompt){ rebuildEdges(); renderConstellation(); }
   if (state.session && state.prompt){ state.session.words = state.prompt.words; state.session.links = state.prompt.links; scheduleAutosave(); }
 }
 function skyToScreen(wx, wy){
@@ -5909,18 +5925,7 @@ function layoutConstellation(){
     });
   }
   /* all lines come from user-driven (or relationship) links */
-  state.edges = [];
-  state.edgeMeta = [];
-  if (state.prompt){
-    state.prompt.links = (state.prompt.links || []).map(normalizeLink);
-    const isEvt = j => state.nodes[j] && state.nodes[j].cat === 'event' && state.nodes[j].role === 'word';
-    state.prompt.links.forEach(l => {
-      if (state.nodes[l.a] && state.nodes[l.b] && !isEvt(l.a) && !isEvt(l.b)){
-        state.edges.push([l.a, l.b]);
-        state.edgeMeta.push(l);
-      }
-    });
-  }
+  rebuildEdges();
     state.nodes.forEach((nd, i) => {
     const w = words[i];
     if (w && w.fx != null){
