@@ -4389,7 +4389,9 @@ function commitWord(word, sub, catId){
   state.prompt.words.push(built);
   bumpTimerForGuideWord(built);
   $('skyEmpty').style.display = 'none';
-  if (built.role === 'being' || (built.role === 'word' && (built.cat === 'setting' || built.cat === 'object'))){
+  if (isMentalSpace(built)){
+    // off-scale place for this section → goes straight to the mental-space sidebar, no map placement
+  } else if (built.role === 'being' || (built.role === 'word' && (built.cat === 'setting' || built.cat === 'object'))){
     built.needsPlace = true; startPlacement([builtIdx]);   // place/draw it, same as a rolled element
   }
   layoutConstellation();
@@ -5123,6 +5125,7 @@ function addFromCategory(catId, subName){
   const placeIdxs = [];
   for (let pi = startLen; pi < words.length; pi++){
     const w = words[pi];
+    if (isMentalSpace(w)) continue;   // off-scale place → mental-space sidebar, skip map placement
     if (w && (w.role === 'being' || (w.role === 'word' && (w.cat === 'setting' || w.cat === 'object')))){ w.needsPlace = true; placeIdxs.push(pi); }
   }
   if (placeIdxs.length) startPlacement(placeIdxs);   // set placing first so the render below hides pending nodes
@@ -5907,11 +5910,12 @@ function setMapTerrain(key){
 }
 function updateMapTerrainPill(){
   const wrap = $('mapTerrainWrap'); if (!wrap) return;
-  wrap.hidden = !state.prompt;            // only meaningful over an active map
+  // the single background biome belongs to the Terrain level ("one terrain for the whole map")
+  wrap.hidden = !(state.prompt && sectionLevel() === 'terrain');
   const btn = $('mapTerrainBtn'); if (!btn) return;
   const key = mapTerrainKey();
-  if (key){ btn.textContent = mapTerrainLabel(key) || 'Map terrain'; btn.classList.add('set'); }
-  else { btn.textContent = '+ Map terrain'; btn.classList.remove('set'); }
+  if (key){ btn.textContent = mapTerrainLabel(key) || 'Background'; btn.classList.add('set'); }
+  else { btn.textContent = '+ Background terrain'; btn.classList.remove('set'); }
 }
 function toggleMapTerrainMenu(open){
   const menu = $('mapTerrainMenu'); if (!menu) return;
@@ -5926,8 +5930,9 @@ function toggleMapTerrainMenu(open){
 }
 // ---- per-section map level (scale): gates which SETTING subs sit physically on the map ----
 const MAP_LEVELS = [
-  { key: 'open',       label: 'Open · any scale', subs: null },
-  { key: 'terrain',    label: 'Terrain',     subs: ['Terrain', 'Natural Locations', 'Settlements', 'Places', 'Connector'] },
+  { key: 'open',       label: 'Free · no hierarchy', subs: null },
+  { key: 'world',      label: 'World · many terrains', subs: ['Terrain', 'Natural Locations', 'Settlements', 'Places', 'Connector'] },
+  { key: 'terrain',    label: 'Terrain · one biome',   subs: ['Natural Locations', 'Settlements', 'Places', 'Connector'] },
   { key: 'settlement', label: 'Settlement',  subs: ['Building', 'Places', 'Connector'] },
   { key: 'building',   label: 'Building',    subs: ['Intimate', 'Connector'] },
   { key: 'room',       label: 'Room',        subs: [] }
@@ -5935,6 +5940,9 @@ const MAP_LEVELS = [
 function levelDef(key){ return MAP_LEVELS.find(l => l.key === key) || MAP_LEVELS[0]; }
 function sectionLevel(){ return (state.prompt && state.prompt.mapLevel) || 'open'; }
 function settingSubIsPhysical(sub){ const def = levelDef(sectionLevel()); return !def.subs || def.subs.indexOf(sub) >= 0; }
+// a setting whose sub doesn't fit this section's scale lives in the "mental space" sidebar, not on the map.
+// drawn terrains/lines always stay physical (they have real geometry).
+function isMentalSpace(nd){ return !!(nd && nd.cat === 'setting' && nd.role === 'word' && !nd.terrain && !nd.line && !settingSubIsPhysical(nd.sub)); }
 function setMapLevel(key){
   if (!state.prompt) return;
   state.prompt.mapLevel = (key === 'open') ? null : key;
@@ -6166,6 +6174,7 @@ function renderConstellation(){
   state.spans = [];
   state.edges.forEach((e, ei) => {
     if (state.placing != null && ((state.nodes[e[0]] && state.nodes[e[0]].needsPlace) || (state.nodes[e[1]] && state.nodes[e[1]].needsPlace))) return;
+    if (isMentalSpace(state.nodes[e[0]]) || isMentalSpace(state.nodes[e[1]])) return;   // skip links to off-scale (sidebar) places
     const ln = document.createElementNS('http://www.w3.org/2000/svg', 'line');
     ln.setAttribute('class', 'edge');
     ln.dataset.edge = ei;
@@ -6221,6 +6230,7 @@ function renderConstellation(){
     if (nd.role === 'frame' || nd.role === 'constraint') return;
     if (nd.cat === 'event' && nd.role === 'word') return;
     if (nd.needsPlace && state.placing != null) return;   // hidden until the player places/draws it
+    if (isMentalSpace(nd)) return;                        // off-scale place → lives in the mental-space sidebar
     const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
     g.setAttribute('class', 'node ' + nd.role + ' ' + nd.cat + (i === state.linkFrom ? ' link-src' : '') + (i === state.selNode ? ' sel' : '') + (nd.destroyed ? ' destroyed' : '') + (nd.locked ? ' is-locked' : ''));
     g.dataset.node = i;
@@ -6698,6 +6708,7 @@ function renderConstellation(){
   renderFocus();
   renderWriteFrame();
   renderEvOverlay();
+  renderMentalOverlay();
   renderLegend();
   updateUndoUI();
   const rn = $('railNote');
@@ -6757,6 +6768,34 @@ function renderEvOverlay(){
   });
 }
 
+// places that exist in the narrative but sit outside this section's map scale → listed as side pills
+function renderMentalOverlay(){
+  const ov = $('mentalOverlay'); if (!ov) return;
+  ov.innerHTML = '';
+  const words = state.prompt ? state.prompt.words : [];
+  const idxs = words.map((w, i) => isMentalSpace(w) ? i : -1).filter(i => i >= 0);
+  if (!idxs.length){ ov.hidden = true; return; }
+  ov.hidden = false;
+  const hd = document.createElement('span');
+  hd.className = 'mo-head';
+  hd.textContent = 'Mental space';
+  ov.appendChild(hd);
+  idxs.forEach(i => {
+    const w = words[i];
+    const it = document.createElement('span');
+    it.className = 'mo-item';
+    if (typeof focusBook === 'function') it.appendChild(focusBook(i, w._wstate || 0));
+    it.appendChild(document.createTextNode(w.name || w.word));
+    const sb = document.createElement('span'); sb.className = 'mo-sub'; sb.textContent = w.sub || 'Place'; it.appendChild(sb);
+    const x = document.createElement('span'); x.className = 'mo-x'; x.textContent = '×'; x.title = 'Remove';
+    x.addEventListener('click', ev => { ev.stopPropagation(); removeNode(i); });
+    it.appendChild(x);
+    it.addEventListener('click', () => { if (typeof openElementWiki === 'function') openElementWiki(i); });
+    it.addEventListener('mouseenter', ev => { const d = descFor(w); if (d) showTip(d, ev); });
+    it.addEventListener('mouseleave', hideTip);
+    ov.appendChild(it);
+  });
+}
 function renderFrameBar(){
   const fb = $('frameBar');
   fb.style.display = 'flex';
