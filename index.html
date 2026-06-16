@@ -735,6 +735,36 @@
   .edge-hit{stroke:transparent; stroke-width:14; cursor:pointer}
   .edge.cut{stroke:rgba(160,58,46,.4)}
   body.eink .edge.cut{stroke:rgba(122,30,20,.6)}
+  .edge.rel{transition:stroke-width .12s, stroke-opacity .12s}
+  .rel-ov{cursor:pointer}
+  .rel-ov-bg{fill:var(--paper); stroke-width:1.4; opacity:.97}
+  .rel-ov-to{font-family:var(--sans); font-size:8px; letter-spacing:.04em; fill:var(--ink-faint); text-transform:uppercase}
+  .rel-ov-type{font-family:var(--serif); font-style:italic; font-size:12.5px}
+  .rel-ov-dot{stroke:var(--line); stroke-width:.8}
+  .rel-ov-stake{font-family:var(--sans); font-size:8.5px; fill:var(--ink-soft)}
+  body.eink .rel-ov-bg{fill:#fff; stroke:#000}
+  #relCard{position:fixed; z-index:60; width:230px; background:var(--paper); border:1px solid var(--line); border-radius:9px; box-shadow:0 10px 30px rgba(0,0,0,.18); padding:11px 12px; font-family:var(--sans); display:none}
+  #relCard .rc-head{font-size:13px; color:var(--ink); margin-bottom:9px; display:flex; align-items:center; gap:5px; flex-wrap:wrap}
+  #relCard .rc-arrow{color:var(--ink-faint)}
+  #relCard .rc-sub{margin-left:auto; font-size:8px; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-faint)}
+  #relCard .rc-row{display:flex; align-items:center; justify-content:space-between; gap:8px; margin:7px 0; font-size:11px; color:var(--ink-soft)}
+  #relCard .rc-row>span:first-child{font-size:9px; letter-spacing:.08em; text-transform:uppercase; color:var(--ink-faint); flex:0 0 62px}
+  #relCard .rc-typewrap{display:flex; gap:4px; flex:1; min-width:0}
+  #relCard select{flex:1; min-width:0; font-family:var(--sans); font-size:11px; padding:3px 4px; border:1px solid var(--line); border-radius:5px; background:var(--paper); color:var(--ink)}
+  #relCard #rcRoll{border:1px solid var(--line); background:var(--paper); border-radius:5px; cursor:pointer; padding:0 7px; font-size:13px; color:var(--ink-faint)}
+  #relCard #rcRoll:hover{color:var(--ink)}
+  #relCard .rc-dots{display:flex; gap:5px}
+  #relCard .rc-dot{width:12px; height:12px; border-radius:50%; border:1px solid var(--line); cursor:pointer; background:var(--paper)}
+  #relCard .rc-dot.on{background:var(--ink-soft); border-color:var(--ink-soft)}
+  #relCard .rc-seg{display:flex; gap:4px}
+  #relCard .rc-seg button{font-family:var(--sans); font-size:10px; padding:3px 7px; border:1px solid var(--line); border-radius:5px; background:var(--paper); color:var(--ink-soft); cursor:pointer}
+  #relCard .rc-seg button.on{border-color:var(--vh,var(--ink)); color:var(--ink); box-shadow:inset 0 0 0 1px var(--vh,var(--ink))}
+  #relCard input{flex:1; min-width:0; font-family:var(--sans); font-size:11px; padding:3px 5px; border:1px solid var(--line); border-radius:5px; background:var(--paper); color:var(--ink)}
+  #relCard .rc-btns{display:flex; gap:6px; margin-top:11px}
+  #relCard .rc-set{flex:1; background:var(--ink); color:var(--paper); border:none; border-radius:6px; padding:6px; font-size:11px; cursor:pointer; letter-spacing:.04em}
+  #relCard .rc-rm{background:var(--paper); border:1px solid var(--line); color:#a05c4d; border-radius:6px; padding:6px 9px; font-size:11px; cursor:pointer}
+  #relCard .rc-cancel{background:var(--paper); border:1px solid var(--line); color:var(--ink-faint); border-radius:6px; padding:6px 9px; font-size:11px; cursor:pointer}
+  body.eink #relCard{border-color:#000}
   .edge-draft{stroke:#8a7a9b; stroke-width:1.4; stroke-dasharray:4 4; pointer-events:none}
   .node.link-target .w{fill:#8a7a9b; text-decoration:underline}
   .node.link-target .tag{font-weight:700}
@@ -4299,12 +4329,31 @@ function calcUsage(){
     });
   });
   (state.prompt.links || []).forEach(l => {
-    if (!l.rel) return;
+    const words = linkRelWords(l);
+    if (!words.length) return;
     res.total++;
-    l._hit = !!(l.used || textHasWord(lc, l.rel));
+    l._hit = !!(l.used || words.some(w => textHasWord(lc, w)));
     if (l._hit) res.count++;
   });
   return res;
+}
+/* every relationship word carried on a link (both directions) */
+function linkRelWords(l){
+  if (!l) return [];
+  if (l.rel) return [l.rel];   // legacy, pre-migration
+  const out = [];
+  if (l.fwd && l.fwd.type) out.push(l.fwd.type);
+  if (l.rev && l.rev.type) out.push(l.rev.type);
+  return out;
+}
+function relExportNote(r){
+  if (!r) return '';
+  const n = Math.max(0, Math.min(4, r.intensity || 0));
+  const dots = '●'.repeat(n) + '○'.repeat(4 - n);
+  const bits = [r.sub || 'bond', dots, r.valence || 'neutral'];
+  if (r.secret) bits.push('secret');
+  if ((r.stake || '').trim()) bits.push('stake: “' + r.stake.trim() + '”');
+  return '**' + (r.type || '—') + '**  (' + bits.join(' · ') + ')';
 }
 
 /* ---------------- add a characteristic to a being ---------------- */
@@ -4916,7 +4965,8 @@ function gameHarvest(){
     });
   });
   (state.prompt.links || []).forEach(l => {
-    if (l.rel && l._hit && !seen.has('l|' + l.rel)){ seen.add('l|' + l.rel); gained += 2; lastWord = l.rel; }
+    if (!l._hit) return;
+    linkRelWords(l).forEach(rw => { if (!seen.has('l|' + rw)){ seen.add('l|' + rw); gained += 2; lastWord = rw; } });
   });
   if (gained){
     state.game.earnedKeys = Array.from(seen);
@@ -5545,6 +5595,169 @@ function cycleDir(meta){
   if (state.session && state.prompt){ state.session.links = state.prompt.links; scheduleAutosave(); }
 }
 
+/* ===================== relationships v2: directed, two-sided, aspect-rich ===================== */
+const REL_VAL_HUE = { warm: '#c98a3e', neutral: '#8f8a9c', cold: '#4f78c2' };
+const REL_VAL_LABEL = { warm: 'Warm', neutral: 'Neutral', cold: 'Cold' };
+const REL_WIDTH = { 1: 1.6, 2: 2.6, 3: 4, 4: 6 };
+const REL_ACT_OP = { 1: 0.55, 2: 0.72, 3: 0.86, 4: 1 };
+const GENERIC_REL = ['Tied to', 'Bound to', 'Defined against', 'Echoes', 'Opposes', 'Shadows', 'Answers to', 'Drawn to'];
+function hexMix(c1, c2, t){
+  const p = h => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
+  const a = p(c1), b = p(c2);
+  const m = a.map((v, k) => Math.round(v + (b[k] - v) * t));
+  return '#' + m.map(v => v.toString(16).padStart(2, '0')).join('');
+}
+function blankRel(){ return { type: '', sub: '', intensity: 2, valence: 'neutral', secret: false, stake: '' }; }
+function normalizeLink(l){
+  if (Array.isArray(l)) l = { a: Math.min(l[0], l[1]), b: Math.max(l[0], l[1]) };
+  if (!('fwd' in l) && !('rev' in l)){
+    if (l.rel){
+      const mk = { type: l.rel, sub: l.sub || '', intensity: 2, valence: 'neutral', secret: false, stake: '' };
+      if (l.dir === 'ba'){ l.fwd = null; l.rev = mk; }
+      else if (l.dir === 'both'){ l.fwd = mk; l.rev = Object.assign({}, mk); }
+      else { l.fwd = mk; l.rev = null; }
+    } else { l.fwd = null; l.rev = null; }
+    delete l.rel; delete l.sub; delete l.dir;
+  }
+  if (!('fwd' in l)) l.fwd = null;
+  if (!('rev' in l)) l.rev = null;
+  return l;
+}
+function getLink(a, b){ if (!state.prompt) return null; const lo = Math.min(a, b), hi = Math.max(a, b); return (state.prompt.links || []).find(l => l.a === lo && l.b === hi) || null; }
+function relSubFor(i, j){
+  const wi = state.prompt.words[i], wj = state.prompt.words[j]; if (!wi || !wj) return null;
+  const relCat = getCat('relationship');
+  const key = w => w.role === 'being' ? 'being' : w.cat;
+  const ki = key(wi), kj = key(wj);
+  if (ki === 'being' || kj === 'being'){ const other = ki === 'being' ? kj : ki; return relCat.subcategories.find(s => s.target === other) || null; }
+  if (ki === 'setting' && kj === 'setting') return relCat.subcategories.find(s => s.source === 'setting') || null;
+  return null;
+}
+function relPool(i, j){ const s = relSubFor(i, j); return s ? s.words : GENERIC_REL; }
+function relSubName(i, j){ const s = relSubFor(i, j); return s ? s.name : 'Connection'; }
+function rollRelType(i, j, avoid){ return relPick(relPool(i, j), [], avoid); }
+function relIntensity(link){ let m = 0; if (link.fwd) m = Math.max(m, link.fwd.intensity || 2); if (link.rev) m = Math.max(m, link.rev.intensity || 2); return m || 1; }
+function relValHue(link){
+  const hs = []; if (link.fwd) hs.push(REL_VAL_HUE[link.fwd.valence] || REL_VAL_HUE.neutral); if (link.rev) hs.push(REL_VAL_HUE[link.rev.valence] || REL_VAL_HUE.neutral);
+  if (!hs.length) return REL_VAL_HUE.neutral; if (hs.length === 1) return hs[0]; return hexMix(hs[0], hs[1], 0.5);
+}
+function relSecret(link){ return !!((link.fwd && link.fwd.secret) || (link.rev && link.rev.secret)); }
+
+/* called when a connect-drag is dropped on another element */
+function beginRelationship(from, to){
+  if (from === to || !state.prompt) return;
+  const a = Math.min(from, to), b = Math.max(from, to);
+  const side = from < to ? 'fwd' : 'rev';
+  openRelCard(a, b, side, from, to, {});   // link object is created on Set, not before
+}
+
+let relEdit = null;
+function relDraftFor(link, side, from, to){
+  if (link && link[side]) return Object.assign(blankRel(), link[side]);
+  const r = blankRel(); r.sub = relSubName(from, to); r.type = rollRelType(from, to) || ''; return r;
+}
+function closeRelCard(){ const c = $('relCard'); if (c) c.style.display = 'none'; relEdit = null; }
+function openRelCard(a, b, side, from, to, opts){
+  opts = opts || {};
+  const link = getLink(a, b);
+  const draft = relDraftFor(link, side, from, to);
+  relEdit = { a, b, side, from, to, draft };
+  let card = $('relCard');
+  if (!card){ card = document.createElement('div'); card.id = 'relCard'; document.body.appendChild(card); }
+  const nameOf = k => { const w = state.prompt.words[k]; return (w && w.name) || (state.nodes[k] && state.nodes[k].word) || '?'; };
+  const pool = relPool(from, to).map(x => typeof x === 'string' ? x : x.w);
+  if (draft.type && pool.indexOf(draft.type) < 0) pool.unshift(draft.type);
+  const opts2 = pool.map(w => '<option value="' + esc(w) + '"' + (w === draft.type ? ' selected' : '') + '>' + esc(w) + '</option>').join('');
+  card.innerHTML =
+    '<div class="rc-head"><span class="rc-from">' + esc(nameOf(from)) + '</span> <span class="rc-arrow">→</span> <span class="rc-to">' + esc(nameOf(to)) + '</span><span class="rc-sub">' + esc(relSubName(from, to)) + '</span></div>' +
+    '<label class="rc-row"><span>Type</span><span class="rc-typewrap"><select id="rcType">' + opts2 + '</select><button id="rcRoll" title="Roll another">↻</button></span></label>' +
+    '<div class="rc-row"><span>Intensity</span><span id="rcInt" class="rc-dots"></span></div>' +
+    '<div class="rc-row"><span>Valence</span><span id="rcVal" class="rc-seg"></span></div>' +
+    '<div class="rc-row"><span>Knowledge</span><span id="rcSec" class="rc-seg"></span></div>' +
+    '<label class="rc-row"><span>Stake</span><input id="rcStake" type="text" maxlength="80" placeholder="what’s at risk…" value="' + esc(draft.stake || '') + '"></label>' +
+    '<div class="rc-btns"><button id="rcSet" class="rc-set">Set</button>' + ((link && link[side]) ? '<button id="rcRemove" class="rc-rm">Remove</button>' : '') + '<button id="rcCancel" class="rc-cancel">Cancel</button></div>';
+  const drawInt = () => { const el = card.querySelector('#rcInt'); el.innerHTML = ''; for (let n = 1; n <= 4; n++){ const d = document.createElement('span'); d.className = 'rc-dot' + (n <= draft.intensity ? ' on' : ''); d.addEventListener('click', () => { draft.intensity = n; drawInt(); }); el.appendChild(d); } };
+  const drawVal = () => { const el = card.querySelector('#rcVal'); el.innerHTML = ''; ['warm', 'neutral', 'cold'].forEach(v => { const b2 = document.createElement('button'); b2.textContent = REL_VAL_LABEL[v]; b2.className = (draft.valence === v ? 'on' : ''); b2.style.setProperty('--vh', REL_VAL_HUE[v]); b2.addEventListener('click', () => { draft.valence = v; drawVal(); }); el.appendChild(b2); }); };
+  const drawSec = () => { const el = card.querySelector('#rcSec'); el.innerHTML = ''; [['known', 'Known'], ['secret', 'Secret']].forEach(([k, lab]) => { const b2 = document.createElement('button'); b2.textContent = lab; b2.className = ((draft.secret ? 'secret' : 'known') === k ? 'on' : ''); b2.addEventListener('click', () => { draft.secret = (k === 'secret'); drawSec(); }); el.appendChild(b2); }); };
+  drawInt(); drawVal(); drawSec();
+  card.querySelector('#rcType').addEventListener('change', e => { draft.type = e.target.value; });
+  card.querySelector('#rcRoll').addEventListener('click', () => { const nw = rollRelType(from, to, draft.type); if (nw){ draft.type = nw; const sel = card.querySelector('#rcType'); if ([...sel.options].every(o => o.value !== nw)){ const o = document.createElement('option'); o.value = nw; o.textContent = nw; sel.appendChild(o); } sel.value = nw; } });
+  card.querySelector('#rcStake').addEventListener('input', e => { draft.stake = e.target.value; });
+  card.querySelector('#rcSet').addEventListener('click', commitRelCard);
+  card.querySelector('#rcCancel').addEventListener('click', cancelRelCard);
+  const rm = card.querySelector('#rcRemove'); if (rm) rm.addEventListener('click', removeRelSide);
+  card.style.display = 'block';
+  // position near the line midpoint, clamped to the viewport
+  const mid = skyToScreen((state.nodes[a].x + state.nodes[b].x) / 2, (state.nodes[a].y + state.nodes[b].y) / 2);
+  const cw = 230, ch = 250;
+  card.style.left = Math.max(8, Math.min(mid.x - cw / 2, window.innerWidth - cw - 8)) + 'px';
+  card.style.top = Math.max(8, Math.min(mid.y + 12, window.innerHeight - ch - 8)) + 'px';
+  setTimeout(() => { const s = card.querySelector('#rcType'); if (s) s.focus(); }, 0);
+}
+function commitRelCard(){
+  if (!relEdit) return;
+  pushUndo();
+  state.prompt.links = state.prompt.links || [];
+  let link = getLink(relEdit.a, relEdit.b);
+  if (!link){ link = { a: relEdit.a, b: relEdit.b, fwd: null, rev: null }; state.prompt.links.push(link); }
+  link[relEdit.side] = Object.assign(blankRel(), relEdit.draft);
+  saveLinksAndRender();
+  closeRelCard();
+}
+function removeRelSide(){
+  if (!relEdit) return;
+  const link = getLink(relEdit.a, relEdit.b);
+  if (link){ pushUndo(); link[relEdit.side] = null; if (!link.fwd && !link.rev) dropLink(relEdit.a, relEdit.b); saveLinksAndRender(); }
+  closeRelCard();
+}
+function cancelRelCard(){ closeRelCard(); }
+function dropLink(a, b){ if (!state.prompt) return; const lo = Math.min(a, b), hi = Math.max(a, b); state.prompt.links = (state.prompt.links || []).filter(l => !(l.a === lo && l.b === hi)); }
+function saveLinksAndRender(){
+  if (state.prompt) renderConstellation();
+  if (state.session && state.prompt){ state.session.words = state.prompt.words; state.session.links = state.prompt.links; scheduleAutosave(); }
+}
+function skyToScreen(wx, wy){
+  const svg = $('skySvg'); const r = svg.getBoundingClientRect();
+  const [x0, y0, w, h, W, H] = viewBoxVals(); const rw = r.width || W, rh = r.height || H;
+  return { x: r.left + (wx - x0) / w * rw, y: r.top + (wy - y0) / h * rh };
+}
+function buildRelOverlay(ei, side, from, to, rel, slots, slot){
+  const NS = 'http://www.w3.org/2000/svg';
+  const g = document.createElementNS(NS, 'g');
+  g.setAttribute('class', 'rel-ov'); g.dataset.edge = ei; g.dataset.slots = slots; g.dataset.slot = slot;
+  const nameOf = k => { const w = state.prompt.words[k]; return (w && w.name) || (state.nodes[k] && state.nodes[k].word) || '?'; };
+  const vh = REL_VAL_HUE[rel.valence] || REL_VAL_HUE.neutral;
+  const stake = (rel.stake || '').trim();
+  const W = 132, H = stake ? 50 : 38;
+  const rect = document.createElementNS(NS, 'rect');
+  rect.setAttribute('class', 'rel-ov-bg'); rect.setAttribute('x', -W / 2); rect.setAttribute('y', -H / 2);
+  rect.setAttribute('width', W); rect.setAttribute('height', H); rect.setAttribute('rx', 7); rect.setAttribute('stroke', vh);
+  g.appendChild(rect);
+  const tgt = document.createElementNS(NS, 'text');
+  tgt.setAttribute('class', 'rel-ov-to'); tgt.setAttribute('x', -W / 2 + 9); tgt.setAttribute('y', -H / 2 + 12);
+  tgt.textContent = '→ ' + nameOf(to) + (rel.secret ? '  · secret' : '');
+  g.appendChild(tgt);
+  const ty = document.createElementNS(NS, 'text');
+  ty.setAttribute('class', 'rel-ov-type'); ty.setAttribute('x', -W / 2 + 9); ty.setAttribute('y', -H / 2 + 26); ty.setAttribute('fill', vh);
+  ty.textContent = rel.type || '—';
+  g.appendChild(ty);
+  for (let n = 1; n <= 4; n++){
+    const d = document.createElementNS(NS, 'circle');
+    d.setAttribute('class', 'rel-ov-dot'); d.setAttribute('cx', W / 2 - 10 - (4 - n) * 7); d.setAttribute('cy', -H / 2 + 22); d.setAttribute('r', 2.2);
+    if (n <= (rel.intensity || 1)) d.setAttribute('fill', vh); else d.setAttribute('fill', 'none');
+    g.appendChild(d);
+  }
+  if (stake){
+    const sk = document.createElementNS(NS, 'text');
+    sk.setAttribute('class', 'rel-ov-stake'); sk.setAttribute('x', -W / 2 + 9); sk.setAttribute('y', H / 2 - 7);
+    sk.textContent = '⚑ ' + (stake.length > 22 ? stake.slice(0, 21) + '…' : stake);
+    g.appendChild(sk);
+  }
+  const lo = Math.min(from, to), hi = Math.max(from, to);
+  g.addEventListener('click', ev => { ev.stopPropagation(); openRelCard(lo, hi, side, from, to, {}); });
+  return g;
+}
+
 /* ---------------- view: zoom & pan ---------------- */
 function viewBoxVals(){
   const svg = $('skySvg');
@@ -5630,7 +5843,7 @@ function endLinkDrag(cancel){
   sky.querySelectorAll('.link-target').forEach(el => el.classList.remove('link-target'));
   sky.querySelectorAll('.link-src').forEach(el => el.classList.remove('link-src'));
   state.lastDrag = Date.now();
-  if (!cancel && ld.target != null) toggleLink(ld.from, ld.target);
+  if (!cancel && ld.target != null) beginRelationship(ld.from, ld.target);
 }
 
 /* ---------------- constellation ---------------- */
@@ -5699,7 +5912,7 @@ function layoutConstellation(){
   state.edges = [];
   state.edgeMeta = [];
   if (state.prompt){
-    state.prompt.links = (state.prompt.links || []).map(l => Array.isArray(l) ? { a: Math.min(l[0], l[1]), b: Math.max(l[0], l[1]) } : l);
+    state.prompt.links = (state.prompt.links || []).map(normalizeLink);
     const isEvt = j => state.nodes[j] && state.nodes[j].cat === 'event' && state.nodes[j].role === 'word';
     state.prompt.links.forEach(l => {
       if (state.nodes[l.a] && state.nodes[l.b] && !isEvt(l.a) && !isEvt(l.b)){
@@ -6977,58 +7190,58 @@ function renderConstellation(){
   }
   /* (setting watercolor "blots" + connector spans removed — terrain regions replace them) */
   state.spans = [];
+  const relOvs = [];
   state.edges.forEach((e, ei) => {
-    if (state.placing != null && ((state.nodes[e[0]] && state.nodes[e[0]].needsPlace) || (state.nodes[e[1]] && state.nodes[e[1]].needsPlace))) return;
-    if (isMentalSpace(state.nodes[e[0]]) || isMentalSpace(state.nodes[e[1]])) return;   // skip links to off-scale (sidebar) places
+    const a = e[0], b = e[1];
+    if (state.placing != null && ((state.nodes[a] && state.nodes[a].needsPlace) || (state.nodes[b] && state.nodes[b].needsPlace))) return;
+    if (isMentalSpace(state.nodes[a]) || isMentalSpace(state.nodes[b])) return;   // skip links to off-scale (sidebar) places
+    const link = (state.edgeMeta && state.edgeMeta[ei]) || { fwd: null, rev: null };
+    const active = (state.selNode === a || state.selNode === b);
+    const hasRel = !!(link.fwd || link.rev);
+    const intensity = relIntensity(link);
+    const colA = catColor(state.nodes[a].cat), colB = catColor(state.nodes[b].cat);
     const ln = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-    ln.setAttribute('class', 'edge');
+    ln.setAttribute('class', 'edge' + (active ? ' active' : '') + (hasRel ? ' rel' : ''));
     ln.dataset.edge = ei;
+    if (relSecret(link)) ln.setAttribute('stroke-dasharray', '6 5');
+    if (active && hasRel){
+      const gid = 'relg' + ei;
+      const grad = document.createElementNS('http://www.w3.org/2000/svg', 'linearGradient');
+      grad.setAttribute('id', gid); grad.setAttribute('class', 'relgrad'); grad.dataset.edge = ei;
+      grad.setAttribute('gradientUnits', 'userSpaceOnUse');
+      grad.setAttribute('x1', state.nodes[a].x); grad.setAttribute('y1', state.nodes[a].y + 5);
+      grad.setAttribute('x2', state.nodes[b].x); grad.setAttribute('y2', state.nodes[b].y + 5);
+      const vh = relValHue(link);
+      [[0, colA], [0.5, vh], [1, colB]].forEach(p => { const st = document.createElementNS('http://www.w3.org/2000/svg', 'stop'); st.setAttribute('offset', p[0]); st.setAttribute('stop-color', p[1]); grad.appendChild(st); });
+      defs.appendChild(grad);
+      ln.style.stroke = 'url(#' + gid + ')';
+      ln.style.strokeOpacity = REL_ACT_OP[intensity];
+      ln.style.strokeWidth = REL_WIDTH[intensity];
+      if (link.fwd) ln.setAttribute('marker-end', 'url(#arrowE)');
+      if (link.rev) ln.setAttribute('marker-start', 'url(#arrowE)');
+    } else if (hasRel){
+      ln.style.stroke = hexMix(hexMix(colA, colB, 0.5), relValHue(link), 0.35);
+      ln.style.strokeOpacity = 0.12;
+      ln.style.strokeWidth = 1.5;
+    }
     svg.appendChild(ln);
     const hit = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-    hit.setAttribute('class', 'edge-hit');
-    hit.dataset.edge = ei;
+    hit.setAttribute('class', 'edge-hit'); hit.dataset.edge = ei;
     const ht = document.createElementNS('http://www.w3.org/2000/svg', 'title');
-    ht.textContent = 'Click to remove this connection';
+    ht.textContent = hasRel ? 'Click to edit this relationship' : 'Click to add a relationship';
     hit.appendChild(ht);
-    hit.addEventListener('click', ev => { ev.stopPropagation(); toggleLink(e[0], e[1]); });
-    hit.addEventListener('mouseenter', () => ln.classList.add('cut'));
-    hit.addEventListener('mouseleave', () => ln.classList.remove('cut'));
+    hit.addEventListener('click', ev => {
+      ev.stopPropagation();
+      const side = link.fwd ? 'fwd' : (link.rev ? 'rev' : 'fwd');
+      const from = side === 'fwd' ? a : b, to = side === 'fwd' ? b : a;
+      openRelCard(a, b, side, from, to, {});
+    });
     svg.appendChild(hit);
-    const meta = state.edgeMeta && state.edgeMeta[ei];
-    if (meta && meta.rel){
-      const lbl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-      lbl.setAttribute('class', 'rel-label');
-      lbl.dataset.edge = ei;
-      lbl.setAttribute('text-anchor', 'middle');
-      if (meta._hit){
-        const rc = document.createElementNS('http://www.w3.org/2000/svg', 'tspan');
-        rc.setAttribute('class', 'achk');
-        rc.textContent = '\u2713 ';
-        lbl.appendChild(rc);
-      }
-      const rw = document.createElementNS('http://www.w3.org/2000/svg', 'tspan');
-      rw.textContent = meta.rel;
-      lbl.appendChild(rw);
-      const lt = document.createElementNS('http://www.w3.org/2000/svg', 'title');
-      lt.textContent = (meta.sub || 'Relationship') + ' \u2014 click to change';
-      lbl.appendChild(lt);
-      lbl.addEventListener('mouseenter', ev => {
-        const d = descFor({ word: meta.rel, cat: 'relationship', sub: meta.sub });
-        if (d) showTip(d, ev, catColor('relationship'));
-      });
-      lbl.addEventListener('mouseleave', hideTip);
-      lbl.addEventListener('click', ev => { ev.stopPropagation(); cycleRelWord(meta); });
-      svg.appendChild(lbl);
-      const dg = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-      dg.setAttribute('class', 'dir-glyph');
-      dg.dataset.edge = ei;
-      dg.setAttribute('text-anchor', 'middle');
-      dg.textContent = meta.dir === 'ab' ? '\u2192' : meta.dir === 'ba' ? '\u2190' : meta.dir === 'both' ? '\u2194' : '\u2013';
-      const dt = document.createElementNS('http://www.w3.org/2000/svg', 'title');
-      dt.textContent = 'Direction \u2014 click to change: one-way, reversed, mutual, ambiguous';
-      dg.appendChild(dt);
-      dg.addEventListener('click', ev => { ev.stopPropagation(); cycleDir(meta); });
-      svg.appendChild(dg);
+    if (active && hasRel){
+      const sides = [];
+      if (link.fwd) sides.push(['fwd', a, b]);
+      if (link.rev) sides.push(['rev', b, a]);
+      sides.forEach((sd, si) => relOvs.push(buildRelOverlay(ei, sd[0], sd[1], sd[2], link[sd[0]], sides.length, si)));
     }
   });
   state.nodes.forEach((nd, i) => {
@@ -7257,7 +7470,7 @@ function renderConstellation(){
     if (i === state.selNode){
       const circ = [];
       circ.push({
-        title: 'Drag to another element to connect them — drop on a line to cut it',
+        title: 'Drag onto another element to build a relationship',
         down: true,
         on: ev => { ev.stopPropagation(); ev.preventDefault(); startLinkDrag(i, ev); },
         ic: () => makeLucide('link', { cls: 'ctl-ic', color: 'currentColor', x: 0, y: 0, scale: 0.5, sw: 2.2 })
@@ -7369,6 +7582,7 @@ function renderConstellation(){
     const firstNode = svg.querySelector('g.node:not(.is-locked)');
     lockedGs.forEach(gg => { svg.insertBefore(gg, firstNode || null); });
   }
+  relOvs.forEach(ov => svg.appendChild(ov));   // relationship overlays sit on top, readable
   positionConstellation(0);
   applyView();
   renderFrameBar();
@@ -7948,15 +8162,17 @@ function positionConstellation(t){
     sp.setAttribute('d', streakPath(dist + 18, sm.h, sm.seed));
     sp.setAttribute('transform', 'translate(' + mx.toFixed(1) + ',' + my.toFixed(1) + ') rotate(' + ang.toFixed(1) + ')');
   });
-  svg.querySelectorAll('.rel-label').forEach(tx => {
-    const [a, b] = state.edges[+tx.dataset.edge];
-    tx.setAttribute('x', (pos[a].x + pos[b].x) / 2);
-    tx.setAttribute('y', (pos[a].y + pos[b].y) / 2 - 5);
+  svg.querySelectorAll('linearGradient.relgrad').forEach(gr => {
+    const [a, b] = state.edges[+gr.dataset.edge];
+    gr.setAttribute('x1', pos[a].x); gr.setAttribute('y1', pos[a].y + 5);
+    gr.setAttribute('x2', pos[b].x); gr.setAttribute('y2', pos[b].y + 5);
   });
-  svg.querySelectorAll('.dir-glyph').forEach(tx => {
-    const [a, b] = state.edges[+tx.dataset.edge];
-    tx.setAttribute('x', (pos[a].x + pos[b].x) / 2);
-    tx.setAttribute('y', (pos[a].y + pos[b].y) / 2 + 16);
+  svg.querySelectorAll('.rel-ov').forEach(g => {
+    const [a, b] = state.edges[+g.dataset.edge];
+    const mx = (pos[a].x + pos[b].x) / 2, my = (pos[a].y + pos[b].y) / 2;
+    const slots = +g.dataset.slots || 1, slot = +g.dataset.slot || 0;
+    const ox = slots > 1 ? (slot === 0 ? -70 : 70) : 0;
+    g.setAttribute('transform', 'translate(' + (mx + ox) + ',' + (my - 12) + ')');
   });
 }
 let rafHandle = null;
@@ -9256,9 +9472,16 @@ function wikiRelations(el){
       if (A.word === el.word && A.cat === el.cat){ other = B; isA = true; }
       else if (B.word === el.word && B.cat === el.cat){ other = A; isA = false; }
       else return;
-      const arrow = l.dir === 'both' ? '↔' : l.dir === 'ba' ? (isA ? '←' : '→') : l.dir === 'ab' ? (isA ? '→' : '←') : '—';
       const otherName = other.name ? ('“' + other.name + '” (' + other.word + ')') : other.word;
-      out.push((l.rel ? l.rel + ' ' : '') + arrow + ' ' + otherName);
+      const sides = [];
+      if (l.fwd) sides.push({ type: l.fwd.type, dir: 'ab' });
+      if (l.rev) sides.push({ type: l.rev.type, dir: 'ba' });
+      if (l.rel) sides.push({ type: l.rel, dir: l.dir || 'ab' });   // legacy, pre-migration
+      sides.forEach(sd => {
+        const elToOther = (sd.dir === 'ab' && isA) || (sd.dir === 'ba' && !isA);
+        const arrow = sd.dir === 'both' ? '↔' : (elToOther ? '→' : '←');
+        out.push((sd.type ? sd.type + ' ' : '') + arrow + ' ' + otherName);
+      });
     });
   });
   return [...new Set(out)];
@@ -9793,10 +10016,17 @@ function wikiRelLinks(el, byKey){
       if (A.word === el.word && A.cat === el.cat){ other = B; isA = true; }
       else if (B.word === el.word && B.cat === el.cat){ other = A; isA = false; }
       else return;
-      const arrow = l.dir === 'both' ? '↔' : l.dir === 'ba' ? (isA ? '←' : '→') : l.dir === 'ab' ? (isA ? '→' : '←') : '—';
       const label = (other.name ? ('“' + other.name + '” ') : '') + other.word;
       const linked = byKey[other.cat + '|' + other.word] ? ('[' + label + '](' + wikiFileName(other) + ')') : label;
-      out.push((l.rel ? l.rel + ' ' : '') + arrow + ' ' + linked);
+      const sides = [];
+      if (l.fwd) sides.push({ type: l.fwd.type, dir: 'ab' });
+      if (l.rev) sides.push({ type: l.rev.type, dir: 'ba' });
+      if (l.rel) sides.push({ type: l.rel, dir: l.dir || 'ab' });   // legacy
+      sides.forEach(sd => {
+        const elToOther = (sd.dir === 'ab' && isA) || (sd.dir === 'ba' && !isA);
+        const arrow = sd.dir === 'both' ? '↔' : (elToOther ? '→' : '←');
+        out.push((sd.type ? sd.type + ' ' : '') + arrow + ' ' + linked);
+      });
     });
   });
   return [...new Set(out)];
@@ -10032,9 +10262,13 @@ function buildMarkdown(s){
         const a = l.a != null ? l.a : l[0], b = l.b != null ? l.b : l[1];
         const A = words[a], B = words[b];
         if (!A || A.set !== i) return;
-        const arrow = l.dir === 'both' ? ' \u2194 ' : l.dir === 'ba' ? ' \u2190 ' : l.dir === 'ab' ? ' \u2192 ' : ' \u2014 ';
-        if (l.rel) lines.push('- *' + A.word + arrow + l.rel + arrow + (B ? B.word : '?') + '*  (' + (l.sub || 'bond') + ')');
-        else lines.push('- *' + A.word + ' \u2194 ' + (B ? B.word : '?') + '*');
+        const bn = B ? B.word : '?';
+        const sides = [];
+        if (l.fwd) sides.push(['- *' + A.word + ' \u2192 ' + bn + '*  ' + relExportNote(l.fwd)]);
+        if (l.rev) sides.push(['- *' + bn + ' \u2192 ' + A.word + '*  ' + relExportNote(l.rev)]);
+        if (l.rel) sides.push(['- *' + A.word + (l.dir === 'both' ? ' \u2194 ' : l.dir === 'ba' ? ' \u2190 ' : ' \u2192 ') + l.rel + ' \u2192 ' + bn + '*  (' + (l.sub || 'bond') + ')']);
+        if (sides.length) sides.forEach(sd => lines.push(sd[0]));
+        else lines.push('- *' + A.word + ' \u2194 ' + bn + '*');
       });
     }
   };
@@ -10729,6 +10963,8 @@ function init(){
   $('einkBtn').addEventListener('click', () => setEink(!document.body.classList.contains('eink')));
   window.addEventListener('pointerdown', e => {
     if (!(e.target.closest && e.target.closest('#aspectMenu'))) closeAspectMenu();
+    const rc = $('relCard');
+    if (rc && rc.style.display === 'block' && e.target.closest && !e.target.closest('#relCard') && !e.target.closest('.rel-ov') && !e.target.closest('.edge-hit')) cancelRelCard();
   }, true);
   $('zoomSlider').addEventListener('input', () => {
     state.view.zoom = parseInt($('zoomSlider').value, 10) / 100;
