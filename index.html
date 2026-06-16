@@ -6463,20 +6463,25 @@ function startPlacement(idxs){
   state.placeQueue = (state.placeQueue || []).concat(idxs);
   if (state.placing == null) placeNext();
 }
-// pick an open spot, spiralling out from the content centroid (golden angle keeps them spread)
-function autoSpot(i){
-  const svg = document.getElementById('skySvg'); const W = (svg && svg.clientWidth) || 600, H = (svg && svg.clientHeight) || 320;
-  let cx = W / 2, cy = H / 2;
-  const pts = (state.nodes || []).filter(n => typeof n.fx === 'number').map(n => [n.fx, n.fy]);
-  if (pts.length){ cx = pts.reduce((a, p) => a + p[0], 0) / pts.length; cy = pts.reduce((a, p) => a + p[1], 0) / pts.length; }
+// pick a spot WITHIN the currently visible map frame (golden-angle spiral, clamped inside)
+function autoSpot(i, margin){
+  margin = margin || 40;
+  const vv = viewBoxVals(); const vx = vv[0], vy = vv[1], vw = vv[2], vh = vv[3];
+  const cx = vx + vw / 2, cy = vy + vh / 2;
   const seed = ((state.prompt && state.prompt.words.length) || 0) + i + 1;
-  const ang = seed * 2.39996, rad = 82 + 24 * Math.sqrt(seed);
-  return { x: Math.round(cx + Math.cos(ang) * rad), y: Math.round(cy + Math.sin(ang) * rad) };
+  const ang = seed * 2.39996;
+  const maxR = Math.max(0, Math.min(vw, vh) / 2 - margin);
+  const rad = Math.min(maxR, 18 + 16 * Math.sqrt(seed));
+  let x = cx + Math.cos(ang) * rad, y = cy + Math.sin(ang) * rad;
+  x = Math.max(vx + margin, Math.min(vx + vw - margin, x));
+  y = Math.max(vy + margin, Math.min(vy + vh - margin, y));
+  return { x: Math.round(x), y: Math.round(y) };
 }
 // an organic, island-like closed blob (per-vertex radius jitter; terrainSmoothPath rounds it)
-function autoTerrainPoly(cx, cy){
-  const n = 9 + Math.floor(Math.random() * 4);
-  const rx = 58 + Math.random() * 34, ry = (58 + Math.random() * 34) * (0.72 + Math.random() * 0.3), rot = Math.random() * Math.PI;
+function autoTerrainPoly(cx, cy, baseR){
+  baseR = baseR || 56;
+  const n = 9 + Math.floor(Math.random() * 4), rot = Math.random() * Math.PI;
+  const rx = baseR * (0.85 + Math.random() * 0.35), ry = baseR * (0.85 + Math.random() * 0.35) * (0.74 + Math.random() * 0.24);
   const out = [];
   for (let k = 0; k < n; k++){
     const a = (k / n) * Math.PI * 2, r = 0.72 + Math.random() * 0.5;
@@ -6487,9 +6492,13 @@ function autoTerrainPoly(cx, cy){
 }
 function autoPlaceOne(i){
   const w = state.prompt && state.prompt.words[i]; if (!w) return;
-  const spot = autoSpot(i);
-  if (isAreaWord(w)) commitAreaPlacement(i, autoTerrainPoly(spot.x, spot.y));   // terrain → organic shape
-  else commitPointPlacement(i, spot);                                          // connector → just the icon; beings/objects → a point
+  if (isAreaWord(w)){                                                          // terrain → organic shape sized to fit the frame
+    const vv = viewBoxVals(); const baseR = Math.max(26, Math.min(64, Math.min(vv[2], vv[3]) * 0.16));
+    const spot = autoSpot(i, baseR + 14);
+    commitAreaPlacement(i, autoTerrainPoly(spot.x, spot.y, baseR));
+  } else {
+    commitPointPlacement(i, autoSpot(i, 42));                                  // connector → just the icon; beings/objects → a point
+  }
 }
 // re-enter interactive draw for one element, replacing its shape/line
 function editShape(i){
@@ -6731,8 +6740,9 @@ function renderConstellation(){
     if (elFill) w.style.fill = elFill;   // inline style beats the .node text CSS fill
     w.textContent = (nd.cat === 'concept' && nd.role !== 'frame') ? '\u27E8 ' + nd.word + ' \u27E9' : nd.word;
     w.addEventListener('mouseenter', ev => {
+      if (i !== state.selNode) return;   // description only when the element is selected
       let d = descFor(nd); if (nd.destroyed && nd.destroyedCause) d = '\u2620 Destroyed \u2014 ' + nd.destroyedCause + (d ? '  \u00B7  ' + d : '');
-      if (nd.role === 'being' && i === state.selNode) d = (d ? d + '  \u2014  ' : '') + (nd.wkeep ? 'click to unpin' : 'click to pin (show when unselected)');
+      if (nd.role === 'being') d = (d ? d + '  \u2014  ' : '') + (nd.wkeep ? 'click to unpin' : 'click to pin (show when unselected)');
       if (d) showTip(d, ev);
     });
     w.addEventListener('mouseleave', hideTip);
