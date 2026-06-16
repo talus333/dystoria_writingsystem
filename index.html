@@ -68,6 +68,17 @@
   #appMenu .hbtn.active .sw::after{left:13px; background:var(--paper)}
   #mapLabel{position:absolute; top:13px; left:18px; z-index:5; pointer-events:none;
     font-family:var(--sans); font-size:10px; font-weight:700; letter-spacing:.24em; text-transform:uppercase; color:var(--ink-faint)}
+  #mapTerrainWrap{position:absolute; left:16px; bottom:14px; z-index:6}
+  #mapTerrainBtn{font-family:var(--sans); font-size:10px; font-weight:600; letter-spacing:.14em; text-transform:uppercase;
+    color:var(--ink-faint); background:rgba(251,250,248,.9); border:1px solid var(--line); border-radius:14px; padding:4px 11px; cursor:pointer}
+  #mapTerrainBtn:hover{color:var(--ink)}
+  #mapTerrainBtn.set{color:var(--ink); border-color:rgba(0,0,0,.2); letter-spacing:.1em}
+  #mapTerrainMenu{position:absolute; left:0; bottom:30px; background:var(--paper); border:1px solid var(--line); border-radius:10px;
+    box-shadow:var(--shadow); padding:5px; display:flex; flex-direction:column; gap:1px; min-width:132px}
+  #mapTerrainMenu button{display:block; width:100%; text-align:left; font-family:var(--sans); font-size:12px; color:var(--ink);
+    background:none; border:none; border-radius:6px; padding:5px 9px; cursor:pointer}
+  #mapTerrainMenu button:hover{background:rgba(0,0,0,.05)}
+  #mapTerrainMenu button.on{font-weight:700}
   #evOverlay{position:absolute; top:36px; left:16px; z-index:5; display:flex; flex-direction:column;
     gap:3px; align-items:flex-start; max-width:240px; pointer-events:auto}
   .evo-head{font-family:var(--sans); font-size:8.5px; font-weight:600; letter-spacing:.2em;
@@ -714,6 +725,7 @@
   .node:active{cursor:grabbing}
   .node text{font-family:var(--serif); fill:var(--ink); cursor:inherit}
   .node .w{font-size:15.5px; font-weight:500}
+  .node .w.pinned{font-weight:700; fill:var(--ink)}
   .node.setting .w{font-family:var(--ancient); font-size:13px; font-weight:700; letter-spacing:.05em}
   .node.setting .w.w-terrain{font-family:var(--serif); font-style:italic; font-weight:500; font-size:14px; letter-spacing:.12em; text-transform:uppercase}
   .node.setting .w.w-connector{font-family:var(--serif); font-style:italic; font-weight:400; font-size:13px; letter-spacing:.01em}
@@ -1309,6 +1321,10 @@
       <div id="timerBar"></div>
       <div id="placeBanner" hidden><span id="placeBannerText"></span><button id="placeBannerSkip" type="button">Auto-place</button></div>
       <div id="mapLabel">Map</div>
+      <div id="mapTerrainWrap" hidden>
+        <button id="mapTerrainBtn" type="button" title="Set the whole map to a base terrain">+ Map terrain</button>
+        <div id="mapTerrainMenu" hidden></div>
+      </div>
       <div id="evOverlay"></div>
       <div id="undoWrap"><button id="undoMapBtn" title="Undo map change"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg></button><button id="redoMapBtn" title="Redo map change"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 14 5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/></svg></button></div>
       <div id="mapLegend" class="min">
@@ -5821,12 +5837,69 @@ function renderLineFeature(w, layer){
   layer.appendChild(tEl('path', { d, fill: 'none', stroke: '#f3ecdd', 'stroke-width': (st.width + 2.6).toFixed(1), 'stroke-linecap': 'round', 'stroke-linejoin': 'round', opacity: '0.55' }));
   layer.appendChild(tEl('path', { d, fill: 'none', stroke: st.stroke, 'stroke-width': st.width.toFixed(1), 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }));
 }
+// whole-map base terrain (an optional biome behind everything; no word label, just a pill)
+const MAP_TERRAINS = [['Forest', 'forest'], ['Grassland', 'grass'], ['Hills', 'hills'], ['Mountains', 'mountains'], ['Wetland', 'wetland'], ['Desert', 'dunes'], ['Water', 'water'], ['Snow & Ice', 'cold']];
+function mapTerrainKey(){ return (state.session && state.session.mapTerrain) || null; }
+function mapTerrainLabel(key){ const e = MAP_TERRAINS.find(t => t[1] === key); return e ? e[0] : null; }
+function renderMapBackground(layer){
+  const key = mapTerrainKey(); if (!key) return;
+  const st = TERRAIN_STYLES[key]; if (!st) return;
+  const [vx, vy, vw, vh] = viewBoxVals();
+  let minx = vx, miny = vy, maxx = vx + vw, maxy = vy + vh;
+  (state.nodes || []).forEach(n => { if (typeof n.x === 'number'){ minx = Math.min(minx, n.x - 80); miny = Math.min(miny, n.y - 80); maxx = Math.max(maxx, n.x + 80); maxy = Math.max(maxy, n.y + 80); } });
+  const padX = vw * 0.9, padY = vh * 0.9;
+  minx -= padX; miny -= padY; maxx += padX; maxy += padY;
+  const wdt = maxx - minx, hgt = maxy - miny;
+  const d = 'M' + minx.toFixed(0) + ' ' + miny.toFixed(0) + ' H' + maxx.toFixed(0) + ' V' + maxy.toFixed(0) + ' H' + minx.toFixed(0) + ' Z';
+  const wash = tEl('g', {});
+  wash.appendChild(tEl('path', { d, fill: st.fill, 'fill-opacity': st.op, filter: 'url(#tWc)' }));
+  wash.appendChild(tEl('path', { d, fill: st.fill, 'fill-opacity': (st.op * 0.5).toFixed(2), filter: 'url(#tWc2)' }));
+  layer.appendChild(wash);
+  const fg = tEl('g', { stroke: terrainDarken(st.fill, TERRAIN_CFG.glyphDark), 'stroke-width': '1.0', fill: 'none', filter: 'url(#tPencil)', 'stroke-linecap': 'round', 'stroke-linejoin': 'round', opacity: TERRAIN_CFG.glyphOp.toFixed(2) });
+  let target = wdt * hgt * st.density * TERRAIN_CFG.densMul;
+  target = Math.max(2, Math.min(220, target));
+  const cell = Math.max(7, Math.sqrt((wdt * hgt) / target)); const jit = cell * 0.38;
+  const rng = terrainRng((hashStr('map:' + key) ^ 0x9e3779b1) >>> 0);
+  for (let gy = miny + cell / 2; gy < maxy; gy += cell){ for (let gx = minx + cell / 2; gx < maxx; gx += cell){
+    const x = gx + (rng() - 0.5) * 2 * jit, y = gy + (rng() - 0.5) * 2 * jit;
+    fg.appendChild(terrainGlyph(st.glyph, x, y, 1.3 + rng() * 0.8, 0));
+  } }
+  layer.appendChild(fg);
+}
+function setMapTerrain(key){
+  ensureSession();
+  state.session.mapTerrain = key || null;
+  updateMapTerrainPill();
+  if (state.prompt) renderConstellation();
+  scheduleAutosave();
+}
+function updateMapTerrainPill(){
+  const wrap = $('mapTerrainWrap'); if (!wrap) return;
+  wrap.hidden = !state.prompt;            // only meaningful over an active map
+  const btn = $('mapTerrainBtn'); if (!btn) return;
+  const key = mapTerrainKey();
+  if (key){ btn.textContent = mapTerrainLabel(key) || 'Map terrain'; btn.classList.add('set'); }
+  else { btn.textContent = '+ Map terrain'; btn.classList.remove('set'); }
+}
+function toggleMapTerrainMenu(open){
+  const menu = $('mapTerrainMenu'); if (!menu) return;
+  const show = open != null ? open : menu.hidden;
+  if (!show){ menu.hidden = true; return; }
+  const key = mapTerrainKey();
+  menu.innerHTML = '';
+  const mk = (label, k) => { const b = document.createElement('button'); b.type = 'button'; b.textContent = label; if ((k || null) === (key || null)) b.classList.add('on'); b.addEventListener('click', () => { setMapTerrain(k); toggleMapTerrainMenu(false); }); return b; };
+  menu.appendChild(mk('None', null));
+  MAP_TERRAINS.forEach(t => menu.appendChild(mk(t[0], t[1])));
+  menu.hidden = false;
+}
 function renderTerrains(svg){
   const words = (state.prompt && state.prompt.words) || [];
   const layer = tEl('g', { 'class': 'terrain-layer' });
+  renderMapBackground(layer);                                         // base biome first, behind everything
   words.forEach(w => { if (w.terrain && w.poly) renderTerrainRegion(w, layer); });
   words.forEach(w => { if (w.line) renderLineFeature(w, layer); });   // lines sit on top of fills
   svg.appendChild(layer);
+  updateMapTerrainPill();
 }
 // A drawn region becomes a real Natural — Large element, pinned (fx/fy) at the region centroid,
 // so it links / wikis / shows in the legend like any element — it just isn't rolled.
@@ -6141,13 +6214,29 @@ function renderConstellation(){
     let elFill = null;
     if (lineLike){ elFill = (nd.lstyle && nd.lstyle.stroke) || (isWaterLineWord(nd.word) ? '#5a86a8' : '#9a7747'); }
     else if (nd.terrain){ const ts = terrainStyleFor(nd); elFill = terrainDarken(ts.fill, 0.5); }
-    // collapsed named being: show only the name, kept in the top slot (archetype word hidden)
-    const hideArchetype = collapsedBeing && nd.name;
-    w.setAttribute('class', lineLike ? 'w w-connector' : (nd.terrain ? 'w w-terrain' : 'w')); w.setAttribute('text-anchor', 'middle');
+    // collapsed named being: by default just the name sits in the top slot, but a PINNED
+    // archetype (bolded while selected) stays visible when unselected, like pinned subcategories
+    const archePinned = nd.role === 'being' && !!nd.wkeep;
+    const hideArchetype = collapsedBeing && nd.name && !archePinned;
+    w.setAttribute('class', (lineLike ? 'w w-connector' : (nd.terrain ? 'w w-terrain' : 'w')) + (archePinned ? ' pinned' : '')); w.setAttribute('text-anchor', 'middle');
     if (elFill) w.style.fill = elFill;   // inline style beats the .node text CSS fill
     w.textContent = (nd.cat === 'concept' && nd.role !== 'frame') ? '\u27E8 ' + nd.word + ' \u27E9' : nd.word;
-    w.addEventListener('mouseenter', ev => { let d = descFor(nd); if (nd.destroyed && nd.destroyedCause) d = '\u2620 Destroyed \u2014 ' + nd.destroyedCause + (d ? '  \u00B7  ' + d : ''); if (d) showTip(d, ev); });
+    w.addEventListener('mouseenter', ev => {
+      let d = descFor(nd); if (nd.destroyed && nd.destroyedCause) d = '\u2620 Destroyed \u2014 ' + nd.destroyedCause + (d ? '  \u00B7  ' + d : '');
+      if (nd.role === 'being' && i === state.selNode) d = (d ? d + '  \u2014  ' : '') + (nd.wkeep ? 'click to unpin' : 'click to pin (show when unselected)');
+      if (d) showTip(d, ev);
+    });
     w.addEventListener('mouseleave', hideTip);
+    if (nd.role === 'being'){
+      w.addEventListener('click', ev => {
+        if (i !== state.selNode) return;   // only pin/unpin while selected; otherwise let the click select
+        ev.stopPropagation();
+        const wr = state.prompt && state.prompt.words[i]; if (!wr) return;
+        wr.wkeep = !wr.wkeep; if (state.nodes[i]) state.nodes[i].wkeep = wr.wkeep;
+        renderConstellation();
+        if (state.session){ state.session.words = state.prompt.words; scheduleAutosave(); }
+      });
+    }
     if (nd.name){
       const nm = document.createElementNS('http://www.w3.org/2000/svg', 'text');
       nm.setAttribute('class', 'noun');
@@ -6161,12 +6250,12 @@ function renderConstellation(){
     let tagY = 17;
     let hiddenAttrs = 0;
     const isMin = state.prompt && state.prompt.words[i] && state.prompt.words[i].min;
-    if (!collapsedBeing && (nd.role === 'being' || (nd.role === 'word' && (nd.cat === 'setting' || nd.cat === 'object'))) && nd.attrs && nd.attrs.length){
+    if ((nd.role === 'being' || (nd.role === 'word' && (nd.cat === 'setting' || nd.cat === 'object'))) && nd.attrs && nd.attrs.length){
       let row = 0;
       const sel = i === state.selNode;
       const visible = [];
       nd.attrs.forEach((at, ai) => {
-        if (isMin && !at.keep){ hiddenAttrs++; return; }
+        if ((isMin || collapsedBeing) && !at.keep){ hiddenAttrs++; return; }   // unselected being shows only pinned subcategories
         visible.push([at, ai]);
       });
       const perLine = 2;
@@ -7802,6 +7891,7 @@ function openSession(id){
   if (state.prompt && state.prompt.words) state.prompt.words.forEach(w => { if (w.needsPlace) delete w.needsPlace; });
   reconcileSections();          // self-heal any orphan sections left by older deletions
   renderTimeline();
+  updateMapTerrainPill();
   state.game = (s.game && s.game.on)
     ? { on: true, gens: s.game.gens || 0, earnedKeys: s.game.earnedKeys || [], over: (s.game.over != null ? s.game.over : 120), closed: false }
     : null;
@@ -7878,6 +7968,7 @@ function newSession(){
   ['promptScore', 'focusScore', 'wordCountLbl'].forEach(id => { const e = $(id); if (e){ e.textContent = ''; e.classList.remove('full'); } });
   state.usageKey = '';
   renderTimeline();
+  updateMapTerrainPill();
   $('storyName').value = ''; $('sectionTitle').value = ''; $('editor').innerHTML = '';
   $('skySvg').innerHTML = ''; $('skyEmpty').style.display = 'flex';
   ink.pageRef = null; ink.strokes = []; ink.h = 1100; ink.viewLocked = false;
@@ -9745,7 +9836,7 @@ function init(){
     dragging = null;
   };
   const endPan = () => {
-    if (panning){ if (panning.moved) state.lastDrag = Date.now(); panning = null; }
+    if (panning){ if (panning.moved){ state.lastDrag = Date.now(); if (mapTerrainKey() && state.prompt) renderConstellation(); } panning = null; }
   };
   sky.addEventListener('pointerup', () => { terrainEnd(true); endLinkDrag(false); endPan(); endDrag(); });
   sky.addEventListener('pointercancel', () => { terrainEnd(false); endLinkDrag(true); endPan(); endDrag(); });
@@ -9849,8 +9940,14 @@ function init(){
   $('zoomSlider').addEventListener('input', () => {
     state.view.zoom = parseInt($('zoomSlider').value, 10) / 100;
     applyView();
+    if (mapTerrainKey() && state.prompt) renderConstellation();   // refit the base biome to the new view
   });
   $('centerBtn').addEventListener('click', snapToBeing);
+  $('mapTerrainBtn').addEventListener('click', e => { e.stopPropagation(); toggleMapTerrainMenu(); });
+  document.addEventListener('mousedown', e => {
+    const w = $('mapTerrainWrap');
+    if (w && !w.contains(e.target)){ const m = $('mapTerrainMenu'); if (m && !m.hidden) toggleMapTerrainMenu(false); }
+  });
   $('autoExpBtn').addEventListener('click', toggleAutoExport);
   if (getPrefs().autoExport){
     idbGet('autodir').then(h => { if (h){ autoDir = h; $('autoExpBtn').classList.add('active'); } }).catch(() => {});
