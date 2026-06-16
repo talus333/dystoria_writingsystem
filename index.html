@@ -4464,6 +4464,40 @@ function openRoleMenu(i, x, y){
   menu.style.top = Math.max(8, Math.min(y, window.innerHeight - 200)) + 'px';
   menu.style.display = 'block';
 }
+function openDeleteMenu(i, x, y){
+  const menu = $('aspectMenu'); menu.innerHTML = '';
+  const nd = state.nodes[i], w0 = state.prompt && state.prompt.words[i];
+  if (!nd) return;
+  const isB = nd.role === 'being';
+  const isS = nd.cat === 'setting' && nd.role === 'word' && !nd.destroyed;
+  const who = (w0 && w0.name) || nd.word || 'this';
+  const add = (label, fn) => { const b = document.createElement('button'); b.textContent = label; b.addEventListener('click', ev => { ev.stopPropagation(); fn(); }); menu.appendChild(b); };
+  if (isB){
+    add('💀 Kill — describe how…', async () => {
+      closeAspectMenu();
+      const cause = await sitePrompt('How did ' + who + ' die?', ''); if (cause === null) return;
+      state.deaths = (state.deaths || 0) + 1; state.deathLog = state.deathLog || [];
+      state.deathLog.push({ name: who, cause: cause.trim() || 'cause unknown', frame: (state.frameIdx || 0) + 1 });
+      if (state.session){ state.session.deaths = state.deaths; state.session.deathLog = state.deathLog; }
+      updateDeaths(); removeNode(i);
+    });
+  } else if (isS){
+    add('☠ Destroy — describe how…', async () => {
+      closeAspectMenu();
+      const cause = await sitePrompt('How was ' + who + ' destroyed?', ''); if (cause === null) return;
+      if (w0){ w0.destroyed = true; w0.destroyedCause = cause.trim() || 'cause unknown'; }
+      if (state.nodes[i]) state.nodes[i].destroyed = true;
+      state.ruinsLog = state.ruinsLog || [];
+      state.ruinsLog.push({ name: who, cause: cause.trim() || 'cause unknown', frame: (state.frameIdx || 0) + 1 });
+      if (state.session){ state.session.words = state.prompt.words; state.session.ruinsLog = state.ruinsLog; }
+      renderConstellation(); scheduleAutosave();
+    });
+  }
+  add('✕ Just delete', () => { closeAspectMenu(); removeNode(i); });
+  menu.style.left = Math.max(8, Math.min(x, window.innerWidth - 200)) + 'px';
+  menu.style.top = Math.max(8, Math.min(y, window.innerHeight - 160)) + 'px';
+  menu.style.display = 'block';
+}
 function charPool(subName){
   if (subName === 'Adjective'){
     let all = [];
@@ -6629,43 +6663,20 @@ function renderConstellation(){
 
     const isBeing = nd.role === 'being';
     const isSetting = nd.cat === 'setting' && nd.role === 'word';
-    const onDel = async ev => {
+    const onDel = ev => {
       ev.stopPropagation();
-      if (isBeing){
-        const who = nd.name || nd.word;
-        const cause = await sitePrompt('How did ' + who + ' die?', '');
-        if (cause === null) return;
-        state.deaths = (state.deaths || 0) + 1;
-        state.deathLog = state.deathLog || [];
-        state.deathLog.push({ name: who, cause: (cause.trim() || 'cause unknown'), frame: (state.frameIdx || 0) + 1 });
-        if (state.session){ state.session.deaths = state.deaths; state.session.deathLog = state.deathLog; }
-        updateDeaths();
-        removeNode(i);
-        return;
-      }
-      if (isSetting && !nd.destroyed){
-        const w0 = state.prompt && state.prompt.words[i];
-        const place = (w0 && w0.name) || nd.word;
-        const cause = await sitePrompt('How was ' + place + ' destroyed?', '');
-        if (cause === null) return;
-        if (w0){ w0.destroyed = true; w0.destroyedCause = cause.trim() || 'cause unknown'; }
-        if (state.nodes[i]) state.nodes[i].destroyed = true;
-        state.ruinsLog = state.ruinsLog || [];
-        state.ruinsLog.push({ name: place, cause: (cause.trim() || 'cause unknown'), frame: (state.frameIdx || 0) + 1 });
-        if (state.session){ state.session.words = state.prompt.words; state.session.ruinsLog = state.ruinsLog; }
-        renderConstellation();
-        scheduleAutosave();
-        return;
-      }
-      removeNode(i);
+      if (isBeing || (isSetting && !nd.destroyed)){ openDeleteMenu(i, ev.clientX || 200, ev.clientY || 200); return; }
+      removeNode(i);   // objects / events / clearing ruins → straight delete
     };
     const delHit = mkHit(POS.del, 'ctl-hit del-hit', 14); delHit.addEventListener('click', onDel); g.appendChild(delHit);
     let del;
     if (isBeing){
       del = makeLucide('skull', { cls: 'del-skull', color: 'currentColor', x: POS.del.x, y: POS.del.y, scale: 0.6, sw: 2 });
-      const dt = document.createElementNS(NSx, 'title'); dt.textContent = 'Kill this character \u2014 adds to the death count'; del.appendChild(dt);
+      const dt = document.createElementNS(NSx, 'title'); dt.textContent = 'Remove \u2014 kill (with a cause) or just delete'; del.appendChild(dt);
+      del.addEventListener('mouseenter', ev => showTip('Remove \u2014 kill (with a cause) or just delete', ev));
+      del.addEventListener('mouseleave', hideTip);
     } else if (isSetting && !nd.destroyed){
-      del = mkGlyph(POS.del, 'del', '\u2620', 'Destroy this place \u2014 and say how');
+      del = mkGlyph(POS.del, 'del', '\u2620', 'Remove \u2014 destroy (with a cause) or just delete');
     } else if (isSetting && nd.destroyed){
       del = mkGlyph(POS.del, 'del', '\u00D7', 'Clear the ruins (remove from map)');
     } else {
