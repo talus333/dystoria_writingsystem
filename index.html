@@ -86,7 +86,11 @@
     text-transform:uppercase; color:var(--ink-faint); opacity:.7; margin:3px 0 1px}
   .sub-seg .seg-pill.overlay{opacity:.45}
   #mapContainerWrap{position:relative; z-index:7}
-  #autoPlaceWrap{position:absolute; top:10px; right:16px; z-index:7; pointer-events:auto}
+  #mapTools{position:absolute; top:10px; right:16px; z-index:7; display:flex; align-items:center; gap:8px; pointer-events:auto}
+  #autoPlaceWrap{position:relative; z-index:7; pointer-events:auto}
+  #clearMapBtn{font-family:var(--sans); font-size:10px; font-weight:700; letter-spacing:.1em; text-transform:uppercase;
+    color:var(--ink-soft); background:rgba(251,250,248,.92); border:1px solid var(--line); border-radius:4px; padding:4px 10px; cursor:pointer; white-space:nowrap}
+  #clearMapBtn:hover{color:#fff; background:#a05c4d; border-color:#a05c4d}
   #autoPlaceBtn{font-family:var(--sans); font-size:10px; font-weight:700; letter-spacing:.1em; text-transform:uppercase;
     color:var(--ink-soft); background:rgba(251,250,248,.92); border:1px solid var(--line); border-radius:4px; padding:4px 10px; cursor:pointer; white-space:nowrap}
   #autoPlaceBtn:hover{color:var(--ink)}
@@ -1162,6 +1166,7 @@
   /* ---------- guideline tooltip ---------- */
   #tip{position:fixed; max-width:240px; background:var(--ink); color:#f0efec; font-size:12px; line-height:1.45;
     padding:8px 11px; border-radius:7px; pointer-events:none; opacity:0; transition:opacity .15s; z-index:60}
+  #tip .tip-act{color:#8fc0e8}
 
   /* ---------- e-ink mode ---------- */
   body.eink{--bg:#ffffff; --bg2:#ffffff; --paper:#ffffff; --ink:#000000; --ink-soft:#000000;
@@ -1362,8 +1367,11 @@
         <div id="evOverlay"></div>
         <div id="mentalOverlay" hidden></div>
       </div>
-      <div id="autoPlaceWrap" hidden>
-        <button id="autoPlaceBtn" type="button" title="Auto-place terrains as organic shapes and connectors as icons — toggle off/on. Use 'Redraw shape' to draw one by hand.">Autoplace</button>
+      <div id="mapTools">
+        <button id="clearMapBtn" type="button" title="Clear all elements from this map — you can undo it" hidden>Clear map</button>
+        <div id="autoPlaceWrap" hidden>
+          <button id="autoPlaceBtn" type="button" title="Auto-place terrains as organic shapes and connectors as icons — toggle off/on. Use 'Redraw shape' to draw one by hand.">Autoplace</button>
+        </div>
       </div>
       <div id="mapTerrainWrap" hidden>
         <button id="mapTerrainBtn" type="button" title="Set the whole map to a base terrain">+ Map terrain</button>
@@ -1957,10 +1965,16 @@ function syncSubChecks(div, cat){
     cb.checked = (state.selection[cat.id] && state.selection[cat.id].has(cat.subcategories[i].name)) || !!cat.subcategories[i].always;
   });
 }
-function showTip(text, e){
-  const t = $('tip'); t.textContent = text; t.style.opacity = 1;
+function showTip(text, e, accent, action){
+  const t = $("tip");
+  const esc = s => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  let body = esc(text);
+  if (accent) body = body.replace(/^([^/<]+? \/ )/, "<span style=\"color:" + accent + "\">$1</span>");   // "Sub / " in the category colour
+  if (action) body += " <span class=\"tip-act\">\u2014 " + esc(action) + "</span>";                          // appended instruction in light blue
+  t.innerHTML = body;
+  t.style.opacity = 1;
   const x = Math.min(e.clientX + 14, window.innerWidth - 260);
-  t.style.left = x + 'px'; t.style.top = (e.clientY + 14) + 'px';
+  t.style.left = x + "px"; t.style.top = (e.clientY + 14) + "px";
 }
 function hideTip(){ $('tip').style.opacity = 0; }
 
@@ -3981,6 +3995,20 @@ function redoMap(){
   if (state.prompt) undoStack.push(mapSnapshot());
   applyMapSnapshot(u);
   flashStatus('Redone');
+}
+async function clearMap(){
+  if (!state.prompt || !((state.prompt.words || []).length)){ flashStatus('Map is already empty'); return; }
+  const ok = await siteConfirm('Clear all elements from this map? You can undo it.', 'Clear map');
+  if (!ok) return;
+  pushUndo();
+  state.prompt.words = []; state.prompt.links = []; state.prompt.removedLinks = [];
+  state.selNode = null; state.linkFrom = null;
+  if (state.session) state.session.words = state.prompt.words;
+  layoutConstellation();
+  renderConstellation();
+  if (typeof syncFramesToSession === 'function') syncFramesToSession();
+  scheduleAutosave();
+  flashStatus('Map cleared — undo to restore');
 }
 
 /* ---------------- shared table (two writers, one map) ---------------- */
@@ -6346,6 +6374,7 @@ function openContainerPicker(ev){
   openElemCard('setting', 'container');
 }
 function updateAutoPlacePill(){
+  const cm = $('clearMapBtn'); if (cm) cm.hidden = !(state.prompt && (state.prompt.words || []).length);
   const wrap = $('autoPlaceWrap'); if (wrap) wrap.hidden = !(state.prompt && state.autoPlaceSeen);   // pill appears once auto-place is first turned on
   const b = $('autoPlaceBtn'); if (!b) return;
   b.textContent = state.autoPlace ? 'Autoplace ✓' : 'Autoplace';
@@ -6660,7 +6689,7 @@ function renderConstellation(){
       lbl.appendChild(lt);
       lbl.addEventListener('mouseenter', ev => {
         const d = descFor({ word: meta.rel, cat: 'relationship', sub: meta.sub });
-        if (d) showTip(d, ev);
+        if (d) showTip(d, ev, catColor('relationship'));
       });
       lbl.addEventListener('mouseleave', hideTip);
       lbl.addEventListener('click', ev => { ev.stopPropagation(); cycleRelWord(meta); });
@@ -6759,8 +6788,8 @@ function renderConstellation(){
     w.addEventListener('mouseenter', ev => {
       if (i !== state.selNode) return;   // description only when the element is selected
       let d = descFor(nd); if (nd.destroyed && nd.destroyedCause) d = '\u2620 Destroyed \u2014 ' + nd.destroyedCause + (d ? '  \u00B7  ' + d : '');
-      if (nd.role === 'being') d = (d ? d + '  \u2014  ' : '') + (nd.wkeep ? 'click to unpin' : 'click to pin (show when unselected)');
-      if (d) showTip(d, ev);
+      const act = (nd.role === 'being') ? (nd.wkeep ? 'click to unpin' : 'click to pin (show when unselected)') : null;
+      if (d || act) showTip(d || '', ev, catColor(nd.cat), act);
     });
     w.addEventListener('mouseleave', hideTip);
     if (nd.role === 'being'){
@@ -6825,7 +6854,7 @@ function renderConstellation(){
           wd.textContent = attrDisplay(at);
           wd.addEventListener('mouseenter', ev => {
             const d = descFor({ word: at.word, cat: 'being', sub: at.sub });
-            showTip((d ? d + '  \u2014  ' : '') + (at.keep ? 'click to unpin' : 'click to pin'), ev);
+            showTip(d || '', ev, catColor(nd.cat), at.keep ? 'click to unpin' : 'click to pin');
           });
           wd.addEventListener('mouseleave', hideTip);
           wd.addEventListener('click', ev => {
@@ -10456,6 +10485,7 @@ function init(){
   $('mapContainerBtn').addEventListener('click', e => { e.stopPropagation(); openContainerPicker(e); });
   state.autoPlace = false; state.autoPlaceSeen = false;   // click-to-place by default
   $('autoPlaceBtn').addEventListener('click', e => { e.stopPropagation(); toggleAutoPlace(); });
+  $('clearMapBtn').addEventListener('click', e => { e.stopPropagation(); clearMap(); });
   document.addEventListener('mousedown', e => {
     const lw = $('mapLevelWrap');
     if (lw && !lw.contains(e.target)){ const lm = $('mapLevelMenu'); if (lm && !lm.hidden) toggleMapLevelMenu(false); }
