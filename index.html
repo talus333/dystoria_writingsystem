@@ -1162,6 +1162,18 @@
   .trait-pill:hover .trait-pill-tx{fill:var(--ink)}
   body.eink .trait-pill-bg{stroke:#000; stroke-width:2}
   body.eink .trait-pill-tx{fill:#000}
+  .ctl-circle{fill:var(--paper); stroke:var(--line); stroke-width:1; cursor:pointer; pointer-events:all}
+  .ctl-btn{cursor:pointer}
+  .ctl-btn:hover .ctl-circle{stroke:var(--ink-faint)}
+  .ctl-ic{color:var(--ink-faint)}
+  .ctl-btn:hover .ctl-ic{color:var(--ink)}
+  .ctl-gly{font-family:var(--sans); font-size:12px; fill:var(--ink-faint)}
+  .ctl-btn:hover .ctl-gly{fill:var(--ink)}
+  .ctl-gly.infocus{fill:#2f9e44}
+  body.eink .ctl-circle{stroke:#000; stroke-width:1.6}
+  body.eink .ctl-ic{color:#000}
+  body.eink .ctl-gly{fill:#000}
+  .aspect-sep{height:1px; background:var(--line); margin:5px 8px}
 
   /* ---------- guideline tooltip ---------- */
   #tip{position:fixed; max-width:240px; background:var(--ink); color:#f0efec; font-size:12px; line-height:1.45;
@@ -4534,6 +4546,41 @@ function openDeleteMenu(i, x, y){
   menu.style.top = Math.max(8, Math.min(y, window.innerHeight - 160)) + 'px';
   menu.style.display = 'block';
 }
+function openEditMenu(i, x, y){
+  const menu = $('aspectMenu'); menu.innerHTML = '';
+  const nd = state.nodes[i]; if (!nd) return;
+  const isB = nd.role === 'being';
+  const isSetting = nd.cat === 'setting' && nd.role === 'word';
+  const isTerrLine = isSetting && (nd.terrain || nd.line || nd.sub === 'Terrain' || nd.sub === 'Connector');
+  const hasShape = !!(nd.terrain || nd.line);
+  const add = (label, fn) => { const b = document.createElement('button'); b.textContent = label; b.addEventListener('click', ev => { ev.stopPropagation(); fn(); }); menu.appendChild(b); };
+  add('↻ Search or generate…', () => { closeAspectMenu(); EC.x = x + 8; EC.y = y; openElemCard(nd.cat, 'replace', i); });
+  add('✎ Rename…', () => { closeAspectMenu(); nameElement(i); });
+  if (isTerrLine) add('⬡ Redraw shape', () => { closeAspectMenu(); editShape(i); });
+  if (hasShape){
+    const pinned = nd.labelPinned !== false;
+    add(pinned ? '📍 Unpin label from shape' : '📍 Pin label to shape', () => { closeAspectMenu(); togglePinLabel(i); });
+  }
+  if (isSetting && !nd.destroyed){
+    add('🔒 Lock in place', () => {
+      closeAspectMenu();
+      const w0 = state.prompt && state.prompt.words[i]; if (!w0) return;
+      w0.locked = true; w0.lockedAt = Date.now(); w0.fx = state.nodes[i].x; w0.fy = state.nodes[i].y;
+      if (state.nodes[i]){ state.nodes[i].locked = true; state.nodes[i].lockedAt = w0.lockedAt; state.nodes[i].fx = w0.fx; state.nodes[i].fy = w0.fy; }
+      state.selNode = null; renderConstellation();
+      if (state.session){ state.session.words = state.prompt.words; scheduleAutosave(); }
+    });
+  }
+  const sep = document.createElement('div'); sep.className = 'aspect-sep'; menu.appendChild(sep);
+  if (isB || (isSetting && !nd.destroyed)){
+    add(isB ? '💀 Kill or delete…' : '☠ Destroy or delete…', () => openDeleteMenu(i, x, y));
+  } else {
+    add('✕ Delete', () => { closeAspectMenu(); removeNode(i); });
+  }
+  menu.style.left = Math.max(8, Math.min(x, window.innerWidth - 200)) + 'px';
+  menu.style.top = Math.max(8, Math.min(y, window.innerHeight - 260)) + 'px';
+  menu.style.display = 'block';
+}
 function charPool(subName){
   if (subName === 'Adjective'){
     let all = [];
@@ -5938,6 +5985,26 @@ function makeTraitPill(cx, cy, onClick, title, label){
   grp.addEventListener('click', onClick);
   return grp;
 }
+// A small circle button styled like the +Trait pill, with an icon centred inside it.
+function makeCircleBtn(cx, cy, buildIcon, title, onClick, opts){
+  opts = opts || {};
+  const NS = 'http://www.w3.org/2000/svg';
+  const grp = document.createElementNS(NS, 'g');
+  grp.setAttribute('class', 'ctl-btn');
+  grp.setAttribute('transform', 'translate(' + cx + ',' + cy + ')');
+  const c = document.createElementNS(NS, 'circle');
+  c.setAttribute('class', 'ctl-circle'); c.setAttribute('r', opts.r || 10);
+  grp.appendChild(c);
+  const ic = buildIcon();
+  if (ic){ ic.setAttribute('pointer-events', 'none'); grp.appendChild(ic); }
+  if (title){
+    const tt = document.createElementNS(NS, 'title'); tt.textContent = title; grp.appendChild(tt);
+    grp.addEventListener('mouseenter', ev => showTip(title, ev));
+    grp.addEventListener('mouseleave', hideTip);
+  }
+  grp.addEventListener(opts.down ? 'pointerdown' : 'click', onClick);
+  return grp;
+}
 const SETTING_ICON_WORDS = {
   Forest:'tree-pine','Old-Growth Forest':'tree-pine','Bamboo Forest':'tree-pine',
   Jungle:'palmtree',Island:'palmtree','Coral Atoll':'palmtree',
@@ -7032,117 +7099,36 @@ function renderConstellation(){
     const ringCy = -2;
     const ringRx = Math.max(38, nd.word.length * 4.8 + 20);
     const ringRy = (nd.role === 'being' && nd.attrs && nd.attrs.length && !isMin) ? 32 + nd.attrs.length * 7 : 27;
-    // selected-element controls sit in a horizontal row just under the lowest trait (above the +Trait pill)
-    const isSettingNode2 = nd.cat === 'setting' && nd.role === 'word';
-    const isTerrLine = isSettingNode2 && (nd.terrain || nd.line || nd.sub === 'Terrain' || nd.sub === 'Connector');
-    const hasShape = !!(nd.terrain || nd.line);
-    const ctlOrder = isSettingNode2 ? ['del', 'edit', 'name', 'focus', 'link', 'book', 'lock'] : ['del', 'edit', 'name', 'focus', 'link', 'book'];
-    if (isTerrLine){ ctlOrder.splice(2, 0, 'shape'); if (hasShape) ctlOrder.splice(3, 0, 'pin'); }
-    const ctlGap = 16, ctlY = tagY, ctlX0 = -((ctlOrder.length - 1) * ctlGap) / 2;
-    const POS = {};
-    ctlOrder.forEach((k, idx) => { POS[k] = { x: Math.round(ctlX0 + idx * ctlGap), y: ctlY }; });
-    POS.wiki = POS.book;
-    const mkHit = (p, cls, r) => { const h = document.createElementNS(NSx, 'circle'); h.setAttribute('class', cls); h.setAttribute('cx', p.x); h.setAttribute('cy', p.y); h.setAttribute('r', r || 13); return h; };
-    const mkGlyph = (p, cls, txt, title) => { const t = document.createElementNS(NSx, 'text'); t.setAttribute('class', cls); t.setAttribute('x', p.x); t.setAttribute('y', p.y + 4); t.setAttribute('text-anchor', 'middle'); t.textContent = txt; if (title){ const tt = document.createElementNS(NSx, 'title'); tt.textContent = title; t.appendChild(tt); t.addEventListener('mouseenter', ev => showTip(title, ev)); t.addEventListener('mouseleave', hideTip); } return t; };
-
-    const isBeing = nd.role === 'being';
-    const isSetting = nd.cat === 'setting' && nd.role === 'word';
-    const onDel = ev => {
-      ev.stopPropagation();
-      if (isBeing || (isSetting && !nd.destroyed)){ openDeleteMenu(i, ev.clientX || 200, ev.clientY || 200); return; }
-      removeNode(i);   // objects / events / clearing ruins → straight delete
-    };
-    const delHit = mkHit(POS.del, 'ctl-hit del-hit', 14); delHit.addEventListener('click', onDel); g.appendChild(delHit);
-    let del;
-    if (isBeing){
-      del = makeLucide('skull', { cls: 'del-skull', color: 'currentColor', x: POS.del.x, y: POS.del.y, scale: 0.6, sw: 2 });
-      const dt = document.createElementNS(NSx, 'title'); dt.textContent = 'Remove \u2014 kill (with a cause) or just delete'; del.appendChild(dt);
-      del.addEventListener('mouseenter', ev => showTip('Remove \u2014 kill (with a cause) or just delete', ev));
-      del.addEventListener('mouseleave', hideTip);
-    } else if (isSetting && !nd.destroyed){
-      del = mkGlyph(POS.del, 'del', '\u2620', 'Remove \u2014 destroy (with a cause) or just delete');
-    } else if (isSetting && nd.destroyed){
-      del = mkGlyph(POS.del, 'del', '\u00D7', 'Clear the ruins (remove from map)');
-    } else {
-      del = mkGlyph(POS.del, 'del', '\u00D7', 'Remove from map');
-    }
-    del.addEventListener('click', onDel); g.appendChild(del);
-    // wiki book — top-left of the ring, opposite the skull/delete
-    if (wRef0 && (nd.role === 'being' || nd.role === 'word')){
-      const ws = wRef0._wstate || 0;
-      const wb = makeLucide('book-open', { cls: 'wbook ' + (ws === 1 ? 'cur' : ws === 2 ? 'other' : 'none'), color: 'currentColor', x: POS.book.x, y: POS.book.y, scale: 0.55, sw: 2 });
-      const wbt = document.createElementNS(NSx, 'title');
-      wbt.textContent = ws === 1 ? 'Woven into this section — open its wiki' : ws === 2 ? 'Woven into another section — open its wiki' : 'Open this element’s wiki';
-      wb.appendChild(wbt);
-      wb.addEventListener('click', ev => { ev.stopPropagation(); openElementWiki(i); });
-      wb.addEventListener('mouseenter', ev => showTip(wbt.textContent, ev));
-      wb.addEventListener('mouseleave', hideTip);
-      g.appendChild(wb);
-    }
-    // lock toggle (settings) — only while selected, tucked into the upper arc
-    if (isSetting && i === state.selNode){
-      const lp = POS.lock;
-      const onLock = ev => {
-        ev.stopPropagation();
-        const w0 = state.prompt && state.prompt.words[i];
-        if (!w0) return;
-        w0.locked = true; w0.lockedAt = Date.now(); w0.fx = state.nodes[i].x; w0.fy = state.nodes[i].y;
-        if (state.nodes[i]){ state.nodes[i].locked = true; state.nodes[i].lockedAt = w0.lockedAt; state.nodes[i].fx = w0.fx; state.nodes[i].fy = w0.fy; }
-        state.selNode = null;
-        renderConstellation();
-        if (state.session){ state.session.words = state.prompt.words; scheduleAutosave(); }
-      };
-      const lkHit = mkHit(lp, 'ctl-hit rrl-hit', 12); lkHit.addEventListener('click', onLock); g.appendChild(lkHit);
-      const lk = makeLucide('lock-open', { cls: 'lnk', color: 'currentColor', x: lp.x, y: lp.y, scale: 0.55, sw: 2 });
-      const lkt = document.createElementNS(NSx, 'title'); lkt.textContent = 'Lock in place (no interaction until unlocked)'; lk.appendChild(lkt);
-      lk.addEventListener('click', onLock);
-      lk.addEventListener('mouseenter', ev => showTip(lkt.textContent, ev));
-      lk.addEventListener('mouseleave', hideTip);
-      g.appendChild(lk);
+    // selected-element controls: small circle buttons (Connect / Wiki / Focus) in a row above the pills
+    const ctlY = tagY;
+    if (i === state.selNode){
+      const circ = [];
+      circ.push({
+        title: 'Drag to another element to connect them — drop on a line to cut it',
+        down: true,
+        on: ev => { ev.stopPropagation(); ev.preventDefault(); startLinkDrag(i, ev); },
+        ic: () => makeLucide('link', { cls: 'ctl-ic', color: 'currentColor', x: 0, y: 0, scale: 0.5, sw: 2.2 })
+      });
+      if (wRef0 && (nd.role === 'being' || nd.role === 'word')){
+        const ws = wRef0._wstate || 0;
+        circ.push({
+          title: ws === 1 ? 'Woven into this section — open its wiki' : ws === 2 ? 'Woven into another section — open its wiki' : 'Open this element’s wiki',
+          on: ev => { ev.stopPropagation(); openElementWiki(i); },
+          ic: () => makeLucide('book-open', { cls: 'ctl-ic wbook ' + (ws === 1 ? 'cur' : ws === 2 ? 'other' : 'none'), color: 'currentColor', x: 0, y: 0, scale: 0.5, sw: 2 })
+        });
+      }
+      const inFocus = (state.focusKeys || []).includes(wordKey(nd));
+      circ.push({
+        title: inFocus ? 'Remove from the Writing Focus' : 'Add to the Writing Focus',
+        on: ev => { ev.stopPropagation(); addFocusIdx(i); },
+        ic: () => { const t = document.createElementNS(NSx, 'text'); t.setAttribute('class', 'ctl-gly' + (inFocus ? ' infocus' : '')); t.setAttribute('text-anchor', 'middle'); t.setAttribute('y', 4); t.textContent = inFocus ? '◉' : '◎'; return t; }
+      });
+      const cGap = 25, cX0 = -((circ.length - 1) * cGap) / 2;
+      circ.forEach((b, idx) => {
+        g.appendChild(makeCircleBtn(Math.round(cX0 + idx * cGap), ctlY, b.ic, b.title, b.on, { r: 10, down: b.down }));
+      });
     }
 
-    const onReroll = ev => { ev.stopPropagation(); EC.x = (ev.clientX || 200) + 8; EC.y = (ev.clientY || 120); openElemCard(nd.cat, 'replace', i); };
-    const rrlHit = mkHit(POS.edit, 'ctl-hit rrl-hit', 12); rrlHit.addEventListener('click', onReroll); g.appendChild(rrlHit);
-    const rrl = mkGlyph(POS.edit, 'rrl', '\u21BB', 'Edit \u2014 search to change, or Generate a new one'); rrl.addEventListener('click', onReroll); g.appendChild(rrl);
-
-    const onName = ev => { ev.stopPropagation(); nameElement(i); };
-    const penHit = mkHit(POS.name, 'ctl-hit rrl-hit', 12); penHit.addEventListener('click', onName); g.appendChild(penHit);
-    const pen = mkGlyph(POS.name, 'rrl pen', '\u270E', 'Name this element (or double-click it)'); pen.addEventListener('click', onName); g.appendChild(pen);
-
-    const onFcs = ev => { ev.stopPropagation(); addFocusIdx(i); };
-    const inFocus = (state.focusKeys || []).includes(wordKey(nd));
-    const fcsHit = mkHit(POS.focus, 'ctl-hit rrl-hit', 12); fcsHit.addEventListener('click', onFcs); g.appendChild(fcsHit);
-    const fcs = mkGlyph(POS.focus, 'rrl fcs' + (inFocus ? ' infocus' : ''), inFocus ? '\u25C9' : '\u25CE', inFocus ? 'Remove from the Writing Focus' : 'Add to the Writing Focus'); fcs.addEventListener('click', onFcs); g.appendChild(fcs);
-
-    if (isTerrLine && POS.shape){
-      const onShape = ev => { ev.stopPropagation(); editShape(i); };
-      const shHit = mkHit(POS.shape, 'ctl-hit rrl-hit', 12); shHit.addEventListener('click', onShape); g.appendChild(shHit);
-      const sh = mkGlyph(POS.shape, 'rrl', '\u2B21', 'Redraw the shape / line'); sh.addEventListener('click', onShape); g.appendChild(sh);
-    }
-    if (hasShape && POS.pin){
-      const pinned = nd.labelPinned !== false;
-      const pinTip = pinned ? 'Label pinned to the shape \u2014 click to unpin & move it' : 'Label loose \u2014 click to pin it back to the shape';
-      const onPin = ev => { ev.stopPropagation(); togglePinLabel(i); };
-      const pHit = mkHit(POS.pin, 'ctl-hit rrl-hit', 12); pHit.addEventListener('click', onPin); g.appendChild(pHit);
-      const pin = makeLucide('map-pin', { cls: 'lnk', color: pinned ? '#2e4a7a' : 'currentColor', x: POS.pin.x, y: POS.pin.y, scale: 0.5, sw: 2, opacity: pinned ? 1 : 0.9 });
-      const pt = document.createElementNS(NSx, 'title'); pt.textContent = pinTip; pin.appendChild(pt);
-      pin.addEventListener('click', onPin);
-      pin.addEventListener('mouseenter', ev => showTip(pinTip, ev));
-      pin.addEventListener('mouseleave', hideTip);
-      g.appendChild(pin);
-    }
-
-
-    const onLnkDown = ev => { ev.stopPropagation(); ev.preventDefault(); startLinkDrag(i, ev); };
-    const lnkHit = mkHit(POS.link, 'ctl-hit', 14); lnkHit.addEventListener('pointerdown', onLnkDown); g.appendChild(lnkHit);
-    const lnk = makeLucide('link', { cls: 'lnk', color: 'currentColor', x: POS.link.x, y: POS.link.y, scale: 0.62, sw: 2.2 });
-    const lnkTitle = document.createElementNS(NSx, 'title');
-    lnkTitle.textContent = 'Drag to another element to connect them \u2014 drop on a line to cut it';
-    lnk.appendChild(lnkTitle);
-    lnk.addEventListener('pointerdown', onLnkDown);
-    lnk.addEventListener('mouseenter', ev => showTip('Drag to another element to connect them', ev));
-    lnk.addEventListener('mouseleave', hideTip);
-    g.appendChild(lnk);
     if (nd.role !== 'frame'){
       if (nd.cat === 'setting'){ const mo = makeMotif(nd); if (mo) g.appendChild(mo); }   // terrains & connectors now show an icon too
       else if (nd.cat === 'object'){ g.appendChild(makeObjectIcon(nd)); }
@@ -7184,17 +7170,22 @@ function renderConstellation(){
       }
       renderConstellation();
     });
-    if (i === state.selNode && nd.role === 'being'){
-      const addY = ctlY + 28;
-      const onAdd = ev => { ev.stopPropagation(); openAspectMenu(i, ev.clientX || 200, ev.clientY || 200); };
-      g.appendChild(makeTraitPill(-29, addY - 4, onAdd, 'Add a characteristic (max 10)'));
-      const onRole = ev => { ev.stopPropagation(); openRoleMenu(i, ev.clientX || 200, ev.clientY || 200); };
-      g.appendChild(makeTraitPill(29, addY - 4, onRole, 'Narrator / Main Character / Antagonist', '+ Role'));
-    }
-    if (i === state.selNode && nd.role === 'word' && (nd.cat === 'setting' || nd.cat === 'object')){
-      const addY2 = ctlY + 28;
-      const onAdd2 = ev => { ev.stopPropagation(); openAspectMenu(i, ev.clientX || 200, ev.clientY || 200); };
-      g.appendChild(makeTraitPill(0, addY2 - 4, onAdd2, 'Add a characteristic'));
+    if (i === state.selNode){
+      const pillY = ctlY + 28 - 4;
+      const onEdit = ev => { ev.stopPropagation(); openEditMenu(i, ev.clientX || 200, ev.clientY || 200); };
+      if (nd.role === 'being'){
+        const onAdd = ev => { ev.stopPropagation(); openAspectMenu(i, ev.clientX || 200, ev.clientY || 200); };
+        const onRole = ev => { ev.stopPropagation(); openRoleMenu(i, ev.clientX || 200, ev.clientY || 200); };
+        g.appendChild(makeTraitPill(-56, pillY, onAdd, 'Add a characteristic (max 10)'));
+        g.appendChild(makeTraitPill(0, pillY, onRole, 'Narrator / Main Character / Antagonist', '+ Role'));
+        g.appendChild(makeTraitPill(56, pillY, onEdit, 'Rename, lock, redraw, destroy…', 'Edit ▾'));
+      } else if (nd.role === 'word' && (nd.cat === 'setting' || nd.cat === 'object')){
+        const onAdd = ev => { ev.stopPropagation(); openAspectMenu(i, ev.clientX || 200, ev.clientY || 200); };
+        g.appendChild(makeTraitPill(-28, pillY, onAdd, 'Add a characteristic'));
+        g.appendChild(makeTraitPill(28, pillY, onEdit, 'Rename, lock, redraw, destroy…', 'Edit ▾'));
+      } else {
+        g.appendChild(makeTraitPill(0, pillY, onEdit, 'Rename or delete…', 'Edit ▾'));
+      }
     }
     svg.appendChild(g);
     if (w.getComputedTextLength){
@@ -10427,7 +10418,7 @@ function init(){
       }
       return;
     }
-    if (e.target.closest && e.target.closest('.wbook')) return;
+    if (e.target.closest && (e.target.closest('.wbook') || e.target.closest('.ctl-btn') || e.target.closest('.trait-pill'))) return;
     if (e.target.classList && (e.target.classList.contains('del') || e.target.classList.contains('lnk') || e.target.classList.contains('ctl-hit') || e.target.classList.contains('wscale') || e.target.classList.contains('rrl') || e.target.classList.contains('attr-rrl') || e.target.classList.contains('attr-del') || e.target.classList.contains('chk') || e.target.classList.contains('attr-add') || e.target.classList.contains('lock-badge'))) return;
     if (linkDragActive()) return;
     const iLk = +g.dataset.node;
