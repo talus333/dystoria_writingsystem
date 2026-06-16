@@ -4306,6 +4306,7 @@ function ecSubGuideline(name){
 }
 function renderECPills(){
   const wrap = $('ecSubPills'); if (!wrap) return;
+  if (EC.mode === 'container'){ wrap.innerHTML = ''; wrap.style.display = 'none'; return; }   // sub is pinned in container mode
   const names = ecSubNames();
   wrap.innerHTML = '';
   if (names.length <= 1){ wrap.style.display = 'none'; return; }
@@ -4334,10 +4335,13 @@ function openElemCard(catId, mode, node){
   if (mode === 'add' && catId === 'plot' && findPlotWord()){ flashStatus('A story carries one plot \u2014 edit it on the timeline'); return; }
   EC.cat = catId; EC.cats = null; EC.mode = mode || 'add'; EC.node = (node == null ? -1 : node);
   const cat = getCat(catId);
-  $('ecTitle').textContent = (mode === 'replace' ? 'Change \u2014 ' : 'Add \u2014 ') + (cat ? cat.name : catId);
-  const subs = cat.subcategories.filter(sub => !(catId === 'being' && !IDENTITY_SUBS.includes(sub.name)));
+  const containerSub = (EC.mode === 'container') ? levelContainerSub() : null;
+  $('ecTitle').textContent = containerSub ? ('This map is a \u2014 ' + containerSub)
+    : ((mode === 'replace' ? 'Change \u2014 ' : 'Add \u2014 ') + (cat ? cat.name : catId));
+  const subs = containerSub ? cat.subcategories.filter(sb => sb.name === containerSub)
+    : cat.subcategories.filter(sub => !(catId === 'being' && !IDENTITY_SUBS.includes(sub.name)));
   $('ecSub').innerHTML = subs.map(sb => '<option>' + sb.name + '</option>').join('');
-  EC.subSel = null;   // "All" by default; pills are single-select
+  EC.subSel = containerSub ? new Set([containerSub]) : null;   // container mode pins one sub
   renderECPills();
   const sr = $('ecSearch');
   sr.value = (mode === 'replace' && state.prompt && state.prompt.words[EC.node]) ?
@@ -4395,6 +4399,7 @@ function ecBuildItem(word, sub, s, catId){
 }
 function commitWord(word, sub, catId){
   catId = catId || EC.cat;
+  if (EC.mode === 'container'){ setMapContainer(word); closeElemCard(); return; }   // sets what the whole map IS
   if (EC.mode === 'replace' && state.prompt && state.prompt.words[EC.node]){
     pushUndo();
     const w = state.prompt.words[EC.node];
@@ -5902,7 +5907,13 @@ function renderLineFeature(w, layer){
 }
 // whole-map base terrain (an optional biome behind everything; no word label, just a pill)
 const MAP_TERRAINS = [['Forest', 'forest'], ['Grassland', 'grass'], ['Hills', 'hills'], ['Mountains', 'mountains'], ['Wetland', 'wetland'], ['Desert', 'dunes'], ['Water', 'water'], ['Snow & Ice', 'cold']];
-function mapTerrainKey(){ return (state.session && state.session.mapTerrain) || null; }
+// the whole-map background biome is derived from the Terrain-level container choice (per section)
+function mapTerrainKey(){
+  if (sectionLevel() === 'terrain' && state.prompt && state.prompt.mapContainer && typeof terrainStyleForWord === 'function'){
+    return terrainStyleForWord(state.prompt.mapContainer);
+  }
+  return null;
+}
 function mapTerrainLabel(key){ const e = MAP_TERRAINS.find(t => t[1] === key); return e ? e[0] : null; }
 function renderMapBackground(layer){
   const key = mapTerrainKey(); if (!key) return;
@@ -5936,15 +5947,8 @@ function setMapTerrain(key){
   if (state.prompt) renderConstellation();
   scheduleAutosave();
 }
-function updateMapTerrainPill(){
-  const wrap = $('mapTerrainWrap'); if (!wrap) return;
-  // the single background biome belongs to the Terrain level ("one terrain for the whole map")
-  wrap.hidden = !(state.prompt && sectionLevel() === 'terrain');
-  const btn = $('mapTerrainBtn'); if (!btn) return;
-  const key = mapTerrainKey();
-  if (key){ btn.textContent = mapTerrainLabel(key) || 'Background'; btn.classList.add('set'); }
-  else { btn.textContent = '+ Background terrain'; btn.classList.remove('set'); }
-}
+// deprecated: the Terrain biome is now chosen through the unified container pill (Add popup)
+function updateMapTerrainPill(){ const wrap = $('mapTerrainWrap'); if (wrap) wrap.hidden = true; }
 function toggleMapTerrainMenu(open){
   const menu = $('mapTerrainMenu'); if (!menu) return;
   const show = open != null ? open : menu.hidden;
@@ -5995,7 +5999,10 @@ function toggleMapLevelMenu(open){
   const cur = sectionLevel();
   menu.innerHTML = '';
   MAP_LEVELS.forEach(l => {
-    const b = document.createElement('button'); b.type = 'button'; b.textContent = l.label; b.title = l.hint;
+    const b = document.createElement('button'); b.type = 'button';
+    b.innerHTML = '<span class="ml-name"></span><span class="ml-desc"></span>';
+    b.querySelector('.ml-name').textContent = l.label;
+    b.querySelector('.ml-desc').textContent = l.hint;
     if (l.key === cur) b.classList.add('on');
     b.addEventListener('click', () => { setMapLevel(l.key); toggleMapLevelMenu(false); });
     menu.appendChild(b);
@@ -6003,20 +6010,13 @@ function toggleMapLevelMenu(open){
   menu.hidden = false;
 }
 // ---- "container" selector: which one of the level's type this whole map IS (Room→a room, etc.) ----
+// chosen through the full Add popup (search / navigate / add), then shown as the dark-grey pill.
 function levelContainerSub(){
   const k = sectionLevel();
-  return k === 'settlement' ? 'Settlements' : k === 'building' ? 'Building' : k === 'room' ? 'Intimate' : null;
+  return k === 'terrain' ? 'Terrain' : k === 'settlement' ? 'Settlements'
+       : k === 'building' ? 'Building' : k === 'room' ? 'Intimate' : null;
 }
-function containerWords(){
-  const sub = levelContainerSub(); if (!sub || typeof getCat !== 'function') return [];
-  const cat = getCat('setting'); if (!cat) return [];
-  const sb = cat.subcategories.find(s => s.name === sub); if (!sb) return [];
-  return sb.words.map(x => typeof x === 'string' ? x : x.w);
-}
-function currentContainerName(){
-  if (sectionLevel() === 'terrain') return mapTerrainLabel(mapTerrainKey());
-  return (state.prompt && state.prompt.mapContainer) || null;
-}
+function currentContainerName(){ return (state.prompt && state.prompt.mapContainer) || null; }
 function updateMapLabel(){
   const lab = $('mapLabel'); if (!lab) return;
   const c = currentContainerName();
@@ -6024,9 +6024,10 @@ function updateMapLabel(){
 }
 function setMapContainer(word){
   if (!state.prompt) return;
-  state.prompt.mapContainer = word || null;     // the whole map "becomes" this one
+  state.prompt.mapContainer = word || null;     // the whole map "becomes" this one (biome auto-derives at Terrain)
   updateMapContainerPill();
   updateMapLabel();
+  renderConstellation();
   if (state.session){ if (typeof syncFramesToSession === 'function') syncFramesToSession(); state.session.words = state.prompt.words; scheduleAutosave(); }
 }
 function updateMapContainerPill(){
@@ -6034,22 +6035,17 @@ function updateMapContainerPill(){
   const sub = levelContainerSub();
   wrap.hidden = !(state.prompt && sub);
   const btn = $('mapContainerBtn'); if (!btn) return;
-  const cur = (state.prompt && state.prompt.mapContainer) || null;
+  const cur = currentContainerName();
   const k = sectionLevel();
-  const noun = k === 'settlement' ? 'settlement' : k === 'building' ? 'building' : 'room';
+  const noun = k === 'terrain' ? 'terrain' : k === 'settlement' ? 'settlement' : k === 'building' ? 'building' : 'room';
   if (cur){ btn.textContent = cur; btn.classList.add('set'); }
   else { btn.textContent = '+ Choose ' + noun; btn.classList.remove('set'); }
 }
-function toggleMapContainerMenu(open){
-  const menu = $('mapContainerMenu'); if (!menu) return;
-  const show = open != null ? open : menu.hidden;
-  if (!show){ menu.hidden = true; return; }
-  const cur = (state.prompt && state.prompt.mapContainer) || null;
-  menu.innerHTML = '';
-  const mk = (label, w) => { const b = document.createElement('button'); b.type = 'button'; b.textContent = label; if ((w || null) === (cur || null)) b.classList.add('on'); b.addEventListener('click', () => { setMapContainer(w); toggleMapContainerMenu(false); }); return b; };
-  menu.appendChild(mk('None', null));
-  containerWords().forEach(w => menu.appendChild(mk(w, w)));
-  menu.hidden = false;
+function openContainerPicker(ev){
+  if (!state.prompt || !levelContainerSub()) return;
+  EC.x = ev ? ((ev.clientX || 150) + 8) : 150;
+  EC.y = ev ? (ev.clientY || 120) : 120;
+  openElemCard('setting', 'container');
 }
 function renderTerrains(svg){
   const words = (state.prompt && state.prompt.words) || [];
