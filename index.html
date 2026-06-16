@@ -737,12 +737,21 @@
   body.eink .edge.cut{stroke:rgba(122,30,20,.6)}
   .edge.rel{transition:stroke-width .12s, stroke-opacity .12s}
   .rel-ov{cursor:pointer}
-  .rel-ov-bg{fill:var(--paper); stroke-width:1.4; opacity:.97}
+  .rel-lab{font-family:var(--serif); font-style:italic; font-size:12.5px; paint-order:stroke; stroke:var(--paper); stroke-width:3px; stroke-linejoin:round}
+  .rel-ov-compact:hover .rel-lab{text-decoration:underline}
+  .rel-lab-dot{stroke:var(--line); stroke-width:.7; paint-order:stroke}
+  .rel-ov-bg{fill:var(--paper); stroke-width:1.4; opacity:.98}
   .rel-ov-to{font-family:var(--sans); font-size:8px; letter-spacing:.04em; fill:var(--ink-faint); text-transform:uppercase}
   .rel-ov-type{font-family:var(--serif); font-style:italic; font-size:12.5px}
   .rel-ov-dot{stroke:var(--line); stroke-width:.8}
   .rel-ov-stake{font-family:var(--sans); font-size:8.5px; fill:var(--ink-soft)}
+  .rel-ov-edit{cursor:pointer}
+  .rel-ov-editbg{fill:var(--paper); stroke:var(--line); stroke-width:1}
+  .rel-ov-edit:hover .rel-ov-editbg{stroke:var(--ink-faint)}
+  .rel-ov-edittx{font-family:var(--sans); font-size:9px; letter-spacing:.06em; text-transform:uppercase; fill:var(--ink-soft)}
+  .rel-ov-edit:hover .rel-ov-edittx{fill:var(--ink)}
   body.eink .rel-ov-bg{fill:#fff; stroke:#000}
+  body.eink .rel-lab{stroke:#fff}
   #relCard{position:fixed; z-index:60; width:230px; background:var(--paper); border:1px solid var(--line); border-radius:9px; box-shadow:0 10px 30px rgba(0,0,0,.18); padding:11px 12px; font-family:var(--sans); display:none}
   #relCard .rc-head{font-size:13px; color:var(--ink); margin-bottom:9px; display:flex; align-items:center; gap:5px; flex-wrap:wrap}
   #relCard .rc-arrow{color:var(--ink-faint)}
@@ -5737,14 +5746,39 @@ function skyToScreen(wx, wy){
   const [x0, y0, w, h, W, H] = viewBoxVals(); const rw = r.width || W, rh = r.height || H;
   return { x: r.left + (wx - x0) / w * rw, y: r.top + (wy - y0) / h * rh };
 }
+function relKey(from, to, side){ return Math.min(from, to) + '-' + Math.max(from, to) + '|' + side; }
 function buildRelOverlay(ei, side, from, to, rel, slots, slot){
   const NS = 'http://www.w3.org/2000/svg';
-  const g = document.createElementNS(NS, 'g');
-  g.setAttribute('class', 'rel-ov'); g.dataset.edge = ei; g.dataset.slots = slots; g.dataset.slot = slot;
   const nameOf = k => { const w = state.prompt.words[k]; return (w && w.name) || (state.nodes[k] && state.nodes[k].word) || '?'; };
   const vh = REL_VAL_HUE[rel.valence] || REL_VAL_HUE.neutral;
+  const intens = rel.intensity || 1;
+  const key = relKey(from, to, side);
+  const lo = Math.min(from, to), hi = Math.max(from, to);
+  const g = document.createElementNS(NS, 'g');
+  g.dataset.edge = ei; g.dataset.slots = slots; g.dataset.slot = slot;
+
+  if (state.relExpanded !== key){
+    // COMPACT — just the word, a direction arrow, and intensity dots; no box
+    g.setAttribute('class', 'rel-ov rel-ov-compact');
+    const ty = document.createElementNS(NS, 'text');
+    ty.setAttribute('class', 'rel-lab'); ty.setAttribute('text-anchor', 'middle'); ty.setAttribute('y', 0); ty.setAttribute('fill', vh);
+    ty.textContent = (side === 'rev' ? '← ' : '') + (rel.type || '—') + (side === 'rev' ? '' : ' →') + (rel.secret ? ' ·' : '');
+    g.appendChild(ty);
+    const startx = -((4 - 1) * 6) / 2;
+    for (let n = 1; n <= 4; n++){
+      const d = document.createElementNS(NS, 'circle');
+      d.setAttribute('class', 'rel-lab-dot'); d.setAttribute('cx', startx + (n - 1) * 6); d.setAttribute('cy', 9); d.setAttribute('r', 2);
+      d.setAttribute('fill', n <= intens ? vh : 'none');
+      g.appendChild(d);
+    }
+    g.addEventListener('click', ev => { ev.stopPropagation(); state.relExpanded = key; renderConstellation(); });
+    return g;
+  }
+
+  // EXPANDED — the full detail box with an Edit button
+  g.setAttribute('class', 'rel-ov rel-ov-open');
   const stake = (rel.stake || '').trim();
-  const W = 132, H = stake ? 50 : 38;
+  const W = 146, H = stake ? 62 : 50;
   const rect = document.createElementNS(NS, 'rect');
   rect.setAttribute('class', 'rel-ov-bg'); rect.setAttribute('x', -W / 2); rect.setAttribute('y', -H / 2);
   rect.setAttribute('width', W); rect.setAttribute('height', H); rect.setAttribute('rx', 7); rect.setAttribute('stroke', vh);
@@ -5754,23 +5788,32 @@ function buildRelOverlay(ei, side, from, to, rel, slots, slot){
   tgt.textContent = '→ ' + nameOf(to) + (rel.secret ? '  · secret' : '');
   g.appendChild(tgt);
   const ty = document.createElementNS(NS, 'text');
-  ty.setAttribute('class', 'rel-ov-type'); ty.setAttribute('x', -W / 2 + 9); ty.setAttribute('y', -H / 2 + 26); ty.setAttribute('fill', vh);
+  ty.setAttribute('class', 'rel-ov-type'); ty.setAttribute('x', -W / 2 + 9); ty.setAttribute('y', -H / 2 + 28); ty.setAttribute('fill', vh);
   ty.textContent = rel.type || '—';
   g.appendChild(ty);
   for (let n = 1; n <= 4; n++){
     const d = document.createElementNS(NS, 'circle');
-    d.setAttribute('class', 'rel-ov-dot'); d.setAttribute('cx', W / 2 - 10 - (4 - n) * 7); d.setAttribute('cy', -H / 2 + 22); d.setAttribute('r', 2.2);
-    if (n <= (rel.intensity || 1)) d.setAttribute('fill', vh); else d.setAttribute('fill', 'none');
+    d.setAttribute('class', 'rel-ov-dot'); d.setAttribute('cx', W / 2 - 12 - (4 - n) * 7); d.setAttribute('cy', -H / 2 + 24); d.setAttribute('r', 2.2);
+    d.setAttribute('fill', n <= intens ? vh : 'none');
     g.appendChild(d);
   }
   if (stake){
     const sk = document.createElementNS(NS, 'text');
-    sk.setAttribute('class', 'rel-ov-stake'); sk.setAttribute('x', -W / 2 + 9); sk.setAttribute('y', H / 2 - 7);
-    sk.textContent = '⚑ ' + (stake.length > 22 ? stake.slice(0, 21) + '…' : stake);
+    sk.setAttribute('class', 'rel-ov-stake'); sk.setAttribute('x', -W / 2 + 9); sk.setAttribute('y', -H / 2 + 43);
+    sk.textContent = '⚑ ' + (stake.length > 24 ? stake.slice(0, 23) + '…' : stake);
     g.appendChild(sk);
   }
-  const lo = Math.min(from, to), hi = Math.max(from, to);
-  g.addEventListener('click', ev => { ev.stopPropagation(); openRelCard(lo, hi, side, from, to, {}); });
+  const eb = document.createElementNS(NS, 'g');
+  eb.setAttribute('class', 'rel-ov-edit'); eb.setAttribute('transform', 'translate(' + (W / 2 - 24) + ',' + (H / 2 - 11) + ')');
+  const er = document.createElementNS(NS, 'rect');
+  er.setAttribute('class', 'rel-ov-editbg'); er.setAttribute('x', -18); er.setAttribute('y', -8); er.setAttribute('width', 36); er.setAttribute('height', 16); er.setAttribute('rx', 8);
+  eb.appendChild(er);
+  const et = document.createElementNS(NS, 'text');
+  et.setAttribute('class', 'rel-ov-edittx'); et.setAttribute('text-anchor', 'middle'); et.setAttribute('y', 3.4); et.textContent = 'Edit';
+  eb.appendChild(et);
+  eb.addEventListener('click', ev => { ev.stopPropagation(); openRelCard(lo, hi, side, from, to, {}); });
+  g.appendChild(eb);
+  g.addEventListener('click', ev => { ev.stopPropagation(); state.relExpanded = null; renderConstellation(); });
   return g;
 }
 
@@ -7195,6 +7238,7 @@ function renderConstellation(){
   }
   /* (setting watercolor "blots" + connector spans removed — terrain regions replace them) */
   state.spans = [];
+  if (state.relExpanded){ const m = /^(\d+)-(\d+)\|/.exec(state.relExpanded); if (m && state.selNode !== +m[1] && state.selNode !== +m[2]) state.relExpanded = null; }
   const relOvs = [];
   state.edges.forEach((e, ei) => {
     const a = e[0], b = e[1];
