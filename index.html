@@ -10591,6 +10591,70 @@ function init(){
     applyView();
     if (mapTerrainKey() && state.prompt) renderConstellation();   // refit the base biome to the new view
   });
+  // ---- trackpad + touchscreen gestures: two-finger swipe = pan, pinch/spread = zoom ----
+  (function(){
+    const sky = $('skySvg');
+    const ZMIN = 0.6, ZMAX = 2.4;
+    let refitT = null;
+    function afterView(){
+      applyView();
+      const zs = $('zoomSlider'); if (zs) zs.value = Math.round((state.view.zoom || 1) * 100);
+      if (mapTerrainKey() && state.prompt){ clearTimeout(refitT); refitT = setTimeout(renderConstellation, 130); }
+    }
+    function clampZoom(z){ return Math.max(ZMIN, Math.min(ZMAX, z)); }
+    // pan the viewport; dx/dy are screen px (positive = scroll content toward +x / +y)
+    function panBy(dx, dy){
+      const z = state.view.zoom || 1;
+      state.view.panX = (state.view.panX || 0) + dx / z;
+      state.view.panY = (state.view.panY || 0) + dy / z;
+    }
+    // zoom by factor while keeping the world point under (cx,cy screen coords) fixed
+    function zoomAt(factor, cx, cy){
+      const r = sky.getBoundingClientRect();
+      const W = sky.clientWidth || 600, H = sky.clientHeight || 320;
+      const rw = r.width || W, rh = r.height || H;
+      const sx = cx - r.left, sy = cy - r.top;
+      const z0 = state.view.zoom || 1;
+      const wx = (W - W / z0) / 2 + (state.view.panX || 0) + sx / rw * (W / z0);
+      const wy = (H - H / z0) / 2 + (state.view.panY || 0) + sy / rh * (H / z0);
+      const z = clampZoom(z0 * factor);
+      state.view.zoom = z;
+      state.view.panX = wx - (W - W / z) / 2 - sx / rw * (W / z);
+      state.view.panY = wy - (H - H / z) / 2 - sy / rh * (H / z);
+    }
+    sky.addEventListener('wheel', e => {
+      e.preventDefault();
+      if (e.ctrlKey){                                   // trackpad pinch (also ⌘/ctrl + wheel)
+        zoomAt(Math.exp(-e.deltaY * 0.01), e.clientX, e.clientY);
+      } else {                                          // two-finger swipe → pan
+        panBy(e.deltaX, e.deltaY);
+      }
+      afterView();
+    }, { passive: false });
+    // touchscreen: two-finger drag = pan, pinch/spread = zoom
+    let tPrev = null;
+    function pinchInfo(touches){
+      const a = touches[0], b = touches[1];
+      return { cx: (a.clientX + b.clientX) / 2, cy: (a.clientY + b.clientY) / 2,
+               d: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY) };
+    }
+    sky.addEventListener('touchstart', e => {
+      if (e.touches.length === 2){ e.preventDefault(); tPrev = pinchInfo(e.touches); }
+    }, { passive: false });
+    sky.addEventListener('touchmove', e => {
+      if (e.touches.length === 2 && tPrev){
+        e.preventDefault();
+        const now = pinchInfo(e.touches);
+        panBy(-(now.cx - tPrev.cx), -(now.cy - tPrev.cy));   // content follows fingers
+        if (tPrev.d > 0) zoomAt(now.d / tPrev.d, now.cx, now.cy);
+        tPrev = now;
+        afterView();
+      }
+    }, { passive: false });
+    function endTouch(e){ if (!e.touches || e.touches.length < 2) tPrev = null; }
+    sky.addEventListener('touchend', endTouch);
+    sky.addEventListener('touchcancel', endTouch);
+  })();
   $('centerBtn').addEventListener('click', snapToBeing);
   $('mapLevelBtn').addEventListener('click', e => { e.stopPropagation(); toggleMapLevelMenu(); });
   $('mapContainerBtn').addEventListener('click', e => { e.stopPropagation(); openContainerPicker(e); });
