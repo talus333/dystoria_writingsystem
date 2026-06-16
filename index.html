@@ -6346,15 +6346,27 @@ function openContainerPicker(ev){
   openElemCard('setting', 'container');
 }
 function updateAutoPlacePill(){
-  const wrap = $('autoPlaceWrap'); if (wrap) wrap.hidden = !state.prompt;
+  const wrap = $('autoPlaceWrap'); if (wrap) wrap.hidden = !(state.prompt && state.autoPlaceSeen);   // pill appears once auto-place is first turned on
   const b = $('autoPlaceBtn'); if (!b) return;
-  b.textContent = state.autoPlace ? 'Auto-place ✓' : 'Auto-place';
+  b.textContent = state.autoPlace ? 'Autoplace ✓' : 'Autoplace';
   b.classList.toggle('on', !!state.autoPlace);
 }
-function toggleAutoPlace(){
-  state.autoPlace = !state.autoPlace;
-  try { const p = getPrefs(); p.autoPlace = state.autoPlace; localStorage.setItem(LS_PREFS, JSON.stringify(p)); } catch (e){}
+// turn auto-place on (from the banner guide or the pill); place anything currently pending, reveal the pill
+function enableAutoPlaceNow(){
+  state.autoPlace = true; state.autoPlaceSeen = true;
+  const pending = [];
+  if (state.placing != null) pending.push(state.placing);
+  (state.placeQueue || []).forEach(i => pending.push(i));
+  state.placeQueue = []; state.placing = null;
+  const sky = document.getElementById('skySvg'); if (sky) sky.style.cursor = '';
+  placementPrompt();
+  pending.forEach(autoPlaceOne);
   updateAutoPlacePill();
+  if (state.prompt) renderConstellation();
+}
+function toggleAutoPlace(){
+  if (!state.autoPlace) enableAutoPlaceNow();
+  else { state.autoPlace = false; updateAutoPlacePill(); }
 }
 function renderTerrains(svg){
   const words = (state.prompt && state.prompt.words) || [];
@@ -6454,6 +6466,11 @@ function placementPrompt(){
   const name = (w && (w.name || w.word)) || 'element';
   const verb = isLineWord(w) ? 'Draw the line of ' : isAreaWord(w) ? 'Draw the boundary of ' : 'Click the map to place ';
   document.getElementById('placeBannerText').textContent = verb + name;
+  const btn = document.getElementById('placeBannerSkip');
+  if (btn){
+    if (state.autoPlaceSeen){ btn.hidden = true; }                 // pill controls auto-place now — no more guide
+    else { btn.hidden = false; btn.textContent = 'Turn on Autoplace'; }
+  }
   banner.hidden = false;
 }
 function startPlacement(idxs){
@@ -6560,7 +6577,7 @@ function endPlacement(){
 }
 function initPlaceBanner(){
   const b = document.getElementById('placeBannerSkip');
-  if (b) b.addEventListener('click', endPlacement);
+  if (b) b.addEventListener('click', enableAutoPlaceNow);
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && state.placing != null) endPlacement(); });
 }
 
@@ -8368,7 +8385,7 @@ function openSession(id){
     $('skySvg').innerHTML = ''; $('skyEmpty').style.display = 'flex';
   }
   // never open a story stuck mid-placement (placement hides pending elements until placed)
-  state.placing = null; state.placeQueue = [];
+  state.placing = null; state.placeQueue = []; state.autoPlace = false; state.autoPlaceSeen = false;
   (state.frames || []).forEach(fr => ((fr.prompt && fr.prompt.words) || []).forEach(w => { if (w.needsPlace) delete w.needsPlace; }));
   if (state.prompt && state.prompt.words) state.prompt.words.forEach(w => { if (w.needsPlace) delete w.needsPlace; });
   reconcileSections();          // self-heal any orphan sections left by older deletions
@@ -8449,6 +8466,8 @@ function newSession(){
   updateGameUI();
   // clear element-derived UI bars so an imported story's era/event/constraints don't linger
   state.selNode = null; state.linkFrom = null; state.activeSet = 0; state.usage = null;
+  state.autoPlace = false; state.autoPlaceSeen = false; state.placing = null; state.placeQueue = [];   // back to click-to-place; hide the auto-place pill + banner
+  placementPrompt(); updateAutoPlacePill();
   ['frameBar', 'constraintBar', 'writeFrameBar', 'evOverlay', 'legendCounts', 'legendDead'].forEach(id => { const e = $(id); if (e) e.innerHTML = ''; });
   // clear leftover score/count text from the previous story (these are only refreshed by renderConstellation)
   ['promptScore', 'focusScore', 'wordCountLbl'].forEach(id => { const e = $(id); if (e){ e.textContent = ''; e.classList.remove('full'); } });
@@ -10435,7 +10454,7 @@ function init(){
   $('centerBtn').addEventListener('click', snapToBeing);
   $('mapLevelBtn').addEventListener('click', e => { e.stopPropagation(); toggleMapLevelMenu(); });
   $('mapContainerBtn').addEventListener('click', e => { e.stopPropagation(); openContainerPicker(e); });
-  state.autoPlace = !!getPrefs().autoPlace;
+  state.autoPlace = false; state.autoPlaceSeen = false;   // click-to-place by default
   $('autoPlaceBtn').addEventListener('click', e => { e.stopPropagation(); toggleAutoPlace(); });
   document.addEventListener('mousedown', e => {
     const lw = $('mapLevelWrap');
