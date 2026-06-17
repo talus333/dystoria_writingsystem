@@ -10328,6 +10328,38 @@ function updateReadTop(){
   const rb = $('readBody'), bt = $('readTop'); if (!rb || !bt) return;
   bt.classList.toggle('show', rb.scrollTop > 220);
 }
+/* ---- keep the reading place when toggling Read <-> Edit (both render the same prose) ---- */
+let _ovAnchor = null;
+function ovProseEl(scrollEl){
+  if (!scrollEl) return null;
+  if (scrollEl.id === 'readBody') return scrollEl.querySelector('.rd-prose') || scrollEl;
+  if (scrollEl.id === 'editScroll') return $('editBody') || scrollEl;
+  return scrollEl;
+}
+function ovBlocks(proseEl){ return proseEl ? Array.from(proseEl.children).filter(c => (c.textContent || '').trim().length || c.tagName === 'HR') : []; }
+function ovBlockKey(b){ return (b.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 50); }
+function ovCaptureAnchor(scrollEl){
+  if (!scrollEl) return null;
+  const topY = scrollEl.getBoundingClientRect().top;
+  for (const b of ovBlocks(ovProseEl(scrollEl))){
+    const r = b.getBoundingClientRect();
+    if (r.bottom > topY + 2) return { key: ovBlockKey(b), offset: topY - r.top, atTop: scrollEl.scrollTop <= 2 };
+  }
+  return { atTop: scrollEl.scrollTop <= 2 };
+}
+function ovApplyAnchor(scrollEl, anchor){
+  if (!scrollEl || !anchor) return false;
+  if (!anchor.key){ if (anchor.atTop){ scrollEl.scrollTop = 0; return true; } return false; }
+  const blocks = ovBlocks(ovProseEl(scrollEl));
+  const pre = anchor.key.slice(0, 24);
+  const match = blocks.find(b => ovBlockKey(b) === anchor.key)
+    || blocks.find(b => ovBlockKey(b).startsWith(pre))
+    || blocks.find(b => (b.textContent || '').replace(/\s+/g, ' ').trim().startsWith(pre));
+  if (!match) return false;
+  const cr = scrollEl.getBoundingClientRect(), br = match.getBoundingClientRect();
+  scrollEl.scrollTop = Math.max(0, scrollEl.scrollTop + (br.top - cr.top) - (anchor.offset || 0));
+  return true;
+}
 function openReadMode(){
   if (window.__closeDrawers) window.__closeDrawers();
   buildReadMode();
@@ -10335,7 +10367,10 @@ function openReadMode(){
   $('readSugToggle').style.display = has ? '' : 'none';
   setReadSug(state._readSug || 'suggested');
   $('readMode').classList.add('show');
-  requestAnimationFrame(readScrollToCurrent);
+  requestAnimationFrame(() => {
+    if (!(_ovAnchor && ovApplyAnchor($('readBody'), _ovAnchor))) readScrollToCurrent();
+    _ovAnchor = null; updateReadTop();
+  });
 }
 function closeReadMode(){ $('readMode').classList.remove('show'); }
 // Swap read <-> edit in one paint with no transition, so the writing pad never flashes between.
@@ -10476,7 +10511,10 @@ function openEditMode(){
   if (window.__closeDrawers) window.__closeDrawers();
   buildEditMode();
   $('editMode').classList.add('show');
-  requestAnimationFrame(editScrollToCurrent);
+  requestAnimationFrame(() => {
+    if (!(_ovAnchor && ovApplyAnchor($('editScroll'), _ovAnchor))) editScrollToCurrent();
+    _ovAnchor = null; updateEditTop();
+  });
 }
 function closeEditMode(){ commitEdit(); $('sgBar').classList.remove('show'); $('editMode').classList.remove('show'); }
 function commitEdit(){
@@ -11820,10 +11858,10 @@ function init(){
   $('readClose').addEventListener('click', closeReadMode);
   $('readTop').addEventListener('click', () => { $('readBody').scrollTo({ top: 0, behavior: 'smooth' }); });
   $('readBody').addEventListener('scroll', updateReadTop);
-  $('readToEdit').addEventListener('click', () => { overlaySwitch(() => { openEditMode(); closeReadMode(); }); });
+  $('readToEdit').addEventListener('click', () => { _ovAnchor = ovCaptureAnchor($('readBody')); overlaySwitch(() => { openEditMode(); closeReadMode(); }); });
   $('editBtn').addEventListener('click', openEditMode);
   $('editClose').addEventListener('click', closeEditMode);
-  $('editToRead').addEventListener('click', () => { overlaySwitch(() => { closeEditMode(); openReadMode(); }); });
+  $('editToRead').addEventListener('click', () => { _ovAnchor = ovCaptureAnchor($('editScroll')); overlaySwitch(() => { closeEditMode(); openReadMode(); }); });
   $('edDirect').addEventListener('change', applyEditEditable);
   $('editTop').addEventListener('click', () => { $('editScroll').scrollTo({ top: 0, behavior: 'smooth' }); });
   $('editScroll').addEventListener('scroll', () => { updateEditTop(); $('sgBar').classList.remove('show'); closeSgPop(); });
