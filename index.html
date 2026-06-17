@@ -583,6 +583,30 @@
   body.eink.mapfull #mapFullToggle{background:#000}
   body.eink #writeModeBtn{border-width:2px}
   body.eink #focusPanel{background:#fff}
+  /* ---- Notepad (scratchpad) — the default lower view ---- */
+  #notepad{display:none; flex:1; min-height:0; overflow:auto; box-sizing:border-box; width:100%; max-width:840px; margin:0 auto;
+    padding:18px 26px 24px; font-family:var(--serif); font-size:16px; line-height:1.7; color:var(--ink); outline:none}
+  #notepad:empty::before{content:attr(data-ph); color:var(--ink-faint); font-style:italic; pointer-events:none}
+  body:not(.writing) #notepad{display:block}
+  body:not(.writing) #writeArea{display:none}
+  body:not(.writing) #wmTitleBar, body:not(.writing) #writeFrameBar, body:not(.writing) #fmtBar{display:none}
+  body:not(.writing) #focusPanel{display:none}                 /* the left Writing-Focus bar is write-mode only */
+  /* notepad handwriting (Ink) — reveal the canvas, hide the text pad */
+  body:not(.writing).np-ink #writeArea{display:flex}
+  body:not(.writing).np-ink #editorWrap, body:not(.writing).np-ink #notepad{display:none}
+  /* ---- Writing-Focus footer (default / map view) ---- */
+  #focusFooter{display:none}
+  body:not(.writing) #focusFooter{display:flex; align-items:center; gap:10px; flex:none; border-top:1px solid var(--line); background:var(--bg); padding:7px 16px 8px; overflow-x:auto}
+  #focusFooter .ff-lbl{font-family:var(--sans); font-size:9px; letter-spacing:.18em; text-transform:uppercase; color:var(--ink-faint); flex:none}
+  #focusFooterList{display:flex; align-items:center; gap:6px; flex-wrap:nowrap}
+  .ff-pill{display:inline-flex; align-items:center; gap:5px; font-family:var(--serif); font-size:13px; color:var(--ink); border:1px solid var(--line); border-radius:14px; padding:3px 10px; white-space:nowrap; background:var(--paper); cursor:pointer}
+  .ff-pill .ff-cat{font-family:var(--sans); font-size:7.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-faint)}
+  .ff-empty{font-family:var(--serif); font-style:italic; font-size:12px; color:var(--ink-faint)}
+  /* write mode: a divider before the focus elements in the left bar */
+  body.writing #focusList:not(:empty){border-top:1px solid var(--line); margin-top:6px; padding-top:10px}
+  /* mode pills active state */
+  #padTools #notepadBtn.on, #padTools #writeBtn.on{background:var(--ink); color:var(--paper); border-color:var(--ink)}
+  body.eink #padTools #notepadBtn.on, body.eink #padTools #writeBtn.on{background:#000; color:#fff}
 
   /* ---------- control rail ---------- */
   #rail{
@@ -1528,7 +1552,8 @@
     <div id="writeFrameBar"></div>
     <div id="deskbar">
       <div id="padTools">
-        <span class="pad-mode" title="You're composing in the lower screen">Writing</span>
+        <button id="notepadBtn" title="Notepad — a scratchpad for ideas not yet in the story">Notepad</button>
+        <button id="writeBtn" title="Write — full-screen focused writing">Write</button>
         <button id="readBtn" title="Reading mode — the whole story, stitched together">Read</button>
         <button id="editBtn" title="Edit mode — suggest changes to written sections">Edit</button>
       </div>
@@ -1568,6 +1593,8 @@
         <span id="inkNav" style="display:none"><button id="inkPrev" title="Earlier page">◀</button><span id="inkNavLbl"></span><button id="inkNext" title="Later page">▶</button></span>
       </div>
     </div>
+    <div id="notepad" contenteditable="true" spellcheck="false" data-ph="A scratchpad for ideas, fragments, and notes you haven’t written into the story yet…"></div>
+    <div id="focusFooter"><span class="ff-lbl">Focus</span><div id="focusFooterList"></div></div>
     <div id="actionbar">
       <span id="saveStatus"></span>
     </div>
@@ -8234,6 +8261,7 @@ function openFocusAddCard(block, x, y){
   $('ecSearch').focus();
 }
 function renderFocus(){
+  if (typeof renderFocusFooter === 'function') renderFocusFooter();   // keep the notepad/map focus footer in sync
   const fl = $('focusList');
   if (!fl) return;
   fl.innerHTML = '';
@@ -9295,6 +9323,7 @@ function openSession(id){
   $('sectionTitle').value = s.section || '';
   if (s.html) $('editor').innerHTML = s.html;
   else $('editor').textContent = s.text || '';
+  $('notepad').innerHTML = s.notepad || '';   // restore the scratchpad
   normalizeLocks();
   state.activeSet = 0; state.linkFrom = null; state.selNode = null;
   if (s.frames && s.frames.length){
@@ -9410,10 +9439,12 @@ function newSession(){
   updateMapLabel();
   buildRail();
   $('storyName').value = ''; $('sectionTitle').value = ''; $('editor').innerHTML = '';
+  if ($('notepad')) $('notepad').innerHTML = '';
   $('skySvg').innerHTML = ''; $('skyEmpty').style.display = 'flex';
   ink.pageRef = null; ink.strokes = []; ink.h = 1100; ink.viewLocked = false;
   if (state.session) state.session.inkPages = [];
   inkResize(); inkRedraw(); updateInkNav();
+  setWriting(false);   // land in Notepad mode (default), syncs the mode pills
   setMode('type'); setupTimer(); updateWordCount(); updateMeta();
   closeLibrary();
 }
@@ -10869,7 +10900,7 @@ const ink = { canvas: null, ctx: null, w: 760, h: 1100, strokes: [], current: nu
    Each page = { frame, strokes, h, locked }. A finished session's page is locked
    (read-only, never re-transcribed); the writer always gets a fresh page next. */
 function inkPagesArr(){ if (!state.session) return []; if (!Array.isArray(state.session.inkPages)) state.session.inkPages = []; return state.session.inkPages; }
-function inkFrameKey(){ return state.frameIdx || 0; }
+function inkFrameKey(){ return document.body.classList.contains('writing') ? (state.frameIdx || 0) : 'np'; }   // notepad ink lives on its own 'np' page
 function inkActivePage(frame){
   const pages = inkPagesArr();
   for (let i = pages.length - 1; i >= 0; i--){ if (pages[i].frame === frame && !pages[i].locked) return pages[i]; }
@@ -11136,11 +11167,36 @@ function setMode(m){
   state.inkMode = (m === 'ink');
   $('modeType').classList.toggle('active', !state.inkMode);
   $('modeInk').classList.toggle('active', state.inkMode);
-  $('editorWrap').style.display = state.inkMode ? 'none' : 'block';
-  $('fmtBar').style.display = state.inkMode ? 'none' : 'flex';
+  const notepadMode = !document.body.classList.contains('writing');
+  document.body.classList.toggle('np-ink', notepadMode && state.inkMode);
+  if (!notepadMode){
+    $('editorWrap').style.display = state.inkMode ? 'none' : 'block';
+    $('fmtBar').style.display = state.inkMode ? 'none' : 'flex';
+  }
   $('inkWrap').classList.toggle('show', state.inkMode);
   $('inkTools').classList.toggle('show', state.inkMode);
-  if (state.inkMode){ if (!ink.pageRef) inkShowFrame(inkFrameKey()); inkResize(); updateInkNav(); }
+  if (state.inkMode){ inkShowFrame(inkFrameKey()); inkResize(); updateInkNav(); }
+}
+/* ---- notepad scratchpad + focus footer ---- */
+function renderNotepad(){ const n = $('notepad'); if (!n) return; const html = (state.session && state.session.notepad) || ''; if (n.innerHTML !== html) n.innerHTML = html; }
+function saveNotepad(){ if (!state.session) ensureSession(); state.session.notepad = $('notepad').innerHTML; scheduleAutosave(); }
+function renderFocusFooter(){
+  const host = $('focusFooterList'); if (!host) return;
+  host.innerHTML = '';
+  const words = state.prompt ? state.prompt.words : [];
+  let n = 0;
+  (state.focusKeys || []).forEach(key => {
+    const i = words.findIndex(w => wordKey(w) === key); if (i < 0) return;
+    const w = words[i]; n++;
+    const pill = document.createElement('span'); pill.className = 'ff-pill';
+    pill.appendChild(document.createTextNode(w.name || w.word));
+    const c = document.createElement('span'); c.className = 'ff-cat'; c.style.color = catColor(w.cat); c.textContent = (getCat(w.cat) || {}).name || w.cat; pill.appendChild(c);
+    pill.addEventListener('mouseenter', ev => { const d = descFor(w); if (d) showTip(d, ev, catColor(w.cat)); });
+    pill.addEventListener('mouseleave', hideTip);
+    pill.addEventListener('click', () => { state.selNode = state.selNode === i ? null : i; renderConstellation(); });
+    host.appendChild(pill);
+  });
+  if (!n){ const e = document.createElement('span'); e.className = 'ff-empty'; e.textContent = 'No focus elements yet — select one on the map and press ◎.'; host.appendChild(e); }
 }
 function setEink(on){
   document.body.classList.toggle('eink', on);
@@ -11172,16 +11228,19 @@ function setWriting(on){
   if (on && document.body.classList.contains('mapfull')) setMapFull(false);
   if (window.__closeDrawers) window.__closeDrawers();
   document.body.classList.toggle('writing', on);
-  const b = $('writeModeBtn');
-  b.textContent = on ? 'Exit Focus' : 'Focus';
-  b.classList.toggle('on', on);
+  const b = $('writeModeBtn'); if (b){ b.textContent = 'End Session'; b.classList.toggle('on', on); }
+  const nb = $('notepadBtn'), wb = $('writeBtn');
+  if (nb) nb.classList.toggle('on', !on);
+  if (wb) wb.classList.toggle('on', on);
+  setMode(state.inkMode ? 'ink' : 'type');   // restore the right surface (editor vs notepad, + correct ink page)
   if (on){
     updateWmTitle();
     renderWriteFrame();
     if (state.timer.started) state.timer.running = true;
     if (!state.inkMode) $('editor').focus();
-    flashStatus('Writing \u2014 the clock starts with your first words. Esc or Exit returns');
+    flashStatus('Writing \u2014 the clock starts with your first words. End Session returns');
   } else {
+    renderNotepad();
     if (state.prompt) renderConstellation();
   }
 }
@@ -11250,6 +11309,9 @@ function init(){
   renderFocus();
   renderFocusBlocks();
   $('writeModeBtn').addEventListener('click', () => setWriting(!document.body.classList.contains('writing')));
+  $('notepadBtn').addEventListener('click', () => { if (typeof closeReadMode === 'function') closeReadMode(); if (typeof closeEditMode === 'function') closeEditMode(); setWriting(false); });
+  $('writeBtn').addEventListener('click', () => setWriting(true));
+  $('notepad').addEventListener('input', saveNotepad);
   (function(){
     const bt = $('brandTitle');
     const blurb = 'Dystoria \u2014 the place that holds all stories, the infinite library you exist within.';
