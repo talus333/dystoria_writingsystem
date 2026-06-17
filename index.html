@@ -266,6 +266,11 @@
   #sgFmt .edf-dots{display:flex; align-items:center; gap:4px; margin:0 2px}
   #sgFmt .fdot{width:15px; height:15px; border-radius:50%; border:1px solid rgba(255,255,255,.55)}
   #sgFmt .fdot:hover{transform:scale(1.15)}
+  #sgFmt .fdot-pick{width:17px; height:17px; padding:0; border:1px solid rgba(255,255,255,.7); border-radius:50%; cursor:pointer; -webkit-appearance:none; appearance:none; background:conic-gradient(from 90deg,#e0142c,#f47216,#16a34a,#0ea5b5,#2563eb,#8b2fe0,#e21b8d,#e0142c)}
+  #sgFmt .fdot-pick:hover{transform:scale(1.15)}
+  #sgFmt .fdot-pick::-webkit-color-swatch-wrapper{padding:0}
+  #sgFmt .fdot-pick::-webkit-color-swatch{border:none; border-radius:50%; opacity:0}
+  #sgFmt .fdot-pick::-moz-color-swatch{border:none; border-radius:50%; opacity:0}
   /* undo/redo — only while editing directly */
   #edUndoRedo{display:none; align-items:center; gap:2px}
   #editMode.direct-edit #edUndoRedo{display:inline-flex}
@@ -10591,6 +10596,7 @@ function ipClose(val){
 function amOwner(){ return !(state.session && state.session._shared); }
 function editDirectOn(){ return !!(amOwner() && $('edEditSeg') && $('edEditSeg').classList.contains('active')); }
 let _edLastRange = null;   // last non-collapsed selection in the edit body (so the font/size dropdowns can apply after they steal focus)
+let _edCaret = null;       // last known caret/selection anywhere in the edit body (for image insertion at the cursor)
 // Apply a cosmetic format to the edit-body selection. Bold/Italic toggle (execCommand); font/size/color wrap a styled span.
 function edFmt(cmd, val){
   const body = $('editBody'); if (!body) return;
@@ -10622,13 +10628,26 @@ function edInsertImage(file){
     const body = $('editBody'); if (!body) return;
     const img = document.createElement('img');
     img.className = 'story-img'; img.src = rd.result; img.alt = file.name || 'image';
+    // Figure out where the cursor was. Prefer a tracked caret inside the body; fall back to the live selection.
     const live = window.getSelection();
-    let r = (_edLastRange && body.contains(_edLastRange.commonAncestorContainer)) ? _edLastRange
-      : (live && live.rangeCount && body.contains(live.getRangeAt(0).commonAncestorContainer)) ? live.getRangeAt(0) : null;
-    if (r){ r.collapse(false); r.insertNode(img); r.setStartAfter(img); r.collapse(true); if (live){ live.removeAllRanges(); live.addRange(r); } }
+    const inBody = rg => rg && body.contains(rg.commonAncestorContainer);
+    let r = inBody(_edCaret) ? _edCaret.cloneRange()
+      : inBody(_edLastRange) ? _edLastRange.cloneRange()
+      : (live && live.rangeCount && inBody(live.getRangeAt(0))) ? live.getRangeAt(0).cloneRange() : null;
+    // Put the image on its own line: drop it at the end of the block the caret sits in (or the end of the body).
+    let anchor = null;
+    if (r){
+      let node = r.endContainer;
+      while (node && node.parentNode !== body) node = node.parentNode;   // climb to a top-level block
+      anchor = node;
+    }
+    if (anchor && anchor.parentNode === body) anchor.after(img);
     else body.appendChild(img);
-    _edLastRange = null;
+    _edLastRange = null; _edCaret = null;
     commitEdit();
+    // Make sure the writer actually sees it appear.
+    requestAnimationFrame(() => { try { img.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch (e){ img.scrollIntoView(); } });
+    flashStatus('Image added');
   };
   rd.readAsDataURL(file);
 }
@@ -12195,6 +12214,7 @@ function init(){
   $('edEditSeg').addEventListener('click', () => { $('edEditSeg').classList.add('active'); $('edSuggestSeg').classList.remove('active'); applyEditEditable(); });
   document.querySelectorAll('#sgFmt button[data-edf]').forEach(b => b.addEventListener('mousedown', ev => { ev.preventDefault(); edFmt(b.dataset.edf); }));
   document.querySelectorAll('#sgFmt .fdot[data-edcolor]').forEach(b => b.addEventListener('mousedown', ev => { ev.preventDefault(); edFmt('color', b.dataset.edcolor); }));
+  $('edColorPick').addEventListener('input', e => edFmt('color', e.target.value));
   $('edFont').addEventListener('change', e => { if (e.target.value) edFmt('font', e.target.value); e.target.value = ''; });
   $('edSize').addEventListener('change', e => { if (e.target.value) edFmt('size', e.target.value); e.target.value = ''; });
   $('edImgBtn').addEventListener('mousedown', ev => ev.preventDefault());
