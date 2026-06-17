@@ -11114,6 +11114,29 @@ async function doSg(kind){
   commitEdit();
   renderPending(); renderNotes();
 }
+// Suggest mode: typing over a highlight starts a Replace suggestion inline (strike the old text, type the new).
+function startInlineReplace(range, firstChar){
+  const body = $('editBody'); if (!body || range.collapsed) return;
+  const del = sgWrap(range, 'sg-del');
+  const ins = sgSpanText('sg-ins', firstChar || '', del.dataset.grp);
+  del.after(ins);
+  ins.contentEditable = 'true';
+  ins.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === 'Escape'){ e.preventDefault(); ins.blur(); } });
+  ins.addEventListener('blur', () => finalizeInlineReplace(ins), { once: true });
+  $('sgBar').classList.remove('show');
+  // place the caret at the end of the new text and let native editing take over
+  const sel = window.getSelection(); const r = document.createRange();
+  r.selectNodeContents(ins); r.collapse(false);
+  sel.removeAllRanges(); sel.addRange(r);
+  ins.focus();
+  commitEdit();
+}
+function finalizeInlineReplace(ins){
+  if (!ins) return;
+  ins.contentEditable = 'false';
+  if (!ins.textContent.trim()) ins.remove();   // typed nothing → leave it as a plain delete suggestion
+  commitEdit(); renderPending();
+}
 /* ----- AI rephrase: alternatives for the highlighted text, shown in the left sidebar ----- */
 let _aiRephraseRng = null;
 function aiParseList(raw){
@@ -12494,17 +12517,22 @@ function init(){
     if ((ev.metaKey || ev.ctrlKey) && (ev.key === 'z' || ev.key === 'Z')){ ev.preventDefault(); ev.shiftKey ? edRedo() : edUndo(); }
     else if ((ev.metaKey || ev.ctrlKey) && (ev.key === 'y' || ev.key === 'Y')){ ev.preventDefault(); edRedo(); }
   });
-  // Suggest mode: Delete/Backspace on a highlighted span is a shortcut for the Delete suggestion
+  // Suggest mode shortcuts on a highlighted span: Delete/Backspace → delete suggestion; typing → inline replace
   document.addEventListener('keydown', ev => {
-    if (ev.key !== 'Delete' && ev.key !== 'Backspace') return;
     if (!$('editMode').classList.contains('show') || editDirectOn()) return;
     const ae = document.activeElement;
-    if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable)) return;   // don't hijack real fields
+    if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable)) return;   // don't hijack real fields or an active inline replacement
+    if (ev.metaKey || ev.ctrlKey || ev.altKey) return;
+    const isDelete = (ev.key === 'Delete' || ev.key === 'Backspace');
+    const isChar = !!(ev.key && ev.key.length === 1);
+    if (!isDelete && !isChar) return;
     const body = $('editBody'), sel = window.getSelection();
     if (!body || !sel || !sel.rangeCount || sel.isCollapsed) return;
-    if (!body.contains(sel.getRangeAt(0).commonAncestorContainer)) return;
+    const range = sel.getRangeAt(0);
+    if (!body.contains(range.commonAncestorContainer)) return;
     ev.preventDefault();
-    doSg('delete');
+    if (isDelete) doSg('delete');
+    else startInlineReplace(range, ev.key);
   });
   $('editTop').addEventListener('click', () => { $('editScroll').scrollTo({ top: 0, behavior: 'smooth' }); });
   $('editScroll').addEventListener('scroll', () => { updateEditTop(); $('sgBar').classList.remove('show'); closeSgPop(); scheduleRememberAnchor($('editScroll')); });
