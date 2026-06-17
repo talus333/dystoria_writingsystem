@@ -602,9 +602,31 @@
   body.eink.mapfull #mapFullToggle{background:#000}
   body.eink #writeModeBtn{border-width:2px}
   body.eink #focusPanel{background:#fff}
-  /* ---- Notepad (scratchpad) — the default lower view ---- */
-  #notepad{display:none; flex:1; min-height:0; overflow:auto; box-sizing:border-box; width:100%; max-width:840px; margin:0 auto;
-    padding:18px 26px 24px; font-family:var(--serif); font-size:16px; line-height:1.7; color:var(--ink); outline:none}
+  /* ---- Notepad (scratchpad) — the default lower view: element rail (left) + notes (right) ---- */
+  #npWrap{display:none; flex:1; min-height:0; min-width:0}
+  body:not(.writing) #npWrap{display:flex}
+  body:not(.writing).np-ink #npWrap{display:none}    /* ink uses the full canvas; the element rail steps aside */
+  #npElements{flex:none; width:300px; overflow-y:auto; box-sizing:border-box; padding:16px 12px; border-right:1px solid var(--line);
+    background:var(--bg2); display:flex; flex-wrap:wrap; align-content:flex-start; gap:7px; scrollbar-width:thin}
+  .np-chip{display:inline-flex; align-items:center; gap:5px; max-width:100%; font-family:var(--serif); font-size:13.5px; color:var(--ink);
+    border:1px solid var(--line); border-radius:14px; padding:4px 11px; background:var(--paper); cursor:pointer; white-space:nowrap; box-sizing:border-box}
+  .np-chip .np-label{overflow:hidden; text-overflow:ellipsis}
+  .np-chip .np-cat{font-family:var(--sans); font-size:7.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-faint); flex:none}
+  .np-chip.on{border-color:var(--ink); font-weight:600}
+  .np-chip .np-arrow{display:none; color:var(--gold); flex:none}
+  .np-chip.on .np-arrow{display:inline}
+  .np-chip .np-rm{color:var(--ink-faint); margin-left:1px; font-family:var(--sans); font-size:12px; flex:none}
+  .np-chip .np-rm:hover{color:var(--gold)}
+  .np-add{font-family:var(--sans); font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-faint);
+    border:1px dashed var(--ink-faint); border-radius:14px; padding:4px 11px; background:transparent; cursor:pointer; white-space:nowrap}
+  #npAddMenu{position:fixed; z-index:80; background:var(--paper); border:1px solid var(--line); border-radius:8px; box-shadow:var(--shadow); padding:5px; max-height:330px; overflow-y:auto; width:240px}
+  #npAddMenu[hidden]{display:none}
+  #npAddMenu button{display:flex; align-items:baseline; gap:6px; width:100%; text-align:left; font-family:var(--serif); font-size:13.5px; padding:5px 9px; border-radius:6px; color:var(--ink)}
+  #npAddMenu button:hover{background:var(--bg2)}
+  #npAddMenu .np-cat{font-family:var(--sans); font-size:7.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-faint)}
+  #npAddMenu .np-empty{font-family:var(--serif); font-style:italic; font-size:12px; color:var(--ink-faint); padding:6px 9px}
+  #notepad{display:none; min-height:0; overflow:auto; box-sizing:border-box; flex:1; min-width:0;
+    padding:18px 30px 24px; font-family:var(--serif); font-size:16px; line-height:1.7; color:var(--ink); outline:none}
   #notepad:empty::before{content:attr(data-ph); color:var(--ink-faint); font-style:italic; pointer-events:none}
   body:not(.writing) #notepad{display:block}
   body:not(.writing) #writeArea{display:none}
@@ -9412,7 +9434,7 @@ function saveSession(){
   s.section = $('sectionTitle').value.trim();
   s.text = editorText();
   s.html = editorHTML();
-  if ($('notepad')) s.notepad = $('notepad').innerHTML;
+  if ($('notepad')) npSetNotes(npActiveKey(), $('notepad').innerHTML);   // flush current tab (General or an element) to the right place; npEls/npNotes ride on the session
   s.updated = new Date().toISOString();
   if (state.prompt){ s.links = state.prompt.links || []; s.removedLinks = state.prompt.removedLinks || []; }
   if (state.frames){ s.frames = state.frames; s.frameIdx = state.frameIdx; }
@@ -9455,7 +9477,10 @@ function openSession(id){
   $('sectionTitle').value = s.section || '';
   if (s.html) $('editor').innerHTML = s.html;
   else $('editor').textContent = s.text || '';
-  $('notepad').innerHTML = s.notepad || '';   // restore the scratchpad
+  state.npActive = 'general';                 // restore the scratchpad + per-element notes
+  if (!Array.isArray(s.npEls)) s.npEls = [];
+  if (!s.npNotes || typeof s.npNotes !== 'object') s.npNotes = {};
+  renderNotepad(); renderNpElements();
   normalizeLocks();
   state.activeSet = 0; state.linkFrom = null; state.selNode = null;
   if (s.frames && s.frames.length){
@@ -9572,7 +9597,10 @@ function newSession(){
   updateMapLabel();
   buildRail();
   $('storyName').value = ''; $('sectionTitle').value = ''; $('editor').innerHTML = '';
+  state.npActive = 'general';
+  if (state.session){ state.session.npEls = []; state.session.npNotes = {}; }
   if ($('notepad')) $('notepad').innerHTML = '';
+  if (typeof renderNpElements === 'function') renderNpElements();
   $('skySvg').innerHTML = ''; $('skyEmpty').style.display = 'flex';
   ink.pageRef = null; ink.strokes = []; ink.h = 1100; ink.viewLocked = false;
   if (state.session) state.session.inkPages = [];
@@ -11034,7 +11062,11 @@ const ink = { canvas: null, ctx: null, w: 760, h: 1100, strokes: [], current: nu
    Each page = { frame, strokes, h, locked }. A finished session's page is locked
    (read-only, never re-transcribed); the writer always gets a fresh page next. */
 function inkPagesArr(){ if (!state.session) return []; if (!Array.isArray(state.session.inkPages)) state.session.inkPages = []; return state.session.inkPages; }
-function inkFrameKey(){ return document.body.classList.contains('writing') ? (state.frameIdx || 0) : 'np'; }   // notepad ink lives on its own 'np' page
+function inkFrameKey(){   // notepad ink lives on a per-tab page: 'np' (General) or 'np:<key>' per element
+  if (document.body.classList.contains('writing')) return (state.frameIdx || 0);
+  const k = state.npActive || 'general';
+  return k === 'general' ? 'np' : ('np:' + k);
+}
 function inkActivePage(frame){
   const pages = inkPagesArr();
   for (let i = pages.length - 1; i >= 0; i--){ if (pages[i].frame === frame && !pages[i].locked) return pages[i]; }
@@ -11315,8 +11347,111 @@ function setMode(m){
   if (state.inkMode){ inkShowFrame(inkFrameKey()); inkResize(); updateInkNav(); }
 }
 /* ---- notepad scratchpad + focus footer ---- */
-function renderNotepad(){ const n = $('notepad'); if (!n) return; const html = (state.session && state.session.notepad) || ''; if (n.innerHTML !== html) n.innerHTML = html; }
-function saveNotepad(){ if (!state.session) ensureSession(); state.session.notepad = $('notepad').innerHTML; scheduleAutosave(); }
+function npActiveKey(){ return state.npActive || 'general'; }
+function npGetNotes(key){
+  if (!state.session) return '';
+  if (key === 'general') return state.session.notepad || '';
+  return (state.session.npNotes && state.session.npNotes[key]) || '';
+}
+function npSetNotes(key, html){
+  if (!state.session) ensureSession();
+  if (key === 'general'){ state.session.notepad = html; }
+  else { if (!state.session.npNotes) state.session.npNotes = {}; state.session.npNotes[key] = html; }
+}
+function npIsElement(w){
+  return !!(w && (w.role === 'being' || w.role === 'word') && w.role !== 'constraint'
+    && w.cat !== 'event' && w.cat !== 'stakes' && w.cat !== 'theme' && (w.name || w.word));
+}
+function npFindEl(key){
+  const here = (state.prompt && state.prompt.words) || [];
+  let w = here.find(x => wordKey(x) === key);
+  if (!w) (state.frames || []).forEach(fr => { if (w) return; ((fr.prompt && fr.prompt.words) || []).forEach(x => { if (!w && wordKey(x) === key) w = x; }); });
+  return w || null;
+}
+function npLabelFor(key){
+  if (key === 'general') return { word: 'General Notes', cat: '', catId: null };
+  const w = npFindEl(key);
+  return w ? { word: (w.name || w.word), cat: (getCat(w.cat) || {}).name || w.cat, catId: w.cat } : { word: 'Element', cat: '', catId: null };
+}
+function npStoryElements(){
+  const seen = new Set(), out = [];
+  const collect = words => (words || []).forEach(w => { if (!npIsElement(w)) return; const k = wordKey(w); if (seen.has(k)) return; seen.add(k); out.push({ key: k, w }); });
+  if (state.frames && state.frames.length) state.frames.forEach(fr => collect(fr.prompt && fr.prompt.words));
+  else if (state.prompt) collect(state.prompt.words);
+  return out;
+}
+function renderNpElements(){
+  const host = $('npElements'); if (!host) return;
+  host.innerHTML = '';
+  const active = npActiveKey();
+  const mk = (key, removable) => {
+    const lab = npLabelFor(key);
+    const chip = document.createElement('span');
+    chip.className = 'np-chip' + (key === active ? ' on' : '');
+    chip.title = lab.word;
+    const l = document.createElement('span'); l.className = 'np-label'; l.textContent = lab.word; chip.appendChild(l);
+    if (lab.cat){ const c = document.createElement('span'); c.className = 'np-cat'; c.style.color = catColor(lab.catId); c.textContent = lab.cat; chip.appendChild(c); }
+    const ar = document.createElement('span'); ar.className = 'np-arrow'; ar.textContent = '▸'; chip.appendChild(ar);
+    if (removable){ const x = document.createElement('span'); x.className = 'np-rm'; x.textContent = '×'; x.title = 'Remove from notepad';
+      x.addEventListener('click', ev => { ev.stopPropagation(); npRemove(key); }); chip.appendChild(x); }
+    chip.addEventListener('click', () => npSelect(key));
+    host.appendChild(chip);
+  };
+  mk('general', false);
+  ((state.session && state.session.npEls) || []).forEach(k => mk(k, true));
+  const add = document.createElement('button'); add.className = 'np-add'; add.textContent = '+ element';
+  add.title = 'Add a story element to the notepad';
+  add.addEventListener('click', ev => { ev.stopPropagation(); npAddOpen(add); });
+  host.appendChild(add);
+}
+function npSelect(key){
+  saveNotepad();                 // flush the current pad before switching
+  state.npActive = key;
+  renderNotepad();
+  renderNpElements();
+  if (state.inkMode){ inkShowFrame(inkFrameKey()); inkResize(); updateInkNav(); }
+}
+function npAdd(key){
+  if (!state.session) ensureSession();
+  if (!state.session.npEls) state.session.npEls = [];
+  if (!state.session.npEls.includes(key)) state.session.npEls.push(key);
+  npSelect(key);
+  scheduleAutosave();
+}
+function npRemove(key){
+  if (state.session && state.session.npEls) state.session.npEls = state.session.npEls.filter(k => k !== key);
+  if (state.session && state.session.npNotes) delete state.session.npNotes[key];
+  if (npActiveKey() === key) state.npActive = 'general';
+  renderNotepad(); renderNpElements(); scheduleAutosave();
+}
+function npAddOpen(anchor){
+  const menu = $('npAddMenu'); if (!menu) return;
+  menu.innerHTML = '';
+  const pinned = new Set((state.session && state.session.npEls) || []);
+  const els = npStoryElements().filter(e => !pinned.has(e.key));
+  if (!els.length){ const e = document.createElement('div'); e.className = 'np-empty'; e.textContent = 'No more story elements to add.'; menu.appendChild(e); }
+  els.forEach(e => {
+    const b = document.createElement('button');
+    const l = document.createElement('span'); l.textContent = e.w.name || e.w.word; b.appendChild(l);
+    const c = document.createElement('span'); c.className = 'np-cat'; c.style.color = catColor(e.w.cat); c.textContent = (getCat(e.w.cat) || {}).name || e.w.cat; b.appendChild(c);
+    b.addEventListener('click', () => { npAdd(e.key); menu.hidden = true; });
+    menu.appendChild(b);
+  });
+  const r = anchor.getBoundingClientRect();
+  menu.style.left = Math.max(8, Math.min(r.left, window.innerWidth - 252)) + 'px';
+  menu.style.top = Math.max(8, Math.min(r.bottom + 5, window.innerHeight - 344)) + 'px';
+  menu.hidden = false;
+}
+function renderNotepad(){
+  const n = $('notepad'); if (!n) return;
+  const key = npActiveKey();
+  const html = npGetNotes(key);
+  if (n.innerHTML !== html) n.innerHTML = html;
+  n.dataset.ph = (key === 'general')
+    ? 'A scratchpad for ideas, fragments, and notes you haven’t written into the story yet…'
+    : 'Notes about ' + npLabelFor(key).word + '…';
+}
+function saveNotepad(){ if (!state.session) ensureSession(); npSetNotes(npActiveKey(), $('notepad').innerHTML); scheduleAutosave(); }
 function renderFocusFooter(){
   const host = $('focusFooterList'); if (!host) return;
   host.innerHTML = '';
@@ -11449,7 +11584,8 @@ function init(){
   $('notepadBtn').addEventListener('click', () => { if (typeof closeReadMode === 'function') closeReadMode(); if (typeof closeEditMode === 'function') closeEditMode(); setWriting(false); });
   $('writeBtn').addEventListener('click', () => setWriting(true));
   $('notepad').addEventListener('input', saveNotepad);
-  $('notepadBtn').classList.add('on'); renderNotepad();   // start in Notepad mode
+  document.addEventListener('mousedown', e => { const m = $('npAddMenu'); if (m && !m.hidden && !m.contains(e.target) && !(e.target.closest && e.target.closest('.np-add'))) m.hidden = true; });
+  $('notepadBtn').classList.add('on'); state.npActive = 'general'; renderNotepad(); renderNpElements();   // start in Notepad mode
   (function(){
     const bt = $('brandTitle');
     const blurb = 'Dystoria \u2014 the place that holds all stories, the infinite library you exist within.';
