@@ -10652,11 +10652,12 @@ async function aiRollup(el){
   const rels = wikiRelations(el); if (rels.length) facts.push('Relationships: ' + rels.join('; '));
   if (el.frames && el.frames.size) facts.push('Appears in: ' + [...el.frames].sort((a, b) => a - b).map(f => wikiSectionLabel(f - 1)).join('; '));
   const quotes = wikiAppearances(el);
+  if (!quotes.length) return 'Not yet part of story.';   // on the map but not woven into the prose yet
   const prior = (state.session && state.session.wikiAI && state.session.wikiAI[el.cat + '|' + el.word]) ? state.session.wikiAI[el.cat + '|' + el.word].text : '';
-  const sys = 'You are a story-wiki assistant for a writer. Write a short, grounded encyclopedia-style entry for ONE story element using ONLY the facts and prose excerpts given. Never invent events, names, or traits that are not present. If the prose reveals little, stay brief and say what is known. Refer to parts of the story as "Section N" (never "timeframe"); a section may have a name or event you can mention. 2–4 sentences, third person, present tense, no preamble.';
+  const sys = 'You write entries for a story wiki. Summarize how ONE element figures within the story itself, using ONLY the facts and prose excerpts given. Look only at the story — never mention the author, the writer, or the act of writing. Never invent events, names, or traits that are not present. If the prose reveals little, stay brief and say what is known. Refer to parts of the story as "Section N" (never "timeframe"); a section may have a name or event you can mention. 2–4 sentences, third person, present tense, no preamble.';
   const prompt = facts.join('\n')
-    + (prior ? ('\n\nPrevious summary (revise it to fit the latest prose; keep what still holds, fold in what is new):\n' + prior) : '')
-    + '\n\nProse excerpts where it appears:\n' + (quotes.length ? quotes.map(q => '- ' + q).join('\n') : '(none yet)')
+    + (prior && prior !== 'Not yet part of story.' ? ('\n\nExisting entry (build on it — keep what still holds, fold in what the new prose adds; do NOT rewrite from scratch):\n' + prior) : '')
+    + '\n\nProse excerpts where it appears:\n' + quotes.map(q => '- ' + q).join('\n')
     + '\n\nWrite the entry:';
   return aiCall(sys, prompt);
 }
@@ -10725,8 +10726,12 @@ async function runAIOverview(){
   if (!text){ flashStatus('Write some prose first'); return; }
   wrap.innerHTML = '<div class="wk-aitext wk-empty"><span class="spin"></span>Summarizing the story so far…</div>';
   try {
-    const sys = 'You summarize a work-in-progress story for the writer’s own reference. Use ONLY what the prose contains; do not invent. Refer to parts as "Section N", not "timeframe". 3–5 sentences, neutral and clear, no preamble.';
-    const out = await aiCall(sys, 'Story so far:\n\n' + text.slice(0, 18000) + '\n\nSummarize what has happened and the current situation:');
+    const prior = (state.session && state.session.wikiOverview) ? String(state.session.wikiOverview).trim() : '';
+    const sys = 'You summarize a story as a whole, looking only at the story itself — never the author, the writer, or the act of writing. Use ONLY what the prose contains; do not invent. Refer to parts as "Section N", not "timeframe". 3–5 sentences, neutral and clear, no preamble.';
+    const prompt = 'Story so far:\n\n' + text.slice(0, 18000)
+      + (prior ? ('\n\nExisting summary (build on it — keep what still holds, fold in what the new prose adds; do NOT rewrite from scratch):\n' + prior) : '')
+      + '\n\nSummarize what happens in the story and where it now stands:';
+    const out = await aiCall(sys, prompt);
     if (state.session){ state.session.wikiOverview = out; scheduleAutosave(500); }
     renderWikiOverview(out);
   } catch (e){
