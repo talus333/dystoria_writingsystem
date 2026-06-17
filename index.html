@@ -262,6 +262,12 @@
   #sgFmt .edf-dots{display:flex; align-items:center; gap:4px; margin:0 2px}
   #sgFmt .fdot{width:15px; height:15px; border-radius:50%; border:1px solid rgba(255,255,255,.55)}
   #sgFmt .fdot:hover{transform:scale(1.15)}
+  /* undo/redo — only while editing directly */
+  #edUndoRedo{display:none; align-items:center; gap:2px}
+  #editMode.direct-edit #edUndoRedo{display:inline-flex}
+  #edUndoRedo button{font-size:16px; line-height:1; color:var(--ink-soft); border:1px solid var(--line); border-radius:7px; width:28px; height:26px; background:var(--paper)}
+  #edUndoRedo button:hover{color:var(--ink); border-color:var(--ink-faint)}
+  #edUndoRedo button:disabled{opacity:.35; pointer-events:none}
   /* formatting is shown in Read + Edit but neutralized in Write mode (a clean, distraction-free surface) */
   body.writing #editor span[style], body.writing #editor font,
   body.writing #editor b, body.writing #editor strong,
@@ -1317,14 +1323,6 @@
   .mode-switch{display:flex; border:1px solid var(--line); border-radius:18px; overflow:hidden}
   .mode-switch button{font-size:11px; letter-spacing:.12em; text-transform:uppercase; padding:6px 14px; color:var(--ink-faint)}
   .mode-switch button.active{background:var(--ink); color:var(--paper)}
-  /* write-mode section navigation (locked while a timed session runs) */
-  #wmSectionNav{display:none; align-items:center; gap:6px}
-  body.writing #wmSectionNav{display:flex}
-  #wmSectionNav button{font-size:16px; line-height:1; color:var(--ink-soft); padding:1px 7px; border-radius:6px}
-  #wmSectionNav button:hover{color:var(--ink); background:var(--paper)}
-  #wmSecLabel{font-family:var(--sans); font-size:10px; letter-spacing:.08em; text-transform:uppercase; color:var(--ink-faint); white-space:nowrap}
-  body.timer-running #wmSectionNav button{opacity:.3; pointer-events:none}
-  body.timer-running #wmSecLabel{opacity:.6}
   .wordcount{font-size:11px; color:var(--ink-faint); font-variant-numeric:tabular-nums}
 
   #writeArea{flex:1; position:relative; min-height:0; overflow:hidden}
@@ -1633,6 +1631,10 @@
       <span id="edPending" class="ed-pending"></span>
       <span id="edGlobal" class="ed-global" style="display:none"><button id="edApproveAll" title="Approve every suggestion">Approve all</button><button id="edRejectAll" title="Reject every suggestion">Reject all</button></span>
       <input type="file" id="edImgFile" accept="image/*" style="display:none">
+      <span id="edUndoRedo">
+        <button id="edUndoBtn" title="Undo (⌘Z)">↶</button>
+        <button id="edRedoBtn" title="Redo (⌘⇧Z)">↷</button>
+      </span>
       <div id="edModeSwitch" class="mode-switch" style="display:none" title="Suggest changes for approval, or edit the text directly">
         <button id="edSuggestSeg" class="active">Suggest</button>
         <button id="edEditSeg">Edit</button>
@@ -1801,7 +1803,6 @@
         <button id="inkTranscribe" title="Read your handwriting and add it as text to this section's Type page">Transcribe</button>
         <span id="inkNav" style="display:none"><button id="inkPrev" title="Earlier page">◀</button><span id="inkNavLbl"></span><button id="inkNext" title="Later page">▶</button></span>
       </div>
-      <div id="wmSectionNav"><button id="wmSecPrev" title="Previous section">‹</button><span id="wmSecLabel"></span><button id="wmSecNext" title="Next section">›</button></div>
       <div class="mode-switch">
         <button id="modeType" class="active">Type</button>
         <button id="modeInk">Ink</button>
@@ -10705,6 +10706,7 @@ function buildEditMode(){
   renderNotes();
   $('editMode').classList.toggle('show-notes', !!$('editBody').querySelector('.nt'));
   closeSgPop();
+  edResetHistory();
 }
 function applyEditEditable(){
   const body = $('editBody'); if (!body) return;
@@ -10744,6 +10746,46 @@ function commitEdit(){
   paintSectionFocus();
   if (typeof updateWordCount === 'function') updateWordCount();
   saveSession();
+  edPushHistory();
+}
+// --- Refine-mode undo/redo: snapshot the edit body's HTML on every committed change ---
+let _edStates = [], _edIdx = -1, _edHistLock = false;
+function edResetHistory(){ const b = $('editBody'); _edStates = b ? [b.innerHTML] : []; _edIdx = _edStates.length - 1; updateUndoRedoBtns(); }
+function edPushHistory(){
+  if (_edHistLock) return;
+  const b = $('editBody'); if (!b) return;
+  const html = b.innerHTML;
+  if (_edStates[_edIdx] === html) return;
+  _edStates = _edStates.slice(0, _edIdx + 1);
+  _edStates.push(html); _edIdx = _edStates.length - 1;
+  if (_edStates.length > 120){ _edStates.shift(); _edIdx--; }
+  updateUndoRedoBtns();
+}
+function edRestoreHistory(){
+  const body = $('editBody'); if (!body) return;
+  _edHistLock = true;
+  body.innerHTML = _edStates[_edIdx];
+  $('editor').innerHTML = body.innerHTML;
+  normalizeLocks(); paintSectionFocus();
+  if (typeof updateWordCount === 'function') updateWordCount();
+  applyEditEditable(); renderPending(); renderNotes();
+  $('editMode').classList.toggle('show-notes', !!body.querySelector('.nt'));
+  saveSession();
+  _edHistLock = false;
+  $('sgBar').classList.remove('show'); closeSgPop();
+  updateUndoRedoBtns();
+}
+function edUndo(){
+  clearTimeout(_edCommitT);
+  const b = $('editBody'); if (b && _edStates[_edIdx] !== b.innerHTML) edPushHistory();   // bank pending typing as a step
+  if (_edIdx <= 0) return;
+  _edIdx--; edRestoreHistory();
+}
+function edRedo(){ if (_edIdx >= _edStates.length - 1) return; _edIdx++; edRestoreHistory(); }
+function updateUndoRedoBtns(){
+  const u = $('edUndoBtn'), r = $('edRedoBtn');
+  if (u) u.disabled = _edIdx <= 0;
+  if (r) r.disabled = _edIdx >= _edStates.length - 1;
 }
 function sgMeta(span, grp){
   span.dataset.au = sgAuthor();
@@ -12171,6 +12213,15 @@ function init(){
     $('edImgFile').click();
   });
   $('edImgFile').addEventListener('change', e => { const f = e.target.files && e.target.files[0]; if (f) edInsertImage(f); e.target.value = ''; });
+  $('edUndoBtn').addEventListener('mousedown', ev => ev.preventDefault());
+  $('edRedoBtn').addEventListener('mousedown', ev => ev.preventDefault());
+  $('edUndoBtn').addEventListener('click', edUndo);
+  $('edRedoBtn').addEventListener('click', edRedo);
+  $('editBody').addEventListener('keydown', ev => {
+    if (!editDirectOn()) return;
+    if ((ev.metaKey || ev.ctrlKey) && (ev.key === 'z' || ev.key === 'Z')){ ev.preventDefault(); ev.shiftKey ? edRedo() : edUndo(); }
+    else if ((ev.metaKey || ev.ctrlKey) && (ev.key === 'y' || ev.key === 'Y')){ ev.preventDefault(); edRedo(); }
+  });
   $('editTop').addEventListener('click', () => { $('editScroll').scrollTo({ top: 0, behavior: 'smooth' }); });
   $('editScroll').addEventListener('scroll', () => { updateEditTop(); $('sgBar').classList.remove('show'); closeSgPop(); });
   $('editBody').addEventListener('mouseup', ev => { _edClick = { x: ev.clientX, y: ev.clientY }; setTimeout(onEditSelect, 0); });
