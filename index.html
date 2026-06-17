@@ -10842,19 +10842,30 @@ function aiErrMsg(e){
   if (/too many|quota|rate|429/i.test(m)) return 'Too many AI requests — give it a moment and try again.';
   return 'Couldn’t summarize: ' + m;
 }
-function aiSig(el){ const q = wikiAppearances(el); return q.length + ':' + q.join(' ').length; }
+function aiSig(el){ const q = wikiAppearances(el); const n = npNotesForEl(el); return q.length + ':' + q.join(' ').length + ':n' + n.length; }
+function npPlain(html){ const d = document.createElement('div'); d.innerHTML = (html || '').replace(/<\/(div|p|li)>/gi, '\n').replace(/<br\s*\/?>/gi, '\n'); return (d.textContent || '').replace(/ /g, ' ').replace(/\n{3,}/g, '\n\n').trim(); }
+function npNotesForEl(el){
+  if (!el || !(state.session && state.session.npNotes)) return '';
+  const keys = [];
+  if (el.ref) keys.push(wordKey(el.ref));
+  keys.push('0|' + el.cat + '|' + el.word);
+  for (const k of keys){ if (state.session.npNotes[k]) return npPlain(state.session.npNotes[k]); }
+  return '';
+}
 async function aiRollup(el){
   const facts = ['Element: ' + el.word + (el.name ? ' (named “' + el.name + '”)' : '') + ' — ' + wikiCatName(el.cat) + (el.sub ? ' · ' + el.sub : '')];
   if (el.attrs && el.attrs.length) facts.push('Traits: ' + el.attrs.map(a => a.word).join(', '));
   const rels = wikiRelations(el); if (rels.length) facts.push('Relationships: ' + rels.join('; '));
   if (el.frames && el.frames.size) facts.push('Appears in: ' + [...el.frames].sort((a, b) => a - b).map(f => wikiSectionLabel(f - 1)).join('; '));
   const quotes = wikiAppearances(el);
-  if (!quotes.length) return 'Not yet part of story.';   // on the map but not woven into the prose yet
+  const notes = npNotesForEl(el);
+  if (!quotes.length && !notes) return 'Not yet part of story.';   // on the map but no prose or notes yet
   const prior = (state.session && state.session.wikiAI && state.session.wikiAI[el.cat + '|' + el.word]) ? state.session.wikiAI[el.cat + '|' + el.word].text : '';
-  const sys = 'You write entries for a story wiki. Summarize how ONE element figures within the story itself, using ONLY the facts and prose excerpts given. Look only at the story — never mention the author, the writer, or the act of writing. Never invent events, names, or traits that are not present. If the prose reveals little, stay brief and say what is known. Refer to parts of the story as "Section N" (never "timeframe"); a section may have a name or event you can mention. 2–4 sentences, third person, present tense, no preamble.';
+  const sys = 'You write entries for a story wiki. Summarize how ONE element figures within the story itself, using ONLY the facts, prose excerpts, and the writer’s notes given. Look only at the story — never mention the author, the writer, or the act of writing. Never invent events, names, or traits that are not present in the sources. The writer’s notes may be rough or messy: fold their details into the entry, rewritten cleanly and in the wiki’s voice, WITHOUT changing their meaning or adding anything they do not say. If little is known, stay brief. Refer to parts of the story as "Section N" (never "timeframe"); a section may have a name or event you can mention. 2–4 sentences (a little longer is fine when the notes are rich), third person, present tense, no preamble.';
   const prompt = facts.join('\n')
-    + (prior && prior !== 'Not yet part of story.' ? ('\n\nExisting entry (build on it — keep what still holds, fold in what the new prose adds; do NOT rewrite from scratch):\n' + prior) : '')
-    + '\n\nProse excerpts where it appears:\n' + quotes.map(q => '- ' + q).join('\n')
+    + (prior && prior !== 'Not yet part of story.' ? ('\n\nExisting entry (build on it — keep what still holds, fold in what the prose and notes add; do NOT rewrite from scratch):\n' + prior) : '')
+    + (quotes.length ? ('\n\nProse excerpts where it appears:\n' + quotes.map(q => '- ' + q).join('\n')) : '')
+    + (notes ? ('\n\nThe writer’s notes about this element (rough — clean them up and fold their meaning into the entry; do not copy verbatim, do not invent beyond them):\n' + notes) : '')
     + '\n\nWrite the entry:';
   return aiCall(sys, prompt);
 }
@@ -10901,7 +10912,7 @@ async function autoSummarizeElements(){
   _autoSumRunning = true;
   try {
     const lcAll = editorText().toLowerCase();
-    const els = wikiGather().filter(e => textHasWord(lcAll, e.word) || (e.name && textHasWord(lcAll, e.name)));
+    const els = wikiGather().filter(e => textHasWord(lcAll, e.word) || (e.name && textHasWord(lcAll, e.name)) || npNotesForEl(e));
     state.session.wikiAI = state.session.wikiAI || {};
     for (const el of els){
       const key = el.cat + '|' + el.word;
