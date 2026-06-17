@@ -10574,7 +10574,29 @@ function ipClose(val){
   if (r) r(val);
 }
 function amOwner(){ return !(state.session && state.session._shared); }
-function sgAuthor(){ return (typeof myDisplayName === 'function' ? myDisplayName() : 'Writer'); }
+function editDirectOn(){ return !!(amOwner() && $('edDirectPill') && $('edDirectPill').classList.contains('on')); }
+let _edLastRange = null;   // last non-collapsed selection in the edit body (so the font/size dropdowns can apply after they steal focus)
+// Apply a cosmetic format to the edit-body selection. Bold/Italic toggle (execCommand); font/size/color wrap a styled span.
+function edFmt(cmd, val){
+  const body = $('editBody'); if (!body) return;
+  const live = window.getSelection();
+  let r = (live && live.rangeCount && !live.isCollapsed && body.contains(live.getRangeAt(0).commonAncestorContainer)) ? live.getRangeAt(0) : _edLastRange;
+  if (cmd === 'bold' || cmd === 'italic'){
+    if (r && live){ try { live.removeAllRanges(); live.addRange(r); } catch (e){} }
+    body.focus();
+    try { document.execCommand('styleWithCSS', false, true); document.execCommand(cmd, false, null); } catch (e){}
+    commitEdit(); return;
+  }
+  if (!r || r.collapsed){ flashStatus('Select some text to format first'); return; }
+  const span = document.createElement('span');
+  if (cmd === 'font') span.style.fontFamily = val;
+  else if (cmd === 'size') span.style.fontSize = val;
+  else if (cmd === 'color') span.style.color = val;
+  try { const rng = r.cloneRange(); span.appendChild(rng.extractContents()); rng.insertNode(span); } catch (e){}
+  if (live) live.removeAllRanges();
+  _edLastRange = null;
+  commitEdit();
+}
 // Re-assert read-only on prose that was locked in a finished Focus session.
 function normalizeLocks(){
   const ed = $('editor'); if (!ed) return;
@@ -10635,8 +10657,9 @@ function buildEditMode(){
   tmp.querySelectorAll('div.ph').forEach(d => { if (!d.textContent.trim()) d.remove(); });
   $('editBody').innerHTML = tmp.innerHTML;
   normalizeSuggestions();
-  $('edDirectWrap').style.display = amOwner() ? '' : 'none';
-  if (!amOwner() && $('edDirect')) $('edDirect').checked = false;
+  $('edDirectPill').style.display = amOwner() ? '' : 'none';
+  $('edDirectPill').classList.remove('on'); $('edFormatPill').classList.remove('on');   // each edit session starts in suggestion mode
+  $('editMode').classList.remove('show-fmt');
   applyEditEditable();
   renderPending();
   renderNotes();
@@ -10648,6 +10671,8 @@ function applyEditEditable(){
   const direct = editDirectOn();
   body.contentEditable = direct ? 'true' : 'false';
   body.querySelectorAll('.lk').forEach(n => { n.contentEditable = direct ? 'true' : 'false'; });
+  const fp = $('edFormatPill'); if (fp) fp.style.display = direct ? '' : 'none';   // formatting needs direct editing
+  if (!direct){ if (fp) fp.classList.remove('on'); $('editMode').classList.remove('show-fmt'); }
 }
 function editScrollToCurrent(){
   const es = $('editScroll'); if (!es) return;
@@ -12083,7 +12108,12 @@ function init(){
   document.querySelectorAll('.mode-pills button').forEach(b => b.addEventListener('click', () => goMode(b.dataset.mode)));
   $('editBtn').addEventListener('click', openEditMode);
   $('editClose').addEventListener('click', closeEditMode);
-  $('edDirect').addEventListener('change', applyEditEditable);
+  $('edDirectPill').addEventListener('click', () => { $('edDirectPill').classList.toggle('on'); applyEditEditable(); });
+  $('edFormatPill').addEventListener('click', () => { if ($('edFormatPill').style.display === 'none') return; const on = !$('edFormatPill').classList.contains('on'); $('edFormatPill').classList.toggle('on', on); $('editMode').classList.toggle('show-fmt', on); });
+  document.querySelectorAll('#edFmtBar button[data-edf]').forEach(b => b.addEventListener('mousedown', ev => { ev.preventDefault(); edFmt(b.dataset.edf); }));
+  document.querySelectorAll('#edFmtBar .fdot[data-edcolor]').forEach(b => b.addEventListener('mousedown', ev => { ev.preventDefault(); edFmt('color', b.dataset.edcolor); }));
+  $('edFont').addEventListener('change', e => { if (e.target.value) edFmt('font', e.target.value); e.target.value = ''; });
+  $('edSize').addEventListener('change', e => { if (e.target.value) edFmt('size', e.target.value); e.target.value = ''; });
   $('editTop').addEventListener('click', () => { $('editScroll').scrollTo({ top: 0, behavior: 'smooth' }); });
   $('editScroll').addEventListener('scroll', () => { updateEditTop(); $('sgBar').classList.remove('show'); closeSgPop(); });
   $('editBody').addEventListener('mouseup', ev => { _edClick = { x: ev.clientX, y: ev.clientY }; setTimeout(onEditSelect, 0); });
