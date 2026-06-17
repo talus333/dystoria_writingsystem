@@ -9612,10 +9612,10 @@ function coverErrMsg(e){
 /* in-story image insert was removed (buggy + unclear fit); book covers are unaffected. */
 
 /* ---------------- import a story (prose → new story + AI element extraction) ---------------- */
-function makeElementItem(cat, word, set){
-  if (cat === 'being'){ const seed = hashStr(word); return { word, cat: 'being', sub: 'Archetype', set, role: 'being', attrs: [], identity: [{ word, sub: 'Archetype' }], sexSeed: seed, gender: (seed % 2) ? 'female' : 'male' }; }
-  const cc = getCat(cat); const sub = (cc && cc.subcategories[0]) ? cc.subcategories[0].name : '';
-  const item = { word, cat, sub, set, role: 'word' };
+function makeElementItem(cat, word, set, sub){
+  if (cat === 'being'){ const id = sub || 'Archetype'; const seed = hashStr(word); return { word, cat: 'being', sub: id, set, role: 'being', attrs: [], identity: [{ word, sub: id }], sexSeed: seed, gender: (seed % 2) ? 'female' : 'male' }; }
+  const cc = getCat(cat); const s = sub || ((cc && cc.subcategories[0]) ? cc.subcategories[0].name : '');
+  const item = { word, cat, sub: s, set, role: 'word' };
   if (cat === 'event') item.frame = state.frameIdx || 0;
   return item;
 }
@@ -9631,7 +9631,7 @@ function parseJsonLoose(s){
 // Accept the expected {elements:[…]} shape, a bare array, or the old per-category shape.
 function normalizeExtract(data){
   if (!data) return null;
-  if (Array.isArray(data)) return { elements: data, overview: '', title: '' };
+  if (Array.isArray(data)) return { elements: data, overview: '', title: '', sections: [], relationships: [] };
   let els = Array.isArray(data.elements) ? data.elements : null;
   if (!els){
     const keyed = [];
@@ -9641,14 +9641,16 @@ function normalizeExtract(data){
     if (keyed.length) els = keyed;
   }
   if (!els) return null;
-  return { elements: els, overview: data.overview || '', title: data.title || '' };
+  return { elements: els, overview: data.overview || '', title: data.title || '',
+    sections: Array.isArray(data.sections) ? data.sections : [],
+    relationships: Array.isArray(data.relationships) ? data.relationships : [] };
 }
-const IMP = { mode: 'new', title: '', prose: '', overview: '', elements: [] };
+const IMP = { mode: 'new', title: '', prose: '', overview: '', elements: [], sections: [], relationships: [] };
 // push one reviewed element onto the current map + archive (story or system) + cache its summary
 function placeImportElement(el){
   const word = (el.name || '').trim().slice(0, 60); if (!word) return false;
-  state.prompt.words.push(makeElementItem(el.cat, word, 0));
-  const sub = (el.cat === 'being') ? 'Archetype' : (((getCat(el.cat).subcategories[0]) || {}).name || '');
+  const sub = validImportSub(el.cat, el.sub);
+  state.prompt.words.push(makeElementItem(el.cat, word, 0, sub));
   const entry = { word, sub, desc: el.summary, g: [] };
   if (el.sys){ const cw = loadCustomWords(); cw[el.cat] = cw[el.cat] || []; if (!cw[el.cat].some(e => e.word === word)) cw[el.cat].push(entry); localStorage.setItem(LS_CUSTOM, JSON.stringify(cw)); }
   else { state.session.customWords[el.cat] = state.session.customWords[el.cat] || []; if (!state.session.customWords[el.cat].some(e => e.word === word)) state.session.customWords[el.cat].push(entry); }
@@ -9656,6 +9658,67 @@ function placeImportElement(el){
   return true;
 }
 const IMP_TMAP = { being: 'being', character: 'being', creature: 'being', person: 'being', monster: 'being', animal: 'being', setting: 'setting', place: 'setting', location: 'setting', object: 'object', item: 'object', thing: 'object', artifact: 'object', event: 'event', happening: 'event', moment: 'event', scene: 'event' };
+/* subcategory names for a category (for the AI prompt + the review dropdown) */
+function importSubNames(cat){ const c = getCat(cat); return c ? c.subcategories.filter(s => !s.retired).map(s => s.name) : []; }
+/* validate the AI's sub against the category; fall back to a sensible default */
+function validImportSub(cat, sub){
+  const names = importSubNames(cat);
+  if (sub){ const m = names.find(n => n.toLowerCase() === String(sub).trim().toLowerCase()); if (m) return m; }
+  if (cat === 'being') return names.includes('Archetype') ? 'Archetype' : (names[0] || '');
+  return names[0] || '';
+}
+/* split the original prose at the AI's section openings (verbatim first words), preserving paragraphs */
+function splitProseBySections(prose, sections){
+  const one = t => [{ title: (sections && sections[0] && sections[0].title) || '', body: String(prose || '').trim() }];
+  if (!sections || sections.length < 2) return one();
+  const lower = prose.toLowerCase();
+  const marks = [];
+  sections.forEach(sec => {
+    const op = String((sec && sec.opening) || '').trim().toLowerCase().replace(/\s+/g, ' ').slice(0, 28);
+    if (!op) return;
+    const idx = lower.indexOf(op);
+    if (idx >= 0) marks.push({ title: (sec.title || ''), idx });
+  });
+  marks.sort((a, b) => a.idx - b.idx);
+  const uniq = [];
+  marks.forEach(m => { if (!uniq.length || m.idx > uniq[uniq.length - 1].idx + 8) uniq.push(m); });
+  if (uniq.length < 2) return one();
+  const out = [];
+  for (let i = 0; i < uniq.length; i++){
+    const start = uniq[i].idx, end = (i + 1 < uniq.length) ? uniq[i + 1].idx : prose.length;
+    out.push({ title: uniq[i].title, body: prose.slice(start, end).trim() });
+  }
+  if (uniq[0].idx > 0){ const pre = prose.slice(0, uniq[0].idx).trim(); if (pre) out[0].body = pre + '\n\n' + out[0].body; }
+  return out;
+}
+/* append a body of prose as paragraph <div>s into the editor */
+function appendImportProse(ed, body){
+  String(body || '').split(/\n{2,}/).forEach(p => { const t = p.trim(); if (!t && ed.lastElementChild) return; const x = document.createElement('div'); x.textContent = t; ed.appendChild(x); });
+}
+/* create directed starter bonds from the AI's relationships (by name); heuristic fallback if none */
+function seedImportBonds(rels){
+  if (!state.prompt) return 0;
+  const words = state.prompt.words;
+  const findIdx = nm => { const t = String(nm || '').trim().toLowerCase(); if (!t) return -1; return words.findIndex(w => (w.name || '').toLowerCase() === t || (w.word || '').toLowerCase() === t); };
+  let made = 0;
+  (rels || []).forEach(r => {
+    if (!r || !r.from || !r.to) return;
+    const fi = findIdx(r.from), ti = findIdx(r.to);
+    if (fi < 0 || ti < 0 || fi === ti) return;
+    const a = Math.min(fi, ti), b = Math.max(fi, ti);
+    if (getLink(a, b)) return;
+    const rr = blankRel(); rr.sub = relSubName(fi, ti); rr.type = (r.type && String(r.type).trim()) || rollRelType(fi, ti) || ''; rr.intensity = 2; rr.valence = 'neutral';
+    const link = { a, b, fwd: null, rev: null }; link[fi < ti ? 'fwd' : 'rev'] = rr;
+    state.prompt.links.push(link); made++;
+  });
+  if (!made){   // nothing from the AI → connect the cast heuristically, like the start window
+    const idxOf = cid => words.map((w, i) => (w.cat === cid && w.role !== 'frame') ? i : -1).filter(i => i >= 0);
+    const bs = idxOf('being'), ss = idxOf('setting'), os = idxOf('object');
+    bs.forEach((bi, k) => { if (ss.length) starterBond(bi, ss[k % ss.length]); if (os.length) starterBond(bi, os[k % os.length]); });
+    if (bs.length >= 2) starterBond(bs[0], bs[1]);
+  }
+  return made;
+}
 function importShow(view){
   $('importEntry').style.display = view === 'entry' ? 'block' : 'none';
   $('importReview').style.display = view === 'review' ? 'block' : 'none';
@@ -9708,7 +9771,13 @@ async function extractImport(){
   if (!prose){ $('importStatus').textContent = 'Paste some prose first.'; return; }
   IMP.mode = 'new'; IMP.prose = prose; IMP.title = $('importTitle').value.trim();
   $('importGo').disabled = true; $('importStatus').innerHTML = '<span class="spin"></span>Reading &amp; ingesting…';
-  const sys = 'You analyze a story for a worldbuilding app and return ONLY valid minified JSON — no prose, no code fences. Schema: {"title":string,"overview":string,"elements":[{"type":"being"|"setting"|"object"|"event","name":string,"summary":string}]}. being = a named character or creature; setting = a place; object = a notable physical thing; event = a key happening. overview = 2 short sentences on what happens. summary = ONE short sentence grounded only in the text. Use names exactly as written. Up to 6 of each type. Keep it concise. Invent nothing.';
+  const subInfo = 'being ∈ [' + IDENTITY_SUBS.join(', ') + ']; setting ∈ [' + importSubNames('setting').join(', ') + ']; object ∈ [' + importSubNames('object').join(', ') + ']; event ∈ [' + importSubNames('event').join(', ') + ']';
+  const sys = 'You analyze a story for a worldbuilding app and return ONLY valid minified JSON — no prose, no code fences. Schema: {"title":string,"overview":string,"sections":[{"title":string,"opening":string}],"elements":[{"type":"being"|"setting"|"object"|"event","name":string,"summary":string,"sub":string}],"relationships":[{"from":string,"to":string,"type":string}]}. ' +
+    'sections = split the story into its parts by chapter/section titles, headers, or clear scene breaks; title = a short section title; opening = the first ~8 words of that section copied EXACTLY/verbatim from the text. If the story is one continuous piece, return a single section. ' +
+    'being = a named character or creature; setting = a place; object = a notable physical thing; event = a key happening. summary = ONE short sentence grounded only in the text. ' +
+    'sub = the single best-fitting subcategory, chosen from: ' + subInfo + '. ' +
+    'relationships = up to 8 of the clearest bonds between the named elements; from/to are exact element names; type = a short relationship phrase such as "Guardian of","Rivalry","Keeper of","Born of","Betrayal". ' +
+    'overview = 2 short sentences. Use names exactly as written. Up to 6 elements of each type. Invent nothing.';
   const user = 'Story:\n\n' + prose.slice(0, 14000) + '\n\nReturn the JSON.';
   let norm = null;
   for (let attempt = 0; attempt < 3 && !norm; attempt++){
@@ -9727,8 +9796,10 @@ async function extractImport(){
     const cat = IMP_TMAP[String(el.type || '').toLowerCase()];
     if (!cat) return;
     const name = String(el.name).trim().slice(0, 60); if (!name) return;
-    IMP.elements.push({ cat, name, summary: String(el.summary || '').trim(), exists: wordExistsSystem(cat, name), include: true, sys: false });
+    IMP.elements.push({ cat, name, sub: validImportSub(cat, el.sub), summary: String(el.summary || '').trim(), exists: wordExistsSystem(cat, name), include: true, sys: false });
   });
+  IMP.sections = splitProseBySections(IMP.prose, norm.sections);            // [{title, body}]
+  IMP.relationships = Array.isArray(norm.relationships) ? norm.relationships : [];
   $('importGo').disabled = false;
   $('importConfirm').disabled = false;
   $('importTitle').value = IMP.title;
@@ -9743,11 +9814,13 @@ function renderImportReview(){
   IMP.elements.forEach(el => {
     const d = document.createElement('div'); d.className = 'ir-el' + (el.include ? '' : ' off') + (el.sys ? ' sys' : '');
     const opts = IMP_CATS.map(c => '<option value="' + c[0] + '"' + (c[0] === el.cat ? ' selected' : '') + '>' + c[1] + '</option>').join('');
+    const subOpts = importSubNames(el.cat).map(n => '<option value="' + esc(n) + '"' + (n === el.sub ? ' selected' : '') + '>' + esc(n) + '</option>').join('');
     d.innerHTML =
       '<div class="ir-el-top">' +
       '<label class="ir-inc"><input type="checkbox" class="ir-i"' + (el.include ? ' checked' : '') + '></label>' +
       '<span class="ir-dot" style="background:' + catColor(el.cat) + '"></span>' +
       '<select class="ir-type">' + opts + '</select>' +
+      '<select class="ir-sub" title="Subcategory — AI-suggested; change if needed">' + subOpts + '</select>' +
       '<input class="ir-name" value="' + esc(el.name) + '" placeholder="name">' +
       '<span class="ir-exists"' + (el.exists ? '' : ' style="display:none"') + ' title="Already in the shared library — editing here makes a story-specific variation">✦ in library</span>' +
       '</div>' +
@@ -9756,7 +9829,8 @@ function renderImportReview(){
       '<span class="ir-genhint">becomes the description everywhere — keep it generic</span>' +
       '<button type="button" class="ir-gen">✦ generalize</button></div>';
     const inc = d.querySelector('.ir-i'); inc.addEventListener('change', () => { el.include = inc.checked; d.classList.toggle('off', !inc.checked); });
-    d.querySelector('.ir-type').addEventListener('change', e => { el.cat = e.target.value; renderImportReview(); });
+    d.querySelector('.ir-type').addEventListener('change', e => { el.cat = e.target.value; el.sub = validImportSub(el.cat, ''); renderImportReview(); });
+    d.querySelector('.ir-sub').addEventListener('change', e => { el.sub = e.target.value; });
     const nm = d.querySelector('.ir-name'); const ex = d.querySelector('.ir-exists');
     nm.addEventListener('input', () => { el.name = nm.value; el.exists = wordExistsSystem(el.cat, nm.value.trim()); ex.style.display = el.exists ? '' : 'none'; });
     const ta = d.querySelector('.ir-sum'); ta.addEventListener('input', () => { el.summary = ta.value; });
@@ -9840,38 +9914,57 @@ async function confirmImport(){
   $('importConfirm').disabled = true;
   try {
   const ed = $('editor');
+  const secs = (IMP.sections && IMP.sections.length) ? IMP.sections : [{ title: IMP.title, body: IMP.prose }];
+  const appendDivider = (idx, title) => {
+    const mark = document.createElement('div'); mark.className = 'sec-mark'; mark.contentEditable = 'false'; mark.innerHTML = '<span class="dia"><span>' + (idx + 1) + '</span></span>';
+    const h = document.createElement('h3'); h.dataset.frame = idx; h.textContent = title || ('Section ' + (idx + 1));
+    ed.appendChild(mark); ed.appendChild(h);
+  };
   if (asSection){
-    // append a new timeline section to the current story
     pushUndo();
     if (!state.frames){ state.frames = [{ gap: null, prompt: state.prompt, stage: 0 }]; state.frameIdx = 0; }
-    const idx = state.frames.length;
-    const newPrompt = { words: [], sets: 1, links: [], removedLinks: [] };
-    state.frames.push({ gap: 'later', prompt: newPrompt, stage: idx, stageName: IMP.title || '' });
-    state.frameIdx = idx; state.prompt = newPrompt; state.activeSet = 0;
-    const mark = document.createElement('div'); mark.className = 'sec-mark'; mark.contentEditable = 'false'; mark.innerHTML = '<span class="dia"><span>' + (idx + 1) + '</span></span>';
-    const h = document.createElement('h3'); h.dataset.frame = idx; h.textContent = IMP.title || ('Section ' + (idx + 1));
-    ed.appendChild(mark); ed.appendChild(h);
-    IMP.prose.split(/\n{2,}/).forEach(p => { const x = document.createElement('div'); x.textContent = p.trim(); ed.appendChild(x); });
   } else {
     newSession();
     $('storyName').value = IMP.title || 'Imported story'; updateWmTitle();
     ed.innerHTML = '';
-    IMP.prose.split(/\n{2,}/).forEach(p => { const x = document.createElement('div'); x.textContent = p.trim(); ed.appendChild(x); });
     if (!state.prompt){ state.prompt = { words: [], sets: 1, links: [], removedLinks: [] }; state.frames = [{ gap: null, prompt: state.prompt }]; state.frameIdx = 0; state.activeSet = 0; }
   }
   ensureSession();
-  state.session.text = editorText(); state.session.html = editorHTML(); state.session.frames = state.frames; state.session.words = state.prompt.words;
   state.session.customWords = state.session.customWords || {};
   state.session.wikiAI = state.session.wikiAI || {};
-  if (IMP.overview){ state.session.wikiOverview = asSection && state.session.wikiOverview ? (state.session.wikiOverview + ' ' + IMP.overview) : IMP.overview; }
+  // the first imported section's prompt receives the cast + bonds; later sections carry them forward
+  let firstIdx, firstPrompt;
+  if (asSection){
+    firstIdx = state.frames.length;
+    firstPrompt = { words: [], sets: 1, links: [], removedLinks: [] };
+    state.frames.push({ gap: 'later', prompt: firstPrompt, stage: firstIdx, stageName: secs[0].title || (IMP.title || '') });
+    state.frameIdx = firstIdx; state.prompt = firstPrompt; state.activeSet = 0;
+    appendDivider(firstIdx, secs[0].title || IMP.title);
+  } else {
+    firstIdx = 0; firstPrompt = state.prompt; state.frameIdx = 0; state.activeSet = 0;
+    $('sectionTitle').value = secs[0].title || '';
+  }
+  appendImportProse(ed, secs[0].body);
   let added = 0;
   IMP.elements.forEach(el => { if (el.include && placeImportElement(el)) added++; });
+  seedImportBonds(IMP.relationships);
+  for (let i = 1; i < secs.length; i++){                 // carry the cast forward into each later section
+    const idx = firstIdx + i;
+    const copy = pruneEventsFromCopy(JSON.parse(JSON.stringify(firstPrompt)));
+    state.frames.push({ gap: 'later', prompt: copy, stage: idx, stageName: secs[i].title || '' });
+    appendDivider(idx, secs[i].title);
+    appendImportProse(ed, secs[i].body);
+  }
+  state.frameIdx = firstIdx; state.prompt = state.frames[firstIdx].prompt;
+  if (IMP.overview){ state.session.wikiOverview = asSection && state.session.wikiOverview ? (state.session.wikiOverview + ' ' + IMP.overview) : IMP.overview; }
+  state.session.text = editorText(); state.session.html = editorHTML(); state.session.frames = state.frames; state.session.words = state.prompt.words;
   rebuildPools();
   setMode('type'); updateWordCount();
-  if (added || asSection){ $('skyEmpty').style.display = 'none'; }
+  if (added || asSection || IMP.prose.trim()){ $('skyEmpty').style.display = 'none'; }
   layoutConstellation(); renderConstellation(); renderTimeline(); saveSession();
   closeImport();
-  flashStatus(asSection ? ('Added a section — ' + added + ' element' + (added === 1 ? '' : 's')) : ('Imported — ' + added + ' element' + (added === 1 ? '' : 's') + ' added to the map'));
+  const secMsg = secs.length > 1 ? (' across ' + secs.length + ' sections') : '';
+  flashStatus(asSection ? ('Added ' + added + ' element' + (added === 1 ? '' : 's') + secMsg) : ('Imported — ' + added + ' element' + (added === 1 ? '' : 's') + secMsg));
   } catch (e){ console.warn('import build error:', e); $('importConfirm').disabled = false; flashStatus('Couldn’t build: ' + e.message); }
 }
 
