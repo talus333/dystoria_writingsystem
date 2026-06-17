@@ -275,6 +275,21 @@
   #editCols{flex:1; min-height:0; position:relative; overflow:hidden}
   #editScroll{height:100%; overflow-y:auto; box-sizing:border-box; padding:8px 24px 90px; width:100%; max-width:760px; margin:0 auto}
   #notesPanel{position:absolute; top:0; left:calc(50% + 384px); height:100%; width:256px; overflow:hidden; border-left:1px solid var(--line); background:var(--paper)}
+  /* AI rephrase suggestions — left sidebar, mirrors the notes panel on the right */
+  #aiSugPanel{position:absolute; top:0; right:calc(50% + 384px); height:100%; width:272px; overflow:hidden; border-right:1px solid var(--line); background:var(--paper); display:none}
+  #editMode.show-aisug #aiSugPanel{display:block}
+  .ais-close{float:right; cursor:pointer; color:var(--ink-faint); font-size:14px; line-height:1}
+  .ais-close:hover{color:var(--gold)}
+  #aiSugList{padding:0 14px 24px; overflow-y:auto; height:calc(100% - 40px)}
+  .ais-orig{font-family:var(--serif); font-style:italic; font-size:12.5px; color:var(--ink-faint); padding:0 2px 9px; border-bottom:1px solid var(--line-soft); margin-bottom:11px; line-height:1.45}
+  .ais-item{border:1px solid var(--line); border-radius:8px; padding:10px 11px; margin-bottom:10px; background:var(--paper)}
+  .ais-item:hover{border-color:var(--gold)}
+  .ais-text{font-family:var(--serif); font-size:16px; color:var(--ink); margin-bottom:4px}
+  .ais-def{font-family:var(--serif); font-style:italic; font-size:12.5px; color:var(--ink-soft); margin-bottom:6px; line-height:1.45}
+  .ais-reason{font-family:var(--sans); font-size:11px; color:var(--ink-faint); line-height:1.5}
+  .ais-apply{font-family:var(--sans); font-size:9px; letter-spacing:.12em; text-transform:uppercase; color:var(--ink-soft); border:1px solid var(--line); border-radius:12px; padding:4px 11px; background:transparent; margin-top:9px; cursor:pointer}
+  .ais-apply:hover{border-color:var(--gold); color:var(--ink)}
+  .ais-empty{font-family:var(--serif); font-style:italic; font-size:12.5px; color:var(--ink-faint); padding:6px 2px}
   .np-head{font-family:var(--sans); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--ink-faint); padding:16px 16px 8px}
   #notesList{padding:0 14px 24px; overflow-y:auto; height:calc(100% - 40px)}
   .np-item{border:1px solid var(--line); border-radius:8px; padding:9px 10px; margin-bottom:9px; cursor:pointer; background:var(--paper)}
@@ -1579,9 +1594,11 @@
       <div id="editChrome"></div>
       <div id="editBody"></div>
     </div>
+    <div id="aiSugPanel"><div class="np-head">Suggestions <span class="ais-close" title="Close">×</span></div><div id="aiSugList"></div></div>
     <div id="notesPanel"><div class="np-head">Notes</div><div id="notesList"></div></div>
   </div>
   <div id="sgBar">
+    <button data-sg="rephrase" title="Ask AI for alternative wordings">Rephrase ✦</button>
     <button data-sg="replace" title="Suggest different wording">Replace</button>
     <button data-sg="delete" title="Suggest removing this">Delete</button>
     <button data-sg="insert" title="Suggest inserting text here">Insert</button>
@@ -10516,7 +10533,7 @@ function openEditMode(){
     _ovAnchor = null; updateEditTop();
   });
 }
-function closeEditMode(){ commitEdit(); $('sgBar').classList.remove('show'); $('editMode').classList.remove('show'); }
+function closeEditMode(){ commitEdit(); $('sgBar').classList.remove('show'); closeAiSug(); $('editMode').classList.remove('show'); }
 function commitEdit(){
   const body = $('editBody'); if (!body) return;
   $('editor').innerHTML = body.innerHTML;
@@ -10552,11 +10569,13 @@ function onEditSelect(){
   } else {
     const rect = r.getBoundingClientRect(); cx = (rect.left + rect.right) / 2; cy = rect.top;
   }
+  sb.querySelector('[data-sg="rephrase"]').style.display = collapsed ? 'none' : '';
   sb.querySelector('[data-sg="replace"]').style.display = collapsed ? 'none' : '';
   sb.querySelector('[data-sg="delete"]').style.display = collapsed ? 'none' : '';
   sb.querySelector('[data-sg="note"]').style.display = collapsed ? 'none' : '';
   sb.querySelector('[data-sg="insert"]').style.display = collapsed ? '' : 'none';
-  sb.style.left = Math.max(8, Math.min(window.innerWidth - 190, cx - 90)) + 'px';
+  const bw = sb.offsetWidth || (collapsed ? 90 : 320);
+  sb.style.left = Math.max(8, Math.min(window.innerWidth - bw - 8, cx - bw / 2)) + 'px';
   sb.style.top = Math.max(8, cy - 44) + 'px';
   sb.classList.add('show');
 }
@@ -10568,6 +10587,7 @@ async function doSg(kind){
   const rng = r0.cloneRange();          // hold the spot — the styled prompt steals focus
   const direct = amOwner() && $('edDirect') && $('edDirect').checked;
   $('sgBar').classList.remove('show');
+  if (kind === 'rephrase'){ if (!rng.collapsed) aiRephrase(rng); return; }
   if (kind === 'delete'){
     if (rng.collapsed) return;
     if (direct) rng.deleteContents(); else sgWrap(rng, 'sg-del');
@@ -10599,6 +10619,59 @@ async function doSg(kind){
   commitEdit();
   renderPending(); renderNotes();
 }
+/* ----- AI rephrase: alternatives for the highlighted text, shown in the left sidebar ----- */
+let _aiRephraseRng = null;
+function aiParseList(raw){
+  let t = String(raw || '').trim().replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
+  const a = t.indexOf('['), b = t.lastIndexOf(']');
+  if (a >= 0 && b > a) t = t.slice(a, b + 1);
+  try { const j = JSON.parse(t); return Array.isArray(j) ? j : []; } catch (e){ return []; }
+}
+async function aiRephrase(rng){
+  const selText = rng.toString().trim(); if (!selText) return;
+  _aiRephraseRng = rng;
+  const list = $('aiSugList'); if (!list) return;
+  $('editMode').classList.add('show-aisug');
+  const shorten = s => (s.length > 90 ? s.slice(0, 90) + '…' : s);
+  list.innerHTML = '<div class="ais-orig">“' + ipEsc(shorten(selText)) + '”</div><div class="ais-empty"><span class="spin"></span>Finding alternatives…</div>';
+  try {
+    const ctx = snippetAround(rng);
+    const isWord = !/\s/.test(selText);
+    const sys = 'You are a precise literary editor. Given a highlighted excerpt from a story and its surrounding context, propose three strong alternative ' + (isWord ? 'words' : 'phrasings') + ' that preserve the meaning and fit the voice. For each, return: "text" (the replacement only), "definition" (a brief, plain definition when it is a single less-common word; otherwise an empty string), and "reason" (one concise line on why it strengthens the writing). Vary the options. Return ONLY a JSON array of exactly three objects with keys text, definition, reason — no prose, no code fences.';
+    const prompt = 'Surrounding context: …' + ctx.before + '〈' + ctx.sel + '〉' + ctx.after + '…\n\nHighlighted text to rework: "' + selText + '"';
+    const arr = aiParseList(await aiCall(sys, prompt));
+    renderAiSug(selText, arr);
+  } catch (e){
+    list.innerHTML = '<div class="ais-orig">“' + ipEsc(shorten(selText)) + '”</div><div class="ais-empty">' + ipEsc(aiErrMsg(e)) + '</div>';
+  }
+}
+function renderAiSug(orig, arr){
+  const list = $('aiSugList'); if (!list) return;
+  list.innerHTML = '';
+  const o = document.createElement('div'); o.className = 'ais-orig'; o.textContent = '“' + (orig.length > 90 ? orig.slice(0, 90) + '…' : orig) + '”'; list.appendChild(o);
+  if (!arr.length){ const e = document.createElement('div'); e.className = 'ais-empty'; e.textContent = 'No suggestions came back — try again.'; list.appendChild(e); return; }
+  arr.slice(0, 3).forEach(s => {
+    const it = document.createElement('div'); it.className = 'ais-item';
+    const tx = document.createElement('div'); tx.className = 'ais-text'; tx.textContent = s.text || ''; it.appendChild(tx);
+    if (s.definition){ const d = document.createElement('div'); d.className = 'ais-def'; d.textContent = s.definition; it.appendChild(d); }
+    if (s.reason){ const r = document.createElement('div'); r.className = 'ais-reason'; r.textContent = s.reason; it.appendChild(r); }
+    const ap = document.createElement('button'); ap.className = 'ais-apply'; ap.textContent = 'Use this';
+    ap.addEventListener('click', () => applyAiSug(s.text || '')); it.appendChild(ap);
+    list.appendChild(it);
+  });
+}
+function applyAiSug(text){
+  const rng = _aiRephraseRng; if (!rng || !text){ closeAiSug(); return; }
+  const body = $('editBody');
+  if (!body || !body.contains(rng.commonAncestorContainer)){ closeAiSug(); return; }
+  const direct = amOwner() && $('edDirect') && $('edDirect').checked;
+  if (direct){ rng.deleteContents(); rng.insertNode(document.createTextNode(text)); }
+  else { const del = sgWrap(rng, 'sg-del'); del.after(sgSpanText('sg-ins', text, del.dataset.grp)); }
+  const s2 = window.getSelection(); if (s2) s2.removeAllRanges();
+  commitEdit(); renderPending(); renderNotes();
+  closeAiSug();
+}
+function closeAiSug(){ _aiRephraseRng = null; const e = $('editMode'); if (e) e.classList.remove('show-aisug'); const l = $('aiSugList'); if (l) l.innerHTML = ''; }
 /* ----- resolving suggestions (approve / reject / edit) ----- */
 // Backfill ids on suggestions made before grouping existed, so they stay resolvable.
 function normalizeSuggestions(root){
@@ -11876,6 +11949,7 @@ function init(){
     closeSgPop();
   });
   document.querySelectorAll('#sgBar button').forEach(b => b.addEventListener('mousedown', ev => { ev.preventDefault(); doSg(b.dataset.sg); }));
+  { const ap = $('aiSugPanel'); if (ap) ap.addEventListener('click', e => { if (e.target.classList && e.target.classList.contains('ais-close')) closeAiSug(); }); }
   $('edApproveAll').addEventListener('click', () => resolveAllSg(true));
   $('edRejectAll').addEventListener('click', () => resolveAllSg(false));
   $('readSugToggle').addEventListener('click', () => setReadSug(state._readSug === 'original' ? 'suggested' : 'original'));
