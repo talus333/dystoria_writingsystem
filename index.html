@@ -10573,7 +10573,8 @@ function ovApplyAnchor(scrollEl, anchor){
     || blocks.find(b => (b.textContent || '').replace(/\s+/g, ' ').trim().startsWith(pre));
   if (!match) return false;
   const cr = scrollEl.getBoundingClientRect(), br = match.getBoundingClientRect();
-  scrollEl.scrollTop = Math.max(0, scrollEl.scrollTop + (br.top - cr.top) - (anchor.offset || 0));
+  // offset was captured as (viewportTop - blockTop); add it back so the block lands at the same spot it was scrolled to
+  scrollEl.scrollTop = Math.max(0, scrollEl.scrollTop + (br.top - cr.top) + (anchor.offset || 0));
   return true;
 }
 function openReadMode(){
@@ -10652,6 +10653,10 @@ function ipClose(val){
 }
 function amOwner(){ return !(state.session && state.session._shared); }
 function editDirectOn(){ return !!(amOwner() && $('edEditSeg') && $('edEditSeg').classList.contains('active')); }
+// Remembered Suggest/Edit choice (owners), persisted across sessions.
+let _edSegMode = 'suggest';
+try { if (localStorage.getItem('dystoria_refine_mode') === 'edit') _edSegMode = 'edit'; } catch (e){}
+function setEdSegMode(mode){ _edSegMode = mode; try { localStorage.setItem('dystoria_refine_mode', mode); } catch (e){} }
 let _edLastRange = null;   // last non-collapsed selection in the edit body (so the font/size dropdowns can apply after they steal focus)
 let _edCaret = null;       // last known caret/selection anywhere in the edit body (for image insertion at the cursor)
 // Apply a cosmetic format to the edit-body selection. Bold/Italic toggle (execCommand); font/size/color wrap a styled span.
@@ -10666,13 +10671,19 @@ function edFmt(cmd, val){
     commitEdit(); return;
   }
   if (!r || r.collapsed){ flashStatus('Select some text to format first'); return; }
-  const span = document.createElement('span');
-  if (cmd === 'font') span.style.fontFamily = val;
-  else if (cmd === 'size') span.style.fontSize = val;
-  else if (cmd === 'color') span.style.color = val;
-  try { const rng = r.cloneRange(); span.appendChild(rng.extractContents()); rng.insertNode(span); } catch (e){}
+  const prop = cmd === 'font' ? 'fontFamily' : cmd === 'size' ? 'fontSize' : 'color';
+  const span = edWrapRange(r, prop, val);
   if (live) live.removeAllRanges();
   _edLastRange = null;
+  return span;
+}
+// Wrap a range's contents in a styled <span> and commit. Returns the span (or null).
+function edWrapRange(range, prop, val){
+  if (!range || range.collapsed) return null;
+  const span = document.createElement('span');
+  span.style[prop] = val;
+  try { const rng = range.cloneRange(); span.appendChild(rng.extractContents()); rng.insertNode(span); }
+  catch (e){ return null; }
   commitEdit();
   return span;
 }
@@ -10681,16 +10692,15 @@ function applyEdColor(color){
   if (!color) return;
   const body = $('editBody'); const r = _edLastRange;
   if (!r || r.collapsed || !body.contains(r.commonAncestorContainer)){ flashStatus('Highlight some text, then Apply'); return; }
-  const live = window.getSelection();
-  try { live.removeAllRanges(); live.addRange(r); } catch (e){}
-  const span = edFmt('color', color);
+  const span = edWrapRange(r, 'color', color);   // wrap the stored range directly (robust, no focus dependency)
   pushRecentColor(color);
   // keep the just-coloured text highlighted so another change can be made without re-selecting
   if (span){
     const nr = document.createRange(); nr.selectNodeContents(span);
+    const live = window.getSelection();
     try { body.focus(); live.removeAllRanges(); live.addRange(nr); } catch (e){}
     _edLastRange = nr.cloneRange();
-  }
+  } else { _edLastRange = null; }
 }
 // Recently-used custom colours — small circles in the bar, capped at 6 (oldest drops off), persisted across sessions.
 function getRecentColors(){ try { return JSON.parse(localStorage.getItem('dystoria_recent_colors') || '[]'); } catch (e){ return []; } }
@@ -10905,8 +10915,9 @@ function buildEditMode(){
   $('editBody').innerHTML = tmp.innerHTML;
   normalizeSuggestions();
   $('edModeSwitch').style.display = amOwner() ? '' : 'none';
-  $('edSuggestSeg').classList.add('active'); $('edEditSeg').classList.remove('active');   // each edit session starts in Suggest
-  $('editMode').classList.remove('direct-edit');
+  const wantEdit = amOwner() && _edSegMode === 'edit';   // restore the last Suggest/Edit choice
+  $('edEditSeg').classList.toggle('active', wantEdit);
+  $('edSuggestSeg').classList.toggle('active', !wantEdit);
   applyEditEditable();
   renderPending();
   renderNotes();
