@@ -1768,7 +1768,7 @@
   .oc-flash{background:#fbf3d9!important; transition:background .4s}
   /* ===== Write Sessions (Phase 1): history + mini end button ===== */
   #lowerMain{position:relative}
-  #sessionHistory{width:100%; margin-top:12px; border-top:1px solid var(--line); padding-top:9px}
+  #sessionHistory{flex:none; width:100%; margin-top:8px; border-top:1px solid var(--line); padding-top:9px; max-height:32vh; overflow-y:auto}
   #sessionHistory .sh-head{font-family:var(--sans); font-size:9px; letter-spacing:.2em; text-transform:uppercase; color:var(--ink-faint); margin-bottom:6px}
   .sh-item{border-bottom:1px solid var(--line); padding:5px 0}
   .sh-item:last-child{border-bottom:none}
@@ -2088,8 +2088,8 @@
         <div id="focusList"></div>
         <button id="focusAddBtn" class="np-add" title="Add a story element to keep in focus while you write">+ focus element</button>
         <div id="focusCounts"><span class="wordcount" id="wordCountLbl"></span><span class="wordcount" id="promptScore" title="Prompt words woven into the writing \u2014 \u2713 marks them on the map"></span></div>
-        <div id="sessionHistory" style="display:none"></div>
       </div>
+      <div id="sessionHistory" style="display:none"></div>
       <button id="writeModeBtn" title="Full-screen focused writing \u2014 Esc to return">Focus</button>
     </div>
     <div id="recapCard">
@@ -9621,24 +9621,36 @@ function restoreFromSnapshotsIfEmpty(){
   if(typeof scheduleAutosave==='function') scheduleAutosave();
   if(typeof flashStatus==='function') flashStatus('Restored your earlier sessions from history');
 }
+// The Archive panel (its own pinned section at the bottom of the focus panel).
+// Active sessions live as locked prose in the editor, so they aren't listed here —
+// only deleted sessions, which can be restored or purged.
 function renderSessionHistory(){
   const host=$('sessionHistory'); if(!host) return;
-  const log=(state.session&&state.session.sessionLog)||[];
   const arch=(state.session&&state.session.archive)||[];
-  if(!log.length && !arch.length){ host.innerHTML=''; host.style.display='none'; return; }
+  if(!arch.length){ host.innerHTML=''; host.style.display='none'; return; }
   host.style.display='';
   const esc2=s=>(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-  host.innerHTML='<div class="sh-head">Sessions</div>';
-  log.slice().reverse().forEach(e=>{
-    const item=document.createElement('div'); item.className='sh-item';
+  host.innerHTML='';
+  const ah=document.createElement('div'); ah.className='sh-head'; ah.style.cursor='pointer';
+  ah.textContent=(host._archOpen?'▾ ':'▸ ')+'Archive ('+arch.length+')';
+  ah.addEventListener('click',()=>{ host._archOpen=!host._archOpen; renderSessionHistory(); });
+  host.appendChild(ah);
+  if(!host._archOpen) return;
+  arch.slice().reverse().forEach(e=>{
+    const item=document.createElement('div'); item.className='sh-item arch';
     let when=''; try{ when=new Date(e.at).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}); }catch(_){}
     const sec=(e.frame!=null)?('Section '+(((e.frame|0)+1))):'';
     const wc=(e.words!=null)?(e.words+'w'):'';
     const head=document.createElement('div'); head.className='sh-row';
     head.innerHTML='<span class="sh-when">'+esc2(when)+'</span><span class="sh-meta">'+[sec,wc].filter(Boolean).join(' · ')+'</span>';
+    const rst=document.createElement('span'); rst.className='sh-restore'; rst.textContent='restore';
+    rst.addEventListener('click',ev=>{ ev.stopPropagation(); restoreArchivedSession(e.id); });
+    const pg=document.createElement('span'); pg.className='sh-purge'; pg.textContent='purge';
+    pg.addEventListener('click',ev=>{ ev.stopPropagation(); if(confirm('Permanently delete this archived session? This cannot be undone.')) purgeArchivedSession(e.id); });
+    head.appendChild(rst); head.appendChild(pg);
     const body=document.createElement('div'); body.className='sh-body'; body.style.display='none';
-    const rev=e.review||e.summary||'';
-    body.innerHTML=rev?('<div class="sh-review">'+esc2(rev).replace(/\n{2,}/g,'<br><br>').replace(/\n/g,'<br>')+'</div>'):'<div class="sh-review wk-empty">Review pending…</div>';
+    const rev=e.review||'';
+    body.innerHTML=rev?('<div class="sh-review">'+esc2(rev).replace(/\n{2,}/g,'<br><br>').replace(/\n/g,'<br>')+'</div>'):'';
     if(e.html){
       const tog=document.createElement('span'); tog.className='sh-toggle'; tog.textContent='show passage';
       const pv=document.createElement('div'); pv.className='sh-passage'; pv.style.display='none'; pv.innerHTML=e.html;
@@ -9648,39 +9660,6 @@ function renderSessionHistory(){
     head.addEventListener('click',()=>{ body.style.display=(body.style.display==='none')?'':'none'; });
     item.appendChild(head); item.appendChild(body); host.appendChild(item);
   });
-  // --- archived sessions (deleted; restorable or purgeable) ---
-  if(arch.length){
-    const ah=document.createElement('div'); ah.className='sh-arch-head';
-    ah.textContent=(host._archOpen?'▾ ':'▸ ')+'Archived ('+arch.length+')';
-    ah.addEventListener('click',()=>{ host._archOpen=!host._archOpen; renderSessionHistory(); });
-    host.appendChild(ah);
-    if(host._archOpen) arch.slice().reverse().forEach(e=>{
-      const item=document.createElement('div'); item.className='sh-item arch';
-      let when=''; try{ when=new Date(e.at).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}); }catch(_){}
-      const sec=(e.frame!=null)?('Section '+(((e.frame|0)+1))):'';
-      const wc=(e.words!=null)?(e.words+'w'):'';
-      const head=document.createElement('div'); head.className='sh-row';
-      head.innerHTML='<span class="sh-when">'+esc2(when)+'</span><span class="sh-meta">'+[sec,wc].filter(Boolean).join(' · ')+'</span>'
-        +'<span class="sh-reason">'+esc2(e.reason||'archived')+'</span>';
-      const acts=document.createElement('div');
-      const rst=document.createElement('span'); rst.className='sh-restore'; rst.textContent='restore';
-      rst.addEventListener('click',ev=>{ ev.stopPropagation(); restoreArchivedSession(e.id); });
-      const pg=document.createElement('span'); pg.className='sh-purge'; pg.textContent='purge';
-      pg.addEventListener('click',ev=>{ ev.stopPropagation(); if(confirm('Permanently delete this archived session? This cannot be undone.')) purgeArchivedSession(e.id); });
-      head.appendChild(rst); head.appendChild(pg);
-      const body=document.createElement('div'); body.className='sh-body'; body.style.display='none';
-      const rev=e.review||'';
-      body.innerHTML=rev?('<div class="sh-review">'+esc2(rev).replace(/\n{2,}/g,'<br><br>').replace(/\n/g,'<br>')+'</div>'):'';
-      if(e.html){
-        const tog=document.createElement('span'); tog.className='sh-toggle'; tog.textContent='show passage';
-        const pv=document.createElement('div'); pv.className='sh-passage'; pv.style.display='none'; pv.innerHTML=e.html;
-        tog.addEventListener('click',ev=>{ ev.stopPropagation(); const on=pv.style.display==='none'; pv.style.display=on?'':'none'; tog.textContent=on?'hide passage':'show passage'; });
-        body.appendChild(tog); body.appendChild(pv);
-      }
-      head.addEventListener('click',()=>{ body.style.display=(body.style.display==='none')?'':'none'; });
-      item.appendChild(head); item.appendChild(body); host.appendChild(item);
-    });
-  }
 }
 /* add a focus element from a dropdown of this section's elements (like the notepad +element) */
 function focusAddOpen(anchor){
@@ -11905,6 +11884,21 @@ function normalizeLocks(){
   const ed = $('editor'); if (!ed) return;
   ed.querySelectorAll('.session-prior').forEach(n => n.classList.remove('session-prior'));   // strip deprecated gate class that hid prior sessions
   ed.querySelectorAll('.lk').forEach(n => { n.contentEditable = 'false'; });
+  backfillSessionIds();
+}
+// Older stories locked their sessions before per-session ids existed → their .lk blocks
+// carry no data-sess, so they can't be selected/deleted. Backfill ids by grouping
+// consecutive locked blocks, starting a new group at each .session-start marker.
+function backfillSessionIds(){
+  const ed = $('editor'); if (!ed) return;
+  let cur = null;
+  Array.from(ed.children).forEach(c => {
+    if (!(c.classList && c.classList.contains('lk'))){ cur = null; return; }
+    if (c.classList.contains('session-start') || !cur){
+      cur = (c.dataset && c.dataset.sess) ? c.dataset.sess : ('sess' + Date.now().toString(36) + Math.random().toString(36).slice(2,5));
+    }
+    if (!c.dataset.sess) c.dataset.sess = cur;
+  });
 }
 // Wrap stray top-level text/inline nodes in #editor into <div> blocks. The first
 // line typed into an empty editor stays a bare TEXT node until Enter is pressed —
