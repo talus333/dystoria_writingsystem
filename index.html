@@ -1132,6 +1132,8 @@
   .node.link-target .tag{font-weight:700}
   .set-divider{stroke:var(--line); stroke-width:1; stroke-dasharray:1 6; opacity:.9}
   #skySvg{touch-action:none; user-select:none; -webkit-user-select:none}
+  .lasso-path{pointer-events:none}
+  .grp-ring{fill:rgba(184,134,11,.10); stroke:var(--gold); stroke-width:1.5; stroke-dasharray:4 3; pointer-events:none}
   #terrainTool{position:absolute; left:16px; bottom:16px; z-index:6; font-family:var(--sans,system-ui,sans-serif)}
   #terrainToolBtn{font:inherit; font-size:12px; padding:6px 11px; border:1px solid #cfc3a8; border-radius:16px; background:#fbf6ea; color:#4a4336; cursor:pointer; box-shadow:0 1px 4px rgba(60,50,30,.12)}
   #terrainTool.drawing #terrainToolBtn{background:#3a352c; color:#f3ecdd; border-color:#3a352c}
@@ -4352,6 +4354,15 @@ function hybridizeType(word){
   return word + ' (' + a + ' + ' + b + ')';
 }
 const IDENTITY_SUBS = ['Type', 'Archetype', 'Occupation'];
+// The connector that links a being's name to its identity word: "Jessy the Anarchist", "Mara a Smuggler".
+// Archetypes read as epithets ("the"); occupations and types read as descriptors ("a"/"an").
+const BEING_ARTICLE = { Archetype: 'the', Occupation: 'a', Type: 'a' };
+function beingArticle(nd){
+  if (!nd || nd.role !== 'being' || !nd.name) return '';
+  const base = BEING_ARTICLE[nd.sub]; if (!base) return '';
+  if (base === 'a' && /^[aeiou]/i.test(nd.word || '')) return 'an';   // a → an before a vowel
+  return base;
+}
 function drawBeing(set, used, genres){
   const cat = getCat('being');
   const sel = state.selection.being;
@@ -6559,6 +6570,29 @@ function skyPt(e){
            y: y0 + (e.clientY - r.top) / rh * h };
 }
 
+/* ---------------- lasso select (one-pointer drag on empty map; two-finger gesture still pans) ---------------- */
+function pointInPoly(x, y, pts){
+  let inside = false;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++){
+    const xi = pts[i][0], yi = pts[i][1], xj = pts[j][0], yj = pts[j][1];
+    if (((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi)) inside = !inside;
+  }
+  return inside;
+}
+function nodeLassoable(i){ const nd = state.nodes && state.nodes[i]; return !!(nd && typeof nd.x === 'number' && !nd.poly && !nd.line && !nd.locked); }
+function clearGroupSel(){ if (state.selGroup && state.selGroup.length){ state.selGroup = null; markGroupSel(); return true; } state.selGroup = null; return false; }
+function markGroupSel(){
+  const sky = $('skySvg'); if (!sky) return;
+  sky.querySelectorAll('.grp-ring').forEach(el => el.remove());
+  sky.querySelectorAll('g.node.grp-sel').forEach(el => el.classList.remove('grp-sel'));
+  (state.selGroup || []).forEach(i => {
+    const g = sky.querySelector('g.node[data-node="' + i + '"]'); if (!g) return;
+    g.classList.add('grp-sel');
+    const ring = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    ring.setAttribute('class', 'grp-ring'); ring.setAttribute('cx', 0); ring.setAttribute('cy', 0); ring.setAttribute('r', 24);
+    g.insertBefore(ring, g.firstChild);
+  });
+}
 /* ---------------- drag-to-connect ---------------- */
 let linkDragState = null;
 function linkDragActive(){ return !!linkDragState; }
@@ -8082,10 +8116,11 @@ function renderConstellation(){
     // collapsed named being: by default just the name sits in the top slot, but a PINNED
     // archetype (bolded while selected) stays visible when unselected, like pinned subcategories
     const archePinned = nd.role === 'being' && !!nd.wkeep;
-    const hideArchetype = collapsedBeing && nd.name && !archePinned;
+    const hideArchetype = false;   // keep the being's identity word showing even when named (reads "Name the Archetype")
     w.setAttribute('class', (lineLike ? 'w w-connector' : (nd.terrain ? 'w w-terrain' : 'w')) + (archePinned ? ' pinned' : '')); w.setAttribute('text-anchor', 'middle');
     if (elFill) w.style.fill = elFill;   // inline style beats the .node text CSS fill
-    w.textContent = (nd.cat === 'concept' && nd.role !== 'frame') ? '\u27E8 ' + nd.word + ' \u27E9' : nd.word;
+    const _art = beingArticle(nd);   // "the"/"a"/"an" linking the name to the identity word
+    w.textContent = (nd.cat === 'concept' && nd.role !== 'frame') ? '\u27E8 ' + nd.word + ' \u27E9' : ((_art ? _art + ' ' : '') + nd.word);
     w.addEventListener('mouseenter', ev => {
       if (i !== state.selNode) return;   // description only when the element is selected
       let d = descFor(nd);
@@ -8360,6 +8395,7 @@ function renderConstellation(){
   updateAutoPlacePill();   // keep the Clear-map (and auto-place) pill in sync with whether the map has elements
   const rn = $('railNote');
   if (rn) rn.style.display = (state.prompt && state.prompt.words && state.prompt.words.length) ? 'none' : '';
+  markGroupSel();   // re-apply lasso-group highlight rings after a fresh render
 }
 function renderEvOverlay(){
   const ov = $('evOverlay');
@@ -12318,6 +12354,20 @@ function init(){
   const sky = $('skySvg');
   let dragging = null;
   let panning = null;
+  let lasso = null, lassoPath = null;
+  function lassoEnd(){
+    if (!lasso) return;
+    const pts = lasso.pts; lasso = null;
+    if (lassoPath && lassoPath.parentNode) lassoPath.parentNode.removeChild(lassoPath);
+    lassoPath = null;
+    state.lastDrag = Date.now();
+    if (pts.length < 3){ return; }
+    const sel = [];
+    (state.nodes || []).forEach((nd, i) => { if (nodeLassoable(i) && pointInPoly(nd.x, nd.y, pts)) sel.push(i); });
+    state.selGroup = sel.length ? sel : null;
+    markGroupSel();
+    if (sel.length) flashStatus(sel.length + (sel.length === 1 ? ' element selected — drag it to move' : ' elements selected — drag any one to move the group'));
+  }
   let terrainDrawing = null, terrainPreview = null;
   function terrainEnd(commit){
     if (!terrainDrawing) return;
@@ -12356,8 +12406,14 @@ function init(){
     }
     const g = e.target.closest ? e.target.closest('g.node') : null;
     if (!g){
-      if (state.prompt){
-        panning = { sx: e.clientX, sy: e.clientY, panX0: state.view.panX || 0, panY0: state.view.panY || 0, pid: e.pointerId, moved: false };
+      // one-pointer drag on empty map → lasso select (two-finger gesture still pans/zooms via wheel/touch)
+      if (state.prompt && e.isPrimary !== false){
+        const p = skyPt(e);
+        lasso = { pts: [[p.x, p.y]], pid: e.pointerId };
+        lassoPath = tEl('path', { class: 'lasso-path', fill: 'rgba(120,140,200,0.10)', stroke: '#5a7fbf', 'stroke-width': '1.2', 'stroke-dasharray': '5 4' });
+        sky.appendChild(lassoPath);
+        try { sky.setPointerCapture(e.pointerId); } catch (err) {}
+        e.preventDefault();
       }
       return;
     }
@@ -12369,7 +12425,12 @@ function init(){
     if (state.nodes[iLk] && (state.nodes[iLk].terrain || state.nodes[iLk].line) && state.nodes[iLk].labelPinned !== false) return;   // pinned terrain/connector label rides the shape — unpin to move
     const i = iLk;
     const sp = skyPt(e);
-    dragging = { i, pid: e.pointerId, sx: e.clientX, sy: e.clientY, spx: sp.x, spy: sp.y, ox: state.nodes[i].x, oy: state.nodes[i].y, moved: false };
+    // if this node is part of a lasso selection, drag the whole group together
+    const inGroup = state.selGroup && state.selGroup.indexOf(i) >= 0;
+    const group = inGroup ? state.selGroup.filter(nodeLassoable) : null;
+    if (!inGroup) clearGroupSel();   // grabbing a node outside the selection clears it
+    dragging = { i, pid: e.pointerId, sx: e.clientX, sy: e.clientY, spx: sp.x, spy: sp.y, ox: state.nodes[i].x, oy: state.nodes[i].y, moved: false,
+      group, groupOrig: group ? group.map(j => ({ j, x: state.nodes[j].x, y: state.nodes[j].y })) : null };
     state.nodes[i].amp = 0;
   });
   sky.addEventListener('pointermove', e => {
@@ -12379,6 +12440,11 @@ function init(){
         terrainDrawing.pts.push([p.x, p.y]);
         terrainPreview.setAttribute('d', 'M ' + terrainDrawing.pts.map(q => q[0].toFixed(1) + ' ' + q[1].toFixed(1)).join(' L '));
       }
+      return;
+    }
+    if (lasso){
+      const p = skyPt(e); lasso.pts.push([p.x, p.y]);
+      if (lassoPath) lassoPath.setAttribute('d', 'M ' + lasso.pts.map(q => q[0].toFixed(1) + ' ' + q[1].toFixed(1)).join(' L ') + ' Z');
       return;
     }
     if (linkDragActive()){ updateLinkDrag(e); return; }
@@ -12404,15 +12470,21 @@ function init(){
     }
     if (!dragging.moved) return;
     const p = skyPt(e);
-    const nd = state.nodes[dragging.i];
-    nd.x = dragging.ox + (p.x - dragging.spx); nd.y = dragging.oy + (p.y - dragging.spy);
+    if (dragging.group && dragging.groupOrig){
+      const gdx = p.x - dragging.spx, gdy = p.y - dragging.spy;
+      dragging.groupOrig.forEach(o => { const n = state.nodes[o.j]; if (n){ n.x = o.x + gdx; n.y = o.y + gdy; n.amp = 0; } });
+    } else {
+      const nd = state.nodes[dragging.i];
+      nd.x = dragging.ox + (p.x - dragging.spx); nd.y = dragging.oy + (p.y - dragging.spy);
+    }
     positionConstellation(0);
   });
   const endDrag = () => {
     if (!dragging) return;
     if (dragging.moved && state.prompt){
-      const w = state.prompt.words[dragging.i];
-      w.fx = state.nodes[dragging.i].x; w.fy = state.nodes[dragging.i].y;
+      const commitOne = j => { const w = state.prompt.words[j]; if (w){ w.fx = state.nodes[j].x; w.fy = state.nodes[j].y; } };
+      if (dragging.group && dragging.group.length) dragging.group.forEach(commitOne);
+      else commitOne(dragging.i);
       state.lastDrag = Date.now();
       if (state.session){ state.session.words = state.prompt.words; scheduleAutosave(); }
     }
@@ -12421,11 +12493,12 @@ function init(){
   const endPan = () => {
     if (panning){ if (panning.moved){ state.lastDrag = Date.now(); if (mapTerrainKey() && state.prompt) renderConstellation(); } panning = null; }
   };
-  sky.addEventListener('pointerup', () => { terrainEnd(true); endLinkDrag(false); endPan(); endDrag(); });
-  sky.addEventListener('pointercancel', () => { terrainEnd(false); endLinkDrag(true); endPan(); endDrag(); });
+  sky.addEventListener('pointerup', () => { terrainEnd(true); lassoEnd(); endLinkDrag(false); endPan(); endDrag(); });
+  sky.addEventListener('pointercancel', () => { terrainEnd(false); lassoEnd(); endLinkDrag(true); endPan(); endDrag(); });
   sky.addEventListener('click', e => {
     if (state.lastDrag && Date.now() - state.lastDrag < 250) return;
     if (state.linkFrom != null){ state.linkFrom = null; renderConstellation(); return; }
+    if (clearGroupSel()) return;   // a plain click on empty map clears the lasso selection
     if (state.selNode != null){ state.selNode = null; renderConstellation(); return; }
     if (!state.prompt || (state.prompt.sets || 1) < 2 || !state.dividers) return;
     const d = state.dividers;
