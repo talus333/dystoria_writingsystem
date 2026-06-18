@@ -1736,6 +1736,25 @@
   .gc-fine a{color:#b08a2e; cursor:pointer; text-decoration:underline}
   /* flash a paragraph when the owner clicks a reader comment to locate it */
   .oc-flash{background:#fbf3d9!important; transition:background .4s}
+  /* ===== Write Sessions (Phase 1): history + mini end button ===== */
+  #lowerMain{position:relative}
+  #sessionHistory{width:100%; margin-top:12px; border-top:1px solid var(--line); padding-top:9px}
+  #sessionHistory .sh-head{font-family:var(--sans); font-size:9px; letter-spacing:.2em; text-transform:uppercase; color:var(--ink-faint); margin-bottom:6px}
+  .sh-item{border-bottom:1px solid var(--line); padding:5px 0}
+  .sh-item:last-child{border-bottom:none}
+  .sh-row{display:flex; justify-content:space-between; align-items:baseline; gap:8px; cursor:pointer; font-family:var(--sans); font-size:10.5px}
+  .sh-row .sh-when{color:var(--ink-soft)}
+  .sh-row .sh-meta{color:var(--ink-faint); letter-spacing:.04em; white-space:nowrap}
+  .sh-row:hover .sh-when{color:var(--gold)}
+  .sh-body{margin-top:5px}
+  .sh-review{font-family:var(--serif); font-size:12px; font-style:italic; color:var(--ink-soft); line-height:1.5}
+  .sh-toggle{display:inline-block; margin-top:6px; font-family:var(--sans); font-size:9px; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-faint); cursor:pointer}
+  .sh-toggle:hover{color:var(--gold)}
+  .sh-passage{margin-top:6px; padding:8px 10px; background:var(--bg2); border-radius:6px; font-family:var(--serif); font-size:12px; line-height:1.55; color:var(--ink); max-height:240px; overflow-y:auto}
+  .end-mini{display:none; position:absolute; right:18px; bottom:14px; z-index:5; font-family:var(--sans); font-size:9.5px; letter-spacing:.14em; text-transform:uppercase; color:var(--ink-faint); border:1px solid var(--line); border-radius:16px; padding:6px 14px; background:var(--paper)}
+  .end-mini:hover{border-color:var(--gold); color:var(--ink)}
+  body.writing .end-mini{display:inline-flex}
+  body.writing #writeModeBtn{display:none}   /* End Session moved to the writing area */
 </style>
 </head>
 <body>
@@ -2025,7 +2044,9 @@
         <div id="focusBlocks"></div>
         <div id="constraintBar"></div>
         <div id="focusList"></div>
+        <button id="focusAddBtn" class="np-add" title="Add a story element to keep in focus while you write">+ focus element</button>
         <div id="focusCounts"><span class="wordcount" id="wordCountLbl"></span><span class="wordcount" id="promptScore" title="Prompt words woven into the writing \u2014 \u2713 marks them on the map"></span></div>
+        <div id="sessionHistory" style="display:none"></div>
       </div>
       <button id="writeModeBtn" title="Full-screen focused writing \u2014 Esc to return">Focus</button>
     </div>
@@ -2045,6 +2066,7 @@
         <div id="graceBar" style="display:none"><span id="graceTxt">Time — finish your thought</span> <span id="graceNum">10</span></div>
         <div id="editorWrap"><div class="sec-mark" id="firstMark" style="display:none"><span class="dia"><span>1</span></span></div><input id="sectionTitle" placeholder="Section title" autocomplete="off"><div id="editor" contenteditable="true" spellcheck="false" data-ph="Begin…"></div></div>
         <div id="inkWrap"><canvas id="inkCanvas"></canvas></div>
+        <button id="endSessionMini" class="end-mini" title="End this writing session — saves a snapshot + review">End session</button>
       </div>
     </div>
     <div id="npAddMenu" hidden></div>
@@ -9022,7 +9044,8 @@ function openFocusAddCard(block, x, y){
   $('ecSearch').focus();
 }
 function renderFocus(){
-  if (typeof renderFocusFooter === 'function') renderFocusFooter();   // keep the notepad/map focus footer in sync
+  if (typeof renderFocusFooter === 'function') renderFocusFooter();
+  if (typeof renderSessionHistory === 'function') renderSessionHistory();   // keep the notepad/map focus footer in sync
   const fl = $('focusList');
   if (!fl) return;
   fl.innerHTML = '';
@@ -9515,6 +9538,70 @@ function updateEndBtn(){
   document.body.classList.toggle('addslock', addsLocked());
   document.body.classList.toggle('timer-running', !!(state.timer.started && state.timer.running));
 }
+
+/* ----- Write Sessions (Phase 1): snapshot the section's prose on session end ----- */
+function currentSectionHtml(){
+  const ed=$('editor'); if(!ed) return '';
+  const k=state.frameIdx||0; const fm=(typeof nodeFrameMap==='function')?nodeFrameMap():null;
+  const tmp=document.createElement('div');
+  Array.from(ed.children).forEach(c=>{
+    const f = fm ? fm.get(c) : 0;
+    if(fm==null || f===k){ const cl=c.cloneNode(true); if(cl.style&&cl.style.display==='none') cl.style.removeProperty('display'); tmp.appendChild(cl); }
+  });
+  return tmp.innerHTML;
+}
+function renderSessionHistory(){
+  const host=$('sessionHistory'); if(!host) return;
+  const log=(state.session&&state.session.sessionLog)||[];
+  if(!log.length){ host.innerHTML=''; host.style.display='none'; return; }
+  host.style.display='';
+  const esc2=s=>(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  host.innerHTML='<div class="sh-head">Sessions</div>';
+  log.slice().reverse().forEach(e=>{
+    const item=document.createElement('div'); item.className='sh-item';
+    let when=''; try{ when=new Date(e.at).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}); }catch(_){}
+    const sec=(e.frame!=null)?('Section '+(((e.frame|0)+1))):'';
+    const wc=(e.words!=null)?(e.words+'w'):'';
+    const head=document.createElement('div'); head.className='sh-row';
+    head.innerHTML='<span class="sh-when">'+esc2(when)+'</span><span class="sh-meta">'+[sec,wc].filter(Boolean).join(' · ')+'</span>';
+    const body=document.createElement('div'); body.className='sh-body'; body.style.display='none';
+    const rev=e.review||e.summary||'';
+    body.innerHTML=rev?('<div class="sh-review">'+esc2(rev).replace(/\n{2,}/g,'<br><br>').replace(/\n/g,'<br>')+'</div>'):'<div class="sh-review wk-empty">Review pending…</div>';
+    if(e.html){
+      const tog=document.createElement('span'); tog.className='sh-toggle'; tog.textContent='show passage';
+      const pv=document.createElement('div'); pv.className='sh-passage'; pv.style.display='none'; pv.innerHTML=e.html;
+      tog.addEventListener('click',ev=>{ ev.stopPropagation(); const on=pv.style.display==='none'; pv.style.display=on?'':'none'; tog.textContent=on?'hide passage':'show passage'; });
+      body.appendChild(tog); body.appendChild(pv);
+    }
+    head.addEventListener('click',()=>{ body.style.display=(body.style.display==='none')?'':'none'; });
+    item.appendChild(head); item.appendChild(body); host.appendChild(item);
+  });
+}
+/* add a focus element from a dropdown of this section's elements (like the notepad +element) */
+function focusAddOpen(anchor){
+  const menu=$('npAddMenu'); if(!menu) return;
+  menu.innerHTML='';
+  const words=(state.prompt&&state.prompt.words)||[];
+  const inFocus=new Set(state.focusKeys||[]); const seen=new Set(); const els=[];
+  words.forEach((w,i)=>{
+    if(w.role==='constraint'||w.role==='rel') return;
+    if(w.cat==='event'||w.cat==='stakes') return;
+    if(!(w.name||w.word)) return;
+    const key=wordKey(w); if(inFocus.has(key)||seen.has(key)) return; seen.add(key); els.push({w,i,key});
+  });
+  if(!els.length){ const e=document.createElement('div'); e.className='np-empty'; e.textContent='No elements to focus on in this section.'; menu.appendChild(e); }
+  els.forEach(o=>{
+    const b=document.createElement('button');
+    const l=document.createElement('span'); l.textContent=elDisplayName(o.w); b.appendChild(l);
+    const c=document.createElement('span'); c.className='np-cat'; c.style.color=catColor(o.w.cat); c.textContent=(getCat(o.w.cat)||{}).name||o.w.cat; b.appendChild(c);
+    b.addEventListener('click',()=>{ addFocusIdx(o.i); menu.hidden=true; });
+    menu.appendChild(b);
+  });
+  const r=anchor.getBoundingClientRect();
+  menu.style.left=Math.max(8,Math.min(r.left,window.innerWidth-252))+'px';
+  menu.style.top=Math.max(8,Math.min(r.bottom+5,window.innerHeight-344))+'px';
+  menu.hidden=false;
+}
 function showRecap(){
   const base = state.sessionStart || { words: 0, woven: 0 };
   const t = editorText().trim();
@@ -9541,6 +9628,11 @@ function showRecap(){
   b.innerHTML = h;
   document.body.classList.add('recap');
   const wl = $('rcWikiLink'); if (wl) wl.addEventListener('click', () => { document.body.classList.remove('recap'); openWiki(); });
+  if (wrote && state.session){
+    state.session.sessionLog = state.session.sessionLog || [];
+    const _snap = { id:'sess'+Date.now().toString(36)+Math.random().toString(36).slice(2,5), at:new Date().toISOString(), frame:(state.frameIdx||0), words:wrote, html:currentSectionHtml(), review:'' };
+    state.session.sessionLog.push(_snap); state._lastSnapId = _snap.id; renderSessionHistory(); scheduleAutosave(800);
+  }
   if (wrote){ runSessionSummary(wovenEls.map(e => e.name || e.word)); autoSummarizeElements(); scanMissedElements(); }
 }
 async function runSessionSummary(wovenNames){
@@ -9564,7 +9656,10 @@ async function runSessionSummary(wovenNames){
     // persist a small session log on the story
     if (state.session){
       state.session.sessionLog = state.session.sessionLog || [];
-      state.session.sessionLog.push({ at: new Date().toISOString(), summary: text, woven: wovenNames });
+      const _e = state.session.sessionLog.find(x => x.id === state._lastSnapId);
+      if (_e){ _e.review = text; _e.woven = wovenNames; }
+      else state.session.sessionLog.push({ id:'sess'+Date.now().toString(36), at:new Date().toISOString(), review:text, woven:wovenNames });
+      if (typeof renderSessionHistory==="function") renderSessionHistory();
       scheduleAutosave(800);
     }
   } catch (e){
@@ -13182,6 +13277,8 @@ function init(){
     }
   })();
   $('endSessionBtn').addEventListener('click', endWritingSession);
+  { const m=$('endSessionMini'); if(m) m.addEventListener('click', endWritingSession); }
+  { const fa=$('focusAddBtn'); if(fa) fa.addEventListener('click', e=>{ e.stopPropagation(); focusAddOpen(fa); }); }
   $('legendShow').addEventListener('click', () => { $('mapLegend').classList.remove('min'); renderLegend(); });
   $('legendHide').addEventListener('click', () => $('mapLegend').classList.add('min'));
   $('ecSearch').addEventListener('input', renderECResults);
