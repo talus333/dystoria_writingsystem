@@ -1653,7 +1653,7 @@
   body.guest #authCard{z-index:4100}   /* so 'create account' opens ABOVE the reader, not behind it */
   /* black-theme top bar for the public reader (scoped under #readMode to beat '#readMode .rd-head') */
   body.guest #readMode .rd-head{background:#1b1916; border-bottom-color:#000}
-  body.guest #readMode .rd-guide{color:#cdc6b8}
+  body.guest #readMode .rd-guide{color:#cdc6b8; left:calc(50% - 138px); max-width:min(540px, calc(100% - 680px))}   /* centre over the story column (offset by the 300px comment rail) */
   body.guest #readMode .rd-guide b{color:var(--gold,#d8b25a)}
   body.guest #readMode .gb-btn{background:transparent; color:#ece6d9; border-color:#4a443a}
   body.guest #readMode .gb-btn:hover{border-color:var(--gold,#c8a24a)}
@@ -1663,6 +1663,9 @@
   .np-item.cm{border-color:#cbd8e2; background:#f6f9fb}
   .np-item.cm .np-quote{border-left-color:#6fa3c0}
   .np-item.cm .np-au{color:#5f7d92}
+  /* hover a note/comment → highlight the passage it's anchored to */
+  .nt.nt-hl{background:#fbf3d9; border-radius:3px; box-shadow:0 0 0 3px #fbf3d9}
+  .pub-hl{background:#e9f2f8 !important; border-radius:3px; box-shadow:0 0 0 4px #e9f2f8; transition:background .12s}
   /* owner Share pill + popup (Read bar) */
   #shareBtn{display:inline-flex; align-items:center; gap:5px}
   #shareBtn.on{border-color:var(--gold,#c8a24a); color:var(--gold,#c8a24a)}
@@ -10240,6 +10243,7 @@ function pubRenderGuestComments(){
     if(c.anchor_key){ const q=document.createElement('span'); q.className='np-quote'; q.textContent='“'+(c.anchor_key||'').slice(0,80)+'”'; it.appendChild(q); }
     const t=document.createElement('div'); t.className='np-text'; t.textContent=c.body||''; it.appendChild(t);
     const au=document.createElement('div'); au.className='np-au'; const who=document.createElement('span'); who.textContent=(c.author_name||'Guest')+' · '+_pubTime(c.created_at); au.appendChild(who); it.appendChild(au);
+    if(c.anchor_key){ it.style.cursor='pointer'; it.addEventListener('mouseenter',()=>pubHoverHighlight($('readBody'),c.anchor_key,true)); it.addEventListener('mouseleave',()=>pubHoverHighlight($('readBody'),c.anchor_key,false)); }
     list.appendChild(it);
   });
 }
@@ -10262,10 +10266,17 @@ async function pubDeleteComment(id){
   try{ const {error}=await supa.from('story_comments').delete().eq('id',id); if(error){ flashStatus('Delete: '+error.message); return; } _pubComments=_pubComments.filter(c=>c.id!==id); pubRenderOwnerComments(); }
   catch(e){ flashStatus('Delete error: '+e.message); }
 }
+// find the prose block that a comment is anchored to (exact key, else contains the snippet)
+function pubBlockFor(container, key){
+  if(!container||!key) return null;
+  const host=(container.querySelector && (container.querySelector('.rd-prose')||container))||container;
+  const blocks=Array.from(host.children||[]); const pre=key.slice(0,30);
+  return blocks.find(b=>_pubBlockKey(b)===key) || blocks.find(b=>(b.textContent||'').replace(/\s+/g,' ').trim().includes(pre)) || null;
+}
+function pubHoverHighlight(container, key, on){ const b=pubBlockFor(container,key); if(b) b.classList.toggle('pub-hl', on); }
 function pubOwnerScrollTo(key){
   const body=$('editBody'); if(!body||!key) return;
-  const blocks=Array.from(body.children); const pre=key.slice(0,24);
-  const m=blocks.find(b=>_pubBlockKey(b)===key)||blocks.find(b=>(b.textContent||'').replace(/\s+/g,' ').trim().includes(pre));
+  const m=pubBlockFor(body, key);
   if(m){ m.scrollIntoView({block:'center',behavior:'smooth'}); m.classList.add('oc-flash'); setTimeout(()=>m.classList.remove('oc-flash'),1200); }
 }
 function pubInit(){
@@ -11900,6 +11911,8 @@ function renderNotes(){
     au.appendChild(who); au.appendChild(acts);
     item.appendChild(q); item.appendChild(t); item.appendChild(au);
     item.addEventListener('click', () => scrollToAnchor(n.dataset.sg));
+    item.addEventListener('mouseenter', () => { const sp = $('editBody').querySelector('.nt[data-sg="' + n.dataset.sg + '"]'); if (sp) sp.classList.add('nt-hl'); });
+    item.addEventListener('mouseleave', () => { const sp = $('editBody').querySelector('.nt[data-sg="' + n.dataset.sg + '"]'); if (sp) sp.classList.remove('nt-hl'); });
     item.addEventListener('dblclick', ev => { ev.stopPropagation(); editNote(n.dataset.sg); });   // double-click to edit (backup)
     ed.addEventListener('click', ev => { ev.stopPropagation(); editNote(n.dataset.sg); });
     x.addEventListener('click', ev => { ev.stopPropagation(); const sp = $('editBody').querySelector('.nt[data-sg="' + n.dataset.sg + '"]'); if (sp) unwrapSpan(sp); commitEdit(); renderNotes(); });
@@ -11916,7 +11929,7 @@ function renderNotes(){
     const x = document.createElement('span'); x.className = 'np-x'; x.textContent = '×'; x.title = 'Remove this reader comment';
     acts.appendChild(x); au.appendChild(who); au.appendChild(acts);
     item.appendChild(t); item.appendChild(au);
-    if (c.anchor_key) item.addEventListener('click', () => pubOwnerScrollTo(c.anchor_key));
+    if (c.anchor_key){ item.addEventListener('click', () => pubOwnerScrollTo(c.anchor_key)); item.addEventListener('mouseenter', () => pubHoverHighlight($('editBody'), c.anchor_key, true)); item.addEventListener('mouseleave', () => pubHoverHighlight($('editBody'), c.anchor_key, false)); }
     x.addEventListener('click', ev => { ev.stopPropagation(); pubDeleteComment(c.id); });
     list.appendChild(item);
   });
