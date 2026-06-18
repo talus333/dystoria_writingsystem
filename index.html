@@ -508,6 +508,21 @@
   #sessMenu button:disabled:hover{background:transparent; color:var(--ink-soft)}
   #sessMenu .sm-note{font-family:var(--serif); font-style:italic; font-size:11.5px; color:var(--ink-faint); padding:4px 10px 7px; line-height:1.4}
   body.eink #sessMenu{border-width:2px; box-shadow:none}
+  /* redo: rewrite-in-place + the Replace/Discard choice */
+  body.redoing #editor .redo-area:empty::before{content:attr(data-ph); color:#b48a5c; font-style:italic}
+  #redoChoice{display:none; position:fixed; inset:0; z-index:95; background:rgba(28,27,25,.34); align-items:center; justify-content:center}
+  #redoChoice.show{display:flex; animation:sgPopIn .14s ease}
+  #redoChoice .rdc-card{width:400px; max-width:calc(100vw - 32px); background:var(--paper); border:1px solid var(--line);
+    border-radius:14px; box-shadow:0 18px 50px rgba(28,27,25,.28); padding:22px 24px 18px; text-align:center}
+  #redoChoice .rdc-q{font-family:var(--ancient); font-size:18px; letter-spacing:.04em; color:var(--ink); margin-bottom:9px}
+  #redoChoice .rdc-sub{font-family:var(--serif); font-size:13.5px; line-height:1.55; color:var(--ink-soft); margin-bottom:16px}
+  #redoChoice .rdc-acts{display:flex; gap:9px; justify-content:center}
+  #redoChoice .rdc-acts button{font-family:var(--sans); font-size:10px; letter-spacing:.12em; text-transform:uppercase;
+    border:1px solid var(--line); border-radius:18px; padding:9px 17px; cursor:pointer; background:transparent; color:var(--ink-soft)}
+  #redoChoice #redoDiscardBtn:hover{color:#8a3b2c; border-color:#c89a8c}
+  #redoChoice #redoReplaceBtn:hover{color:#fff; background:var(--ink); border-color:var(--ink)}
+  body.eink #redoChoice .rdc-card{border-width:2px; box-shadow:none}
+  body.eink #redoChoice{background:rgba(0,0,0,.2)}
   /* archived sessions in the Sessions panel */
   .sh-arch-head{font-family:var(--sans); font-size:9px; letter-spacing:.14em; text-transform:uppercase; color:var(--ink-faint);
     margin-top:10px; padding:5px 0 3px; cursor:pointer; border-top:1px solid var(--line)}
@@ -2128,6 +2143,11 @@
     </div>
     <div id="npAddMenu" hidden></div>
     <div id="sessMenu"></div>
+    <div id="redoChoice"><div class="rdc-card">
+      <div class="rdc-q">Keep this rewrite?</div>
+      <div class="rdc-sub"></div>
+      <div class="rdc-acts"><button id="redoDiscardBtn">Discard new</button><button id="redoReplaceBtn">Replace previous</button></div>
+    </div></div>
     <div id="focusFooter"><span class="ff-lbl">Focus</span><div id="focusFooterList"></div></div>
     </div>
   </section>
@@ -9764,6 +9784,7 @@ function endWritingSession(){
   const hadRun = state.timer.started;
   clearGrace();
   clearInterval(state.timer.handle);
+  if (state.redo && state.redo.active){ finishRedoSession(); return; }   // redo path: lock the rewrite, then prompt Replace/Discard
   if (hadRun) wrapLooseEditorText();   // make the first line a real block before snapshot + lock
   if (hadRun) showRecap();
   if (hadRun){ lockWrittenInSection(); }
@@ -11998,14 +12019,15 @@ function openSessMenu(id, anchorRect){
   h += '<button class="sm-redo" data-act="redo"' + (refined ? ' disabled' : '') + '>Redo this session</button>';
   h += '<button class="sm-danger" data-act="del"' + (refined ? ' disabled' : '') + '>Delete (to archive)</button>';
   if (refined) h += '<div class="sm-note">Refined — sessions are locked; you can only continue.</div>';
-  else h += '<div class="sm-note">Redo arrives in the next update — Delete archives it (restorable).</div>';
+  else h += '<div class="sm-note">Redo rewrites this session in place; Delete archives it (restorable).</div>';
   m.innerHTML = h;
   m.querySelectorAll('button').forEach(b => b.addEventListener('click', ev => {
     ev.stopPropagation();
     const act = b.dataset.act;
     if (b.disabled) return;
-    if (act === 'del'){ const sid = _selSess; clearSessSel(); deleteSession(sid); }
-    else if (act === 'redo'){ flashStatus('Redo is coming in the next update — for now, Delete archives a session.'); }
+    const sid = _selSess; clearSessSel();
+    if (act === 'del'){ deleteSession(sid); }
+    else if (act === 'redo'){ startRedo(sid); }
   }));
   m.classList.add('show');
   // position just below the session's first block, clamped to the viewport
@@ -12088,6 +12110,148 @@ function purgeArchivedSession(id){
   if (typeof renderSessionHistory === 'function') renderSessionHistory();
   scheduleAutosave();
   flashStatus('Session purged');
+}
+
+/* ===== Phase 3: Redo a specific session in place → Replace / Discard ===== */
+// Leave a single empty "Continue…" prompt at the end of frame k's prose.
+function ensureContinueInFrame(k){
+  const ed = $('editor'); if (!ed) return;
+  const fm = (typeof nodeFrameMap === 'function') ? nodeFrameMap() : null;
+  Array.from(ed.children).forEach(c => { if ((fm ? fm.get(c) : 0) === k && c.classList && c.classList.contains('ph') && !(c.textContent||'').trim()) c.remove(); });
+  let lastK = null; Array.from(ed.children).forEach(c => { if ((fm ? fm.get(c) : 0) === k && !(c.classList && c.classList.contains('ph'))) lastK = c; });
+  const d = document.createElement('div'); d.className = 'ph'; d.dataset.ph = 'Continue…';
+  if (lastK && lastK.nextSibling) ed.insertBefore(d, lastK.nextSibling); else ed.appendChild(d);
+}
+function startRedo(id){
+  const ed = $('editor'); if (!ed || !id) return;
+  const k = state.frameIdx || 0;
+  if (state.frames && state.frames[k] && state.frames[k].locked){ flashStatus('Refined — sessions are locked; you can only continue.'); return; }
+  const blocks = sessionBlocks(id); if (!blocks.length) return;
+  clearSessSel();
+  const tmp = document.createElement('div'); blocks.forEach(b => tmp.appendChild(b.cloneNode(true)));
+  const label = (blocks[0].dataset.sessLabel) || 'Session';
+  const prevRef = blocks[0].previousSibling;
+  const nextRef = blocks[blocks.length - 1].nextSibling;
+  blocks.forEach(b => b.remove());
+  const area = document.createElement('div'); area.className = 'ph redo-area'; area.dataset.ph = 'Rewrite this session…';
+  if (nextRef) ed.insertBefore(area, nextRef); else ed.appendChild(area);
+  state.redo = { active: true, id, oldHtml: tmp.innerHTML, label, frame: k, prevRef: prevRef, areaRef: area };
+  document.body.classList.add('redoing');
+  if (typeof paintSectionFocus === 'function') paintSectionFocus();
+  if (!state.inkMode){ ed.focus(); try { const r = document.createRange(); r.selectNodeContents(area); r.collapse(true); const s = window.getSelection(); s.removeAllRanges(); s.addRange(r); } catch(e){} }
+  flashStatus('Rewriting ' + label.split(' · ')[0] + ' — write, then End session to choose Replace or Discard');
+}
+// Re-insert the stashed original session blocks at their old position, re-locked.
+function reinsertRedoOriginal(){
+  const ed = $('editor'); if (!ed || !state.redo) return;
+  const k = state.redo.frame;
+  const tmp = document.createElement('div'); tmp.innerHTML = state.redo.oldHtml || '';
+  const blocks = Array.from(tmp.children);
+  let insertBefore = null;
+  if (state.redo.prevRef && ed.contains(state.redo.prevRef)) insertBefore = state.redo.prevRef.nextSibling;
+  else { const fm = nodeFrameMap(); insertBefore = Array.from(ed.children).find(c => fm.get(c) === k) || null; }
+  blocks.forEach(b => { b.contentEditable = 'false'; b.classList.add('lk'); if (insertBefore) ed.insertBefore(b, insertBefore); else ed.appendChild(b); });
+}
+// Called from endWritingSession when a redo is in progress.
+function finishRedoSession(){
+  const ed = $('editor'); if (!ed || !state.redo){ return; }
+  if (typeof wrapLooseEditorText === 'function') wrapLooseEditorText();
+  const k = state.redo.frame;
+  const fm = nodeFrameMap();
+  const newBlocks = Array.from(ed.children).filter(c =>
+    fm.get(c) === k && !(c.classList && c.classList.contains('lk')) && c.tagName !== 'H3' &&
+    !(c.classList && c.classList.contains('sec-mark')) && (c.textContent || '').trim());
+  if (!newBlocks.length){
+    // nothing written → silently restore the original
+    if (state.redo.areaRef && ed.contains(state.redo.areaRef)) state.redo.areaRef.remove();
+    reinsertRedoOriginal();
+    document.body.classList.remove('redoing');
+    state.redo = null;
+    setupTimer(); updateEndBtn();
+    if (typeof paintSectionFocus === 'function') paintSectionFocus();
+    if (state.session){ state.session.html = editorHTML(); } scheduleAutosave();
+    flashStatus('Redo cancelled — the original session is kept');
+    return;
+  }
+  const nid = 'sess' + Date.now().toString(36) + Math.random().toString(36).slice(2,5);
+  newBlocks.forEach((c, j) => {
+    c.classList.remove('ph', 'redo-area'); delete c.dataset.ph;
+    c.classList.add('lk'); c.contentEditable = 'false'; c.dataset.sess = nid;
+    if (j === 0){ c.classList.add('session-start'); c.dataset.sessLabel = state.redo.label; }
+  });
+  const tmp = document.createElement('div'); newBlocks.forEach(b => tmp.appendChild(b.cloneNode(true)));
+  state.redo.newId = nid;
+  state.redo.newHtml = tmp.innerHTML;
+  state.redo.newWords = (tmp.textContent || '').trim().split(/\s+/).filter(Boolean).length;
+  setupTimer(); updateEndBtn();
+  document.body.classList.remove('redoing');
+  showRedoChoice();
+}
+function showRedoChoice(){
+  if (!state.redo) return;
+  state.redo.choicePending = true;
+  const el = $('redoChoice'); if (!el){ applyRedoReplace(); return; }   // fail-safe
+  const sub = el.querySelector('.rdc-sub');
+  if (sub) sub.textContent = 'Keep this rewrite of ' + (state.redo.label.split(' · ')[0] || 'the session') +
+    '? Replace moves the previous version to the Archive. Discard keeps the original and files this draft in the Archive.';
+  el.classList.add('show');
+}
+function hideRedoChoice(){ const el = $('redoChoice'); if (el) el.classList.remove('show'); if (state.redo) state.redo.choicePending = false; }
+function applyRedoReplace(){
+  if (!state.redo) { hideRedoChoice(); return; }
+  const k = state.redo.frame;
+  const log = (state.session && state.session.sessionLog) || [];
+  const oldEntry = log.find(e => e.id === state.redo.id) || {};
+  state.session.archive = state.session.archive || [];
+  state.session.archive.push({
+    id: state.redo.id, at: oldEntry.at || new Date().toISOString(),
+    words: oldEntry.words != null ? oldEntry.words : 0,
+    html: state.redo.oldHtml, review: oldEntry.review || '', reason: 'replaced', frame: k
+  });
+  if (state.session) state.session.sessionLog = log.filter(e => e.id !== state.redo.id);
+  state.session.sessionLog.push({ id: state.redo.newId, at: new Date().toISOString(), words: state.redo.newWords, html: currentSectionHtml(), review: '', frame: k });
+  ensureContinueInFrame(k);
+  renumberSessionLabels();
+  state.redo = null; hideRedoChoice();
+  if (typeof paintSectionFocus === 'function') paintSectionFocus();
+  if (state.session){ state.session.html = editorHTML(); }
+  if (typeof renderSessionHistory === 'function') renderSessionHistory();
+  scheduleAutosave();
+  flashStatus('Replaced — the previous version is in the Archive');
+}
+function applyRedoDiscard(){
+  if (!state.redo) { hideRedoChoice(); return; }
+  const ed = $('editor'); const k = state.redo.frame;
+  // remove the new (rewritten) blocks
+  sessionBlocks(state.redo.newId).forEach(b => b.remove());
+  // archive the discarded draft
+  state.session.archive = state.session.archive || [];
+  state.session.archive.push({
+    id: state.redo.newId, at: new Date().toISOString(), words: state.redo.newWords,
+    html: state.redo.newHtml, review: '', reason: 'discarded', frame: k
+  });
+  // restore the original in place
+  reinsertRedoOriginal();
+  ensureContinueInFrame(k);
+  renumberSessionLabels();
+  state.redo = null; hideRedoChoice();
+  if (typeof paintSectionFocus === 'function') paintSectionFocus();
+  if (state.session){ state.session.html = editorHTML(); }
+  if (typeof renderSessionHistory === 'function') renderSessionHistory();
+  scheduleAutosave();
+  flashStatus('Discarded — the original session is kept (draft saved to Archive)');
+}
+// If the writer abandons a redo (leaves write mode before writing), restore the original.
+function cancelRedoIfPending(){
+  if (!state.redo || !state.redo.active) return;
+  if (state.redo.choicePending) return;   // a finished redo awaiting a choice — leave the modal up
+  const ed = $('editor');
+  if (ed && state.redo.areaRef && ed.contains(state.redo.areaRef)) state.redo.areaRef.remove();
+  reinsertRedoOriginal();
+  document.body.classList.remove('redoing');
+  state.redo = null;
+  if (typeof paintSectionFocus === 'function') paintSectionFocus();
+  if (state.session){ state.session.html = editorHTML(); } scheduleAutosave();
 }
 // Fuzzy stop: when the clock hits zero, give the writer 10s to finish a thought.
 function startGrace(){
