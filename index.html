@@ -9711,6 +9711,7 @@ function updateAccountUI(){
     if (fm) fm.style.display = 'block';
     $('authTitle').textContent = 'Sign in to Dystoria';
   }
+  if (typeof pubRefreshGuestAuth === 'function') pubRefreshGuestAuth();   // guest reader: toggle the "Comment as yourself" pill + name field
 }
 function cloudDocOf(sess){
   const doc = Object.assign({}, sess);
@@ -10152,12 +10153,12 @@ function pubBuildGuestUI(errOnly){
   if(errOnly){ const gc=$('guestComments'); if(gc) gc.style.display='none'; return; }
   const rb=$('readBody');
   if(rb&&!rb._pubSel){ rb._pubSel=1; rb.addEventListener('mouseup',pubGuestSelect); }
-  const name=$('gcName'); if(name) name.value=_pubGN();
   const post=$('gcPost'); if(post&&!post._w){ post._w=1; post.addEventListener('click',pubPostComment); }
   const acc=$('gcAccount'); if(acc&&!acc._w){ acc._w=1; acc.addEventListener('click',()=>{ if($('authCard')) $('authCard').classList.add('show'); }); }
   const cls=$('gcPopClose'); if(cls&&!cls._w){ cls._w=1; cls.addEventListener('click',pubHideCommentPop); }
   const txt=$('gcText'); if(txt&&!txt._w){ txt._w=1; txt.addEventListener('keydown',e=>{ if(e.key==='Enter'&&(e.metaKey||e.ctrlKey)) pubPostComment(); else if(e.key==='Escape') pubHideCommentPop(); }); }
   if(!document._pubPopDismiss){ document._pubPopDismiss=1; document.addEventListener('mousedown',e=>{ const p=$('gcPop'); if(p&&p.classList.contains('show')&&!p.contains(e.target)) pubHideCommentPop(); }); }
+  pubRefreshGuestAuth();
 }
 // Highlight a passage in the story → the comment tools pop up beside the selection.
 function pubGuestSelect(e){
@@ -10176,7 +10177,7 @@ function pubGuestSelect(e){
 function pubShowCommentPop(rect, text){
   const pop=$('gcPop'); if(!pop) return;
   const note=$('gcAnchorNote'); if(note) note.innerHTML='On: <i>“'+_pubEsc(text.slice(0,70))+(text.length>70?'…':'')+'”</i>';
-  const nm=$('gcName'); if(nm&&!nm.value) nm.value=_pubGN();
+  pubSyncNameField();
   pop.classList.add('show');
   const pw=pop.offsetWidth||300, ph=pop.offsetHeight||230, vw=window.innerWidth, vh=window.innerHeight;
   let left=Math.min(Math.max(10,(rect.left+rect.right)/2-pw/2), vw-pw-10);
@@ -10189,6 +10190,26 @@ function pubHideCommentPop(){
   const rb=$('readBody'); if(rb) rb.querySelectorAll('.pub-anchored').forEach(x=>x.classList.remove('pub-anchored'));
   _pubAnchor=null;
 }
+function _pubSignedIn(){ return !!(cloud.user && !cloud.user.is_anonymous); }
+// name field: auto-filled + editable when signed in; hard-locked to "Anonymous" otherwise
+function pubSyncNameField(){
+  const nm=$('gcName'); if(!nm) return;
+  const fine=$('gcPop')?$('gcPop').querySelector('.gc-fine'):null;
+  if(_pubSignedIn()){
+    nm.disabled=false; nm.readOnly=false; nm.placeholder='Your name';
+    if(!nm.value || nm.value==='Anonymous') nm.value=(cloud.username||myDisplayName()||'').trim();
+    if(fine) fine.style.display='none';
+  } else {
+    nm.value='Anonymous'; nm.disabled=true; nm.placeholder='Anonymous';
+    if(fine) fine.style.display='';
+  }
+}
+// in the guest reader: hide the "Comment as yourself" pill once signed in; refresh the name field
+function pubRefreshGuestAuth(){
+  if(!_pubGuest) return;
+  const sb=$('gbSignin'); if(sb) sb.style.display=_pubSignedIn()?'none':'';
+  pubSyncNameField();
+}
 async function pubEnsureAnon(){
   if(cloud.user) return cloud.user;
   try{ const {data,error}=await supa.auth.signInAnonymously(); if(error){ console.warn('anon signin',error); return null; } cloud.user=data.user; return data.user; }
@@ -10196,13 +10217,10 @@ async function pubEnsureAnon(){
 }
 async function pubPostComment(){
   const t=$('gcText'); const body=(t&&t.value||'').trim(); if(!body){ return; }
-  let name=($('gcName')&&$('gcName').value||'').trim();
   const u=await pubEnsureAnon();
   if(!u){ flashStatus('Couldn’t start a guest session — anonymous sign-in may be off'); return; }
-  if(!name) name=(cloud.username||'').trim();
-  if(!name&&cloud.user&&!cloud.user.is_anonymous) name=myDisplayName();
-  if(!name) name='Guest';
-  _pubSetGN(name);
+  let name='Anonymous';   // not signed in → hard-locked to anonymous
+  if(_pubSignedIn()){ name=($('gcName')&&$('gcName').value||'').trim() || (cloud.username||myDisplayName()||'').trim() || 'Reader'; _pubSetGN(name); }
   try{
     const {error}=await supa.rpc('add_public_comment',{tok:_pubToken,a_name:name,a_anchor:_pubAnchor?_pubAnchor.key:null,a_section:0,a_body:body});
     if(error){ flashStatus('Comment: '+error.message); return; }
