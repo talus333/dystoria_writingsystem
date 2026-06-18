@@ -500,18 +500,30 @@
   }
   /* the story title lives in the header — don't repeat it in the writing area */
   #wmTitleBar{display:none !important}
-  /* in-session ("Start session" pressed): clear distractions so only the section + clock remain */
+  /* in-session ("Start session" pressed): full-screen, immersive — hide all chrome */
+  body.writing.insession header{display:none}
   body.writing.insession #npElements{display:none}
   body.writing.insession #writeFrameBar{display:none}
   body.writing.insession #wmGuide{display:none}
   body.writing.insession #focusFooter{display:none}
   body.writing.insession #notepad{display:none}
-  /* after Start: blank page — hide the prior locked sessions + the section chrome, leaving only the prompt + your fresh writing */
-  body.writing.insession #editor .lk{display:none}
-  body.writing.insession #editor .sec-mark{display:none}
-  body.writing.insession #editor h3{display:none}
-  body.writing.insession #sectionTitle{display:none !important}
-  body.writing.insession #firstMark{display:none !important}
+  /* room below the cursor so the active line scrolls to the top — prior sessions are pushed off-screen above (scroll up to revisit them) */
+  body.writing.insession #editor{padding-bottom:78vh}
+  /* the Writing Focus sidebar becomes a slide-open drawer */
+  body.writing.insession #focusPanel{position:fixed; left:0; top:0; bottom:0; width:278px; z-index:70; transform:translateX(-100%); transition:transform .22s ease; box-shadow:6px 0 28px rgba(28,27,25,.22)}
+  body.writing.insession.focusdrawer #focusPanel{transform:translateX(0)}
+  body.eink.writing.insession #focusPanel{box-shadow:none; border-right:2px solid #000}
+  /* minimal countdown clock, top-left */
+  #miniClock{display:none}
+  body.writing.insession #miniClock{display:block; position:fixed; left:18px; top:10px; z-index:66; font-family:var(--ancient); font-size:23px; letter-spacing:.05em; color:var(--ink-faint); pointer-events:none}
+  body.writing.insession #miniClock.done{color:#b0897a; text-transform:uppercase; font-size:15px; letter-spacing:.2em}
+  body:not(.eink).writing.insession #miniClock{color:#cdc6b8}
+  /* left-edge tab to peek the focus elements */
+  #focusTab{display:none}
+  body.writing.insession #focusTab{display:block; position:fixed; left:0; top:50%; transform:translateY(-50%); z-index:71; writing-mode:vertical-rl; padding:16px 6px; font-family:var(--sans); font-size:9px; letter-spacing:.2em; text-transform:uppercase; color:var(--ink-soft); background:var(--paper); border:1px solid var(--line); border-left:none; border-radius:0 9px 9px 0; cursor:pointer}
+  body.writing.insession.focusdrawer #focusTab{left:278px}
+  body.writing.insession #focusTab:hover{color:var(--ink)}
+  body.eink.writing.insession #focusTab{border-width:2px; border-left:none}
   /* before Start: prior sessions are there to re-read, but the Begin/Continue prompt only appears after you press Start */
   body.writing:not(.insession) #editor .ph{display:none}
   body.writing:not(.insession) #editor:empty::before{content:''}
@@ -2171,6 +2183,8 @@
     </div>
     <div id="npAddMenu" hidden></div>
     <div id="sessMenu"></div>
+    <div id="miniClock"></div>
+    <div id="focusTab" title="Peek your focus elements">Focus</div>
     <div id="redoChoice"><div class="rdc-card">
       <div class="rdc-q">Keep this rewrite?</div>
       <div class="rdc-sub"></div>
@@ -9541,10 +9555,12 @@ window.addEventListener('resize', () => { if (state.prompt) layoutConstellation(
 
 /* ---------------- timer ---------------- */
 function updateClockArc(){
+  const txt = $('timerDisplay').textContent;
+  const done = $('timerDisplay').classList.contains('done');
   const dg = $('digitalTime');
-  if (!dg) return;
-  dg.textContent = $('timerDisplay').textContent;
-  dg.classList.toggle('done', $('timerDisplay').classList.contains('done'));
+  if (dg){ dg.textContent = txt; dg.classList.toggle('done', done); }
+  const mc = $('miniClock');   // the in-session top-left clock
+  if (mc){ mc.textContent = txt; mc.classList.toggle('done', done); }
 }
 // Set the session clock to an arbitrary number of minutes (adding a select option if needed).
 function setSessionMinutes(m){
@@ -9647,8 +9663,10 @@ function updateEndBtn(){
   document.body.classList.toggle('addslock', addsLocked());
   document.body.classList.toggle('timer-running', running);
   document.body.classList.toggle('insession', running);   // running → clear the screen to just the section + clock
+  if (!running) document.body.classList.remove('focusdrawer');   // collapse the focus drawer when not in a session
   const mini = $('endSessionMini');
   if (mini){ mini.textContent = running ? 'End session' : 'Start session'; mini.classList.toggle('is-start', !running); }
+  if (typeof updateClockArc === 'function') updateClockArc();   // keep the top-left mini clock in sync
   updateSectionTitleLock();
 }
 // The section title can be edited only between sessions, or during a section's FIRST session
@@ -9875,15 +9893,23 @@ function startWritingSession(){
         if (lastK && lastK.nextSibling) ed.insertBefore(d, lastK.nextSibling); else ed.appendChild(d);
       }
       ed.focus();
+      let phEl = null;
       try {
-        const ph = Array.from(ed.children).reverse().find(c => c.classList && c.classList.contains('ph') && (fm ? fm.get(c) : 0) === k);
+        phEl = Array.from(ed.children).reverse().find(c => c.classList && c.classList.contains('ph') && (fm ? fm.get(c) : 0) === k);
         const r = document.createRange();
-        if (ph){ r.selectNodeContents(ph); r.collapse(true); } else { r.selectNodeContents(ed); r.collapse(false); }
+        if (phEl){ r.selectNodeContents(phEl); r.collapse(true); } else { r.selectNodeContents(ed); r.collapse(false); }
         const s = window.getSelection(); s.removeAllRanges(); s.addRange(r);
       } catch(e){}
+      // scroll the active prompt to the top so prior sessions slide off-screen above (scroll up to revisit)
+      requestAnimationFrame(() => {
+        try {
+          const wrap = $('editorWrap'); const target = phEl || ed.lastElementChild;
+          if (wrap && target){ const pr = target.getBoundingClientRect(), wr = wrap.getBoundingClientRect(); wrap.scrollTop += (pr.top - wr.top) - 10; }
+        } catch(e){}
+      });
     }
   }
-  flashStatus('Session started \u2014 the clock is running. Write.');
+  flashStatus('Session started \u2014 the page clears. Scroll up anytime to revisit earlier sessions.');
 }
 function fmtTime(s){ return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }
 function gentleClose(){
@@ -13915,6 +13941,15 @@ function init(){
   $('writeModeBtn').addEventListener('click', () => { if (state.timer && state.timer.started) endWritingSession(); if (state.redo && state.redo.choicePending) return; setWriting(false); });
   { const rr = $('redoReplaceBtn'); if (rr) rr.addEventListener('click', applyRedoReplace); }
   { const rd = $('redoDiscardBtn'); if (rd) rd.addEventListener('click', applyRedoDiscard); }
+  // in-session focus drawer: the left-edge tab slides the Writing Focus panel in/out
+  { const ft = $('focusTab'); if (ft) ft.addEventListener('click', ev => { ev.stopPropagation(); document.body.classList.toggle('focusdrawer'); }); }
+  document.addEventListener('mousedown', ev => {
+    if (!document.body.classList.contains('focusdrawer')) return;
+    const fp = $('focusPanel'), ft = $('focusTab');
+    if (fp && fp.contains(ev.target)) return;
+    if (ft && ft.contains(ev.target)) return;
+    document.body.classList.remove('focusdrawer');
+  });
   $('notepadBtn').addEventListener('click', () => { if (typeof closeReadMode === 'function') closeReadMode(); if (typeof closeEditMode === 'function') closeEditMode(); setWriting(false); });
   $('writeBtn').addEventListener('click', () => setWriting(true));
   $('notepad').addEventListener('input', saveNotepad);
