@@ -1669,9 +1669,9 @@
   .nt.nt-hl{background:#fbf3d9; border-radius:3px; box-shadow:0 0 0 3px #fbf3d9}
   .pub-hl{background:#e9f2f8 !important; border-radius:3px; box-shadow:0 0 0 4px #e9f2f8; transition:background .12s}
   /* a comment whose passage was edited/removed → looks inactive, keeps its original quote */
-  .np-item.cm.cm-orphan{opacity:.62; background:#f1f0ee; border-color:#dcdad5; cursor:default}
-  .np-item.cm.cm-orphan .np-quote{border-left-color:#bdbab3; color:#a8a49a; text-decoration:line-through}
-  .np-item.cm.cm-orphan .np-au{color:#a8a49a}
+  .np-item.cm-orphan{opacity:.62; background:#f1f0ee; border-color:#dcdad5; cursor:default}
+  .np-item.cm-orphan .np-quote{border-left-color:#bdbab3; color:#a8a49a; text-decoration:line-through}
+  .np-item.cm-orphan .np-au{color:#a8a49a}
   .cm-stale{font-family:var(--sans,system-ui,sans-serif); font-size:10.5px; font-style:italic; color:#b08968; margin-top:5px}
   .cm-arch-toggle{font-family:var(--sans,system-ui,sans-serif); font-size:11px; letter-spacing:.05em; color:var(--ink-faint,#9a948c); cursor:pointer; padding:9px 2px 6px; margin-top:6px; border-top:1px dashed var(--line,#e3ded3); user-select:none}
   .cm-arch-toggle:hover{color:var(--ink-soft,#6a6a72)}
@@ -10346,10 +10346,10 @@ function pubMakeCommentItem(c, opts){
   }
   return {el:it, orphan:orphan};
 }
-function pubAppendArchiveToggle(list, n){
+function pubAppendArchiveToggle(list, n, label){
   const tog=document.createElement('div'); tog.className='cm-arch-toggle';
-  tog.textContent=(_pubShowArchived?'▾ ':'▸ ')+'Archived comments ('+n+')';
-  tog.title='Comments on passages that were edited or removed';
+  tog.textContent=(_pubShowArchived?'▾ ':'▸ ')+(label||'Archived comments')+' ('+n+')';
+  tog.title='Notes & comments on passages that were edited or removed';
   tog.addEventListener('click',()=>{ _pubShowArchived=!_pubShowArchived; if(_pubGuest) pubRenderGuestComments(); else if(typeof renderNotes==='function') renderNotes(); });
   list.appendChild(tog);
 }
@@ -11889,9 +11889,11 @@ async function doSg(kind){
     else rng.insertNode(sgSpanText('sg-ins', text));
   } else if (kind === 'note'){
     if (rng.collapsed) return;
-    const ctx = '<span class="ip-ctxlbl">Note on:</span> <i>' + ipEsc(rng.toString()) + '</i>';
+    const orig = rng.toString();
+    const ctx = '<span class="ip-ctxlbl">Note on:</span> <i>' + ipEsc(orig) + '</i>';
     const nt = await sitePrompt('Note', '', 'Save', ctx); if (nt == null || nt === '') return;
     const s = document.createElement('span'); s.className = 'nt'; sgMeta(s); s.dataset.note = nt;
+    s.dataset.anchor = orig;                       // remember the original highlight so the note can archive if it later changes/disappears
     s.appendChild(rng.extractContents()); rng.insertNode(s);
     $('editMode').classList.add('show-notes');   // reveal the notes panel so the new note is visible
   }
@@ -12052,6 +12054,31 @@ function openSgPop(span){
 }
 /* ----- notes sidebar ----- */
 let _ntScrollTick = false;
+// ----- note registry: remembers every note's original highlight so notes can archive like comments -----
+function noteReg(){ if (!state.session) return {}; if (!state.session.noteRegistry || typeof state.session.noteRegistry !== 'object') state.session.noteRegistry = {}; return state.session.noteRegistry; }
+function noteAnchorOf(n){ return (n.dataset.anchor != null && n.dataset.anchor !== '') ? n.dataset.anchor : (n.textContent || ''); }
+function syncNoteRegistry(liveNotes){
+  const reg = noteReg();
+  liveNotes.forEach(n => {
+    const sg = n.dataset.sg; if (!sg) return;
+    if (!n.dataset.anchor) n.dataset.anchor = n.textContent || '';   // backfill original highlight for older notes
+    reg[sg] = { anchor: noteAnchorOf(n), note: n.dataset.note || '', au: n.dataset.au || 'Writer' };
+  });
+}
+function deleteNoteFromRegistry(sg){ const reg = noteReg(); if (reg[sg]) delete reg[sg]; }
+function pubMakeArchivedNoteItem(d){
+  const it = document.createElement('div'); it.className = 'np-item cm-orphan';
+  const q = document.createElement('span'); q.className = 'np-quote'; q.textContent = '“' + (d.anchor || '').slice(0, 80) + '”'; it.appendChild(q);
+  const t = document.createElement('div'); t.className = 'np-text'; t.textContent = d.note || ''; it.appendChild(t);
+  const s = document.createElement('div'); s.className = 'cm-stale'; s.textContent = '⚠ This passage has been edited or removed.'; it.appendChild(s);
+  const au = document.createElement('div'); au.className = 'np-au';
+  const who = document.createElement('span'); who.textContent = d.au || 'Writer';
+  const acts = document.createElement('span'); acts.className = 'np-acts';
+  const x = document.createElement('span'); x.className = 'np-x'; x.textContent = '×'; x.title = 'Remove this note';
+  acts.appendChild(x); au.appendChild(who); au.appendChild(acts); it.appendChild(au);
+  x.addEventListener('click', ev => { ev.stopPropagation(); deleteNoteFromRegistry(d.sg); const sp = $('editBody').querySelector('.nt[data-sg="' + d.sg + '"]'); if (sp) unwrapSpan(sp); commitEdit(); renderNotes(); });
+  return it;
+}
 function pubMakeNoteItem(n){
   const item = document.createElement('div'); item.className = 'np-item'; item.dataset.sg = n.dataset.sg;
   const q = document.createElement('span'); q.className = 'np-quote'; q.textContent = '“' + (n.textContent || '').slice(0, 80) + '”';
@@ -12069,7 +12096,7 @@ function pubMakeNoteItem(n){
   item.addEventListener('mouseleave', () => { const sp = $('editBody').querySelector('.nt[data-sg="' + n.dataset.sg + '"]'); if (sp) sp.classList.remove('nt-hl'); });
   item.addEventListener('dblclick', ev => { ev.stopPropagation(); editNote(n.dataset.sg); });
   ed.addEventListener('click', ev => { ev.stopPropagation(); editNote(n.dataset.sg); });
-  x.addEventListener('click', ev => { ev.stopPropagation(); const sp = $('editBody').querySelector('.nt[data-sg="' + n.dataset.sg + '"]'); if (sp) unwrapSpan(sp); commitEdit(); renderNotes(); });
+  x.addEventListener('click', ev => { ev.stopPropagation(); deleteNoteFromRegistry(n.dataset.sg); const sp = $('editBody').querySelector('.nt[data-sg="' + n.dataset.sg + '"]'); if (sp) unwrapSpan(sp); commitEdit(); renderNotes(); });
   return item;
 }
 function renderNotes(){
@@ -12079,6 +12106,10 @@ function renderNotes(){
   // track the visible passage: re-render on scroll (rAF-throttled)
   if (scroller && !scroller._ntScroll){ scroller._ntScroll = 1; scroller.addEventListener('scroll', () => { if (_ntScrollTick) return; _ntScrollTick = true; requestAnimationFrame(() => { _ntScrollTick = false; if ($('editMode') && $('editMode').classList.contains('show')) renderNotes(); }); }); }
   const allNotes = Array.from(eb ? eb.querySelectorAll('.nt') : []);
+  syncNoteRegistry(allNotes);
+  const liveSet = new Set(allNotes.map(n => n.dataset.sg));
+  const reg = noteReg();
+  const deletedNotes = Object.keys(reg).filter(sg => !liveSet.has(sg)).map(sg => Object.assign({ sg }, reg[sg]));   // span gone from prose
   const realComments = (typeof pubOwnerComments === 'function') ? pubOwnerComments() : [];
   const comments = _pubHideComments ? [] : realComments;
   // panel head: title + a (hide/show comments) toggle when reader comments exist
@@ -12088,30 +12119,44 @@ function renderNotes(){
       + (realComments.length ? ' <span id="ntHideCm" class="gc-collapse" title="Show only your notes, or include reader comments">' + (_pubHideComments ? '(show comments)' : '(hide comments)') + '</span>' : '');
     const h = document.getElementById('ntHideCm'); if (h) h.addEventListener('click', () => { _pubHideComments = !_pubHideComments; renderNotes(); });
   }
-  const hasAny = allNotes.length || realComments.length;
+  const hasAny = allNotes.length || realComments.length || deletedNotes.length;
   list.innerHTML = '';
   if (!hasAny){ list.innerHTML = '<div class="np-empty">No notes yet. Select text and choose Note.</div>'; if ($('editMode')) $('editMode').classList.remove('show-notes'); return; }
   if ($('editMode')) $('editMode').classList.add('show-notes');
-  // comments: split active (anchor present) vs archived (orphaned)
+  // comments: active (anchor present) vs archived (orphaned)
   const activeC = [], archC = [];
   comments.forEach(c => { if (c.anchor_key && typeof pubAnchorPresent === 'function' && !pubAnchorPresent(eb, c.anchor_key)) archC.push(c); else activeC.push(c); });
-  // viewport filter — only notes/comments anchored to the passage currently on screen
-  const visNotes = allNotes.filter(n => pubRectInView(scroller, n));
+  // notes: active (original highlight still present) vs changed (span exists but highlight edited away)
+  const activeNotes = [], changedNotes = [];
+  allNotes.forEach(n => { if (pubAnchorPresent(eb, noteAnchorOf(n))) activeNotes.push(n); else changedNotes.push(n); });
+  // viewport filter — only the active notes/comments anchored to the passage on screen
+  const visNotes = activeNotes.filter(n => pubRectInView(scroller, n));
   const visC = activeC.filter(c => { if (!c.anchor_key) return true; const b = pubBlockFor(eb, c.anchor_key); return !b || pubRectInView(scroller, b); });
   if (!visNotes.length && !visC.length){
-    list.innerHTML = '<div class="np-empty">' + (_pubHideComments && !allNotes.length ? 'Reader comments hidden.' : 'Nothing on the passage in view — scroll to a note or comment.') + '</div>';
+    const hint = document.createElement('div'); hint.className = 'np-empty';
+    hint.textContent = (_pubHideComments && !allNotes.length ? 'Reader comments hidden.' : 'Nothing on the passage in view — scroll to a note or comment.');
+    list.appendChild(hint);
   } else {
     visNotes.forEach(n => list.appendChild(pubMakeNoteItem(n)));
     visC.forEach(c => list.appendChild(pubMakeCommentItem(c, { container: eb, owner: true }).el));
   }
-  if (archC.length){ pubAppendArchiveToggle(list, archC.length); if (_pubShowArchived) archC.forEach(c => list.appendChild(pubMakeCommentItem(c, { container: eb, owner: true }).el)); }
+  // archived: notes whose highlight changed or was deleted, plus orphaned comments
+  const archCount = changedNotes.length + deletedNotes.length + archC.length;
+  if (archCount){
+    pubAppendArchiveToggle(list, archCount, 'Archived');
+    if (_pubShowArchived){
+      changedNotes.forEach(n => list.appendChild(pubMakeArchivedNoteItem({ sg: n.dataset.sg, anchor: noteAnchorOf(n), note: n.dataset.note || '', au: n.dataset.au || 'Writer' })));
+      deletedNotes.forEach(d => list.appendChild(pubMakeArchivedNoteItem(d)));
+      archC.forEach(c => list.appendChild(pubMakeCommentItem(c, { container: eb, owner: true }).el));
+    }
+  }
 }
 async function editNote(sg){
   const sp = $('editBody').querySelector('.nt[data-sg="' + sg + '"]'); if (!sp) return;
   const ctx = '<span class="ip-ctxlbl">Note on:</span> <i>' + ipEsc(sp.textContent || '') + '</i>';
   const nt = await sitePrompt('Edit note', sp.dataset.note || '', 'Save', ctx);
   if (nt == null) return;                          // cancelled — leave it
-  if (nt.trim() === ''){ unwrapSpan(sp); }         // emptied → remove the note
+  if (nt.trim() === ''){ deleteNoteFromRegistry(sg); unwrapSpan(sp); }   // emptied → remove the note entirely
   else sp.dataset.note = nt;
   commitEdit(); renderNotes();
 }
