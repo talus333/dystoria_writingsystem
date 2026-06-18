@@ -45,6 +45,13 @@
     display:flex; align-items:center; gap:14px; padding:12px 26px 10px;
     border-bottom:1px solid var(--line); background:#fff; flex:none; position:relative;
   }
+  /* black header — sharper look (e-ink keeps its high-contrast white) */
+  body:not(.eink) header{ background:#1b1916; color:#ece6d9; border-bottom-color:#000 }
+  body:not(.eink) header .hbtn{ color:#ece6d9; border-color:#4a443a; background:transparent }
+  body:not(.eink) header .hbtn:hover{ border-color:var(--gold) }
+  body:not(.eink) header #storyName{ color:#f0ebe0 }
+  body:not(.eink) header #shareNote, body:not(.eink) header #tableInfo{ color:#b8b2a4 }
+  body:not(.eink) header #brandTitle svg{ border-radius:50%; box-shadow:0 0 0 1px rgba(255,255,255,.13) }
   #menuBtn,#libIconBtn{font-size:15px; width:42px; height:32px; padding:0; display:inline-flex; align-items:center; justify-content:center; box-sizing:border-box}
   #libIconBtn svg,#menuBtn svg{width:16px; height:16px; display:block}
   #welcome{position:fixed; inset:0; z-index:200; display:none; align-items:center; justify-content:center;
@@ -352,6 +359,9 @@
   .sg-del{color:#a05c4d; text-decoration:line-through; opacity:.7; cursor:pointer}
   body.eink .sg-ins{color:#1f5a3a}
   body.eink .sg-del{color:#7a3a2c}
+  /* write mode shows the real prose, not suggestion markup: hide proposed insertions, render struck text as normal */
+  body.writing #editor .sg-ins{display:none}
+  body.writing #editor .sg-del{color:inherit; text-decoration:none; opacity:1; cursor:text}
   /* Reading mode: 'suggested' hides deletions + tints insertions; 'original' hides insertions, shows deletions plainly */
   #readBody.sug-suggested .sg-del{display:none}
   #readBody.sug-suggested .sg-ins{color:#2f6f4f; background:none; text-decoration:none; cursor:auto}
@@ -11389,6 +11399,8 @@ function ovApplyAnchor(scrollEl, anchor){
   scrollEl.scrollTop = Math.max(0, scrollEl.scrollTop + (br.top - cr.top) + (anchor.offset || 0));
   return true;
 }
+function guideDone(k){ try{ return localStorage.getItem("dystoria.guideDone."+k)==="1"; }catch(e){ return false; } }
+function markGuideDone(k,el){ try{ localStorage.setItem("dystoria.guideDone."+k,"1"); }catch(e){} if(el) el.style.display="none"; }
 function setHeaderH(){ const hd=document.querySelector("header"); if(hd) document.documentElement.style.setProperty("--hH", hd.offsetHeight+"px"); }
 function openReadMode(){
   if (window.__closeDrawers) window.__closeDrawers();
@@ -11397,7 +11409,7 @@ function openReadMode(){
   setHeaderH();
   const has = readHasSuggestions();
   $('readSugSwitch').style.display = has ? 'flex' : 'none';   // explicit flex so it beats the guest hide rule
-  { const g = $('rdGuide'); if (g) g.innerHTML = has ? 'Read the story without distraction · toggle between <b>suggestions</b> and <b>original</b> to compare' : 'Read the story without distraction'; }
+  { const g = $('rdGuide'); if (g){ g.innerHTML = has ? 'Read the story without distraction · toggle to compare <b>suggestions</b> &amp; <b>original</b>' : 'Read the story without distraction'; let _used=false; try{ _used=localStorage.getItem('dystoria.usedSugPill')==='1'; }catch(e){} g.style.display = (has && _used) ? 'none' : ''; } }
   setReadSug(state._readSug || 'suggested');
   $('readMode').classList.add('show');
   if (typeof pubRenderShareControls === 'function') pubRenderShareControls();
@@ -11765,6 +11777,7 @@ function applyEditEditable(){
   if (g) g.innerHTML = direct
     ? 'Highlight sections to refine <b style="color:var(--ink)">or</b> edit directly.'
     : 'Highlight a section or click between words to make <b>suggested changes</b>';
+  if (g && guideDone('refine')) g.style.display = 'none';
 }
 function editScrollToCurrent(){
   const es = $('editScroll'); if (!es) return;
@@ -11921,6 +11934,7 @@ async function doSg(kind){
     $('editMode').classList.add('show-notes');   // reveal the notes panel so the new note is visible
   }
   const sel2 = window.getSelection(); if (sel2) sel2.removeAllRanges();
+  markGuideDone('refine', $('edGuide'));
   commitEdit();
   renderPending(); renderNotes();
 }
@@ -12038,7 +12052,7 @@ function renderPending(){
   const ep = $('edPending'); if (ep) ep.textContent = n ? (n + ' suggestion' + (n === 1 ? '' : 's')) : '';
   const eg = $('edGlobal'); if (eg) eg.style.display = (n && amOwner()) ? 'flex' : 'none';
   // the how-to note shows while there's nothing to act on; it steps aside once there are suggestions to approve/reject
-  const guide = document.querySelector('.ed-guide'); if (guide) guide.style.display = n > 0 ? 'none' : '';
+  const guide = document.querySelector('.ed-guide'); if (guide) guide.style.display = (n > 0 || guideDone('refine')) ? 'none' : '';
 }
 function closeSgPop(){ const p = $('sgPop'); if (p) p.classList.remove('show'); }
 function openSgPop(span){
@@ -13067,6 +13081,7 @@ function setWriting(on){
   if (wb) wb.classList.toggle('on', on);
   setMode(state.inkMode ? 'ink' : 'type');   // restore the right surface (editor vs notepad, + correct ink page)
   if (on){
+    { const _wg=$('wmGuide'); if(_wg) _wg.style.display = guideDone('write') ? 'none' : ''; }
     updateWmTitle();
     renderWriteFrame();
     if (state.timer.started) state.timer.running = true;
@@ -13491,7 +13506,7 @@ function init(){
   $('editScroll').addEventListener('scroll', () => { updateEditTop(); $('sgBar').classList.remove('show'); closeSgPop(); scheduleRememberAnchor($('editScroll')); });
   $('editBody').addEventListener('mouseup', ev => { _edClick = { x: ev.clientX, y: ev.clientY }; setTimeout(onEditSelect, 0); });
   $('editBody').addEventListener('keyup', () => { const s = window.getSelection(); if (s && !s.isCollapsed) onEditSelect(); else $('sgBar').classList.remove('show'); });
-  $('editBody').addEventListener('input', () => { clearTimeout(_edCommitT); _edCommitT = setTimeout(commitEdit, 800); });
+  $('editBody').addEventListener('input', () => { markGuideDone('refine', $('edGuide')); clearTimeout(_edCommitT); _edCommitT = setTimeout(commitEdit, 800); });
   $('editBody').addEventListener('click', ev => {
     const sg = ev.target.closest && ev.target.closest('.sg-ins,.sg-del');
     if (sg){ ev.stopPropagation(); openSgPop(sg); return; }
@@ -13507,8 +13522,8 @@ function init(){
   { const ap = $('aiSugPanel'); if (ap) ap.addEventListener('click', e => { if (e.target.classList && e.target.classList.contains('ais-close')) closeAiSug(); }); }
   $('edApproveAll').addEventListener('click', () => resolveAllSg(true));
   $('edRejectAll').addEventListener('click', () => resolveAllSg(false));
-  $('readSugSeg').addEventListener('click', () => setReadSug('suggested'));
-  $('readOrigSeg').addEventListener('click', () => setReadSug('original'));
+  $('readSugSeg').addEventListener('click', () => { setReadSug('suggested'); try{localStorage.setItem('dystoria.usedSugPill','1');}catch(e){} const g=$('rdGuide'); if(g) g.style.display='none'; });
+  $('readOrigSeg').addEventListener('click', () => { setReadSug('original'); try{localStorage.setItem('dystoria.usedSugPill','1');}catch(e){} const g=$('rdGuide'); if(g) g.style.display='none'; });
   $('cmOk').addEventListener('click', () => cmClose(true));
   $('cmCancel').addEventListener('click', () => cmClose(false));
   $('confirmModal').addEventListener('mousedown', e => { if (e.target === $('confirmModal')) cmClose(false); });
@@ -13625,6 +13640,7 @@ function init(){
   $('modeInk').addEventListener('click', () => setMode('ink'));
   let usageTimer = null;
   $('editor').addEventListener('input', () => {
+    markGuideDone('write', $('wmGuide'));
     state.lastWriteAt = Date.now();
     cleanPlaceholders();
     startTimerIfArmed(); updateWordCount(); scheduleAutosave();
