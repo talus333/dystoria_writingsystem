@@ -9640,11 +9640,14 @@ function restoreFromSnapshotsIfEmpty(){
   withHtml.forEach(e=>{ const f=(e.frame!=null?e.frame:0); const L=txt(e.html).length; if(best[f]==null||L>bestLen[f]){ best[f]=e; bestLen[f]=L; } });
   const frames=Object.keys(best).map(Number).sort((a,b)=>a-b);
   let html=''; frames.forEach(f=>{ html+=best[f].html; });
-  const snapText=txt(html), edText=(ed.textContent||'').replace(/\s+/g,' ').trim();
-  if(snapText.length <= edText.length + 20) return;             // editor already holds ~everything → leave it
+  const edText=(ed.textContent||'').replace(/\s+/g,'').trim();
+  // ONLY recover into an essentially-empty editor. Never override the editor when it holds
+  // prose — otherwise a deliberate Delete/Redo (which makes the editor shorter than the old
+  // cumulative snapshots) would be undone, resurrecting removed sessions on reopen.
+  if(edText.length > 2) return;
   ed.innerHTML=html;
   ed.querySelectorAll('.session-prior').forEach(n=>n.classList.remove('session-prior'));
-  if(typeof normalizeLocks==='function') normalizeLocks();
+  if(typeof lockAllProseIdle==='function') lockAllProseIdle();   // lock + number every recovered session
   if(typeof paintSectionFocus==='function') paintSectionFocus();
   state.session.sessionsRestored = true;
   state.session.html = editorHTML();
@@ -11930,6 +11933,30 @@ function backfillSessionIds(){
     }
     if (!c.dataset.sess) c.dataset.sess = cur;
   });
+}
+// Lock + number EVERY prose block in the editor as sessions (used only after a snapshot
+// recovery, where some recovered blocks may have lost their .lk/.session-start markers).
+// Honors existing session-start boundaries; the trailing empty placeholder stays editable.
+function lockAllProseIdle(){
+  const ed = $('editor'); if (!ed) return;
+  let cur = null;
+  Array.from(ed.children).forEach(c => {
+    const isH3 = c.tagName === 'H3';
+    const isMark = c.classList && c.classList.contains('sec-mark');
+    const isPh = c.classList && c.classList.contains('ph');
+    const empty = !(c.textContent || '').trim();
+    if (isH3 || isMark){ cur = null; return; }
+    if ((isPh && empty) || empty){ if (isPh && empty) cur = null; return; }
+    if ((c.classList && c.classList.contains('session-start')) || !cur){
+      cur = (c.dataset && c.dataset.sess) ? c.dataset.sess : ('sess' + Date.now().toString(36) + Math.random().toString(36).slice(2,5));
+      c.classList.add('session-start');
+      if (!c.dataset.sessLabel) c.dataset.sessLabel = 'Session';
+    }
+    c.classList.remove('ph'); delete c.dataset.ph;
+    c.classList.add('lk'); c.contentEditable = 'false';
+    if (!c.dataset.sess) c.dataset.sess = cur;
+  });
+  renumberSessionLabels();
 }
 // Wrap stray top-level text/inline nodes in #editor into <div> blocks. The first
 // line typed into an empty editor stays a bare TEXT node until Enter is pressed —
