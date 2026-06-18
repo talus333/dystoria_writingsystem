@@ -10080,6 +10080,13 @@ let _pubGuest=false,_pubStory=null,_pubToken='',_pubComments=[],_pubChan=null,_p
 let _pubStoryChan=null,_pubBcChan=null,_pubBcTok='';   // live story-update broadcast (author → readers)
 let _pubShowArchived=false;   // reveal comments whose passage was edited/removed
 let _pubCommentsCollapsed=false;   // reader collapsed the comments column to read undistracted
+let _pubHideComments=false;        // (Refine) author hid public comments to see only their notes
+// does an element currently sit within the scroll container's viewport?
+function pubRectInView(scrollEl, el){
+  if(!scrollEl||!el) return false;
+  const s=scrollEl.getBoundingClientRect(), r=el.getBoundingClientRect();
+  return r.bottom>s.top+4 && r.top<s.bottom-4;
+}
 function _pubGN(){ try{ return localStorage.getItem('dystoria.guestName')||''; }catch(e){ return ''; } }
 function _pubSetGN(n){ try{ localStorage.setItem('dystoria.guestName',n); }catch(e){} }
 function pubHasCommented(){ try{ return localStorage.getItem('dystoria.commented.'+_pubToken)==='1'; }catch(e){ return false; } }
@@ -10357,7 +10364,8 @@ function pubVisibleComments(cs){
   const cr=rb.getBoundingClientRect(); const out=[];
   cs.forEach(c=>{
     if(!c.anchor_key){ out.push({c,y:-1}); return; }              // unanchored → always relevant, pin to top
-    const b=pubBlockFor(rb,c.anchor_key); if(!b) return;
+    const b=pubBlockFor(rb,c.anchor_key);
+    if(!b){ out.push({c,y:1e9}); return; }                         // present but block not locatable → never drop it (show at end)
     const r=b.getBoundingClientRect();
     if(r.bottom>cr.top+4 && r.top<cr.bottom-4) out.push({c,y:r.top});
   });
@@ -10404,8 +10412,18 @@ async function pubDeleteComment(id){
 function pubBlockFor(container, key){
   if(!container||!key) return null;
   const host=(container.querySelector && (container.querySelector('.rd-prose')||container))||container;
-  const blocks=Array.from(host.children||[]); const pre=key.slice(0,30);
-  return blocks.find(b=>_pubBlockKey(b)===key) || blocks.find(b=>(b.textContent||'').replace(/\s+/g,' ').trim().includes(pre)) || null;
+  const blocks=Array.from(host.children||[]);
+  const norm=s=>(s||'').replace(/\s+/g,' ').trim();
+  const k=norm(key);
+  // try the full snippet, then progressively shorter leading chunks, so a highlight that
+  // started mid-block or sits in nested markup still resolves to its block (no lost comments)
+  for(const len of [k.length, 40, 24, 14, 8]){
+    const pre=k.slice(0, Math.min(len, k.length));
+    if(pre.length<6) break;
+    const m=blocks.find(b=>norm(b.textContent).includes(pre));
+    if(m) return m;
+  }
+  return null;
 }
 function pubHoverHighlight(container, key, on){ const b=pubBlockFor(container,key); if(b) b.classList.toggle('pub-hl', on); }
 // orphan test: is the highlighted snippet still present ANYWHERE in the prose?
@@ -12033,46 +12051,60 @@ function openSgPop(span){
   if (ed) ed.onclick = async () => { closeSgPop(); await editGroup(grp); commitEdit(); renderPending(); };
 }
 /* ----- notes sidebar ----- */
+let _ntScrollTick = false;
+function pubMakeNoteItem(n){
+  const item = document.createElement('div'); item.className = 'np-item'; item.dataset.sg = n.dataset.sg;
+  const q = document.createElement('span'); q.className = 'np-quote'; q.textContent = '“' + (n.textContent || '').slice(0, 80) + '”';
+  const t = document.createElement('div'); t.className = 'np-text'; t.textContent = n.dataset.note || '';
+  const au = document.createElement('div'); au.className = 'np-au';
+  const who = document.createElement('span'); who.textContent = n.dataset.au || 'Writer';
+  const acts = document.createElement('span'); acts.className = 'np-acts';
+  const ed = document.createElement('span'); ed.className = 'np-edit'; ed.textContent = '✎'; ed.title = 'Edit note';
+  const x = document.createElement('span'); x.className = 'np-x'; x.textContent = '×'; x.title = 'Remove note';
+  acts.appendChild(ed); acts.appendChild(x);
+  au.appendChild(who); au.appendChild(acts);
+  item.appendChild(q); item.appendChild(t); item.appendChild(au);
+  item.addEventListener('click', () => scrollToAnchor(n.dataset.sg));
+  item.addEventListener('mouseenter', () => { const sp = $('editBody').querySelector('.nt[data-sg="' + n.dataset.sg + '"]'); if (sp) sp.classList.add('nt-hl'); });
+  item.addEventListener('mouseleave', () => { const sp = $('editBody').querySelector('.nt[data-sg="' + n.dataset.sg + '"]'); if (sp) sp.classList.remove('nt-hl'); });
+  item.addEventListener('dblclick', ev => { ev.stopPropagation(); editNote(n.dataset.sg); });
+  ed.addEventListener('click', ev => { ev.stopPropagation(); editNote(n.dataset.sg); });
+  x.addEventListener('click', ev => { ev.stopPropagation(); const sp = $('editBody').querySelector('.nt[data-sg="' + n.dataset.sg + '"]'); if (sp) unwrapSpan(sp); commitEdit(); renderNotes(); });
+  return item;
+}
 function renderNotes(){
   const list = $('notesList'); if (!list) return;
   const eb = $('editBody');
-  const notes = Array.from(eb ? eb.querySelectorAll('.nt') : []);
-  const comments = (typeof pubOwnerComments === 'function') ? pubOwnerComments() : [];
+  const scroller = $('editScroll');
+  // track the visible passage: re-render on scroll (rAF-throttled)
+  if (scroller && !scroller._ntScroll){ scroller._ntScroll = 1; scroller.addEventListener('scroll', () => { if (_ntScrollTick) return; _ntScrollTick = true; requestAnimationFrame(() => { _ntScrollTick = false; if ($('editMode') && $('editMode').classList.contains('show')) renderNotes(); }); }); }
+  const allNotes = Array.from(eb ? eb.querySelectorAll('.nt') : []);
+  const realComments = (typeof pubOwnerComments === 'function') ? pubOwnerComments() : [];
+  const comments = _pubHideComments ? [] : realComments;
+  // panel head: title + a (hide/show comments) toggle when reader comments exist
   const headEl = $('notesPanel') ? $('notesPanel').querySelector('.np-head') : null;
-  if (headEl) headEl.textContent = comments.length ? 'Notes & Comments' : 'Notes';
-  list.innerHTML = '';
-  if (!notes.length && !comments.length){
-    list.innerHTML = '<div class="np-empty">No notes yet. Select text and choose Note.</div>';
-    if ($('editMode')) $('editMode').classList.remove('show-notes');
-    return;
+  if (headEl){
+    headEl.innerHTML = (realComments.length ? 'Notes &amp; Comments' : 'Notes')
+      + (realComments.length ? ' <span id="ntHideCm" class="gc-collapse" title="Show only your notes, or include reader comments">' + (_pubHideComments ? '(show comments)' : '(hide comments)') + '</span>' : '');
+    const h = document.getElementById('ntHideCm'); if (h) h.addEventListener('click', () => { _pubHideComments = !_pubHideComments; renderNotes(); });
   }
-  notes.forEach(n => {
-    const item = document.createElement('div'); item.className = 'np-item'; item.dataset.sg = n.dataset.sg;
-    const q = document.createElement('span'); q.className = 'np-quote'; q.textContent = '“' + (n.textContent || '').slice(0, 80) + '”';
-    const t = document.createElement('div'); t.className = 'np-text'; t.textContent = n.dataset.note || '';
-    const au = document.createElement('div'); au.className = 'np-au';
-    const who = document.createElement('span'); who.textContent = n.dataset.au || 'Writer';
-    const acts = document.createElement('span'); acts.className = 'np-acts';
-    const ed = document.createElement('span'); ed.className = 'np-edit'; ed.textContent = '✎'; ed.title = 'Edit note';
-    const x = document.createElement('span'); x.className = 'np-x'; x.textContent = '×'; x.title = 'Remove note';
-    acts.appendChild(ed); acts.appendChild(x);
-    au.appendChild(who); au.appendChild(acts);
-    item.appendChild(q); item.appendChild(t); item.appendChild(au);
-    item.addEventListener('click', () => scrollToAnchor(n.dataset.sg));
-    item.addEventListener('mouseenter', () => { const sp = $('editBody').querySelector('.nt[data-sg="' + n.dataset.sg + '"]'); if (sp) sp.classList.add('nt-hl'); });
-    item.addEventListener('mouseleave', () => { const sp = $('editBody').querySelector('.nt[data-sg="' + n.dataset.sg + '"]'); if (sp) sp.classList.remove('nt-hl'); });
-    item.addEventListener('dblclick', ev => { ev.stopPropagation(); editNote(n.dataset.sg); });   // double-click to edit (backup)
-    ed.addEventListener('click', ev => { ev.stopPropagation(); editNote(n.dataset.sg); });
-    x.addEventListener('click', ev => { ev.stopPropagation(); const sp = $('editBody').querySelector('.nt[data-sg="' + n.dataset.sg + '"]'); if (sp) unwrapSpan(sp); commitEdit(); renderNotes(); });
-    list.appendChild(item);
-  });
-  // reader comments — same item style, different colour (.cm), with a remove × for moderation
-  // reader comments — same item style, different colour; orphaned ones archived under a toggle
-  const citems = comments.map(c => pubMakeCommentItem(c, { container: $('editBody'), owner: true }));
-  citems.filter(i => !i.orphan).forEach(i => list.appendChild(i.el));
-  const carch = citems.filter(i => i.orphan);
-  if (carch.length){ pubAppendArchiveToggle(list, carch.length); if (_pubShowArchived) carch.forEach(i => list.appendChild(i.el)); }
+  const hasAny = allNotes.length || realComments.length;
+  list.innerHTML = '';
+  if (!hasAny){ list.innerHTML = '<div class="np-empty">No notes yet. Select text and choose Note.</div>'; if ($('editMode')) $('editMode').classList.remove('show-notes'); return; }
   if ($('editMode')) $('editMode').classList.add('show-notes');
+  // comments: split active (anchor present) vs archived (orphaned)
+  const activeC = [], archC = [];
+  comments.forEach(c => { if (c.anchor_key && typeof pubAnchorPresent === 'function' && !pubAnchorPresent(eb, c.anchor_key)) archC.push(c); else activeC.push(c); });
+  // viewport filter — only notes/comments anchored to the passage currently on screen
+  const visNotes = allNotes.filter(n => pubRectInView(scroller, n));
+  const visC = activeC.filter(c => { if (!c.anchor_key) return true; const b = pubBlockFor(eb, c.anchor_key); return !b || pubRectInView(scroller, b); });
+  if (!visNotes.length && !visC.length){
+    list.innerHTML = '<div class="np-empty">' + (_pubHideComments && !allNotes.length ? 'Reader comments hidden.' : 'Nothing on the passage in view — scroll to a note or comment.') + '</div>';
+  } else {
+    visNotes.forEach(n => list.appendChild(pubMakeNoteItem(n)));
+    visC.forEach(c => list.appendChild(pubMakeCommentItem(c, { container: eb, owner: true }).el));
+  }
+  if (archC.length){ pubAppendArchiveToggle(list, archC.length); if (_pubShowArchived) archC.forEach(c => list.appendChild(pubMakeCommentItem(c, { container: eb, owner: true }).el)); }
 }
 async function editNote(sg){
   const sp = $('editBody').querySelector('.nt[data-sg="' + sg + '"]'); if (!sp) return;
