@@ -1858,7 +1858,7 @@
     <button class="hbtn" id="restoreBtn" title="Restore stories from a backup file (merges with what is here)">Restore</button>
     <button class="hbtn" id="customWordsBtn" title="Custom words you marked as available in all stories — review or remove them">Universal Words</button>
     <input type="file" id="restoreFile" accept=".json,application/json" hidden>
-    <select id="timerLen" hidden><option value="0">none</option><option value="2" selected>2 min</option><option value="5">5 min</option><option value="10">10 min</option><option value="15">15 min</option><option value="20">20 min</option><option value="30">30 min</option><option value="45">45 min</option><option value="60">60 min</option></select>
+    <select id="timerLen" hidden><option value="2" selected>2 min</option><option value="5">5 min</option><option value="10">10 min</option><option value="15">15 min</option><option value="20">20 min</option><option value="30">30 min</option><option value="45">45 min</option><option value="60">60 min</option></select>
   </div>
     <div id="sharePop">
       <div class="sp-title">Share this story</div>
@@ -9552,8 +9552,9 @@ function dropTimerForGuideWord(w){
   setSessionMinutes(Math.max(2, cur - guideSuggestMinutes(w)));   // never drop below the 2-min default
 }
 function setupTimer(){
-  clearInterval(state.timer.handle);
-  const mins = gameOn() ? 2 : parseInt($('timerLen').value, 10);
+  clearInterval((state.timer || {}).handle);
+  let mins = gameOn() ? 2 : parseInt($('timerLen').value, 10);
+  if (!(mins > 0)) mins = 2;                          // a session always has a clock — default 2 min (never 0/hidden)
   state.timer = { len: mins, remaining: mins * 60, running: false, started: false, handle: null };
   $('timerDisplay').classList.remove('done');
   $('timerBar').style.width = '0%';
@@ -11925,13 +11926,15 @@ function normalizeLocks(){
 // consecutive locked blocks, starting a new group at each .session-start marker.
 function backfillSessionIds(){
   const ed = $('editor'); if (!ed) return;
-  let cur = null;
+  const seen = new Set(); let cur = null;
   Array.from(ed.children).forEach(c => {
     if (!(c.classList && c.classList.contains('lk'))){ cur = null; return; }
     if (c.classList.contains('session-start') || !cur){
-      cur = (c.dataset && c.dataset.sess) ? c.dataset.sess : ('sess' + Date.now().toString(36) + Math.random().toString(36).slice(2,5));
+      let id = (c.dataset && c.dataset.sess) ? c.dataset.sess : null;
+      if (!id || seen.has(id)) id = 'sess' + Date.now().toString(36) + Math.random().toString(36).slice(2,5);   // heal missing OR duplicate ids
+      seen.add(id); cur = id;
     }
-    if (!c.dataset.sess) c.dataset.sess = cur;
+    c.dataset.sess = cur;   // every block in the session shares its one unique id
   });
 }
 // Lock + number EVERY prose block in the editor as sessions (used only after a snapshot
@@ -12006,9 +12009,11 @@ function lockWrittenInSection(){
     fresh[0].classList.add('session-start');
     fresh[0].dataset.sessLabel = 'Session ' + (cnt+1) + (when ? ' · ' + when : '');
   }
-  // Stamp every block of this session with the matching snapshot id so the session is
-  // individually addressable (select → redo / delete) later.
-  const sid = state._lastSnapId || ('sess' + Date.now().toString(36) + Math.random().toString(36).slice(2,5));
+  // Stamp every block of this session with a UNIQUE id so the session is individually
+  // addressable (select → redo / delete). Prefer the snapshot id, but never reuse one that
+  // is already on a prior session's blocks (which would make select/redo/delete hit both).
+  let sid = state._lastSnapId || ('sess' + Date.now().toString(36) + Math.random().toString(36).slice(2,5));
+  if (ed.querySelector('[data-sess="' + sid + '"]')) sid = 'sess' + Date.now().toString(36) + Math.random().toString(36).slice(2,5);
   fresh.forEach(c => { c.classList.add('lk'); c.contentEditable = 'false'; c.dataset.sess = sid; });
 }
 
@@ -12074,6 +12079,7 @@ function selectSession(id, anchorEl){
 }
 function deleteSession(id){
   const ed = $('editor'); if (!ed || !id) return;
+  if (!state.session && typeof ensureSession === 'function') ensureSession();
   const blocks = sessionBlocks(id); if (!blocks.length) return;
   const k = state.frameIdx || 0;
   const tmp = document.createElement('div'); blocks.forEach(b => tmp.appendChild(b.cloneNode(true)));
@@ -12081,10 +12087,13 @@ function deleteSession(id){
   const words = (tmp.textContent || '').trim().split(/\s+/).filter(Boolean).length;
   const log = (state.session && state.session.sessionLog) || [];
   const entry = log.find(e => e.id === id) || {};
+  // remember the session immediately before this one (same frame) so restore lands in place
+  let prevSess = null; let p = blocks[0].previousElementSibling;
+  while (p){ if (p.dataset && p.dataset.sess && p.dataset.sess !== id){ prevSess = p.dataset.sess; break; } p = p.previousElementSibling; }
   state.session.archive = state.session.archive || [];
   state.session.archive.push({
     id, at: entry.at || new Date().toISOString(), words: entry.words || words,
-    html: chunkHtml, review: entry.review || '', reason: 'deleted', frame: k
+    html: chunkHtml, review: entry.review || '', reason: 'deleted', frame: k, prevSess: prevSess
   });
   // drop it from the active session log so it no longer counts as live prose
   if (state.session && state.session.sessionLog) state.session.sessionLog = log.filter(e => e.id !== id);
@@ -12101,18 +12110,39 @@ function deleteSession(id){
   flashStatus('Session archived — find it under Sessions to restore or purge');
 }
 function restoreArchivedSession(id){
+  if (!state.session && typeof ensureSession === 'function') ensureSession();
   const arch = (state.session && state.session.archive) || [];
   const i = arch.findIndex(e => e.id === id); if (i < 0) return;
   const rec = arch[i];
   const ed = $('editor'); if (!ed) return;
   const k = rec.frame || 0;
   if ((state.frameIdx || 0) !== k && typeof switchFrame === 'function') switchFrame(k);
-  // re-lock the restored chunk with a fresh id and append it after the frame's prose
+  // re-lock the restored chunk with a fresh id, reinserted at its original position
   const tmp = document.createElement('div'); tmp.innerHTML = rec.html || '';
   const nid = 'sess' + Date.now().toString(36) + Math.random().toString(36).slice(2,5);
   const newBlocks = Array.from(tmp.children);
   const fm = (typeof nodeFrameMap === 'function') ? nodeFrameMap() : null;
-  let lastRef = null; Array.from(ed.children).forEach(c => { if ((fm ? fm.get(c) : 0) === k && !(c.classList && c.classList.contains('ph'))) lastRef = c; });
+  // anchor = last block of the session that originally preceded this one (if still present)
+  let lastRef = null;
+  if (rec.prevSess){
+    const grp = Array.from(ed.children).filter(c => c.dataset && c.dataset.sess === rec.prevSess);
+    if (grp.length) lastRef = grp[grp.length - 1];
+  }
+  if (!lastRef && rec.prevSess == null){
+    // it was the first session in the frame → insert before the frame's first prose block
+    const firstK = Array.from(ed.children).find(c => (fm ? fm.get(c) : 0) === k && !(c.classList && c.classList.contains('sec-mark')) && c.tagName !== 'H3');
+    if (firstK){ let ins = firstK; newBlocks.forEach((b, j) => { b.classList.add('lk'); b.contentEditable = 'false'; b.dataset.sess = nid; if (j === 0){ b.classList.add('session-start'); b.dataset.sessLabel = 'Session'; } ed.insertBefore(b, ins); }); }
+    else newBlocks.forEach((b, j) => { b.classList.add('lk'); b.contentEditable = 'false'; b.dataset.sess = nid; if (j === 0){ b.classList.add('session-start'); b.dataset.sessLabel = 'Session'; } ed.appendChild(b); });
+    state.session.sessionLog = state.session.sessionLog || [];
+    state.session.sessionLog.push({ id: nid, at: rec.at, words: rec.words, html: currentSectionHtml(), review: rec.review || '', frame: k });
+    arch.splice(i, 1); renumberSessionLabels();
+    if (typeof paintSectionFocus === 'function') paintSectionFocus();
+    if (state.session){ state.session.html = editorHTML(); }
+    if (typeof renderSessionHistory === 'function') renderSessionHistory();
+    scheduleAutosave(); flashStatus('Session restored'); return;
+  }
+  // fall back to the end of the frame's prose if the original neighbour is gone
+  if (!lastRef){ Array.from(ed.children).forEach(c => { if ((fm ? fm.get(c) : 0) === k && !(c.classList && c.classList.contains('ph'))) lastRef = c; }); }
   newBlocks.forEach((b, j) => {
     b.classList.add('lk'); b.contentEditable = 'false'; b.dataset.sess = nid;
     if (j === 0){ b.classList.add('session-start'); b.dataset.sessLabel = 'Session'; }
@@ -12226,6 +12256,7 @@ function showRedoChoice(){
 function hideRedoChoice(){ const el = $('redoChoice'); if (el) el.classList.remove('show'); if (state.redo) state.redo.choicePending = false; }
 function applyRedoReplace(){
   if (!state.redo) { hideRedoChoice(); return; }
+  if (!state.session && typeof ensureSession === 'function') ensureSession();
   const k = state.redo.frame;
   const log = (state.session && state.session.sessionLog) || [];
   const oldEntry = log.find(e => e.id === state.redo.id) || {};
@@ -12248,6 +12279,7 @@ function applyRedoReplace(){
 }
 function applyRedoDiscard(){
   if (!state.redo) { hideRedoChoice(); return; }
+  if (!state.session && typeof ensureSession === 'function') ensureSession();
   const ed = $('editor'); const k = state.redo.frame;
   // remove the new (rewritten) blocks
   sessionBlocks(state.redo.newId).forEach(b => b.remove());
