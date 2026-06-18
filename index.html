@@ -482,6 +482,32 @@
   body.writing #editor .session-start:first-child{margin-top:6px}
   body.writing #editor .session-start::before{content:attr(data-sess-label); position:absolute; top:-17px; left:0; font-family:var(--sans); font-size:8.5px; letter-spacing:.14em; text-transform:uppercase; color:var(--ink-faint); background:none}
   #editor .lk:hover{background:rgba(120,110,95,.09)}
+  /* prior-session selection (only while idle — not during an active timed session) */
+  body.writing:not(.timer-running) #editor .lk{cursor:pointer}
+  body.writing #editor .lk.sess-sel{background:rgba(116,92,74,.16); box-shadow:0 0 0 1px rgba(116,92,74,.35)}
+  body.eink #editor .lk.sess-sel{background:none; box-shadow:0 0 0 2px #000}
+  #sessMenu{display:none; position:absolute; z-index:80; background:var(--paper); border:1px solid var(--line);
+    border-radius:11px; box-shadow:0 12px 36px rgba(28,27,25,.22); padding:6px; min-width:188px}
+  #sessMenu.show{display:block; animation:sgPopIn .12s ease}
+  #sessMenu .sm-lbl{font-family:var(--sans); font-size:8.5px; letter-spacing:.14em; text-transform:uppercase; color:var(--ink-faint); padding:5px 9px 6px}
+  #sessMenu button{display:block; width:100%; text-align:left; font-family:var(--serif); font-size:14px; color:var(--ink-soft);
+    padding:8px 10px; border-radius:7px; background:transparent; cursor:pointer}
+  #sessMenu button:hover{background:var(--bg2); color:var(--ink)}
+  #sessMenu button.sm-danger:hover{background:rgba(160,92,77,.12); color:#8a3b2c}
+  #sessMenu button:disabled{opacity:.4; cursor:default}
+  #sessMenu button:disabled:hover{background:transparent; color:var(--ink-soft)}
+  #sessMenu .sm-note{font-family:var(--serif); font-style:italic; font-size:11.5px; color:var(--ink-faint); padding:4px 10px 7px; line-height:1.4}
+  body.eink #sessMenu{border-width:2px; box-shadow:none}
+  /* archived sessions in the Sessions panel */
+  .sh-arch-head{font-family:var(--sans); font-size:9px; letter-spacing:.14em; text-transform:uppercase; color:var(--ink-faint);
+    margin-top:10px; padding:5px 0 3px; cursor:pointer; border-top:1px solid var(--line)}
+  .sh-item.arch{opacity:.72}
+  .sh-item.arch .sh-when{text-decoration:line-through}
+  .sh-reason{font-family:var(--sans); font-size:8px; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-faint); margin-left:6px}
+  .sh-purge{font-family:var(--sans); font-size:9px; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-faint); cursor:pointer; margin-left:8px}
+  .sh-purge:hover{color:#8a3b2c}
+  .sh-restore{font-family:var(--sans); font-size:9px; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-faint); cursor:pointer; margin-left:8px}
+  .sh-restore:hover{color:var(--ink)}
   #padTools{display:flex; gap:6px}
   #padTools button{font-size:10px; letter-spacing:.12em; text-transform:uppercase; padding:5px 11px; color:var(--ink-faint);
     border:1px solid var(--line); border-radius:16px; background:var(--paper)}
@@ -2091,6 +2117,7 @@
       </div>
     </div>
     <div id="npAddMenu" hidden></div>
+    <div id="sessMenu"></div>
     <div id="focusFooter"><span class="ff-lbl">Focus</span><div id="focusFooterList"></div></div>
     </div>
   </section>
@@ -9509,6 +9536,7 @@ function startTimerIfArmed(){
   // Don't start a sprint on a timeframe a collaborator is already sprinting.
   if (typeof live !== 'undefined' && live.on && liveSprintingPeerOnFrame()){ liveApplyProseLock(); return; }
   if (state.timer.len && !state.timer.started){
+    if (typeof clearSessSel === 'function') clearSessSel();   // drop any prior-session selection when writing begins
     state.timer.started = true; state.timer.running = true;
     state.timer.handle = setInterval(tickTimer, 1000);
     const t = editorText().trim();
@@ -9596,7 +9624,8 @@ function restoreFromSnapshotsIfEmpty(){
 function renderSessionHistory(){
   const host=$('sessionHistory'); if(!host) return;
   const log=(state.session&&state.session.sessionLog)||[];
-  if(!log.length){ host.innerHTML=''; host.style.display='none'; return; }
+  const arch=(state.session&&state.session.archive)||[];
+  if(!log.length && !arch.length){ host.innerHTML=''; host.style.display='none'; return; }
   host.style.display='';
   const esc2=s=>(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   host.innerHTML='<div class="sh-head">Sessions</div>';
@@ -9619,6 +9648,39 @@ function renderSessionHistory(){
     head.addEventListener('click',()=>{ body.style.display=(body.style.display==='none')?'':'none'; });
     item.appendChild(head); item.appendChild(body); host.appendChild(item);
   });
+  // --- archived sessions (deleted; restorable or purgeable) ---
+  if(arch.length){
+    const ah=document.createElement('div'); ah.className='sh-arch-head';
+    ah.textContent=(host._archOpen?'▾ ':'▸ ')+'Archived ('+arch.length+')';
+    ah.addEventListener('click',()=>{ host._archOpen=!host._archOpen; renderSessionHistory(); });
+    host.appendChild(ah);
+    if(host._archOpen) arch.slice().reverse().forEach(e=>{
+      const item=document.createElement('div'); item.className='sh-item arch';
+      let when=''; try{ when=new Date(e.at).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}); }catch(_){}
+      const sec=(e.frame!=null)?('Section '+(((e.frame|0)+1))):'';
+      const wc=(e.words!=null)?(e.words+'w'):'';
+      const head=document.createElement('div'); head.className='sh-row';
+      head.innerHTML='<span class="sh-when">'+esc2(when)+'</span><span class="sh-meta">'+[sec,wc].filter(Boolean).join(' · ')+'</span>'
+        +'<span class="sh-reason">'+esc2(e.reason||'archived')+'</span>';
+      const acts=document.createElement('div');
+      const rst=document.createElement('span'); rst.className='sh-restore'; rst.textContent='restore';
+      rst.addEventListener('click',ev=>{ ev.stopPropagation(); restoreArchivedSession(e.id); });
+      const pg=document.createElement('span'); pg.className='sh-purge'; pg.textContent='purge';
+      pg.addEventListener('click',ev=>{ ev.stopPropagation(); if(confirm('Permanently delete this archived session? This cannot be undone.')) purgeArchivedSession(e.id); });
+      head.appendChild(rst); head.appendChild(pg);
+      const body=document.createElement('div'); body.className='sh-body'; body.style.display='none';
+      const rev=e.review||'';
+      body.innerHTML=rev?('<div class="sh-review">'+esc2(rev).replace(/\n{2,}/g,'<br><br>').replace(/\n/g,'<br>')+'</div>'):'';
+      if(e.html){
+        const tog=document.createElement('span'); tog.className='sh-toggle'; tog.textContent='show passage';
+        const pv=document.createElement('div'); pv.className='sh-passage'; pv.style.display='none'; pv.innerHTML=e.html;
+        tog.addEventListener('click',ev=>{ ev.stopPropagation(); const on=pv.style.display==='none'; pv.style.display=on?'':'none'; tog.textContent=on?'hide passage':'show passage'; });
+        body.appendChild(tog); body.appendChild(pv);
+      }
+      head.addEventListener('click',()=>{ body.style.display=(body.style.display==='none')?'':'none'; });
+      item.appendChild(head); item.appendChild(body); host.appendChild(item);
+    });
+  }
 }
 /* add a focus element from a dropdown of this section's elements (like the notepad +element) */
 function focusAddOpen(anchor){
@@ -10031,7 +10093,7 @@ function liveDocStr(){
   delete d.ink; delete d.inkPages; delete d.frameIdx; delete d.focusKeys; delete d.game;
   // …and neither do heavy, regenerable caches — they'd bloat every keystroke broadcast.
   // (They still sync via the periodic full cloud save, so a collaborator gets them on reload.)
-  delete d.wikiAI; delete d.wikiOverview; delete d.sessionLog;
+  delete d.wikiAI; delete d.wikiOverview; delete d.sessionLog; delete d.archive;
   return JSON.stringify(d);
 }
 function liveJoin(sess){
@@ -11892,7 +11954,136 @@ function lockWrittenInSection(){
     fresh[0].classList.add('session-start');
     fresh[0].dataset.sessLabel = 'Session ' + (cnt+1) + (when ? ' · ' + when : '');
   }
-  fresh.forEach(c => { c.classList.add('lk'); c.contentEditable = 'false'; });
+  // Stamp every block of this session with the matching snapshot id so the session is
+  // individually addressable (select → redo / delete) later.
+  const sid = state._lastSnapId || ('sess' + Date.now().toString(36) + Math.random().toString(36).slice(2,5));
+  fresh.forEach(c => { c.classList.add('lk'); c.contentEditable = 'false'; c.dataset.sess = sid; });
+}
+
+/* ===== Phase 3: select a prior session → Delete (archive) / Restore / Purge ===== */
+let _selSess = null;
+// All current-frame editor blocks stamped with this session id.
+function sessionBlocks(id){
+  const ed = $('editor'); if (!ed || !id) return [];
+  return Array.from(ed.children).filter(c => c.dataset && c.dataset.sess === id);
+}
+function clearSessSel(){
+  _selSess = null;
+  const ed = $('editor'); if (ed) ed.querySelectorAll('.sess-sel').forEach(n => n.classList.remove('sess-sel'));
+  const m = $('sessMenu'); if (m) m.classList.remove('show');
+}
+// Re-label the visible "Session N" markers per frame after a delete/restore.
+function renumberSessionLabels(){
+  const ed = $('editor'); if (!ed) return;
+  const fm = (typeof nodeFrameMap === 'function') ? nodeFrameMap() : null;
+  const cnt = {};
+  Array.from(ed.children).forEach(c => {
+    if (!(c.classList && c.classList.contains('session-start'))) return;
+    const f = fm ? (fm.get(c) || 0) : 0;
+    cnt[f] = (cnt[f] || 0) + 1;
+    const tail = (c.dataset.sessLabel || '').split(' · ').slice(1).join(' · ');
+    c.dataset.sessLabel = 'Session ' + cnt[f] + (tail ? ' · ' + tail : '');
+  });
+}
+function openSessMenu(id, anchorRect){
+  const m = $('sessMenu'); if (!m) return;
+  const refined = !!(state.frames && state.frames[state.frameIdx||0] && state.frames[state.frameIdx||0].locked);
+  const blocks = sessionBlocks(id);
+  const label = (blocks[0] && blocks[0].dataset.sessLabel) ? blocks[0].dataset.sessLabel.split(' · ')[0] : 'This session';
+  let h = '<div class="sm-lbl">' + esc(label) + '</div>';
+  h += '<button class="sm-redo" data-act="redo"' + (refined ? ' disabled' : '') + '>Redo this session</button>';
+  h += '<button class="sm-danger" data-act="del"' + (refined ? ' disabled' : '') + '>Delete (to archive)</button>';
+  if (refined) h += '<div class="sm-note">Refined — sessions are locked; you can only continue.</div>';
+  else h += '<div class="sm-note">Redo arrives in the next update — Delete archives it (restorable).</div>';
+  m.innerHTML = h;
+  m.querySelectorAll('button').forEach(b => b.addEventListener('click', ev => {
+    ev.stopPropagation();
+    const act = b.dataset.act;
+    if (b.disabled) return;
+    if (act === 'del'){ const sid = _selSess; clearSessSel(); deleteSession(sid); }
+    else if (act === 'redo'){ flashStatus('Redo is coming in the next update — for now, Delete archives a session.'); }
+  }));
+  m.classList.add('show');
+  // position just below the session's first block, clamped to the viewport
+  const mw = 200, mh = m.offsetHeight || 120;
+  let left = anchorRect.left, top = anchorRect.bottom + 6;
+  left = Math.max(8, Math.min(left, window.innerWidth - mw - 8));
+  if (top + mh > window.innerHeight - 8) top = Math.max(8, anchorRect.top - mh - 6);
+  m.style.left = left + 'px'; m.style.top = top + 'px';
+}
+function selectSession(id, anchorEl){
+  clearSessSel();
+  _selSess = id;
+  sessionBlocks(id).forEach(n => n.classList.add('sess-sel'));
+  const r = (anchorEl || sessionBlocks(id)[0] || {}).getBoundingClientRect
+    ? (anchorEl || sessionBlocks(id)[0]).getBoundingClientRect() : { left: 60, bottom: 120, top: 100 };
+  openSessMenu(id, r);
+}
+function deleteSession(id){
+  const ed = $('editor'); if (!ed || !id) return;
+  const blocks = sessionBlocks(id); if (!blocks.length) return;
+  const k = state.frameIdx || 0;
+  const tmp = document.createElement('div'); blocks.forEach(b => tmp.appendChild(b.cloneNode(true)));
+  const chunkHtml = tmp.innerHTML;
+  const words = (tmp.textContent || '').trim().split(/\s+/).filter(Boolean).length;
+  const log = (state.session && state.session.sessionLog) || [];
+  const entry = log.find(e => e.id === id) || {};
+  state.session.archive = state.session.archive || [];
+  state.session.archive.push({
+    id, at: entry.at || new Date().toISOString(), words: entry.words || words,
+    html: chunkHtml, review: entry.review || '', reason: 'deleted', frame: k
+  });
+  // drop it from the active session log so it no longer counts as live prose
+  if (state.session && state.session.sessionLog) state.session.sessionLog = log.filter(e => e.id !== id);
+  blocks.forEach(b => b.remove());
+  renumberSessionLabels();
+  // if the frame is now empty, leave a fresh Continue/Begin prompt to write into
+  const fm = (typeof nodeFrameMap === 'function') ? nodeFrameMap() : null;
+  const stillHas = Array.from(ed.children).some(c => (fm ? fm.get(c) : 0) === k && (c.textContent || '').trim() && !(c.classList && c.classList.contains('sec-mark')));
+  if (!stillHas && typeof appendBeginPrompt === 'function') appendBeginPrompt('Begin…');
+  if (typeof paintSectionFocus === 'function') paintSectionFocus();
+  if (state.session){ state.session.html = editorHTML(); }
+  if (typeof renderSessionHistory === 'function') renderSessionHistory();
+  scheduleAutosave();
+  flashStatus('Session archived — find it under Sessions to restore or purge');
+}
+function restoreArchivedSession(id){
+  const arch = (state.session && state.session.archive) || [];
+  const i = arch.findIndex(e => e.id === id); if (i < 0) return;
+  const rec = arch[i];
+  const ed = $('editor'); if (!ed) return;
+  const k = rec.frame || 0;
+  if ((state.frameIdx || 0) !== k && typeof switchFrame === 'function') switchFrame(k);
+  // re-lock the restored chunk with a fresh id and append it after the frame's prose
+  const tmp = document.createElement('div'); tmp.innerHTML = rec.html || '';
+  const nid = 'sess' + Date.now().toString(36) + Math.random().toString(36).slice(2,5);
+  const newBlocks = Array.from(tmp.children);
+  const fm = (typeof nodeFrameMap === 'function') ? nodeFrameMap() : null;
+  let lastRef = null; Array.from(ed.children).forEach(c => { if ((fm ? fm.get(c) : 0) === k && !(c.classList && c.classList.contains('ph'))) lastRef = c; });
+  newBlocks.forEach((b, j) => {
+    b.classList.add('lk'); b.contentEditable = 'false'; b.dataset.sess = nid;
+    if (j === 0){ b.classList.add('session-start'); b.dataset.sessLabel = 'Session'; }
+    if (lastRef && lastRef.nextSibling) ed.insertBefore(b, lastRef.nextSibling); else ed.appendChild(b);
+    lastRef = b;
+  });
+  state.session.sessionLog = state.session.sessionLog || [];
+  state.session.sessionLog.push({ id: nid, at: rec.at, words: rec.words, html: currentSectionHtml(), review: rec.review || '', frame: k });
+  arch.splice(i, 1);
+  renumberSessionLabels();
+  if (typeof paintSectionFocus === 'function') paintSectionFocus();
+  if (state.session){ state.session.html = editorHTML(); }
+  if (typeof renderSessionHistory === 'function') renderSessionHistory();
+  scheduleAutosave();
+  flashStatus('Session restored');
+}
+function purgeArchivedSession(id){
+  const arch = (state.session && state.session.archive) || [];
+  const i = arch.findIndex(e => e.id === id); if (i < 0) return;
+  arch.splice(i, 1);
+  if (state.session){ /* nothing in the editor to touch */ }
+  if (typeof renderSessionHistory === 'function') renderSessionHistory();
+  scheduleAutosave();
+  flashStatus('Session purged');
 }
 // Fuzzy stop: when the clock hits zero, give the writer 10s to finish a thought.
 function startGrace(){
@@ -13307,6 +13498,7 @@ function setWriting(on){
     flashStatus('Writing \u2014 the clock starts with your first words. End Session returns');
   } else {
     hideSessionGate();
+    if (typeof clearSessSel === 'function') clearSessSel();
     renderNotepad();
     if (state.prompt) renderConstellation();
   }
@@ -13873,6 +14065,24 @@ function init(){
       const u = calcUsage();
       if ((u.count + '/' + u.total) !== state.usageKey) renderConstellation();
     }, 800);
+  });
+  // Select a prior (locked) session to act on it — only while idle (not mid-session).
+  $('editor').addEventListener('click', ev => {
+    if (!document.body.classList.contains('writing')) return;
+    if (document.body.classList.contains('timer-running')) return;   // don't hijack clicks during an active session
+    let n = ev.target;
+    while (n && n !== $('editor') && !(n.dataset && n.dataset.sess)) n = n.parentNode;
+    if (n && n.dataset && n.dataset.sess){
+      ev.preventDefault();
+      if (_selSess === n.dataset.sess){ clearSessSel(); return; }   // click again to deselect
+      selectSession(n.dataset.sess, n);
+    } else {
+      clearSessSel();
+    }
+  });
+  document.addEventListener('mousedown', ev => {
+    const m = $('sessMenu');
+    if (m && m.classList.contains('show') && !m.contains(ev.target) && !(ev.target.closest && ev.target.closest('.lk'))) clearSessSel();
   });
   $('storyName').addEventListener('input', () => { scheduleAutosave(); updateWmTitle(); });
   $('wmTitleBar').addEventListener('input', () => { $('storyName').value = $('wmTitleBar').textContent.replace(/\s+/g, ' ').replace(/^ /, ''); scheduleAutosave(); });
