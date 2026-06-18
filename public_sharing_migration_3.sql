@@ -76,6 +76,13 @@ create policy comments_select_public on public.story_comments
   for select to anon, authenticated
   using (public.story_is_public(story_id));
 
+-- The owner can ALWAYS read comments on their own story (even after un-publishing),
+-- so the Refine-mode "Reader comments" panel never depends on the public flag.
+drop policy if exists comments_select_owner on public.story_comments;
+create policy comments_select_owner on public.story_comments
+  for select to authenticated
+  using (public.is_story_owner(story_id));
+
 drop policy if exists comments_delete on public.story_comments;
 create policy comments_delete on public.story_comments
   for delete to anon, authenticated
