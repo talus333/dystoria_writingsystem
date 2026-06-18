@@ -10439,6 +10439,22 @@ function pubAnchorPresent(container, key){
   const lead=needle.slice(0, Math.min(needle.length, 24));   // tolerate a clipped/slightly-changed tail
   return lead.length>=8 && hay.indexOf(lead)>=0;
 }
+// looser test for NOTES: still "present" unless MOST of the highlight is gone.
+// weighs the highlight's substantive words by length; ≥40% of that still in the prose → keep active.
+function pubAnchorMostlyPresent(container, key){
+  if(!key) return true;
+  const host=(container && container.querySelector && (container.querySelector('.rd-prose')||container))||container;
+  if(!host) return true;
+  const hay=(' '+(host.textContent||'')+' ').replace(/\s+/g,' ').toLowerCase();
+  const a=String(key).replace(/\s+/g,' ').trim().toLowerCase();
+  if(!a) return true;
+  if(hay.indexOf(a)>=0) return true;                                  // fully intact
+  const words=a.split(' ').map(w=>w.replace(/[^a-z0-9]/gi,'')).filter(w=>w.length>=3);
+  if(!words.length){ const lead=a.slice(0,Math.max(4,Math.ceil(a.length*0.4))); return hay.indexOf(lead)>=0; }
+  let total=0, matched=0;
+  words.forEach(w=>{ total+=w.length; if(hay.indexOf(w)>=0) matched+=w.length; });
+  return total===0 ? true : (matched/total) >= 0.4;                    // <40% left → mostly gone → archive
+}
 function pubOwnerScrollTo(key){
   const body=$('editBody'); if(!body||!key) return;
   const m=pubBlockFor(body, key);
@@ -11373,8 +11389,9 @@ function ovApplyAnchor(scrollEl, anchor){
 function openReadMode(){
   if (window.__closeDrawers) window.__closeDrawers();
   buildReadMode();
+  document.body.classList.remove('guest');   // author Read mode is never the guest reader — clear any stale state
   const has = readHasSuggestions();
-  $('readSugSwitch').style.display = has ? '' : 'none';
+  $('readSugSwitch').style.display = has ? 'flex' : 'none';   // explicit flex so it beats the guest hide rule
   { const g = $('rdGuide'); if (g) g.innerHTML = has ? 'Read the story without distraction · toggle between <b>suggestions</b> and <b>original</b> to compare' : 'Read the story without distraction'; }
   setReadSug(state._readSug || 'suggested');
   if (typeof pubRenderShareControls === 'function') pubRenderShareControls();
@@ -12128,7 +12145,7 @@ function renderNotes(){
   comments.forEach(c => { if (c.anchor_key && typeof pubAnchorPresent === 'function' && !pubAnchorPresent(eb, c.anchor_key)) archC.push(c); else activeC.push(c); });
   // notes: active (original highlight still present) vs changed (span exists but highlight edited away)
   const activeNotes = [], changedNotes = [];
-  allNotes.forEach(n => { if (pubAnchorPresent(eb, noteAnchorOf(n))) activeNotes.push(n); else changedNotes.push(n); });
+  allNotes.forEach(n => { if (pubAnchorMostlyPresent(eb, noteAnchorOf(n))) activeNotes.push(n); else changedNotes.push(n); });   // archive only when most of the highlight is gone
   // viewport filter — only the active notes/comments anchored to the passage on screen
   const visNotes = activeNotes.filter(n => pubRectInView(scroller, n));
   const visC = activeC.filter(c => { if (!c.anchor_key) return true; const b = pubBlockFor(eb, c.anchor_key); return !b || pubRectInView(scroller, b); });
