@@ -9629,6 +9629,7 @@ function startTimerIfArmed(){
       text: editorText()
     };
     updateEndBtn();
+    if (typeof generateSessionGoal === 'function') generateSessionGoal();   // a surprise question for this session
     if (typeof live !== 'undefined' && live.on){ liveScheduleTrack(); liveApplyProseLock(); }
   }
 }
@@ -9671,7 +9672,7 @@ function updateEndBtn(){
   document.body.classList.toggle('addslock', addsLocked());
   document.body.classList.toggle('timer-running', running);
   document.body.classList.toggle('insession', running);   // running → clear the screen to just the section + clock
-  if (!running) document.body.classList.remove('focusdrawer');   // collapse the focus drawer when not in a session
+  if (!running){ document.body.classList.remove('focusdrawer'); const sg = $('sessionGoal'); if (sg){ sg.classList.remove('show'); sg.textContent = ''; } }   // collapse drawer + clear the session goal
   const mini = $('endSessionMini');
   if (mini){ mini.textContent = running ? 'End session' : 'Start session'; mini.classList.toggle('is-start', !running); }
   if (typeof updateClockArc === 'function') updateClockArc();   // keep the top-left mini clock in sync
@@ -9857,6 +9858,31 @@ async function runSessionSummary(wovenNames){
     }
   } catch (e){
     const el = $('rcAi'); if (el) el.innerHTML = '<div class="rc-ai-lbl">This session</div><div class="rc-ai-text wk-empty">' + esc(aiErrMsg(e)) + '</div>';
+  }
+}
+// On Start, conjure a one-line session goal — a question made from the focus elements,
+// constrained by the guides/exercises — shown beneath the clock. A surprise; optional.
+async function generateSessionGoal(){
+  const host = $('sessionGoal'); if (!host) return;
+  const words = (state.prompt && state.prompt.words) || [];
+  const goals = (state.focusKeys || []).map(k => { const w = words.find(x => wordKey(x) === k); return w ? elDisplayName(w) : null; }).filter(Boolean);
+  const guides = words.filter(isGuideWord).map(w => w.word + (w.sub ? ' (' + w.sub + ')' : '') + (descFor(w) ? ': ' + descFor(w) : ''));
+  if (!goals.length && !guides.length){ host.textContent = ''; host.classList.remove('show'); return; }
+  const token = Date.now(); host._token = token;
+  host.classList.add('show', 'loading');
+  host.innerHTML = '<span class="sg-lbl">A question for this session</span>Conjuring…';
+  try {
+    const sys = 'You invent ONE short, evocative question to spark a single timed writing session. Combine the given focus elements into a genuine question worth exploring in a story scene; treat the writing guides/exercises as constraints on HOW it is explored. Output ONLY the question — one sentence, no preamble, no quotation marks. Make it concrete and open-ended, never yes/no.';
+    const prompt = (goals.length ? ('Focus elements: ' + goals.join(', ') + '\n') : '')
+      + (guides.length ? ('Guides & exercises (constraints): ' + guides.join('; ') + '\n') : '')
+      + '\nWrite the one-sentence question:';
+    const text = await aiCall(sys, prompt);
+    if (host._token !== token || !document.body.classList.contains('insession')){ return; }   // a newer session (or it ended) — drop this result
+    const q = (text || '').trim().replace(/^["“”']+|["“”']+$/g, '');
+    host.classList.remove('loading');
+    host.innerHTML = '<span class="sg-lbl">A question for this session</span>' + esc(q);
+  } catch (e){
+    if (host._token === token){ host.classList.remove('loading', 'show'); host.textContent = ''; }
   }
 }
 function endWritingSession(){
