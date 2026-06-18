@@ -4618,11 +4618,11 @@ const undoStack = [];
 const redoStack = [];
 function pushUndo(){
   if (!state.prompt) return;
-  undoStack.push({ frameIdx: state.frameIdx, data: JSON.stringify(state.prompt) });
+  undoStack.push({ frameIdx: state.frameIdx, data: JSON.stringify(state.prompt), selGroup: state.selGroup ? state.selGroup.slice() : null });
   if (undoStack.length > 40) undoStack.shift();
   redoStack.length = 0;
 }
-function mapSnapshot(){ return { frameIdx: state.frameIdx, data: JSON.stringify(state.prompt) }; }
+function mapSnapshot(){ return { frameIdx: state.frameIdx, data: JSON.stringify(state.prompt), selGroup: state.selGroup ? state.selGroup.slice() : null }; }
 function applyMapSnapshot(u){
   const restored = JSON.parse(u.data);
   if (state.frames && state.frames[u.frameIdx]){
@@ -4634,9 +4634,11 @@ function applyMapSnapshot(u){
   }
   state.prompt = restored;
   state.selNode = null; state.linkFrom = null;
+  state.selGroup = (u.selGroup && u.selGroup.length) ? u.selGroup.slice() : null;   // restore the lasso selection too
   refreshSky();
   renderTimeline();
   syncFramesToSession();
+  markGroupSel();
 }
 function undoMap(){
   const u = undoStack.pop();
@@ -6582,7 +6584,7 @@ function pointInPoly(x, y, pts){
   return inside;
 }
 function nodeLassoable(i){ const nd = state.nodes && state.nodes[i]; return !!(nd && typeof nd.x === 'number' && !nd.poly && !nd.line && !nd.locked); }
-function clearGroupSel(){ if (state.selGroup && state.selGroup.length){ state.selGroup = null; markGroupSel(); return true; } state.selGroup = null; return false; }
+function clearGroupSel(){ if (state.selGroup && state.selGroup.length){ pushUndo(); state.selGroup = null; markGroupSel(); return true; } state.selGroup = null; return false; }
 function markGroupSel(){
   const sky = $('skySvg'); if (!sky) return;
   sky.querySelectorAll('.grp-ring').forEach(el => el.remove());
@@ -6835,7 +6837,7 @@ function facetHouse(mk, tx, ty, s){
 function makeBuildingMotif(nd){
   const NS = 'http://www.w3.org/2000/svg';
   const mk = (t, a) => { const e = document.createElementNS(NS, t); for (const k in a) e.setAttribute(k, a[k]); return e; };
-  const baseY = -42 - (nd.name ? 22 : 0);   // lifted to keep the (now doubled) building clear of the label
+  const baseY = -30 - (nd.name ? 22 : 0);   // doubled building, kept close to the word
   const g = mk('g', { 'class': 'motif' });
   if (nd.sub === 'Settlements'){
     g.setAttribute('transform', 'translate(0,' + (baseY + 8) + ') scale(2.84)');
@@ -7085,7 +7087,7 @@ function makeSettingMotif(nd){
   const build = SETTING_SVG[nd.word]; if (!build) return null;
   const NS = 'http://www.w3.org/2000/svg';
   const g = document.createElementNS(NS, 'g'); g.setAttribute('class', 'motif');
-  const baseY = -30 - (nd.name ? 22 : 0);   // lifted to keep the (now doubled) icon clear of the label
+  const baseY = -17 - (nd.name ? 22 : 0);   // doubled icon, kept close to the word (bottom-of-icon → top-of-word gap like objects)
   g.setAttribute('transform', 'translate(0,' + baseY + ') scale(2.4)');
   g.innerHTML = build();
   const t = document.createElementNS(NS, 'title'); t.textContent = nd.word || 'Place'; g.appendChild(t);
@@ -7100,7 +7102,7 @@ function makeMotif(nd){
     || (WATER_WORDS.has(nd.word) ? SETTING_ICON_FAMILY.water : SETTING_ICON_FAMILY[nd.sub])
     || 'mountain';
   return makeLucide(name, { cls: 'motif', color: darken(st.color, 0.32),
-    x: 0, y: -40 - (nd.name ? 22 : 0), scale: 1.9, sw: 1.8, opacity: 0.9 });
+    x: 0, y: -30 - (nd.name ? 22 : 0), scale: 1.9, sw: 1.8, opacity: 0.9 });
 }
 
 /* ---------------- icons (Lucide, MIT \u00B7 lucide.dev) ---------------- */
@@ -12382,9 +12384,11 @@ function init(){
     if (pts.length < 3){ return; }
     const sel = [];
     (state.nodes || []).forEach((nd, i) => { if (nodeLassoable(i) && pointInPoly(nd.x, nd.y, pts)) sel.push(i); });
-    state.selGroup = sel.length ? sel : null;
+    if (!sel.length){ clearGroupSel(); return; }   // lassoed empty space → behave like a deselect
+    pushUndo();                                     // make the selection undoable
+    state.selGroup = sel;
     markGroupSel();
-    if (sel.length) flashStatus(sel.length + (sel.length === 1 ? ' element selected — drag it to move' : ' elements selected — drag any one to move the group'));
+    flashStatus(sel.length + (sel.length === 1 ? ' element selected — drag it to move' : ' elements selected — drag any one to move the group'));
   }
   let terrainDrawing = null, terrainPreview = null;
   function terrainEnd(commit){
@@ -12505,6 +12509,8 @@ function init(){
       else commitOne(dragging.i);
       state.lastDrag = Date.now();
       if (state.session){ state.session.words = state.prompt.words; scheduleAutosave(); }
+    } else {
+      clearGroupSel();   // a tap (no drag) on a node clears the lasso selection
     }
     dragging = null;
   };
