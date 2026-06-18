@@ -1666,6 +1666,11 @@
   /* hover a note/comment → highlight the passage it's anchored to */
   .nt.nt-hl{background:#fbf3d9; border-radius:3px; box-shadow:0 0 0 3px #fbf3d9}
   .pub-hl{background:#e9f2f8 !important; border-radius:3px; box-shadow:0 0 0 4px #e9f2f8; transition:background .12s}
+  /* a comment whose passage was edited/removed → looks inactive, keeps its original quote */
+  .np-item.cm.cm-orphan{opacity:.62; background:#f1f0ee; border-color:#dcdad5; cursor:default}
+  .np-item.cm.cm-orphan .np-quote{border-left-color:#bdbab3; color:#a8a49a; text-decoration:line-through}
+  .np-item.cm.cm-orphan .np-au{color:#a8a49a}
+  .cm-stale{font-family:var(--sans,system-ui,sans-serif); font-size:10.5px; font-style:italic; color:#b08968; margin-top:5px}
   /* owner Share pill + popup (Read bar) */
   #shareBtn{display:inline-flex; align-items:center; gap:5px}
   #shareBtn.on{border-color:var(--gold,#c8a24a); color:var(--gold,#c8a24a)}
@@ -9734,6 +9739,7 @@ async function cloudSave(sess){
       // Update without touching `owner` — a collaborator saving a shared story must not seize ownership.
       const { error } = await supa.from('stories').update({ title, doc: cloudDocOf(sess), updated_at: now }).eq('id', sess.cloudId);
       if (error){ console.warn('cloud update error:', error); flashStatus('Cloud: ' + error.message); }
+      else if (typeof pubBroadcastUpdate === 'function') pubBroadcastUpdate(sess);   // push live update to public readers
     } else {
       sess._inserting = true;
       const { data, error } = await supa.from('stories').insert({ owner: cloud.user.id, title, doc: cloudDocOf(sess), updated_at: now }).select('id').single();
@@ -10052,6 +10058,7 @@ function saveSession(){
 }
 /* ===== Public read-only sharing + anonymous reader comments ===== */
 let _pubGuest=false,_pubStory=null,_pubToken='',_pubComments=[],_pubChan=null,_pubAnchor=null,_pubOwnerHide=false;
+let _pubStoryChan=null,_pubBcChan=null,_pubBcTok='';   // live story-update broadcast (author → readers)
 function _pubGN(){ try{ return localStorage.getItem('dystoria.guestName')||''; }catch(e){ return ''; } }
 function _pubSetGN(n){ try{ localStorage.setItem('dystoria.guestName',n); }catch(e){} }
 function pubHasCommented(){ try{ return localStorage.getItem('dystoria.commented.'+_pubToken)==='1'; }catch(e){ return false; } }
@@ -10120,7 +10127,7 @@ async function pubBootGuest(tok){
   const g=$('rdGuide'); if(g){ g.style.display=''; g.textContent='Highlight any passage in the story to leave a comment.'; if(pubHasCommented()) g.style.display='none'; }
   $('readMode').classList.add('show');
   pubBuildGuestUI();
-  await pubLoadComments(story.id); pubSubscribe(story.id);
+  await pubLoadComments(story.id); pubSubscribe(story.id); pubSubscribeStory(_pubToken);
   requestAnimationFrame(()=>{ $('readBody').scrollTop=0; });
 }
 function pubLoadGuestDoc(doc){
@@ -10204,11 +10211,18 @@ function pubSyncNameField(){
     if(fine) fine.style.display='';
   }
 }
-// in the guest reader: hide the "Comment as yourself" pill once signed in; refresh the name field
-function pubRefreshGuestAuth(){
+// in the guest reader: hide the "Comment as yourself" pill once signed in; refresh the name field;
+// hide "Try Dystoria" only for established accounts (keep it for a brand-new / story-less account)
+async function pubRefreshGuestAuth(){
   if(!_pubGuest) return;
   const sb=$('gbSignin'); if(sb) sb.style.display=_pubSignedIn()?'none':'';
   pubSyncNameField();
+  const tb=$('gbTry'); if(!tb) return;
+  if(!_pubSignedIn()){ tb.style.display=''; return; }   // signed out → keep the CTA
+  try{
+    const {count}=await supa.from('stories').select('id',{count:'exact',head:true}).eq('owner',cloud.user.id);
+    tb.style.display=(count&&count>0)?'none':'';        // has stories → established; 0 → just made an account, keep CTA
+  }catch(e){ tb.style.display='none'; }
 }
 async function pubEnsureAnon(){
   if(cloud.user) return cloud.user;
@@ -10250,6 +10264,37 @@ function pubSubscribe(storyId){
       }).subscribe();
   }catch(e){ console.warn('comments subscribe',e); }
 }
+/* ---- live story updates: author broadcasts on save, readers re-fetch ---- */
+function pubBroadcastUpdate(sess){
+  if(!supa||!sess||!sess._isPublic||!sess._publicToken) return;
+  const tok=sess._publicToken;
+  try{
+    if(_pubBcTok!==tok){ if(_pubBcChan){ try{ supa.removeChannel(_pubBcChan); }catch(e){} } _pubBcChan=supa.channel('pub-'+tok); _pubBcChan.subscribe(); _pubBcTok=tok; }
+    _pubBcChan.send({ type:'broadcast', event:'updated', payload:{ t:Date.now() } });
+  }catch(e){ console.warn('broadcast update',e); }
+}
+function pubSubscribeStory(token){
+  try{
+    if(_pubStoryChan){ supa.removeChannel(_pubStoryChan); _pubStoryChan=null; }
+    _pubStoryChan=supa.channel('pub-'+token).on('broadcast',{event:'updated'},()=>pubReloadStory()).subscribe();
+  }catch(e){ console.warn('story subscribe',e); }
+}
+async function pubReloadStory(){
+  if(!_pubStory||!_pubToken) return;
+  try{
+    const {data,error}=await supa.rpc('get_public_story',{tok:_pubToken});
+    if(error||!data||!data.length) return;
+    _pubStory=data[0];
+    const rb=$('readBody'); const sc=rb?rb.scrollTop:0;
+    pubHideCommentPop();
+    pubLoadGuestDoc(_pubStory.doc||{});
+    buildReadMode();
+    pubAddCopyright(_pubStory.author);
+    if(rb) rb.scrollTop=sc;
+    pubRenderGuestComments();              // re-evaluate which comments are now orphaned
+    if(typeof flashStatus==='function') flashStatus('The author updated this story');
+  }catch(e){ console.warn('reload story',e); }
+}
 /* ---- guest comment list (clean notes-style) ---- */
 function pubRenderGuestComments(){
   const list=$('gcList'); if(!list) return;
@@ -10257,11 +10302,13 @@ function pubRenderGuestComments(){
   list.innerHTML='';
   if(!cs.length){ list.innerHTML='<div class="np-empty">No comments yet. Highlight a passage to add the first.</div>'; return; }
   cs.forEach(c=>{
-    const it=document.createElement('div'); it.className='np-item cm';
+    const orphan=!!(c.anchor_key && typeof pubBlockFor==='function' && !pubBlockFor($('readBody'),c.anchor_key));
+    const it=document.createElement('div'); it.className='np-item cm'+(orphan?' cm-orphan':'');
     if(c.anchor_key){ const q=document.createElement('span'); q.className='np-quote'; q.textContent='“'+(c.anchor_key||'').slice(0,80)+'”'; it.appendChild(q); }
     const t=document.createElement('div'); t.className='np-text'; t.textContent=c.body||''; it.appendChild(t);
+    if(orphan){ const s=document.createElement('div'); s.className='cm-stale'; s.textContent='⚠ This passage has been edited or removed.'; it.appendChild(s); }
     const au=document.createElement('div'); au.className='np-au'; const who=document.createElement('span'); who.textContent=(c.author_name||'Guest')+' · '+_pubTime(c.created_at); au.appendChild(who); it.appendChild(au);
-    if(c.anchor_key){ it.style.cursor='pointer'; it.addEventListener('mouseenter',()=>pubHoverHighlight($('readBody'),c.anchor_key,true)); it.addEventListener('mouseleave',()=>pubHoverHighlight($('readBody'),c.anchor_key,false)); }
+    if(c.anchor_key && !orphan){ it.style.cursor='pointer'; it.addEventListener('mouseenter',()=>pubHoverHighlight($('readBody'),c.anchor_key,true)); it.addEventListener('mouseleave',()=>pubHoverHighlight($('readBody'),c.anchor_key,false)); }
     list.appendChild(it);
   });
 }
@@ -11627,6 +11674,7 @@ function commitEdit(){
   if (typeof updateWordCount === 'function') updateWordCount();
   saveSession();
   edPushHistory();
+  if ($('editMode') && $('editMode').classList.contains('show') && typeof pubOwnerComments === 'function' && pubOwnerComments().length) renderNotes();   // refresh reader-comment orphan state after edits
 }
 // --- Refine-mode undo/redo: snapshot the edit body's HTML on every committed change ---
 let _edStates = [], _edIdx = -1, _edHistLock = false;
@@ -11938,16 +11986,18 @@ function renderNotes(){
   });
   // reader comments — same item style, different colour (.cm), with a remove × for moderation
   comments.forEach(c => {
-    const item = document.createElement('div'); item.className = 'np-item cm';
+    const orphan = !!(c.anchor_key && typeof pubBlockFor === 'function' && !pubBlockFor($('editBody'), c.anchor_key));
+    const item = document.createElement('div'); item.className = 'np-item cm' + (orphan ? ' cm-orphan' : '');
     if (c.anchor_key){ const q = document.createElement('span'); q.className = 'np-quote'; q.textContent = '“' + (c.anchor_key || '').slice(0, 80) + '”'; item.appendChild(q); }
-    const t = document.createElement('div'); t.className = 'np-text'; t.textContent = c.body || '';
+    const t = document.createElement('div'); t.className = 'np-text'; t.textContent = c.body || ''; item.appendChild(t);
+    if (orphan){ const s = document.createElement('div'); s.className = 'cm-stale'; s.textContent = '⚠ This passage has been edited or removed.'; item.appendChild(s); }
     const au = document.createElement('div'); au.className = 'np-au';
     const who = document.createElement('span'); who.textContent = '✦ ' + (c.author_name || 'Guest') + ' · ' + (typeof _pubTime === 'function' ? _pubTime(c.created_at) : '');
     const acts = document.createElement('span'); acts.className = 'np-acts';
     const x = document.createElement('span'); x.className = 'np-x'; x.textContent = '×'; x.title = 'Remove this reader comment';
     acts.appendChild(x); au.appendChild(who); au.appendChild(acts);
-    item.appendChild(t); item.appendChild(au);
-    if (c.anchor_key){ item.addEventListener('click', () => pubOwnerScrollTo(c.anchor_key)); item.addEventListener('mouseenter', () => pubHoverHighlight($('editBody'), c.anchor_key, true)); item.addEventListener('mouseleave', () => pubHoverHighlight($('editBody'), c.anchor_key, false)); }
+    item.appendChild(au);
+    if (c.anchor_key && !orphan){ item.addEventListener('click', () => pubOwnerScrollTo(c.anchor_key)); item.addEventListener('mouseenter', () => pubHoverHighlight($('editBody'), c.anchor_key, true)); item.addEventListener('mouseleave', () => pubHoverHighlight($('editBody'), c.anchor_key, false)); }
     x.addEventListener('click', ev => { ev.stopPropagation(); pubDeleteComment(c.id); });
     list.appendChild(item);
   });
