@@ -8,7 +8,8 @@ const fs = require('fs');
 const path = require('path');
 
 const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
-const script = (html.match(/<script(?![^>]*src=)[^>]*>([\s\S]*?)<\/script>/) || [])[1] || '';
+// Join every inline (non-src) <script> so the lookup works regardless of which block holds the fn.
+const script = [...html.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/g)].map(m => m[1]).join('\n');
 
 // pull a function's source out of the script by brace-matching (these fns contain no { in strings)
 function extractFn(src, name) {
