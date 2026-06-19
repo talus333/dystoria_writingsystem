@@ -1957,6 +1957,8 @@
   #gcText{width:100%; box-sizing:border-box; font:inherit; font-size:14px; padding:7px 9px; border:1px solid var(--line,#ddd); border-radius:7px; resize:vertical}
   #gcPost{margin-top:7px; width:100%; font:inherit; font-size:13px; padding:8px; background:#2a2620; color:#fff; border:none; border-radius:8px; cursor:pointer}
   #gcPost:hover{background:#3a342b}
+  #gcPost:disabled{opacity:.6; cursor:default}
+  #gcErr{display:none; font-size:12px; color:#c0392b; margin-top:7px; line-height:1.45}
   .gc-fine{font-size:11px; color:var(--ink-faint,#a8a08f); margin-top:8px; line-height:1.5}
   .gc-fine a{color:#b08a2e; cursor:pointer; text-decoration:underline}
   /* flash a paragraph when the owner clicks a reader comment to locate it */
@@ -2217,6 +2219,7 @@
     <input id="gcName" placeholder="Your name" maxlength="24" autocomplete="off">
     <textarea id="gcText" placeholder="Leave a comment… (⌘↵ to post)" rows="3"></textarea>
     <button id="gcPost">Post comment</button>
+    <div id="gcErr"></div>
     <div class="gc-fine">Posting publicly with this link. <a id="gcAccount">Create an account</a> to comment under your name.</div>
   </div>
   <button id="readTop" title="Back to the top">↑ Top</button>
@@ -11059,6 +11062,7 @@ function pubShowCommentPop(rect, text){
   const pop=$('gcPop'); if(!pop) return;
   const note=$('gcAnchorNote'); if(note) note.innerHTML='On: <i>“'+_pubEsc(text.slice(0,70))+(text.length>70?'…':'')+'”</i>';
   pubSyncNameField();
+  if(typeof pubCommentErr==='function') pubCommentErr('');
   pop.classList.add('show');
   const pw=pop.offsetWidth||300, ph=pop.offsetHeight||230, vw=window.innerWidth, vh=window.innerHeight;
   let left=Math.min(Math.max(10,(rect.left+rect.right)/2-pw/2), vw-pw-10);
@@ -11067,6 +11071,7 @@ function pubShowCommentPop(rect, text){
   const t=$('gcText'); if(t){ t.value=''; setTimeout(()=>{ try{ t.focus(); }catch(_){} },0); }
 }
 function pubHideCommentPop(){
+  if(typeof pubCommentErr==='function') pubCommentErr('');
   const pop=$('gcPop'); if(pop) pop.classList.remove('show');
   const rb=$('readBody'); if(rb) rb.querySelectorAll('.pub-anchored').forEach(x=>x.classList.remove('pub-anchored'));
   _pubAnchor=null;
@@ -11103,17 +11108,23 @@ async function pubEnsureAnon(){
   try{ const {data,error}=await supa.auth.signInAnonymously(); if(error){ console.warn('anon signin',error); return null; } cloud.user=data.user; return data.user; }
   catch(e){ console.warn('anon signin threw',e); return null; }
 }
+function pubCommentErr(msg){ const el=$('gcErr'); if(el){ el.textContent=msg||''; el.style.display=msg?'block':'none'; } }
 async function pubPostComment(){
-  const t=$('gcText'); const body=(t&&t.value||'').trim(); if(!body){ return; }
-  const u=await pubEnsureAnon();
-  if(!u){ flashStatus('Couldn’t start a guest session — anonymous sign-in may be off'); return; }
-  let name='Anonymous';   // not signed in → hard-locked to anonymous
-  if(_pubSignedIn()){ name=($('gcName')&&$('gcName').value||'').trim() || (cloud.username||myDisplayName()||'').trim() || 'Reader'; _pubSetGN(name); }
+  const t=$('gcText'); const body=(t&&t.value||'').trim();
+  if(!body){ pubCommentErr('Write something first.'); if(t) try{ t.focus(); }catch(_){} return; }
+  const btn=$('gcPost'); pubCommentErr('');
+  if(btn){ btn.disabled=true; btn.dataset.lbl=btn.dataset.lbl||btn.textContent; btn.textContent='Posting…'; }
   try{
+    await pubEnsureAnon();   // best-effort: attaches an author id when anonymous sign-in is enabled, but the
+                            // add_public_comment RPC is granted to the anon role, so posting works without it
+    let name='Anonymous';   // not signed in → hard-locked to anonymous
+    if(_pubSignedIn()){ name=($('gcName')&&$('gcName').value||'').trim() || (cloud.username||myDisplayName()||'').trim() || 'Reader'; _pubSetGN(name); }
     const {error}=await supa.rpc('add_public_comment',{tok:_pubToken,a_name:name,a_anchor:_pubAnchor?_pubAnchor.key:null,a_section:0,a_body:body});
-    if(error){ flashStatus('Comment: '+error.message); return; }
-    if(t) t.value=''; pubHideCommentPop(); pubMarkCommented(); flashStatus('Comment posted'); const s=window.getSelection&&window.getSelection(); if(s&&s.removeAllRanges) s.removeAllRanges();
-  }catch(e){ flashStatus('Comment error: '+e.message); }
+    if(error){ pubCommentErr('Couldn’t post: '+(error.message||'unknown error')); return; }
+    if(t) t.value=''; pubHideCommentPop(); pubMarkCommented(); flashStatus('Comment posted');
+    const s=window.getSelection&&window.getSelection(); if(s&&s.removeAllRanges) s.removeAllRanges();
+  }catch(e){ pubCommentErr('Couldn’t post: '+((e&&e.message)||e||'unknown error')); }
+  finally{ if(btn){ btn.disabled=false; btn.textContent=btn.dataset.lbl||'Post comment'; } }
 }
 /* ---- shared load + realtime ---- */
 async function pubLoadComments(storyId){
@@ -14701,7 +14712,7 @@ function setWriting(on){
     { const dg = $('deskStatus'); if (dg) dg.textContent = 'Roll and gather elements, shape the map, and note ideas as they come.'; }
   }
 }
-const DYSTORIA_BUILD = '2026-06-19 #127 — Read/Refine title alignment: pinned .rd-name line-height to 1.5 in both modes (Refine inherited 1.85 from #editChrome, pushing the title ~8px lower) so the distance from top to the story title is identical and switching modes no longer shifts';
+const DYSTORIA_BUILD = '2026-06-19 #128 — guest comment posting fixed: anonymous sign-in is now best-effort (the add_public_comment RPC is granted to the anon role, so posting works even if anon sign-in is off); errors now show inline in the comment popup (the old flashStatus toast was invisible to guests); Post button shows Posting…/disables';
 function init(){
   try { window.__DYSTORIA_BUILD = DYSTORIA_BUILD; console.log('%cDystoria','font-weight:700', 'build ' + DYSTORIA_BUILD); } catch(e){}
   mergeCustomWords();
