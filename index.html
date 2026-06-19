@@ -10252,11 +10252,18 @@ async function generateSessionGoal(hostId){
     if (host._token === token){ host.classList.remove('loading', 'show'); host.textContent = ''; }
   }
 }
-function endWritingSession(){
+async function endWritingSession(){
   const hadRun = state.timer.started;
   clearGrace();
   clearInterval(state.timer.handle);
   if (state.redo && state.redo.active){ finishRedoSession(); return; }   // redo path: lock the rewrite, then prompt Replace/Discard
+  // Transcribe this session's handwriting FIRST, so a pure-ink session (no typed words) still
+  // becomes real prose in the section and counts toward the review/lock below.
+  if (hadRun && ink.pageRef && !ink.pageRef.locked && ink.pageRef.strokes && ink.pageRef.strokes.length){
+    flashStatus('Saving your handwriting\u2026');
+    try { await transcribeCurrentInk({ silent: true }); } catch(e){}
+  }
+  if (state.inkMode) setMode('type');   // after an ink session, show the transcribed text in the editor
   // only treat this as a real session (snapshot + review card) if words were actually written
   const _base = state.sessionStart || { words: 0 };
   const _t = editorText().trim();
@@ -10267,14 +10274,10 @@ function endWritingSession(){
   if (wrote){ lockWrittenInSection(); }
   setupTimer();
   updateEndBtn();
+  updateInkDock();   // session over \u2192 hide the e-ink dock in Write mode
   if (typeof live !== 'undefined' && live.on){ liveScheduleTrack(); liveApplyProseLock(); }
   if (wrote && editorText().trim()) appendBeginPrompt('Continue\u2026');
   if (wrote){ paintSectionFocus(); if (state.session){ state.session.html = editorHTML(); } scheduleAutosave(); }
-  // auto-transcribe this session's e-ink page, then lock it and open a fresh one
-  if (wrote && ink.pageRef && !ink.pageRef.locked && ink.pageRef.strokes && ink.pageRef.strokes.length){
-    flashStatus('Saving your handwriting\u2026');
-    transcribeCurrentInk({ silent: true });
-  }
   flashStatus(wrote ? 'Session ended \u2014 press Start session when you\u2019re ready for the next'
                     : 'Session ended \u2014 nothing written, so no review.');
 }
@@ -10368,6 +10371,7 @@ async function sendFeedback(){
 function startWritingSession(fullscreen){
   if (!document.body.classList.contains('writing')) setWriting(true);
   if (fullscreen) document.body.classList.add('insession');   // minimalist full-screen (only this path sets it)
+  updateInkDock();                     // e-ink tools become reachable now the session has begun
   startTimerIfArmed();                 // arms the timer (len is always > 0 now)
   updateEndBtn();                      // button becomes "End session"
   if (fullscreen) applyFsHeader();   // mirror the chosen sections (elements/guides/prompt) into the full-screen header — no auto-generated prompt
@@ -14639,7 +14643,7 @@ function setWriting(on){
     { const dg = $('deskStatus'); if (dg) dg.textContent = 'Roll and gather elements, shape the map, and note ideas as they come.'; }
   }
 }
-const DYSTORIA_BUILD = '2026-06-18 #121 — welcome popup rewritten (Welcome to in Cormorant SC, new opening, sign-up sections removed); account nudge after first original contribution (signed out, once)';
+const DYSTORIA_BUILD = '2026-06-19 #122 — e-ink tools moved into a floating bottom pill (#inkDock) so they survive full-screen; Write-mode ink usable only during a session; end-of-session now transcribes ink-only sessions (async transcribe-first) and returns to the type view';
 function init(){
   try { window.__DYSTORIA_BUILD = DYSTORIA_BUILD; console.log('%cDystoria','font-weight:700', 'build ' + DYSTORIA_BUILD); } catch(e){}
   mergeCustomWords();
@@ -14761,6 +14765,7 @@ function init(){
   { const fsb=$('focusStartBtn'); if(fsb) fsb.addEventListener('click', () => startWritingSession(true)); }   // the single Start: always full-screen
   // ----- Write mode = vertical prep board: 3-column focus bar, full-width sessions, Start at the bottom -----
   { try{ const p=getPrefs(); if(p && p.fsShow) fsShow=Object.assign({elements:false,guides:false,prompt:true}, p.fsShow); }catch(e){} }   // restore "show in session" toggles (defaults: elements/guides off, prompt on)
+  buildInkDock();   // relocate the Type/Ink switch + e-ink tools into a floating bottom pill
   (function buildPrepBoard(){
     const fp=$('focusPanel'); if(!fp || fp.dataset.cols) return; fp.dataset.cols='1';
     const mk=(cls,head)=>{ const c=document.createElement('div'); c.className='fb-col '+cls; const h=document.createElement('div'); h.className='fb-colhead'; h.textContent=head; c.appendChild(h); return c; };
