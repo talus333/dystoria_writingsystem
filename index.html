@@ -1987,6 +1987,21 @@
   body.writing:not(.insession) #startBox #clockEdit{opacity:1}
   body.writing:not(.insession) #startBox #focusStartBtn{margin:0}
   body.writing.insession #startBox{display:none}
+  /* Unlimited time → hide the clock (full-screen miniclock; prep keeps the ✎ to change it back) */
+  body.untimed.writing.insession #miniClock{display:none}
+  body.untimed.writing:not(.insession) #startBox #digitalTime{display:none}
+  /* per-section "Show in session" toggle (off = grey, on = gold) */
+  .fb-fstoggle{align-self:center; flex:none; margin:0 0 4px; font-family:var(--sans); font-size:8px; letter-spacing:.12em; text-transform:uppercase;
+    border:1px solid currentColor; border-radius:11px; padding:2px 9px; background:transparent; color:#9a948a; cursor:pointer}
+  .fb-fstoggle.on{color:var(--gold)}
+  .fb-fstoggle:hover{color:var(--ink-soft)}
+  .fb-fstoggle.on:hover{color:var(--gold); opacity:.85}
+  body.eink .fb-fstoggle.on{color:#000}
+  /* full-screen: element/exercise words as centered black pills under the clock, prompt below */
+  #fsWords{display:none}
+  body.writing.insession #fsWords{display:flex; flex-direction:column; align-items:center; gap:5px; margin:10px auto 0; pointer-events:none}
+  .fs-pill{font-family:var(--sans); font-size:10px; letter-spacing:.1em; text-transform:uppercase; background:var(--ink); color:var(--paper); padding:3px 12px; border-radius:13px}
+  body.eink .fs-pill{background:#000; color:#fff}
   #prepPrompt .pp-head{font-family:var(--sans); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--ink-faint); display:flex; align-items:center; justify-content:center; gap:6px}
   #prepPrompt .pp-head #prepPromptGen{background:none; border:none; cursor:pointer; color:var(--ink-faint); font-size:13px; line-height:1; padding:0}
   #prepPrompt .pp-head #prepPromptGen:hover{color:var(--gold)}
@@ -2351,7 +2366,7 @@
     </div>
     <div id="npAddMenu" hidden></div>
     <div id="sessMenu"></div>
-    <div id="fsHeader"><div id="miniClock" title="Time left in this session"></div><div id="sessionGoal"></div></div>
+    <div id="fsHeader"><div id="miniClock" title="Time left in this session"></div><div id="fsWords"></div><div id="sessionGoal"></div></div>
     <div id="focusTab" title="Peek your focus elements">Focus</div>
     <div id="redoChoice"><div class="rdc-card">
       <div class="rdc-q">Keep this rewrite?</div>
@@ -10127,13 +10142,40 @@ function endWritingSession(){
   }
   flashStatus('Session ended \u2014 press Start session when you\u2019re ready for the next');
 }
+// Which prep sections the author wants mirrored into the full-screen session (persisted in prefs).
+let fsShow = { elements: true, guides: true, prompt: true };
+function applyFsHeader(){
+  if (!document.body.classList.contains('insession')) return;
+  const words = (state.prompt && state.prompt.words) || [];
+  const cf = state.frameIdx || 0;
+  const fsW = $('fsWords');
+  if (fsW){
+    fsW.innerHTML = '';
+    const pills = [];
+    if (fsShow.elements){
+      (state.focusKeys || []).forEach(k => { const w = words.find(x => wordKey(x) === k); if (w) pills.push(elDisplayName(w)); });
+      words.forEach(w => { if (w.cat === 'event' && w.role === 'word' && (w.frame == null ? cf === 0 : w.frame === cf)) pills.push(w.name || w.word); });
+      words.forEach(w => { if (w.cat === 'stakes' && w.scope === 'frame' && (w.frame == null ? cf === 0 : w.frame === cf)) pills.push(w.name || w.word); });
+    }
+    if (fsShow.guides){ words.filter(isGuideWord).forEach(w => pills.push(w.word)); }
+    pills.forEach(t => { const s = document.createElement('span'); s.className = 'fs-pill'; s.textContent = t; fsW.appendChild(s); });
+    fsW.style.display = pills.length ? 'flex' : 'none';
+  }
+  // The full-screen prompt is ONLY the one the author generated in the prep board \u2014 never auto-generated here.
+  const sg = $('sessionGoal');
+  if (sg){
+    const prep = (($('prepPromptText') && $('prepPromptText').textContent) || '').trim();
+    if (fsShow.prompt && prep){ sg.textContent = prep; sg.classList.add('show'); }
+    else { sg.textContent = ''; sg.classList.remove('show'); }
+  }
+}
 // Explicit start. fullscreen=false \u2192 start the timer in the current view; fullscreen=true \u2192 minimalist full-screen.
 function startWritingSession(fullscreen){
   if (!document.body.classList.contains('writing')) setWriting(true);
   if (fullscreen) document.body.classList.add('insession');   // minimalist full-screen (only this path sets it)
   startTimerIfArmed();                 // arms the timer (len is always > 0 now)
   updateEndBtn();                      // button becomes "End session"
-  if (fullscreen && typeof generateSessionGoal === 'function') generateSessionGoal();   // surprise question, full-screen only
+  if (fullscreen) applyFsHeader();   // mirror the chosen sections (elements/guides/prompt) into the full-screen header — no auto-generated prompt
   if (!state.inkMode){
     const ed = $('editor');
     if (ed){
@@ -14374,7 +14416,7 @@ function setWriting(on){
     { const dg = $('deskStatus'); if (dg) dg.textContent = 'Roll and gather elements, shape the map, and note ideas as they come.'; }
   }
 }
-const DYSTORIA_BUILD = '2026-06-18 #87 — generated prompt lower + gold; focus-element × white (gold hover) + wiki icon white→gold hover; removed flag on added guides/exercises';
+const DYSTORIA_BUILD = '2026-06-18 #88 — full-screen mirrors chosen sections (per-section Show-in-session toggles; element/guide words as black pills + prep prompt only, no auto-generate); Unlimited timer hides clock; clock dropdown fixed; wiki icon soft grey; removed focus hint';
 function init(){
   try { window.__DYSTORIA_BUILD = DYSTORIA_BUILD; console.log('%cDystoria','font-weight:700', 'build ' + DYSTORIA_BUILD); } catch(e){}
   mergeCustomWords();
@@ -14495,12 +14537,16 @@ function init(){
   { const f=$('fullScreenMini'); if(f) f.addEventListener('click', () => startWritingSession(true)); }   // minimalist full-screen
   { const fsb=$('focusStartBtn'); if(fsb) fsb.addEventListener('click', () => startWritingSession(true)); }   // the single Start: always full-screen
   // ----- Write mode = vertical prep board: 3-column focus bar, full-width sessions, Start at the bottom -----
+  { try{ const p=getPrefs(); if(p && p.fsShow) fsShow=Object.assign({elements:true,guides:true,prompt:true}, p.fsShow); }catch(e){} }   // restore "show in session" toggles
   (function buildPrepBoard(){
     const fp=$('focusPanel'); if(!fp || fp.dataset.cols) return; fp.dataset.cols='1';
     const mk=(cls,head)=>{ const c=document.createElement('div'); c.className='fb-col '+cls; const h=document.createElement('div'); h.className='fb-colhead'; h.textContent=head; c.appendChild(h); return c; };
-    const colE=mk('fb-col-elems','Add Story Focus Elements');
-    const colG=mk('fb-col-guides','Add Guides & Exercises');
-    const colT=mk('fb-col-timer','Set Prompt');
+    const mkFsToggle=(key)=>{ const b=document.createElement('button'); b.type='button'; b.className='fb-fstoggle'+(fsShow[key]?' on':''); b.textContent='Show in session';
+      b.title='Show this in the full-screen writing session'; b.addEventListener('click',()=>{ fsShow[key]=!fsShow[key]; b.classList.toggle('on',fsShow[key]);
+        try{ const p=getPrefs(); p.fsShow=fsShow; localStorage.setItem(LS_PREFS, JSON.stringify(p)); }catch(e){} }); return b; };
+    const colE=mk('fb-col-elems','Add Story Focus Elements'); colE.appendChild(mkFsToggle('elements'));
+    const colG=mk('fb-col-guides','Add Guides & Exercises'); colG.appendChild(mkFsToggle('guides'));
+    const colT=mk('fb-col-timer','Set Prompt'); colT.appendChild(mkFsToggle('prompt'));
     const act=document.createElement('div'); act.className='fb-col-actions';
     const fa=$('focusAddBtn'), fc=$('focusCounts'), fl=$('focusList'), fb=$('focusBlocks'), cbar=$('constraintBar');
     if(fa) act.appendChild(fa);
