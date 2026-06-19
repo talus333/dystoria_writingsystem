@@ -10053,12 +10053,21 @@ async function generateSessionGoal(hostId){
   words.forEach(w => { if (w.cat === 'event' && w.role === 'word' && (w.frame == null ? cf === 0 : w.frame === cf)) goals.push(w.name || w.word); });
   words.forEach(w => { if (w.cat === 'stakes' && w.scope === 'frame' && (w.frame == null ? cf === 0 : w.frame === cf)) goals.push(w.name || w.word); });
   const guides = words.filter(isGuideWord).map(w => w.word + (w.sub ? ' (' + w.sub + ')' : '') + (descFor(w) ? ': ' + descFor(w) : ''));
-  if (!goals.length && !guides.length){ host.textContent = ''; host._sig = ''; host.classList.remove('show'); return; }
-  // Regenerate looks first: skip the call when neither the elements nor the guides have changed.
+  if (!goals.length && !guides.length){ host.textContent = ''; host._sig = ''; host._prev = []; host.classList.remove('show'); return; }
   const sig = JSON.stringify([goals, guides]);
-  if (!isFsGoal && host._sig === sig && (host.textContent || '').trim() && !host.classList.contains('loading')){
-    flashStatus('Prompt is current — nothing changed in the elements or guides since the last one.'); return;
-  }
+  const sameSet = (host._sig === sig);                                       // same elements/guides as last time → ask for a fresh angle
+  const prevPrompts = (sameSet && Array.isArray(host._prev)) ? host._prev.slice(-4) : [];
+  // pull any notepad jottings that mention the chosen elements, so the prompt can draw on them
+  let elemNotes = '';
+  try {
+    const np = (($('notepad') && $('notepad').textContent) || '').trim();
+    if (np && goals.length){
+      const lines = np.split(/\n+/).map(s => s.trim()).filter(Boolean);
+      const names = goals.map(g => (g || '').toLowerCase()).filter(Boolean);
+      const hits = lines.filter(ln => names.some(n => ln.toLowerCase().includes(n)));
+      if (hits.length) elemNotes = hits.slice(0, 12).join('\n');
+    }
+  } catch(e){}
   const written = (typeof editorText === 'function') ? editorText().trim() : '';
   const token = Date.now(); host._token = token;
   host.classList.add('show', 'loading');
@@ -10067,14 +10076,17 @@ async function generateSessionGoal(hostId){
     const sys = 'You write ONE short, punchy prompt to spark a single timed writing session — a question, or a one-line directive. Pick just ONE or TWO of the focus elements (whichever sparks the most intriguing prompt); you do NOT need to use them all — other sessions can explore the rest. If a writing guide or exercise is given, you may fold ONE in as a technique constraint. If story text is provided, either deepen what is there or open an unexplored angle. Keep it under ~12 words, concrete and evocative, never yes/no. Output ONLY the prompt — no preamble, no quotation marks. Examples: "Why does the Victim carry a crutch?" / "What does the Reconstruction mean to the Challenger?" / "Through only descriptions of the Setting, reveal the Victim’s state of mind."';
     const prompt = (goals.length ? ('Focus elements: ' + goals.join(', ') + '\n') : '')
       + (guides.length ? ('Writing guides & exercises (optional technique): ' + guides.join('; ') + '\n') : '')
+      + (elemNotes ? ('\nNotes from the author’s notepad about these elements (draw on them):\n' + elemNotes + '\n') : '')
       + (written ? ('\nStory so far (for inspiration — build on it or find a fresh angle):\n' + written.slice(-1800) + '\n') : '')
+      + (prevPrompts.length ? ('\nAlready generated for this SAME set — take a genuinely DIFFERENT angle (shift which element leads, the kind of question, or the technique); do NOT rephrase these:\n- ' + prevPrompts.join('\n- ') + '\n') : '')
       + '\nWrite the one-line prompt:';
     const text = await aiCall(sys, prompt);
     if (host._token !== token || (isFsGoal && !document.body.classList.contains('insession'))){ return; }   // a newer session (or it ended) — drop this result
     const q = (text || '').trim().replace(/^["“”']+|["“”']+$/g, '');
     host.classList.remove('loading');
     host.textContent = q;
-    host._sig = sig;   // remember what produced this prompt, so a later Regenerate can tell if anything changed
+    host._sig = sig;                                          // remember the element/guide set
+    host._prev = (sameSet ? prevPrompts.concat([q]) : [q]);   // remember prior prompts for this set so the next press finds a new angle
   } catch (e){
     if (host._token === token){ host.classList.remove('loading', 'show'); host.textContent = ''; }
   }
@@ -12648,7 +12660,13 @@ function startRedo(id){
   state.redo = { active: true, id, oldHtml: tmp.innerHTML, label, frame: k, prevRef: prevRef, areaRef: area };
   document.body.classList.add('redoing');
   if (typeof paintSectionFocus === 'function') paintSectionFocus();
+  // Run the rewrite as a full-screen session so the End-session control is present (prep board has no in-view End).
+  document.body.classList.add('insession');
+  if (typeof startTimerIfArmed === 'function') startTimerIfArmed();   // starts the clock → updateEndBtn keeps insession + shows "End session"
+  if (typeof updateEndBtn === 'function') updateEndBtn();
   if (!state.inkMode){ ed.focus(); try { const r = document.createRange(); r.selectNodeContents(area); r.collapse(true); const s = window.getSelection(); s.removeAllRanges(); s.addRange(r); } catch(e){} }
+  try { const wrap = $('editorWrap'), hdr = $('fsHeader'); const hh = hdr ? hdr.getBoundingClientRect().height : 150;
+    const pr = area.getBoundingClientRect(), wr = wrap.getBoundingClientRect(); wrap.scrollTop += (pr.top - wr.top) - (hh + 18); } catch(e){}
   flashStatus('Rewriting ' + label.split(' · ')[0] + ' — write, then End session to choose Replace or Discard');
 }
 // Re-insert the stashed original session blocks at their old position, re-locked.
@@ -14314,7 +14332,7 @@ function setWriting(on){
     { const dg = $('deskStatus'); if (dg) dg.textContent = 'Roll and gather elements, shape the map, and note ideas as they come.'; }
   }
 }
-const DYSTORIA_BUILD = '2026-06-18 #65 — added 5 exercise categories (Character & Interiority, Dialogue, Description & the Senses, Scene & Tension, Generative & Constraint), 40 drills w/ descriptions';
+const DYSTORIA_BUILD = '2026-06-18 #67 — fix Redo (enters full-screen so it can be ended); prompt generator now reads notepad notes about the elements + re-pressing yields a different angle (no skip)';
 function init(){
   try { window.__DYSTORIA_BUILD = DYSTORIA_BUILD; console.log('%cDystoria','font-weight:700', 'build ' + DYSTORIA_BUILD); } catch(e){}
   mergeCustomWords();
