@@ -43,6 +43,12 @@ function eq(a, b, msg) { ok(JSON.stringify(a) === JSON.stringify(b), msg + ' (go
 ok(/const DYSTORIA_BUILD = /.test(html), 'DYSTORIA_BUILD marker present');
 eq((html.match(/\.rd-name\{[^}]*line-height:1\.5/g) || []).length, 2,
    'both .rd-name rules pin line-height:1.5 (Read/Refine title alignment)');
+// safety nets (build #131): silent-error visibility, offline cloud re-sync, backup nudge
+ok(/addEventListener\('error'/.test(html), 'global error handler installed');
+ok(/addEventListener\('unhandledrejection'/.test(html), 'unhandledrejection handler installed');
+ok(/function retryPendingCloud\(/.test(html) && /addEventListener\('online', retryPendingCloud\)/.test(html),
+   'offline cloud re-sync wired to the online event');
+ok(/function maybeBackupNudge\(/.test(html), 'backup reminder present');
 
 /* ---------- 2 + 3. LOAD in jsdom, then assert runtime invariants ---------- */
 let JSDOM;

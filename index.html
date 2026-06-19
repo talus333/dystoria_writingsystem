@@ -10600,14 +10600,15 @@ async function cloudSave(sess){
     if (sess.cloudId){
       // Update without touching `owner` — a collaborator saving a shared story must not seize ownership.
       const { error } = await supa.from('stories').update({ title, doc: cloudDocOf(sess), updated_at: now }).eq('id', sess.cloudId);
-      if (error){ console.warn('cloud update error:', error); flashStatus('Cloud: ' + error.message); }
-      else if (typeof pubBroadcastUpdate === 'function') pubBroadcastUpdate(sess);   // push live update to public readers
+      if (error){ console.warn('cloud update error:', error); sess._needsCloud = true; flashStatus(navigator.onLine === false ? 'Saved on this device — will sync when back online' : ('Cloud: ' + error.message)); }
+      else { sess._needsCloud = false; if (typeof pubBroadcastUpdate === 'function') pubBroadcastUpdate(sess); }   // push live update to public readers
     } else {
       sess._inserting = true;
       const { data, error } = await supa.from('stories').insert({ owner: cloud.user.id, title, doc: cloudDocOf(sess), updated_at: now }).select('id').single();
       sess._inserting = false;
-      if (error){ console.warn('cloud insert error:', error); flashStatus('Cloud: ' + error.message); return; }
+      if (error){ console.warn('cloud insert error:', error); sess._needsCloud = true; flashStatus(navigator.onLine === false ? 'Saved on this device — will sync when back online' : ('Cloud: ' + error.message)); return; }
       if (data){
+        sess._needsCloud = false;
         sess.cloudId = data.id; sess._owner = cloud.user.id; sess._shared = false;
         const list = loadSessions(); const i = list.findIndex(x => x.id === sess.id); if (i >= 0){ list[i].cloudId = data.id; persistSessions(list); }
         flashStatus('Saved to cloud');
@@ -10615,8 +10616,16 @@ async function cloudSave(sess){
         supa.from('stories').update({ title: sess.name || 'Untitled story', doc: cloudDocOf(sess), updated_at: new Date().toISOString() }).eq('id', data.id).then(() => {}, () => {});
       }
     }
-  } catch (e){ sess._inserting = false; console.warn('cloud save threw:', e); flashStatus('Cloud error: ' + e.message); }
+  } catch (e){ sess._inserting = false; sess._needsCloud = true; console.warn('cloud save threw:', e); flashStatus(navigator.onLine === false ? 'Saved on this device — will sync when back online' : ('Cloud error: ' + e.message)); }
 }
+// When the connection returns, re-push any session whose last cloud save failed (the work is already
+// safe in localStorage; this just gets it back to the cloud without the writer having to do anything).
+function retryPendingCloud(){
+  if (!cloudReady()) return;
+  const s = state.session;
+  if (s && s._needsCloud){ flashStatus('Back online — syncing…'); cloudSave(s); }
+}
+if (typeof window !== 'undefined') window.addEventListener('online', retryPendingCloud);
 async function cloudPull(){
   if (!cloudReady()) return;
   try {
@@ -14070,7 +14079,24 @@ function backupAll(){
   const data = { app: 'dystoria-writing', version: 1, exported: new Date().toISOString(), sessions: loadSessions() };
   const d = new Date().toISOString().slice(0, 10);
   download('dystoria-backup-' + d + '.json', JSON.stringify(data), 'application/json');
+  try { const p = getPrefs(); p.lastBackup = Date.now(); localStorage.setItem(LS_PREFS, JSON.stringify(p)); } catch (e){}
   flashStatus(data.sessions.length + (data.sessions.length === 1 ? ' story backed up' : ' stories backed up'));
+}
+// Signed-out work lives only in this browser's localStorage — if it's never been backed up (or not in
+// a while) and there's real writing here, gently remind once per session. Signed-in users have the cloud.
+function maybeBackupNudge(){
+  try {
+    if (cloud && cloud.user) return;                 // cloud-synced → no nudge
+    if (window.__backupNudged) return; window.__backupNudged = true;
+    const list = loadSessions();
+    const hasWork = list.some(s => (s && (s.text || '').trim().length > 40) || (s && s.html && s.html.length > 200));
+    if (!hasWork) return;
+    const last = getPrefs().lastBackup || 0;
+    const days = (Date.now() - last) / 86400000;
+    if (last && days < 14) return;                   // backed up recently
+    flashStatus(last ? 'Tip: it’s been a while — Back Up your stories (menu) to keep a safe copy'
+                     : 'Tip: your stories live only in this browser — use Back Up (menu) or make a free account to keep them safe');
+  } catch (e){}
 }
 function restoreBackup(file){
   const rd = new FileReader();
@@ -14738,7 +14764,25 @@ function setWriting(on){
     { const dg = $('deskStatus'); if (dg) dg.textContent = 'Roll and gather elements, shape the map, and note ideas as they come.'; }
   }
 }
-const DYSTORIA_BUILD = '2026-06-19 #130 — ink dock now centers over the actual writing surface in JS (positionInkDock, on show + resize) instead of a fixed offset, so it lines up on desktop, Boox, tablet and phone; dock wraps + caps width on narrow screens';
+const DYSTORIA_BUILD = '2026-06-19 #131 — silent-error visibility (global error + unhandledrejection toast); offline-resilient autosave (local-first save already; now re-syncs to cloud on reconnect with a friendly "saved on this device" status); gentle back-up reminder for signed-out users; soft per-user daily AI cap in the worker';
+// ---- silent-error visibility -------------------------------------------------------------
+// Uncaught errors used to fail invisibly (e.g. the guest-comment bug). Surface them as a small,
+// throttled toast + console so the writer sees that something hiccuped instead of nothing.
+(function installErrorVisibility(){
+  let _lastAt = 0, _lastMsg = '';
+  function show(kind, msg){
+    try {
+      msg = (msg == null ? 'unknown error' : msg).toString().slice(0, 160);
+      const now = Date.now();
+      if (msg === _lastMsg && now - _lastAt < 8000) return;   // de-dupe error bursts
+      _lastAt = now; _lastMsg = msg;
+      console.warn('[' + kind + '] ' + msg);
+      if (typeof flashStatus === 'function') flashStatus('Something hiccuped — your work is saved. (' + msg + ')');
+    } catch (e){}
+  }
+  window.addEventListener('error', e => { if (e && (e.message || e.error)) show('error', (e.error && e.error.message) || e.message); });
+  window.addEventListener('unhandledrejection', e => { const r = e && e.reason; show('promise', (r && (r.message || r)) || 'unhandled rejection'); });
+})();
 function init(){
   try { window.__DYSTORIA_BUILD = DYSTORIA_BUILD; console.log('%cDystoria','font-weight:700', 'build ' + DYSTORIA_BUILD); } catch(e){}
   mergeCustomWords();
@@ -15511,6 +15555,7 @@ function init(){
   setHeaderH();
   window.addEventListener("resize", setHeaderH);
   window.addEventListener("resize", () => { if (typeof positionInkDock === 'function') positionInkDock(); });
+  setTimeout(() => { try { maybeBackupNudge(); } catch (e){} }, 5000);   // after cloud auth has had a chance to resolve
   try{ const _hd=document.querySelector("header"); if(_hd) new ResizeObserver(setHeaderH).observe(_hd); }catch(e){}
   window.addEventListener('hashchange', applyHash);   // back/forward + manual URL edits
   applyHash();                                        // restore a deep-linked view (#/library or #/s/<id>) on load

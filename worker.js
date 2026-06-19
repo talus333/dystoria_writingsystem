@@ -32,6 +32,17 @@ function rateOk(user, limit) {
   if (_rate.size > 3000) _rate.clear();
   return true;
 }
+// Soft per-user DAILY cap — defense-in-depth against a runaway loop quietly burning neurons.
+// In-memory + per-isolate, so it's a backstop, not a hard guarantee; for a true global daily cap,
+// bind a KV namespace in wrangler.jsonc and key counts there. Returns false once the cap is hit.
+const _daily = new Map();   // user id -> { day, n }
+function dailyOk(user, limit) {
+  const day = Math.floor(Date.now() / 86400000);
+  const d = _daily.get(user);
+  if (!d || d.day !== day) { _daily.set(user, { day, n: 1 }); if (_daily.size > 5000) _daily.clear(); return true; }
+  if (d.n >= limit) return false;
+  d.n++; return true;
+}
 // Current Workers AI model. Lighter/cheaper alternative: '@cf/meta/llama-3.1-8b-instruct-fast'
 const MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
 // Vision model — OCR + handwriting recognition. Used when the request carries an image.
@@ -113,6 +124,7 @@ async function handleAI(request, env) {
   const user = await verifyUser(token);
   if (!user) return new Response(JSON.stringify({ error: 'Sign in to use the AI features' }), { status: 401, headers });
   if (!rateOk(user, image ? 12 : 45)) return new Response(JSON.stringify({ error: 'Too many AI requests — give it a moment' }), { status: 429, headers });
+  if (!dailyOk(user, image ? 400 : 1200)) return new Response(JSON.stringify({ error: 'You’ve hit today’s AI limit — it resets tomorrow. Reach out if you need more.' }), { status: 429, headers });
 
   const maxTokens = Math.min(Math.max(parseInt(body.max_tokens, 10) || 600, 64), 4096);
   const model = body.model || (image ? VISION_MODEL : MODEL);
