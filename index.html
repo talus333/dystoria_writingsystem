@@ -12536,9 +12536,10 @@ function buildEditMode(){
   tmp.innerHTML = editorHTML();
   tmp.querySelectorAll('div.ph').forEach(d => { if (!d.textContent.trim()) d.remove(); });
   $('editBody').innerHTML = tmp.innerHTML;
-  // baseline of each session's text, so committing a Refine edit can mark the changed ones "refined"
-  state._refineBefore = {};
-  Array.from(ed.children).forEach(c => { const s = c.dataset && c.dataset.sess; if (s) state._refineBefore[s] = (state._refineBefore[s] || '') + (c.textContent || ''); });
+  // baseline of each session (text + original HTML) so a Refine edit can mark changed ones "refined"
+  // and archive a restorable copy of the original
+  state._refineBefore = {}; state._refineBeforeHtml = {}; state._refineArchived = {};
+  Array.from(ed.children).forEach(c => { const s = c.dataset && c.dataset.sess; if (!s) return; state._refineBefore[s] = (state._refineBefore[s] || '') + (c.textContent || ''); state._refineBeforeHtml[s] = (state._refineBeforeHtml[s] || '') + c.outerHTML; });
   normalizeSuggestions();
   $('edModeSwitch').style.display = amOwner() ? '' : 'none';
   const wantEdit = amOwner() && _edSegMode === 'edit';   // restore the last Suggest/Edit choice
@@ -12586,21 +12587,53 @@ function openEditMode(){
   });
 }
 function closeEditMode(){ commitEdit(); $('sgBar').classList.remove('show'); closeAiSug(); $('editMode').classList.remove('show'); if (typeof pubOwnerLeave === 'function') pubOwnerLeave(); }
-// Compare each session's text to the baseline captured when Refine opened; any session whose
-// text changed gets stamped data-refined=<timestamp> (once) → orange gutter tag + full lock.
+// When Refine edits a session: archive a copy of the ORIGINAL (pre-refine) session — restorable —
+// and keep the refined version in place, locked. If a session is emptied in Refine, archive the
+// original and remove the session from the Write view entirely.
 function refinedStamp(){ try { return new Date().toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}); } catch(e){ return new Date().toISOString().slice(0,16); } }
 function markRefinedChangedSessions(){
   const ed = $('editor'); if (!ed || !state._refineBefore) return;
+  if (!state.session && typeof ensureSession === 'function') ensureSession();
   const before = state._refineBefore;
-  const now = {};
-  Array.from(ed.children).forEach(c => { const s = c.dataset && c.dataset.sess; if (s) now[s] = (now[s] || '') + (c.textContent || ''); });
+  const beforeHtml = state._refineBeforeHtml || {};
+  state._refineArchived = state._refineArchived || {};
   const norm = t => (t || '').replace(/\s+/g, ' ').trim();
   const ts = refinedStamp();
-  Object.keys(now).forEach(s => {
-    if (before[s] == null) return;                      // session didn't exist at refine-open → skip
-    if (norm(now[s]) === norm(before[s])) return;       // unchanged
-    Array.from(ed.children).forEach(c => { if (c.dataset && c.dataset.sess === s && !c.dataset.refined) c.dataset.refined = ts; });
+  const k = state.frameIdx || 0;
+  // current text + blocks grouped by session id
+  const now = {}, blocksById = {};
+  Array.from(ed.children).forEach(c => {
+    const s = c.dataset && c.dataset.sess; if (!s) return;
+    now[s] = (now[s] || '') + (c.textContent || '');
+    (blocksById[s] = blocksById[s] || []).push(c);
   });
+  Object.keys(before).forEach(s => {
+    const oldText = norm(before[s]); if (!oldText) return;       // nothing original to compare
+    const newText = norm(now[s] || '');                          // '' if the session was emptied/removed
+    if (newText === oldText) return;                             // unchanged
+    // archive a copy of the original (once per refine pass)
+    if (!state._refineArchived[s]){
+      state.session.archive = state.session.archive || [];
+      let prevSess = null; const first = (blocksById[s] || [])[0];
+      if (first){ let p = first.previousElementSibling; while (p){ if (p.dataset && p.dataset.sess && p.dataset.sess !== s){ prevSess = p.dataset.sess; break; } p = p.previousElementSibling; } }
+      state.session.archive.push({
+        id: 'orig' + Date.now().toString(36) + Math.random().toString(36).slice(2,5),
+        at: new Date().toISOString(), words: oldText.split(/\s+/).filter(Boolean).length,
+        html: beforeHtml[s] || '', review: '', reason: newText ? 'pre-refine' : 'removed in refine', frame: k, prevSess
+      });
+      state._refineArchived[s] = true;
+    }
+    if (!newText){
+      // all words deleted → drop the session from the editor + the active log
+      (blocksById[s] || []).forEach(b => b.remove());
+      if (state.session && state.session.sessionLog) state.session.sessionLog = state.session.sessionLog.filter(e => e.id !== s);
+    } else {
+      // refined in place → mark refined (normalizeLocks keeps it locked)
+      (blocksById[s] || []).forEach(c => { if (!c.dataset.refined) c.dataset.refined = ts; });
+    }
+  });
+  if (typeof renumberSessionLabels === 'function') renumberSessionLabels();
+  if (typeof renderSessionHistory === 'function') renderSessionHistory();
 }
 function commitEdit(){
   const body = $('editBody'); if (!body) return;
@@ -13937,7 +13970,7 @@ function setWriting(on){
     if (state.prompt) renderConstellation();
   }
 }
-const DYSTORIA_BUILD = '2026-06-18 #38 — status in mode bar, no question label, recap centered on writing';
+const DYSTORIA_BUILD = '2026-06-18 #40 — refine archives original session (restorable); emptied-in-refine removes session';
 function init(){
   try { window.__DYSTORIA_BUILD = DYSTORIA_BUILD; console.log('%cDystoria','font-weight:700', 'build ' + DYSTORIA_BUILD); } catch(e){}
   mergeCustomWords();
@@ -14026,6 +14059,14 @@ function init(){
     if (fp && fp.contains(ev.target)) return;
     if (ft && ft.contains(ev.target)) return;
     document.body.classList.remove('focusdrawer');
+  });
+  // clicking anywhere that isn't the selected element (a sidebar guide/element or its map node) clears the selection
+  document.addEventListener('mousedown', ev => {
+    if (state.selNode == null) return;
+    const t = ev.target;
+    if (t.closest && (t.closest('.fb-item') || t.closest('#constraintBar') || t.closest('.node') || t.closest('.evo-item'))) return;
+    state.selNode = null;
+    if (typeof renderConstellation === 'function') renderConstellation();
   });
   $('notepadBtn').addEventListener('click', () => { if (typeof closeReadMode === 'function') closeReadMode(); if (typeof closeEditMode === 'function') closeEditMode(); setWriting(false); });
   $('writeBtn').addEventListener('click', () => setWriting(true));
