@@ -1939,9 +1939,8 @@
   body.writing:not(.insession) .fb-colhead{flex:none; text-align:center; margin:2px 0 8px;
     font-family:var(--sans); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--ink-faint)}
   body:not(.eink) #focusPanel .fb-colhead{color:#c9c2b4}
-  /* elements column */
-  body.writing:not(.insession) .fb-col-actions{flex:none; display:flex; align-items:center; gap:12px; flex-wrap:wrap}
-  body.writing:not(.insession) #focusCounts{width:auto; margin:0}
+  /* elements column — the + focus element button is centered; counts no longer live here */
+  body.writing:not(.insession) .fb-col-actions{flex:none; display:flex; align-items:center; justify-content:center; gap:12px; flex-wrap:wrap}
   body.writing:not(.insession) #focusList{flex-direction:column; gap:5px; width:100%}
   body.writing:not(.insession) #focusList .fp-item{width:100%}
   /* guides column */
@@ -1949,10 +1948,11 @@
   body.writing:not(.insession) #constraintBar{flex-direction:row; flex-wrap:wrap; align-items:flex-start; gap:10px 22px; width:100%}
   body.writing:not(.insession) #constraintBar .cb-label{width:100%}
   body.writing:not(.insession) #constraintBar .cb-entry{width:auto; max-width:260px}
-  /* timer column */
+  /* timer column — clock + prompt centered vertically in the column */
   body.writing:not(.insession) .fb-col-timer{align-items:center; text-align:center}
+  body.writing:not(.insession) .fb-timer-inner{flex:1 1 auto; display:flex; flex-direction:column; justify-content:center; align-items:center; gap:10px; width:100%; min-height:0}
   body.writing:not(.insession) .fb-col-timer #timerWrap{justify-content:center}
-  body.writing:not(.insession) #prepPrompt{width:100%; margin-top:4px}
+  body.writing:not(.insession) #prepPrompt{width:100%; max-width:300px; margin-top:2px}
   #prepPrompt .pp-head{font-family:var(--sans); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--ink-faint); display:flex; align-items:center; justify-content:center; gap:6px}
   #prepPrompt .pp-head #prepPromptGen{background:none; border:none; cursor:pointer; color:var(--ink-faint); font-size:13px; line-height:1; padding:0}
   #prepPrompt .pp-head #prepPromptGen:hover{color:var(--gold)}
@@ -9990,9 +9990,18 @@ async function generateSessionGoal(hostId){
   const host = $(hostId || 'sessionGoal'); if (!host) return;
   const isFsGoal = (host.id === 'sessionGoal');
   const words = (state.prompt && state.prompt.words) || [];
+  const cf = state.frameIdx || 0;
+  // the prompt is built ONLY from what's active in the other two columns:
   const goals = (state.focusKeys || []).map(k => { const w = words.find(x => wordKey(x) === k); return w ? elDisplayName(w) : null; }).filter(Boolean);
+  words.forEach(w => { if (w.cat === 'event' && w.role === 'word' && (w.frame == null ? cf === 0 : w.frame === cf)) goals.push(w.name || w.word); });
+  words.forEach(w => { if (w.cat === 'stakes' && w.scope === 'frame' && (w.frame == null ? cf === 0 : w.frame === cf)) goals.push(w.name || w.word); });
   const guides = words.filter(isGuideWord).map(w => w.word + (w.sub ? ' (' + w.sub + ')' : '') + (descFor(w) ? ': ' + descFor(w) : ''));
-  if (!goals.length && !guides.length){ host.textContent = ''; host.classList.remove('show'); return; }
+  if (!goals.length && !guides.length){ host.textContent = ''; host._sig = ''; host.classList.remove('show'); return; }
+  // Regenerate looks first: skip the call when neither the elements nor the guides have changed.
+  const sig = JSON.stringify([goals, guides]);
+  if (!isFsGoal && host._sig === sig && (host.textContent || '').trim() && !host.classList.contains('loading')){
+    flashStatus('Prompt is current — nothing changed in the elements or guides since the last one.'); return;
+  }
   const written = (typeof editorText === 'function') ? editorText().trim() : '';
   const token = Date.now(); host._token = token;
   host.classList.add('show', 'loading');
@@ -10008,6 +10017,7 @@ async function generateSessionGoal(hostId){
     const q = (text || '').trim().replace(/^["“”']+|["“”']+$/g, '');
     host.classList.remove('loading');
     host.textContent = q;
+    host._sig = sig;   // remember what produced this prompt, so a later Regenerate can tell if anything changed
   } catch (e){
     if (host._token === token){ host.classList.remove('loading', 'show'); host.textContent = ''; }
   }
@@ -12384,8 +12394,13 @@ function lockWrittenInSection(){
   if (fresh.length){
     let cnt = 0; ed.querySelectorAll('.session-start').forEach(b => { if (fm.get(b) === k) cnt++; });
     let when = ''; try { when = new Date().toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}); } catch(e){}
+    // session stats live in the gutter tag (and the post-session summary) — not in the focus bar anymore
+    const wc = fresh.reduce((s,c)=> s + ((c.textContent||'').trim().split(/\s+/).filter(Boolean).length), 0);
+    const base = state.sessionStart || { woven: 0 };
+    const wovenNew = Math.max(0, ((state.usage && state.usage.count) || 0) - (base.woven || 0));
+    let tail = (when ? ' · ' + when : '') + ' · ' + wc + ' words' + (wovenNew ? ' · ' + wovenNew + ' woven' : '');
     fresh[0].classList.add('session-start');
-    fresh[0].dataset.sessLabel = 'Session ' + (cnt+1) + (when ? ' · ' + when : '');
+    fresh[0].dataset.sessLabel = 'Session ' + (cnt+1) + tail;
   }
   // Stamp every block of this session with a UNIQUE id so the session is individually
   // addressable (select → redo / delete). Prefer the snapshot id, but never reuse one that
@@ -14242,7 +14257,7 @@ function setWriting(on){
     { const dg = $('deskStatus'); if (dg) dg.textContent = 'Roll and gather elements, shape the map, and note ideas as they come.'; }
   }
 }
-const DYSTORIA_BUILD = '2026-06-18 #55 — fix: 3 columns now distribute (the flex:none child rule was overriding .fb-col); Elements | Guides/Exercises | Timer+Prompt';
+const DYSTORIA_BUILD = '2026-06-18 #56 — timer/prompt vertically centered; prompt built only from active elements+guides w/ change-detect regenerate; cleaner section titles; centered + focus element; word/woven counts moved to summary + gutter tags';
 function init(){
   try { window.__DYSTORIA_BUILD = DYSTORIA_BUILD; console.log('%cDystoria','font-weight:700', 'build ' + DYSTORIA_BUILD); } catch(e){}
   mergeCustomWords();
@@ -14366,18 +14381,20 @@ function init(){
   (function buildPrepBoard(){
     const fp=$('focusPanel'); if(!fp || fp.dataset.cols) return; fp.dataset.cols='1';
     const mk=(cls,head)=>{ const c=document.createElement('div'); c.className='fb-col '+cls; const h=document.createElement('div'); h.className='fb-colhead'; h.textContent=head; c.appendChild(h); return c; };
-    const colE=mk('fb-col-elems','Add up to three Story Focus Elements');
-    const colG=mk('fb-col-guides','Add a Guide and/or an Exercise');
-    const colT=mk('fb-col-timer','Set the time of the session');
+    const colE=mk('fb-col-elems','Story Focus Elements');
+    const colG=mk('fb-col-guides','Guides & Exercises');
+    const colT=mk('fb-col-timer','Timer & Prompt');
     const act=document.createElement('div'); act.className='fb-col-actions';
     const fa=$('focusAddBtn'), fc=$('focusCounts'), fl=$('focusList'), fb=$('focusBlocks'), cbar=$('constraintBar'), tw=$('timerWrap'), cm=$('clockMenu');
-    if(fa) act.appendChild(fa); if(fc) act.appendChild(fc);
+    if(fa) act.appendChild(fa);
     colE.appendChild(act); if(fl) colE.appendChild(fl);
+    if(fc){ fc.style.display='none'; fp.appendChild(fc); }   // counts no longer shown in the bar — kept in DOM (still updated; surfaced in the summary + gutter tags)
     if(fb) colG.appendChild(fb); if(cbar) colG.appendChild(cbar);
-    if(tw) colT.appendChild(tw); if(cm) colT.appendChild(cm);
+    const tin=document.createElement('div'); tin.className='fb-timer-inner';
+    if(tw) tin.appendChild(tw); if(cm) tin.appendChild(cm);
     const pp=document.createElement('div'); pp.id='prepPrompt';
-    pp.innerHTML='<div class="pp-head">Prompt <button id="prepPromptGen" title="Generate a writing prompt from your focus elements & guides">↻</button></div><div id="prepPromptText" class="pp-text"></div>';
-    colT.appendChild(pp);
+    pp.innerHTML='<div class="pp-head">Prompt <button id="prepPromptGen" title="Regenerate the prompt from the active elements &amp; guides">↻</button></div><div id="prepPromptText" class="pp-text"></div>';
+    tin.appendChild(pp); colT.appendChild(tin);
     fp.insertBefore(colT, fp.firstChild); fp.insertBefore(colG, fp.firstChild); fp.insertBefore(colE, fp.firstChild);
     const fs=$('focusScroll'); if(fs) fs.remove();
     const h2=fp.querySelector('.fp-head'); if(h2) h2.style.display='none';
