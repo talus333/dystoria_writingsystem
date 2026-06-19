@@ -10935,6 +10935,13 @@ function _pubGN(){ try{ return localStorage.getItem('dystoria.guestName')||''; }
 function _pubSetGN(n){ try{ localStorage.setItem('dystoria.guestName',n); }catch(e){} }
 function pubHasCommented(){ try{ return localStorage.getItem('dystoria.commented.'+_pubToken)==='1'; }catch(e){ return false; } }
 function pubMarkCommented(){ try{ localStorage.setItem('dystoria.commented.'+_pubToken,'1'); }catch(e){} const g=$('rdGuide'); if(g) g.style.display='none'; }
+// A guest reader only sees THEIR OWN comments. We remember the ids they posted (per share link) and
+// also match on author_id when anonymous sign-in gave them a stable account. The owner (Refine) sees all.
+let _pubMyIds=new Set();
+function _pubMyIdsKey(){ return 'dystoria.mycomments.'+_pubToken; }
+function pubLoadMyIds(){ try{ const a=JSON.parse(localStorage.getItem(_pubMyIdsKey())||'[]'); _pubMyIds=new Set(Array.isArray(a)?a:[]); }catch(e){ _pubMyIds=new Set(); } }
+function pubAddMyId(id){ if(!id) return; _pubMyIds.add(id); try{ localStorage.setItem(_pubMyIdsKey(), JSON.stringify([..._pubMyIds])); }catch(e){} }
+function pubIsMine(c){ if(!c) return false; if(_pubMyIds.has(c.id)) return true; if(cloud.user && cloud.user.id && c.author_id && c.author_id===cloud.user.id) return true; return false; }
 function pubLinkFor(tok){ return location.origin+location.pathname+'#/read/'+tok; }
 function _pubEsc(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 function _pubTime(iso){ try{ return new Date(iso).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}); }catch(e){ return ''; } }
@@ -10989,7 +10996,7 @@ function pubMaybeBootGuest(){
   if(!m) return false; pubBootGuest(m[1]); return true;
 }
 async function pubBootGuest(tok){
-  _pubGuest=true; _pubToken=tok; document.body.classList.add('guest');
+  _pubGuest=true; _pubToken=tok; document.body.classList.add('guest'); pubLoadMyIds();
   if(!supa){ pubGuestError('Cloud is unavailable right now.'); return; }
   let story=null;
   try{ const {data,error}=await supa.rpc('get_public_story',{tok:tok}); if(!error&&data&&data.length) story=data[0]; }catch(e){}
@@ -11114,14 +11121,22 @@ async function pubPostComment(){
   if(!body){ pubCommentErr('Write something first.'); if(t) try{ t.focus(); }catch(_){} return; }
   const btn=$('gcPost'); pubCommentErr('');
   if(btn){ btn.disabled=true; btn.dataset.lbl=btn.dataset.lbl||btn.textContent; btn.textContent='Posting…'; }
+  const anchorKey=_pubAnchor?_pubAnchor.key:null;   // capture before pubHideCommentPop clears it
   try{
     await pubEnsureAnon();   // best-effort: attaches an author id when anonymous sign-in is enabled, but the
                             // add_public_comment RPC is granted to the anon role, so posting works without it
     let name='Anonymous';   // not signed in → hard-locked to anonymous
     if(_pubSignedIn()){ name=($('gcName')&&$('gcName').value||'').trim() || (cloud.username||myDisplayName()||'').trim() || 'Reader'; _pubSetGN(name); }
-    const {error}=await supa.rpc('add_public_comment',{tok:_pubToken,a_name:name,a_anchor:_pubAnchor?_pubAnchor.key:null,a_section:0,a_body:body});
+    const {data,error}=await supa.rpc('add_public_comment',{tok:_pubToken,a_name:name,a_anchor:anchorKey,a_section:0,a_body:body});
     if(error){ pubCommentErr('Couldn’t post: '+(error.message||'unknown error')); return; }
+    const newId = (typeof data==='string') ? data : (data&&data.id) || null;   // RPC returns the new comment's uuid
+    if(newId){ pubAddMyId(newId);   // remember it as mine so the guest view keeps showing it after reload
+      if(_pubGuest && !_pubComments.some(c=>c.id===newId)){
+        _pubComments.push({id:newId, author_id:(cloud.user&&cloud.user.id)||null, author_name:name, anchor_key:anchorKey, section_idx:0, body:body, hidden:false, created_at:new Date().toISOString()});
+      }
+    }
     if(t) t.value=''; pubHideCommentPop(); pubMarkCommented(); flashStatus('Comment posted');
+    if(_pubGuest) pubRenderGuestComments();
     const s=window.getSelection&&window.getSelection(); if(s&&s.removeAllRanges) s.removeAllRanges();
   }catch(e){ pubCommentErr('Couldn’t post: '+((e&&e.message)||e||'unknown error')); }
   finally{ if(btn){ btn.disabled=false; btn.textContent=btn.dataset.lbl||'Post comment'; } }
@@ -11131,7 +11146,7 @@ async function pubLoadComments(storyId){
   try{
     const {data,error}=await supa.from('story_comments').select('*').eq('story_id',storyId).order('created_at',{ascending:true});
     if(error){ console.warn('comments load error:',error); _pubComments=[]; if(!_pubGuest) flashStatus('Comments: '+error.message); }
-    else _pubComments=data||[];
+    else _pubComments=_pubGuest ? (data||[]).filter(pubIsMine) : (data||[]);   // guests see only their own
   }
   catch(e){ console.warn('comments load threw:',e); _pubComments=[]; }
   if(_pubGuest) pubRenderGuestComments(); else pubRenderOwnerComments();
@@ -11142,7 +11157,7 @@ function pubSubscribe(storyId){
     _pubChan=supa.channel('comments-'+storyId)
       .on('postgres_changes',{event:'*',schema:'public',table:'story_comments',filter:'story_id=eq.'+storyId},payload=>{
         const r=payload.new||payload.old; if(!r) return;
-        if(payload.eventType==='INSERT'){ if(!_pubComments.some(c=>c.id===r.id)) _pubComments.push(r); }
+        if(payload.eventType==='INSERT'){ if(!(_pubGuest && !pubIsMine(r)) && !_pubComments.some(c=>c.id===r.id)) _pubComments.push(r); }   // guests ignore others' comments
         else if(payload.eventType==='DELETE'){ _pubComments=_pubComments.filter(c=>c.id!==r.id); }
         else if(payload.eventType==='UPDATE'){ const i=_pubComments.findIndex(c=>c.id===r.id); if(i>=0) _pubComments[i]=r; }
         if(_pubGuest) pubRenderGuestComments(); else pubRenderOwnerComments();
@@ -11232,7 +11247,7 @@ function pubRenderGuestComments(){
   const rb=$('readBody');
   const cs=_pubComments.filter(c=>!c.hidden).slice().sort((a,b)=>(a.created_at||'').localeCompare(b.created_at||''));
   list.innerHTML='';
-  if(!cs.length){ list.innerHTML='<div class="np-empty">No comments yet. Highlight a passage to add the first.</div>'; return; }
+  if(!cs.length){ list.innerHTML='<div class="np-empty">Only your own comments show here. Highlight a passage to add one — the author sees it privately.</div>'; return; }
   const active=[], archived=[];
   cs.forEach(c=>{ if(c.anchor_key && typeof pubAnchorPresent==='function' && !pubAnchorPresent(rb,c.anchor_key)) archived.push(c); else active.push(c); });
   let vis=pubVisibleComments(active).map(o=>o.c);
@@ -14712,7 +14727,7 @@ function setWriting(on){
     { const dg = $('deskStatus'); if (dg) dg.textContent = 'Roll and gather elements, shape the map, and note ideas as they come.'; }
   }
 }
-const DYSTORIA_BUILD = '2026-06-19 #128 — guest comment posting fixed: anonymous sign-in is now best-effort (the add_public_comment RPC is granted to the anon role, so posting works even if anon sign-in is off); errors now show inline in the comment popup (the old flashStatus toast was invisible to guests); Post button shows Posting…/disables';
+const DYSTORIA_BUILD = '2026-06-19 #129 — shared reader now sees only their OWN comments (tracked by posted-id in localStorage + author_id match when signed in); owner still sees all in Refine; guest load + realtime + optimistic insert all filter to mine';
 function init(){
   try { window.__DYSTORIA_BUILD = DYSTORIA_BUILD; console.log('%cDystoria','font-weight:700', 'build ' + DYSTORIA_BUILD); } catch(e){}
   mergeCustomWords();
