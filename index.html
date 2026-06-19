@@ -10260,6 +10260,7 @@ async function generateSessionGoal(hostId){
 async function endWritingSession(){
   const hadRun = state.timer.started;
   clearGrace();
+  cancelBgTranscribe();
   clearInterval(state.timer.handle);
   if (state.redo && state.redo.active){ finishRedoSession(); return; }   // redo path: lock the rewrite, then prompt Replace/Discard
   // Transcribe this session's handwriting FIRST, so a pure-ink session (no typed words) still
@@ -14212,6 +14213,7 @@ function inkUp(e){
     if (maxY > ink.h - 180){ ink.h += 600; inkResize(); }
     startTimerIfArmed();
     scheduleAutosave(6000); /* don't block the pen with storage writes */
+    scheduleBgTranscribe(); /* quietly pre-transcribe on the next pause so session end is instant */
   }
   ink.current = null;
 }
@@ -14325,33 +14327,78 @@ function insertNotepadText(text){
   });
   saveNotepad();   // writes to the active tab (npActiveKey)
 }
+// Strict transcription prompt — shared by the manual button, the end-of-session pass, and background drafts.
+const INK_SYS = 'You are a strict handwriting transcriber. Read ONLY the handwriting actually visible in the image and output exactly that text, preserving line breaks. Never invent, summarize, translate, or imagine content that is not written. If the image contains no legible handwriting, reply with exactly: [no legible text]';
+// Ask the transcriber to read a page of strokes. Returns the text, '' if illegible, throws on network error.
+async function inkReadStrokes(page){
+  const png = inkToPNG({ width: ink.w, height: page.h || 1100, strokes: page.strokes }, 1200);
+  const r = await fetch(AI_ENDPOINT, { method: 'POST', headers: aiHeaders(),
+    body: JSON.stringify({ system: INK_SYS, prompt: 'Transcribe the handwriting in this image, word for word.', image: png, model: AI_VISION_MODEL, max_tokens: 2000 }) });
+  let data; try { data = await r.json(); } catch (e){ throw new Error('HTTP ' + r.status); }
+  if (!r.ok || data.error) throw new Error(data.error || ('HTTP ' + r.status));
+  const text = (data.text || '').trim();
+  if (!text || /^\[no legible text\]$/i.test(text)){ console.warn('Transcribe: no usable text', data.debug || text); return ''; }
+  return text;
+}
+// Commit transcribed text into the section/notepad, then LOCK the page and open a fresh one.
+function inkCommitText(page, text){
+  if (document.body.classList.contains('writing')) insertProseInCurrentSection(text);
+  else insertNotepadText(text);   // notepad: send words to the active tab's notes
+  page.locked = true; page.transcribed = true;
+  inkLoadPage(inkActivePage(page.frame));
+  paintSectionFocus();
+  if (state.session){ state.session.html = editorHTML(); state.session.text = editorText(); }
+  scheduleAutosave();
+}
+/* --- background drafting ---------------------------------------------------------------
+   On a natural writing pause we quietly transcribe the current page into a cached draft
+   (page.draftText / page.draftN = stroke count at snapshot). We never lock or insert in the
+   background, and the fetch is async so the pen keeps drawing. When the writer transcribes
+   (button or session end) and the draft still covers every stroke, we commit it instantly
+   with no AI wait — so the end of a session only ever re-reads the last word or two. */
+let _inkPauseTimer = null, _inkBgBusy = false;
+const INK_PAUSE_MS = 2600;
+function cancelBgTranscribe(){ if (_inkPauseTimer){ clearTimeout(_inkPauseTimer); _inkPauseTimer = null; } }
+function scheduleBgTranscribe(){ if (!state.inkMode) return; cancelBgTranscribe(); _inkPauseTimer = setTimeout(runBgTranscribe, INK_PAUSE_MS); }
+async function runBgTranscribe(){
+  _inkPauseTimer = null;
+  if (_inkBgBusy) return;
+  const page = ink.pageRef;
+  if (!page || page.locked || !page.strokes || !page.strokes.length) return;
+  if (page.draftN === page.strokes.length) return;        // nothing new since the last draft
+  if (!(typeof cloud !== 'undefined' && cloud.user)) return;   // transcription needs a signed-in session
+  const n = page.strokes.length;
+  _inkBgBusy = true;
+  try {
+    const text = await inkReadStrokes(page);              // async — the pen keeps drawing meanwhile
+    if (text){ page.draftText = text; page.draftN = n; }  // cache only; never lock or insert here
+  } catch (e){ /* offline / transient — retry on the next pause */ }
+  finally {
+    _inkBgBusy = false;
+    if (page === ink.pageRef && !page.locked && page.draftN !== page.strokes.length) scheduleBgTranscribe();  // strokes added mid-read → catch up
+  }
+}
 // Send the current page's strokes to the transcriber. On success: insert the text into the
 // section, LOCK the page (saved, never re-sent), and open a fresh page for the next session.
 async function transcribeCurrentInk(opts){
   opts = opts || {};
+  cancelBgTranscribe();
   const page = ink.pageRef;
   if (!page || page.locked){ if (!opts.silent) flashStatus('This page is saved — go to the latest page to write'); return false; }
   if (!page.strokes || !page.strokes.length){ if (!opts.silent) flashStatus('Nothing to transcribe yet — write something first'); return false; }
+  // fast path: a current background draft already covers every stroke → commit instantly, no AI wait
+  if (page.draftText && page.draftN === page.strokes.length){
+    inkCommitText(page, page.draftText);
+    if (!opts.silent){ setMode('type'); flashStatus('Transcribed — page saved, a fresh page is ready'); }
+    return true;
+  }
   const btn = $('inkTranscribe');
   if (btn && !opts.silent){ btn.disabled = true; btn.dataset.label = btn.textContent; btn.innerHTML = '<span class="spin"></span>Reading…'; }
   if (!opts.silent) flashStatus('Reading your handwriting…');
   try {
-    const png = inkToPNG({ width: ink.w, height: page.h || 1100, strokes: page.strokes }, 1200);
-    const sys = 'You are a strict handwriting transcriber. Read ONLY the handwriting actually visible in the image and output exactly that text, preserving line breaks. Never invent, summarize, translate, or imagine content that is not written. If the image contains no legible handwriting, reply with exactly: [no legible text]';
-    const r = await fetch(AI_ENDPOINT, { method: 'POST', headers: aiHeaders(),
-      body: JSON.stringify({ system: sys, prompt: 'Transcribe the handwriting in this image, word for word.', image: png, model: AI_VISION_MODEL, max_tokens: 2000 }) });
-    let data; try { data = await r.json(); } catch (e){ throw new Error('HTTP ' + r.status); }
-    if (!r.ok || data.error) throw new Error(data.error || ('HTTP ' + r.status));
-    const text = (data.text || '').trim();
-    if (!text || /^\[no legible text\]$/i.test(text)){ console.warn('Transcribe returned no usable text. Model debug:', data.debug || text); if (!opts.silent) flashStatus('Couldn’t read the handwriting this time — try darker, larger writing'); return false; }
-    if (document.body.classList.contains('writing')) insertProseInCurrentSection(text);
-    else insertNotepadText(text);   // notepad: send words to the active tab's notes
-    // lock this page and open a fresh one for the same timeframe
-    page.locked = true; page.transcribed = true;
-    inkLoadPage(inkActivePage(page.frame));
-    paintSectionFocus();
-    if (state.session){ state.session.html = editorHTML(); state.session.text = editorText(); }
-    scheduleAutosave();
+    const text = await inkReadStrokes(page);
+    if (!text){ if (!opts.silent) flashStatus('Couldn’t read the handwriting this time — try darker, larger writing'); return false; }
+    inkCommitText(page, text);
     if (!opts.silent){ setMode('type'); flashStatus('Transcribed — page saved, a fresh page is ready'); }
     return true;
   } catch (e){
@@ -14379,6 +14426,7 @@ function setMode(m){
   }
   $('inkWrap').classList.toggle('show', state.inkMode);
   $('inkTools').classList.toggle('show', state.inkMode);
+  if (!state.inkMode && typeof cancelBgTranscribe === 'function') cancelBgTranscribe();
   updateInkDock();
   if (notepadMode && typeof renderNpElements === 'function') renderNpElements();   // resolve element names whenever the notepad is shown
   if (state.inkMode){ inkShowFrame(inkFrameKey()); inkResize(); updateInkNav(); }
@@ -15364,8 +15412,8 @@ function init(){
 
   $('penBtn').addEventListener('click', () => { state.tool = 'pen'; $('penBtn').classList.add('active'); $('eraserBtn').classList.remove('active'); });
   $('eraserBtn').addEventListener('click', () => { state.tool = 'eraser'; $('eraserBtn').classList.add('active'); $('penBtn').classList.remove('active'); });
-  $('undoBtn').addEventListener('click', () => { if (ink.viewLocked) return; ink.strokes.pop(); inkRedraw(); scheduleAutosave(); });
-  $('clearInkBtn').addEventListener('click', async () => { if (ink.viewLocked){ flashStatus('This page is saved — go to the latest page to write'); return; } if (!ink.strokes.length || (await siteConfirm('Clear all ink?', 'Clear'))){ ink.strokes = []; if (ink.pageRef) ink.pageRef.strokes = ink.strokes; inkRedraw(); scheduleAutosave(); } });
+  $('undoBtn').addEventListener('click', () => { if (ink.viewLocked) return; ink.strokes.pop(); inkRedraw(); scheduleAutosave(); scheduleBgTranscribe(); });
+  $('clearInkBtn').addEventListener('click', async () => { if (ink.viewLocked){ flashStatus('This page is saved — go to the latest page to write'); return; } if (!ink.strokes.length || (await siteConfirm('Clear all ink?', 'Clear'))){ ink.strokes = []; if (ink.pageRef){ ink.pageRef.strokes = ink.strokes; ink.pageRef.draftText = ''; ink.pageRef.draftN = -1; } cancelBgTranscribe(); inkRedraw(); scheduleAutosave(); } });
   $('inkTranscribe').addEventListener('click', transcribeInk);
   $('extendBtn').addEventListener('click', () => { if (ink.viewLocked) return; ink.h += 600; inkResize(); });
   $('inkPrev').addEventListener('click', () => inkNavGo(-1));
