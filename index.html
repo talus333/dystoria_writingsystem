@@ -643,6 +643,11 @@
   .wk-airefresh{font-family:var(--sans); font-size:9px; letter-spacing:.1em; text-transform:uppercase; color:#4a6a8a; cursor:pointer; margin-left:8px}
   #wikiOverview{margin:8px auto 0; max-width:800px; width:100%; box-sizing:border-box; padding:4px 18px 0}
   #wikiOverviewText{font-family:var(--serif); font-style:italic; font-size:13px; line-height:1.6; color:var(--ink); margin:6px 0}
+  #wikiQuestions{width:100%; max-width:800px; margin:14px auto 26px; box-sizing:border-box; padding:14px 18px 0; border-top:1px solid var(--line)}
+  #wikiQuestions .wk-q-head{font-family:var(--sans); font-size:10px; font-weight:700; letter-spacing:.22em; text-transform:uppercase; color:var(--ink-faint); margin-bottom:9px}
+  #wikiQuestions .wk-q-item{font-family:var(--serif); font-size:14px; line-height:1.55; color:var(--ink); margin:0 0 8px; padding-left:14px; text-indent:-14px}
+  #wikiQuestions .wk-q-item::before{content:'?'; font-family:var(--sans); font-weight:700; color:var(--gold); margin-right:8px}
+  #wikiQuestions .wk-q-note{font-family:var(--serif); font-style:italic; font-size:12.5px; color:var(--ink-faint); margin-bottom:8px}
   body.eink #wikiPanel{border-left:2px solid #000; box-shadow:none}
   /* ---------- single-element wiki popup ---------- */
   #elemWikiCard{position:fixed; left:50%; top:50%; transform:translate(-50%,-50%) scale(.97); opacity:0; pointer-events:none;
@@ -1975,6 +1980,7 @@
   <div id="wikiMeta"></div>
   <div id="wikiOverview"></div>
   <div id="wikiBody"></div>
+  <div id="wikiQuestions"></div>
 </div>
 
 <div id="readMode">
@@ -10289,7 +10295,7 @@ function liveDocStr(){
   delete d.ink; delete d.inkPages; delete d.frameIdx; delete d.focusKeys; delete d.game;
   // …and neither do heavy, regenerable caches — they'd bloat every keystroke broadcast.
   // (They still sync via the periodic full cloud save, so a collaborator gets them on reload.)
-  delete d.wikiAI; delete d.wikiOverview; delete d.sessionLog; delete d.archive;
+  delete d.wikiAI; delete d.wikiOverview; delete d.wikiQuestions; delete d.sessionLog; delete d.archive;
   return JSON.stringify(d);
 }
 function liveJoin(sess){
@@ -11684,8 +11690,9 @@ function renderWiki(){
   const wc = lcAll.trim() ? lcAll.trim().split(/\s+/).length : 0;
   $('wikiMeta').textContent = els.length + ' elements · ' + woven + ' woven in · ' + wc + ' words';
   renderWikiOverview(state.session && state.session.wikiOverview);
+  renderWikiQuestions(state.session && state.session.wikiQuestions);
   body.innerHTML = '';
-  if (!els.length){ body.innerHTML = '<div style="padding:26px 18px;color:var(--ink-faint);font-style:italic;font-family:var(--serif)">Add elements to your map and write — they’ll gather here, linked to where they appear in your prose.</div>'; return; }
+  if (!els.length){ body.innerHTML = '<div style="padding:26px 18px;color:var(--ink-faint);font-style:italic;font-family:var(--serif)">Add elements to your map and write — they’ll gather here, linked to where they appear in your prose.</div>'; const q=$('wikiQuestions'); if(q) q.innerHTML=''; return; }
   let lastCat = null;
   els.forEach(el => {
     if (el.cat !== lastCat){ lastCat = el.cat; const g = document.createElement('div'); g.className = 'wk-group'; g.textContent = wikiCatName(el.cat); body.appendChild(g); }
@@ -13242,7 +13249,7 @@ async function aiRollup(el){
   const notes = npNotesForEl(el);
   if (!quotes.length && !notes) return 'Not yet part of story.';   // on the map but no prose or notes yet
   const prior = (state.session && state.session.wikiAI && state.session.wikiAI[el.cat + '|' + el.word]) ? state.session.wikiAI[el.cat + '|' + el.word].text : '';
-  const sys = 'You write entries for a story wiki. Summarize how ONE element figures within the story itself, using ONLY the facts, prose excerpts, and the writer’s notes given. Look only at the story — never mention the author, the writer, or the act of writing. Never invent events, names, or traits that are not present in the sources. The writer’s notes may be rough or messy: fold their details into the entry, rewritten cleanly and in the wiki’s voice, WITHOUT changing their meaning or adding anything they do not say. If little is known, stay brief. Refer to parts of the story as "Section N" (never "timeframe"); a section may have a name or event you can mention. 2–4 sentences (a little longer is fine when the notes are rich), third person, present tense, no preamble.';
+  const sys = 'You write entries for a story wiki. For ONE element, describe what the story is DOING with it: the patterns and recurring associations in how it appears, how it connects to other elements and the story’s threads, what it is coming to mean, and any tension it carries — drawing the prose excerpts, the element’s facts, and the writer’s notes together into one organized entry. Use ONLY the given sources; never invent events, names, or traits, and never mention the author, the writer, or the act of writing. The writer’s notes may be rough: fold their meaning in cleanly without changing it or adding anything. Refer to parts of the story as "Section N" (never "timeframe"); a section may have a name or event you can mention. Write a substantial paragraph — about 3–6 sentences (shorter only when little is known) — third person, present tense, no preamble.';
   const prompt = facts.join('\n')
     + (prior && prior !== 'Not yet part of story.' ? ('\n\nExisting entry (build on it — keep what still holds, fold in what the prose and notes add; do NOT rewrite from scratch):\n' + prior) : '')
     + (quotes.length ? ('\n\nProse excerpts where it appears:\n' + quotes.map(q => '- ' + q).join('\n')) : '')
@@ -13313,13 +13320,18 @@ async function runAIOverview(){
   const wrap = $('wikiOverview');
   const text = editorText().trim();
   if (!text){ flashStatus('Write some prose first'); return; }
-  wrap.innerHTML = '<div class="wk-aitext wk-empty"><span class="spin"></span>Summarizing the story so far…</div>';
+  wrap.innerHTML = '<div class="wk-aitext wk-empty"><span class="spin"></span>Organizing the story so far…</div>';
   try {
     const prior = (state.session && state.session.wikiOverview) ? String(state.session.wikiOverview).trim() : '';
-    const sys = 'You summarize a story as a whole, looking only at the story itself — never the author, the writer, or the act of writing. Use ONLY what the prose contains; do not invent. Refer to parts as "Section N", not "timeframe". 3–5 sentences, neutral and clear, no preamble.';
-    const prompt = 'Story so far:\n\n' + text.slice(0, 18000)
-      + (prior ? ('\n\nExisting summary (build on it — keep what still holds, fold in what the new prose adds; do NOT rewrite from scratch):\n' + prior) : '')
-      + '\n\nSummarize what happens in the story and where it now stands:';
+    const els = (typeof wikiGather === 'function') ? wikiGather() : [];
+    const elNames = els.map(e => e.name ? (e.word + ' “' + e.name + '”') : e.word);
+    const npAll = (state.session && state.session.npNotes) ? Object.values(state.session.npNotes).map(h => npPlain(h)).filter(Boolean).join('\n') : '';
+    const sys = 'You write the top-level overview for a story wiki: organize what the story is about and surface the meaningful patterns and threads tying it together — its throughlines, motifs, the tensions and questions in motion, and how the elements relate — not just a plot recap. Draw on the prose (primary), the list of story elements, and the writer’s notes. Use ONLY what is given; do not invent, and never mention the author, the writer, or the act of writing. Refer to parts as "Section N", not "timeframe". 4–7 sentences, clear and substantive, no preamble.';
+    const prompt = (elNames.length ? ('Story elements: ' + elNames.join(', ') + '\n\n') : '')
+      + (npAll ? ('Writer’s notes (rough context):\n' + npAll.slice(0, 3000) + '\n\n') : '')
+      + 'Story so far:\n\n' + text.slice(0, 16000)
+      + (prior ? ('\n\nExisting overview (build on it — keep what still holds, fold in what is new; do NOT rewrite from scratch):\n' + prior) : '')
+      + '\n\nWrite the overview — organize the ideas and surface the patterns tying the story together:';
     const out = await aiCall(sys, prompt);
     if (state.session){ state.session.wikiOverview = out; scheduleAutosave(500); }
     renderWikiOverview(out);
@@ -13337,6 +13349,44 @@ function renderWikiOverview(text){
     const ref = document.createElement('span'); ref.className = 'wk-airefresh'; ref.textContent = 'refresh overview'; ref.addEventListener('click', runAIOverview); wrap.appendChild(ref);
   } else {
     const b = document.createElement('button'); b.className = 'wk-aibtn'; b.textContent = 'Summarize the story ✦'; b.addEventListener('click', runAIOverview); wrap.appendChild(b);
+  }
+}
+// Closing wiki section: open questions the narrative raises, one per key element — food for thought.
+async function runWikiQuestions(){
+  const wrap = $('wikiQuestions'); if (!wrap) return;
+  const text = editorText().trim();
+  if (!text){ flashStatus('Write some prose first'); return; }
+  const els = (typeof wikiGather === 'function') ? wikiGather() : [];
+  const lcAll = text.toLowerCase();
+  const woven = els.filter(e => textHasWord(lcAll, e.word) || (e.name && textHasWord(lcAll, e.name)));
+  const names = (woven.length ? woven : els).map(e => e.name ? (e.word + ' “' + e.name + '”') : e.word);
+  wrap.innerHTML = '<div class="wk-q-head">Questions the story raises</div><div class="wk-aitext wk-empty"><span class="spin"></span>Raising questions…</div>';
+  try {
+    const sys = 'You read a story and raise sharp, open questions it provokes — food for thought for the writer, never direct critique or praise. For several of the key elements, pose ONE genuine question the narrative raises from THAT element’s perspective: about its motives, contradictions, silences, or where it might be heading. Use ONLY what the prose contains; do not invent or answer. Output one per line as "Element — question". A handful total, no preamble.';
+    const prompt = (names.length ? ('Elements: ' + names.join(', ') + '\n\n') : '')
+      + 'Story so far:\n\n' + text.slice(0, 16000)
+      + '\n\nRaise the questions:';
+    const out = await aiCall(sys, prompt);
+    if (state.session){ state.session.wikiQuestions = out; scheduleAutosave(500); }
+    renderWikiQuestions(out);
+  } catch (e){
+    wrap.innerHTML = '<div class="wk-q-head">Questions the story raises</div>';
+    const m = document.createElement('div'); m.className = 'wk-aitext wk-empty'; m.textContent = aiErrMsg(e); wrap.appendChild(m);
+    const b = document.createElement('button'); b.className = 'wk-aibtn'; b.textContent = 'Try again'; b.addEventListener('click', runWikiQuestions); wrap.appendChild(b);
+  }
+}
+function renderWikiQuestions(text){
+  const wrap = $('wikiQuestions'); if (!wrap) return;
+  wrap.innerHTML = '';
+  if (!(state.session && wikiGather && wikiGather().length)) return;   // nothing to ask about yet
+  const head = document.createElement('div'); head.className = 'wk-q-head'; head.textContent = 'Questions the story raises'; wrap.appendChild(head);
+  if (text){
+    const lines = String(text).split(/\n+/).map(s => s.trim()).filter(Boolean);
+    lines.forEach(line => { const d = document.createElement('div'); d.className = 'wk-q-item'; d.textContent = line; wrap.appendChild(d); });
+    const ref = document.createElement('span'); ref.className = 'wk-airefresh'; ref.textContent = 'refresh questions'; ref.addEventListener('click', runWikiQuestions); wrap.appendChild(ref);
+  } else {
+    const note = document.createElement('div'); note.className = 'wk-q-note'; note.textContent = 'Open questions the narrative raises from each element’s perspective — food for thought.'; wrap.appendChild(note);
+    const b = document.createElement('button'); b.className = 'wk-aibtn'; b.textContent = 'Raise questions ✦'; b.addEventListener('click', runWikiQuestions); wrap.appendChild(b);
   }
 }
 
