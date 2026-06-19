@@ -49,6 +49,10 @@ ok(/addEventListener\('unhandledrejection'/.test(html), 'unhandledrejection hand
 ok(/function retryPendingCloud\(/.test(html) && /addEventListener\('online', retryPendingCloud\)/.test(html),
    'offline cloud re-sync wired to the online event');
 ok(/function maybeBackupNudge\(/.test(html), 'backup reminder present');
+// Think redesign (build #133): full-screen map + slide-up notes sheet
+ok(/function buildNotesTab\(/.test(html) && /buildNotesTab\(\);/.test(html), 'notes tab builder present + called');
+ok(/body\.np-open:not\(\.writing\) #lower\{transform:translateY\(0\)\}/.test(html), 'notes sheet slide-up rule present');
+ok(html.includes('open this element in the notes sheet'), 'selected-element notes button present');
 
 /* ---------- 2 + 3. LOAD in jsdom, then assert runtime invariants ---------- */
 let JSDOM;

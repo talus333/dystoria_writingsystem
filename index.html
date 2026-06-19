@@ -1014,6 +1014,36 @@
   body:not(.eink):not(.writing) #focusFooter{border-top-color:rgba(255,255,255,.12)}
   body:not(.eink) #focusPanel .fp-head,
   body:not(.eink) #focusFooter .ff-lbl{color:#cdc6b8}
+
+  /* ===== Think mode: full-screen map + slide-up notes sheet ===== */
+  body:not(.writing) #upper{flex:1 1 auto; border-bottom:none}            /* map (+ story-elements rail) fills the screen */
+  body:not(.writing) #lower{                                             /* notes become a sheet that slides up over the map */
+    position:fixed; left:0; right:0; bottom:0; height:48vh; flex-direction:row; z-index:60;
+    background:var(--bg); border-top:1px solid var(--line); box-shadow:0 -12px 34px rgba(0,0,0,.22);
+    transform:translateY(100%); transition:transform .28s ease;
+  }
+  body.np-open:not(.writing) #lower{transform:translateY(0)}
+  body:not(.writing) #lowerMain{height:100%}
+  body:not(.writing) #npWrap{height:100%; flex:1 1 auto; min-height:0}
+  body:not(.writing) #notepad{display:block !important}                  /* always the text pad in the sheet — never ink */
+  body:not(.writing) #writeArea{display:none !important}
+  body:not(.writing) #focusFooter{display:none !important}               /* focus elements belong to Write mode */
+  body:not(.writing) .mode-switch{display:none !important}               /* no ink toggle in Think */
+  body:not(.writing) #mapFullToggle{display:none !important}             /* map is already full-screen */
+  #npTab{display:none}
+  body:not(.writing) #npTab{                                            /* bottom tab, centred over the rail (278px → 139) */
+    display:inline-flex; align-items:center; gap:7px;
+    position:fixed; left:139px; bottom:0; transform:translateX(-50%); z-index:61;
+    font-family:var(--sans); font-size:11px; letter-spacing:.14em; text-transform:uppercase;
+    color:var(--ink-soft); background:var(--paper); border:1px solid var(--line); border-bottom:none;
+    border-radius:12px 12px 0 0; padding:9px 22px; cursor:pointer; box-shadow:0 -4px 16px rgba(0,0,0,.12);
+  }
+  body:not(.writing) #npTab:hover{color:var(--ink); border-color:var(--gold)}
+  body.np-open:not(.writing) #npTab{bottom:48vh}
+  @media (max-width:760px){ body:not(.writing) #npTab{left:118px} }     /* narrower rail */
+  @media (max-width:500px){ body:not(.writing) #npTab{left:50%} }        /* rail becomes a drawer */
+  #npTab .npt-ch{transition:transform .28s ease; font-size:13px; line-height:1}
+  body.np-open:not(.writing) #npTab .npt-ch{transform:rotate(180deg)}
   body:not(.eink) #focusPanel #digitalTime{color:#ece7de}
   body:not(.eink) #focusPanel #digitalTime.done{color:#d3a899}
   body:not(.eink) #focusPanel .fp-hint,
@@ -9141,6 +9171,16 @@ function renderConstellation(){
         on: ev => { ev.stopPropagation(); addFocusIdx(i); },
         ic: () => { const t = document.createElementNS(NSx, 'text'); t.setAttribute('class', 'ctl-gly' + (inFocus ? ' infocus' : '')); t.setAttribute('text-anchor', 'middle'); t.setAttribute('y', 4); t.textContent = inFocus ? '◉' : '◎'; return t; }
       });
+      circ.push({   // open this element in the notes sheet (added + selected in the notepad)
+        title: 'Open this element in your notes',
+        on: ev => { ev.stopPropagation();
+          try { npAdd(wordKey(nd)); } catch(e){}
+          document.body.classList.add('np-open');
+          const _t = document.getElementById('npTab'); if (_t){ const _l = _t.querySelector('.npt-lbl'); if (_l) _l.textContent = 'Hide'; }
+          const _n = document.getElementById('notepad'); if (_n) setTimeout(() => { try { _n.focus(); } catch(e){} }, 320);
+        },
+        ic: () => makeLucide('feather', { cls: 'ctl-ic', color: 'currentColor', x: 0, y: 0, scale: 0.5, sw: 2 })
+      });
       if (nd.role === 'word' && (nd.cat === 'setting' || nd.cat === 'object')){   // pick a custom icon
         circ.push({
           title: 'Choose an icon for this element',
@@ -14498,6 +14538,23 @@ function buildInkDock(){
   document.body.appendChild(dock);
   updateInkDock();
 }
+// Think mode: the notepad is a slide-up sheet opened by a bottom tab (over the full-screen map).
+function buildNotesTab(){
+  if ($('npTab')) return;
+  const t = document.createElement('button'); t.id = 'npTab'; t.type = 'button';
+  t.innerHTML = '<span class="npt-ch">▴</span><span class="npt-lbl">Notes</span>';
+  t.title = 'Open your notepad over the map';
+  t.addEventListener('click', () => {
+    const open = document.body.classList.toggle('np-open');
+    const lbl = t.querySelector('.npt-lbl'); if (lbl) lbl.textContent = open ? 'Hide' : 'Notes';
+    if (open){ const n = $('notepad'); if (n) setTimeout(() => { try { n.focus(); } catch(e){} }, 300); }
+  });
+  document.body.appendChild(t);
+}
+function closeNotesSheet(){
+  document.body.classList.remove('np-open');
+  const t = $('npTab'); if (t){ const l = t.querySelector('.npt-lbl'); if (l) l.textContent = 'Notes'; }
+}
 // The dock appears only while the ink canvas is actually active (ink mode + notepad, or a running
 // Write session). In plain typing it stays hidden — no empty pill. Overlays always hide it.
 function inkDockVisible(){
@@ -14740,6 +14797,7 @@ function sessionContinue(){
 }
 function setWriting(on){
   if (on && document.body.classList.contains('mapfull')) setMapFull(false);
+  if (on && typeof closeNotesSheet === 'function') closeNotesSheet();   // leaving Think → drop the notes sheet
   if (window.__closeDrawers) window.__closeDrawers();
   document.body.classList.toggle('writing', on);
   const b = $('writeModeBtn'); if (b){ b.textContent = 'End Session'; b.classList.toggle('on', on); }
@@ -14765,7 +14823,7 @@ function setWriting(on){
     { const dg = $('deskStatus'); if (dg) dg.textContent = 'Roll and gather elements, shape the map, and note ideas as they come.'; }
   }
 }
-const DYSTORIA_BUILD = '2026-06-19 #132 — object icon picker: the plain line icons now render in the brand gold (#fa9a31) at the same bespoke size as the hand-drawn designs, so the whole object palette is one consistent gold style (no more black/standard cells)';
+const DYSTORIA_BUILD = '2026-06-19 #133 — Think mode redesigned: the map (with the story-elements rail) is full-screen; the notepad is a slide-up sheet opened by a bottom tab centred over the rail; no ink toggle, no focus bar, no map full-screen button in Think; each selected map element gets a round notes button that opens the sheet with that element added + selected';
 // ---- silent-error visibility -------------------------------------------------------------
 // Uncaught errors used to fail invisibly (e.g. the guest-comment bug). Surface them as a small,
 // throttled toast + console so the writer sees that something hiccuped instead of nothing.
@@ -14906,6 +14964,7 @@ function init(){
   // ----- Write mode = vertical prep board: 3-column focus bar, full-width sessions, Start at the bottom -----
   { try{ const p=getPrefs(); if(p && p.fsShow) fsShow=Object.assign({elements:false,guides:false,prompt:true}, p.fsShow); }catch(e){} }   // restore "show in session" toggles (defaults: elements/guides off, prompt on)
   buildInkDock();   // relocate the Type/Ink switch + e-ink tools into a floating bottom pill
+  buildNotesTab();  // Think-mode bottom tab that slides the notepad up over the map
   (function buildPrepBoard(){
     const fp=$('focusPanel'); if(!fp || fp.dataset.cols) return; fp.dataset.cols='1';
     const mk=(cls,head)=>{ const c=document.createElement('div'); c.className='fb-col '+cls; const h=document.createElement('div'); h.className='fb-colhead'; h.textContent=head; c.appendChild(h); return c; };
