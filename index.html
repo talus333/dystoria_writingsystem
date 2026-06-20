@@ -15711,7 +15711,19 @@ document.addEventListener('DOMContentLoaded', init);
   #npCard .npc-img.empty:hover{color:var(--gold); border-color:var(--gold)}
   #npCard .npc-body{flex:1; min-width:0}
   #npCard .npc-title{font-family:var(--serif); font-style:italic; font-weight:700; font-size:16px; color:var(--ink); line-height:1.2}
-  #npCard .npc-role{font-family:var(--sans); font-size:8px; letter-spacing:.16em; text-transform:uppercase; color:var(--gold); margin-top:3px}
+  #npCard .npc-role{font-family:var(--sans); font-size:9px; letter-spacing:.12em; text-transform:uppercase; color:var(--gold); font-style:normal; font-weight:600}
+  #npCard .npc-mot{margin-top:10px}
+  #npCard .npc-mot-want{display:flex; align-items:center; gap:8px; margin-top:4px; font-family:var(--serif); font-size:14px; color:var(--ink)}
+  #npCard .npc-mot-wanttext{font-style:italic}
+  #npCard .npc-mot-edit{font-family:var(--sans); font-size:8px; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-faint); cursor:pointer}
+  #npCard .npc-mot-edit:hover{color:var(--gold)}
+  #npCard .npc-mot-add{font-family:var(--sans); font-size:9px; letter-spacing:.05em; text-transform:uppercase; color:var(--ink-faint); border:1px dashed var(--line); border-radius:12px; padding:3px 10px; cursor:pointer}
+  #npCard .npc-mot-add:hover{color:var(--gold); border-color:var(--gold)}
+  #npCard .npc-mot-obs{display:flex; align-items:center; gap:8px; margin-top:6px}
+  #npCard .npc-mot-obslab{font-family:var(--sans); font-size:7.5px; letter-spacing:.14em; text-transform:uppercase; color:#9c5f54}
+  #npCard .npc-mot-obschip{font-family:var(--sans); font-size:9px; letter-spacing:.03em; color:var(--ink); border:1px solid #9c5f54; border-radius:12px; padding:2px 9px; cursor:pointer}
+  #npCard .npc-mot-obschip:hover{background:rgba(156,95,84,.1)}
+  #npCard .npc-mot-none{color:var(--ink-faint)}
   #npCard .npc-subhead{font-family:var(--sans); font-size:7.5px; letter-spacing:.16em; text-transform:uppercase; color:var(--ink-faint); margin-top:9px}
   #npCard .npc-traits{display:flex; flex-wrap:wrap; gap:5px; margin-top:5px}
   #npCard .npc-trait{font-family:var(--sans); font-size:9px; letter-spacing:.07em; text-transform:uppercase; color:var(--ink-soft); border:1px solid var(--line); border-radius:12px; padding:3px 10px; cursor:pointer; transition:color .12s,border-color .12s,background .12s}
@@ -15785,7 +15797,8 @@ document.addEventListener('DOMContentLoaded', init);
       if(state.session){ state.session.words=state.prompt.words; if(typeof scheduleAutosave==='function') scheduleAutosave(); }
       return true;
     }
-    let TP={ i:-1, cat:'', sub:'' };
+    let TP={ i:-1, cat:'', sub:'', mode:'trait' };
+    function elIndexByKey(key){ const ws=(state.prompt&&state.prompt.words)||[]; return ws.findIndex(w=>wordKey(w)===key); }
     function tpEl(){
       let p=document.getElementById('traitPicker');
       if(!p){ p=document.createElement('div'); p.id='traitPicker';
@@ -15801,39 +15814,56 @@ document.addEventListener('DOMContentLoaded', init);
     }
     function closeTraitPicker(){ const p=document.getElementById('traitPicker'); if(p) p.classList.remove('show'); }
     function tpRenderPills(){
-      const p=tpEl(), host=p.querySelector('.tp-pills'); host.innerHTML='';
+      const p=tpEl(), host=p.querySelector('.tp-pills');
+      host.innerHTML='';
+      if(TP.mode!=='trait'){ host.style.display='none'; return; }   // motivation/obstacle pickers have no subcategory pills
+      host.style.display='flex';
       traitSubs(TP.cat).forEach(s=>{ const b=document.createElement('span'); b.className='tp-pill'+(s===TP.sub?' on':''); b.textContent=s;
         b.addEventListener('click', ()=>{ TP.sub=s; tpRenderPills(); tpRender(); }); host.appendChild(b); });
     }
     function tpRender(){
       const p=tpEl(), res=p.querySelector('.tp-results'); res.innerHTML='';
       const raw=p.querySelector('.tp-search').value.trim(), q=raw.toLowerCase();
+      if(TP.mode==='obstacle'){
+        const ws=(state.prompt&&state.prompt.words)||[]; const list=[];
+        ws.forEach((w,idx)=>{ if(idx===TP.i) return; if(typeof npIsElement==='function' && !npIsElement(w)) return;
+          const nm=(typeof elDisplayName==='function')?elDisplayName(w):(w.word||''); if(q && nm.toLowerCase().indexOf(q)<0) return; list.push({idx,w,nm}); });
+        list.sort((a,b)=>(a.w.cat==='obstacle'?0:1)-(b.w.cat==='obstacle'?0:1));
+        list.slice(0,50).forEach(o=>{ const b=document.createElement('button'); b.className='ec-opt';
+          const cn=(getCat(o.w.cat)||{}).name||o.w.cat;
+          b.innerHTML='<span class="ec-w">'+o.nm.replace(/</g,'&lt;')+'</span><span class="ec-sub" style="color:'+catColor(o.w.cat)+'">'+cn+'</span>';
+          b.addEventListener('click', ()=>{ setMotivationObstacle(TP.i, o.idx); closeTraitPicker(); }); res.appendChild(b); });
+        if(!list.length){ const e=document.createElement('div'); e.className='tp-empty'; e.textContent='No other elements in this section to link as an obstacle.'; res.appendChild(e); }
+        return;
+      }
+      // trait + motivation: search a word pool, allow create-your-own
+      const sub = TP.mode==='motivation' ? 'Motivation' : TP.sub;
+      const cat = TP.mode==='motivation' ? 'being' : TP.cat;
       const w=state.prompt && state.prompt.words[TP.i];
-      const applied=new Set(((w&&w.attrs)||[]).map(a=>a.word.toLowerCase()));
-      const seen=new Set(), pool=poolWords(TP.sub, TP.cat);
+      const applied = TP.mode==='trait' ? new Set(((w&&w.attrs)||[]).map(a=>a.word.toLowerCase())) : new Set();
+      const seen=new Set(), pool=poolWords(sub, cat);
       const matches=pool.filter(word=>{ const k=word.toLowerCase(); if(seen.has(k)) return false; seen.add(k);
         if(applied.has(k)) return false; return !q || k.includes(q); }).slice(0,40);
       matches.forEach(word=>{ const b=document.createElement('button'); b.className='ec-opt';
-        const d=(typeof descFor==='function')?descFor({word, cat:TP.cat, sub:TP.sub}):'';
-        b.innerHTML='<span class="ec-w">'+word.replace(/</g,'&lt;')+'</span><span class="ec-sub">'+TP.sub+'</span>'+(d?'<span class="ec-d">'+d.replace(/</g,'&lt;')+'</span>':'');
+        const d=(typeof descFor==='function')?descFor({word, cat, sub}):'';
+        b.innerHTML='<span class="ec-w">'+word.replace(/</g,'&lt;')+'</span><span class="ec-sub">'+sub+'</span>'+(d?'<span class="ec-d">'+d.replace(/</g,'&lt;')+'</span>':'');
         b.addEventListener('click', ()=>tpPick(word, false)); res.appendChild(b); });
       const exact=pool.some(word=>word.toLowerCase()===q);
       if(raw && !exact){ const b=document.createElement('button'); b.className='ec-opt tp-new';
-        b.innerHTML='<span class="ec-w">+ Create “'+raw.replace(/</g,'&lt;')+'”</span><span class="ec-sub">'+TP.sub+'</span>';
+        b.innerHTML='<span class="ec-w">+ Create “'+raw.replace(/</g,'&lt;')+'”</span><span class="ec-sub">'+sub+'</span>';
         b.addEventListener('click', ()=>tpPick(raw, true)); res.appendChild(b); }
       else if(!matches.length){ const e=document.createElement('div'); e.className='tp-empty'; e.textContent='Nothing here yet — type a name to create one.'; res.appendChild(e); }
     }
     function tpPick(word, isNew){
+      if(TP.mode==='motivation'){ setMotivationWant(TP.i, word, isNew); closeTraitPicker(); renderNpCard(); return; }
       if(isNew && typeof saveCustomWord==='function'){ try{ saveCustomWord(TP.cat, { word, sub:TP.sub, desc:'', g:[] }, 'story'); }catch(e){} }
       if(!addTraitWord(TP.i, word, TP.sub)) return;
       closeTraitPicker();
       renderNpCard();
       setTrait(word);                                   // jump to the new trait's note sub-tab
     }
-    function openTraitPicker(i, x, y){
-      const w=state.prompt && state.prompt.words[i]; if(!w) return;
-      TP.i=i; TP.cat=w.cat; const subs=traitSubs(TP.cat); TP.sub=subs[0];
-      const p=tpEl(); p.querySelector('.tp-title').textContent='Add trait — '+((typeof elDisplayName==='function')?elDisplayName(w):(w.word||''));
+    function tpOpen(i, x, y){
+      const p=tpEl();
       p.querySelector('.tp-search').value='';
       tpRenderPills(); tpRender();
       p.classList.add('show');
@@ -15841,6 +15871,74 @@ document.addEventListener('DOMContentLoaded', init);
       p.style.left=Math.max(8, Math.min((x||200), window.innerWidth-pw-8))+'px';
       p.style.top=Math.max(8, Math.min((y||120), window.innerHeight-ph-8))+'px';
       p.querySelector('.tp-search').focus();
+    }
+    function openTraitPicker(i, x, y){
+      const w=state.prompt && state.prompt.words[i]; if(!w) return;
+      TP={ i, cat:w.cat, sub:traitSubs(w.cat)[0], mode:'trait' };
+      tpEl().querySelector('.tp-title').textContent='Add trait — '+((typeof elDisplayName==='function')?elDisplayName(w):(w.word||''));
+      tpEl().querySelector('.tp-search').placeholder='search or name a trait…';
+      tpOpen(i, x, y);
+    }
+    function openMotivationPicker(i, x, y){
+      const w=state.prompt && state.prompt.words[i]; if(!w) return;
+      TP={ i, cat:'being', sub:'Motivation', mode:'motivation' };
+      tpEl().querySelector('.tp-title').textContent='Motivation — '+((typeof elDisplayName==='function')?elDisplayName(w):(w.word||''));
+      tpEl().querySelector('.tp-search').placeholder='search or name what they want…';
+      tpOpen(i, x, y);
+    }
+    function openObstaclePicker(i, x, y){
+      const w=state.prompt && state.prompt.words[i]; if(!w) return;
+      TP={ i, cat:w.cat, sub:'', mode:'obstacle' };
+      tpEl().querySelector('.tp-title').textContent='Obstacle — what stands in the way';
+      tpEl().querySelector('.tp-search').placeholder='search this section’s elements…';
+      tpOpen(i, x, y);
+    }
+    // ---- Motivation (elevated) + Obstacle link ----
+    function setMotivationWant(i, want, isNew){
+      const w=state.prompt && state.prompt.words[i]; if(!w) return;
+      if(isNew && typeof saveCustomWord==='function'){ try{ saveCustomWord('being', { word:want, sub:'Motivation', desc:'', g:[] }, 'story'); }catch(e){} }
+      if(typeof pushUndo==='function') pushUndo();
+      w.motivation=w.motivation||{}; w.motivation.want=want;
+      if(state.nodes[i]) state.nodes[i].motivation=w.motivation;
+      if(state.session){ state.session.words=state.prompt.words; if(typeof scheduleAutosave==='function') scheduleAutosave(); }
+    }
+    function _dropObstacleLink(i, obKey){
+      const j=elIndexByKey(obKey); if(j<0) return;
+      const a=Math.min(i,j), b=Math.max(i,j), side=i<j?'fwd':'rev';
+      const link=(typeof getLink==='function')?getLink(a,b):null; if(!link) return;
+      if(link[side] && link[side].type==='blocked by'){ link[side]=null; if(!link.fwd && !link.rev && typeof dropLink==='function') dropLink(a,b); }
+    }
+    function setMotivationObstacle(i, j){
+      const w=state.prompt && state.prompt.words[i], o=state.prompt && state.prompt.words[j]; if(!w||!o||i===j) return;
+      if(typeof pushUndo==='function') pushUndo();
+      w.motivation=w.motivation||{};
+      if(w.motivation.obstacleKey && w.motivation.obstacleKey!==wordKey(o)) _dropObstacleLink(i, w.motivation.obstacleKey);   // swap → drop the old link
+      w.motivation.obstacleKey=wordKey(o);
+      if(state.nodes[i]) state.nodes[i].motivation=w.motivation;
+      const a=Math.min(i,j), b=Math.max(i,j), side=i<j?'fwd':'rev';
+      state.prompt.links=state.prompt.links||[];
+      let link=(typeof getLink==='function')?getLink(a,b):null;
+      if(!link){ link={a,b,fwd:null,rev:null}; state.prompt.links.push(link); }
+      if(!link[side]){ link[side]=Object.assign((typeof blankRel==='function')?blankRel():{type:'',sub:'',intensity:2,valence:'neutral',secret:false,stake:'',hinge:null}, { type:'blocked by', sub:'Obstacle', valence:'cold' }); }
+      if(typeof saveLinksAndRender==='function') saveLinksAndRender();
+      renderNpCard();
+    }
+    function clearMotivationObstacle(i){
+      const w=state.prompt && state.prompt.words[i]; if(!w||!w.motivation) return;
+      if(typeof pushUndo==='function') pushUndo();
+      if(w.motivation.obstacleKey) _dropObstacleLink(i, w.motivation.obstacleKey);
+      delete w.motivation.obstacleKey;
+      if(state.session){ state.session.words=state.prompt.words; }
+      if(typeof saveLinksAndRender==='function') saveLinksAndRender();
+      renderNpCard();
+    }
+    function clearMotivation(i){
+      const w=state.prompt && state.prompt.words[i]; if(!w||!w.motivation) return;
+      if(typeof pushUndo==='function') pushUndo();
+      if(w.motivation.obstacleKey) _dropObstacleLink(i, w.motivation.obstacleKey);
+      delete w.motivation; if(state.nodes[i]) delete state.nodes[i].motivation;
+      if(state.session){ state.session.words=state.prompt.words; if(typeof scheduleAutosave==='function') scheduleAutosave(); }
+      if(typeof saveLinksAndRender==='function') saveLinksAndRender(); else renderNpCard();
     }
     window.openTraitPicker=openTraitPicker;
     document.addEventListener('mousedown', e=>{ const p=document.getElementById('traitPicker');
@@ -15887,9 +15985,34 @@ document.addEventListener('DOMContentLoaded', init);
       const body=document.createElement('div'); body.className='npc-body';
       const w=(typeof npFindEl==='function')?npFindEl(key):null;
       const t=document.createElement('div'); t.className='npc-title';
-      t.textContent=(w&&typeof elDisplayName==='function')?elDisplayName(w):key; body.appendChild(t);
+      t.textContent=(w&&typeof elDisplayName==='function')?elDisplayName(w):key;
       if(w && w.role==='being'){ const roles=[]; if(w.narrator) roles.push('Narrator'); if(w.mainChar) roles.push('Main Character'); if(w.antagonist) roles.push('Antagonist');
-        if(roles.length){ const rl=document.createElement('div'); rl.className='npc-role'; rl.textContent=roles.join(' · '); body.appendChild(rl); } }
+        if(roles.length){ const rs=document.createElement('span'); rs.className='npc-role'; rs.textContent=' — '+roles.join(' · '); t.appendChild(rs); } }   // role at the end of the name line
+      body.appendChild(t);
+      // elevated Motivation (beings): what they want + the obstacle in the way
+      if(w && w.role==='being'){
+        const bi=elIndexByKey(key), mot=w.motivation||null;
+        const sec=document.createElement('div'); sec.className='npc-mot';
+        const mh=document.createElement('div'); mh.className='npc-subhead'; mh.textContent='Motivation'; sec.appendChild(mh);
+        const wantRow=document.createElement('div'); wantRow.className='npc-mot-want';
+        if(mot && mot.want){ const span=document.createElement('span'); span.className='npc-mot-wanttext'; span.textContent=mot.want; wantRow.appendChild(span);
+          if(bi>=0){ const ed=document.createElement('span'); ed.className='npc-mot-edit'; ed.textContent='change'; ed.addEventListener('click',e=>{e.stopPropagation(); openMotivationPicker(bi,e.clientX,e.clientY);}); wantRow.appendChild(ed);
+            const x=document.createElement('span'); x.className='npc-tx'; x.textContent='×'; x.title='Clear motivation'; x.addEventListener('click',e=>{e.stopPropagation(); clearMotivation(bi);}); wantRow.appendChild(x); } }
+        else if(bi>=0){ const add=document.createElement('span'); add.className='npc-mot-add'; add.textContent='+ what do they want?'; add.addEventListener('click',e=>{e.stopPropagation(); openMotivationPicker(bi,e.clientX,e.clientY);}); wantRow.appendChild(add); }
+        else { const none=document.createElement('span'); none.className='npc-mot-none'; none.textContent='—'; wantRow.appendChild(none); }
+        sec.appendChild(wantRow);
+        const obRow=document.createElement('div'); obRow.className='npc-mot-obs';
+        const lab=document.createElement('span'); lab.className='npc-mot-obslab'; lab.textContent='blocked by'; obRow.appendChild(lab);
+        const obKey=mot&&mot.obstacleKey, obW=obKey?npFindEl(obKey):null;
+        if(obW){ const chip=document.createElement('span'); chip.className='npc-mot-obschip'; chip.textContent=elDisplayName(obW);
+          chip.addEventListener('click',e=>{e.stopPropagation(); const oi=elIndexByKey(obKey); if(oi>=0){ state.selNode=oi; if(typeof renderConstellation==='function') renderConstellation(); }});
+          obRow.appendChild(chip);
+          if(bi>=0){ const x=document.createElement('span'); x.className='npc-tx'; x.textContent='×'; x.title='Unlink obstacle'; x.addEventListener('click',e=>{e.stopPropagation(); clearMotivationObstacle(bi);}); obRow.appendChild(x); } }
+        else if(bi>=0){ const add=document.createElement('span'); add.className='npc-mot-add'; add.textContent='+ link an obstacle'; add.addEventListener('click',e=>{e.stopPropagation(); openObstaclePicker(bi,e.clientX,e.clientY);}); obRow.appendChild(add); }
+        else { const none=document.createElement('span'); none.className='npc-mot-none'; none.textContent='—'; obRow.appendChild(none); }
+        sec.appendChild(obRow);
+        body.appendChild(sec);
+      }
       const sh=document.createElement('div'); sh.className='npc-subhead'; sh.textContent='Notes'; body.appendChild(sh);
       const tr=document.createElement('div'); tr.className='npc-traits';
       // "General" sub-tab — notes about the element as a whole
