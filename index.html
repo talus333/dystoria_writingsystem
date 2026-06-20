@@ -5071,6 +5071,11 @@ Object.assign(WORD_DESC, {
   'Agender': 'Wears no gender at all, and feels no draft.',
   'Two-Spirit': 'Holds two spirits as one sacred whole.'
 });
+// Age is auto-assigned to every generated being (its second fixed trait) using the weights already
+// defined on the being "Age" subcategory: Infant 5%, Toddler/Child/Elder 10% each, Young Adult & Adult ~32.5%.
+function ageDefs(){ const cat=(typeof getCat==='function')?getCat('being'):null; const sb=cat&&cat.subcategories.find(s=>s.name==='Age'); const ws=(sb&&sb.words)||[]; return ws.map(x=> typeof x==='string'?{w:x,wt:1}:{w:x.w,wt:(x.wt||1)}); }
+function assignBeingAge(){ const defs=ageDefs(); if(!defs.length) return 'Adult'; const total=defs.reduce((a,d)=>a+d.wt,0); let r=Math.random()*total; for(const d of defs){ r-=d.wt; if(r<0) return d.w; } return defs[defs.length-1].w; }
+function ageMenuValues(){ const v=ageDefs().map(d=>d.w); v.push('Unspecified'); return v; }
 function drawBeing(set, used, genres){
   const cat = getCat('being');
   const sel = state.selection.being;
@@ -5091,7 +5096,7 @@ function drawBeing(set, used, genres){
   });
   const seed = hashStr(parts.map(p => p.word).join('|'));
   return { word: parts.map(p => p.word).join(' '), cat: 'being', sub: parts[0].sub, set, role: 'being',
-    attrs: [{ word: assignBeingSex(), sub: 'Sex' }], identity: parts, sexSeed: seed, gender: (seed % 2) ? 'female' : 'male' };
+    attrs: [{ word: assignBeingSex(), sub: 'Sex' }, { word: assignBeingAge(), sub: 'Age' }], identity: parts, sexSeed: seed, gender: (seed % 2) ? 'female' : 'male' };
 }
 
 function generatePrompt(){
@@ -5805,7 +5810,7 @@ function ecBuildItem(word, sub, s, catId){
   catId = catId || EC.cat;
   if (catId === 'being'){
     const seed = hashStr(word);
-    return { word, cat: 'being', sub, set: s, role: 'being', attrs: [{ word: assignBeingSex(), sub: 'Sex' }], identity: [{ word, sub }], sexSeed: seed, gender: (seed % 2) ? 'female' : 'male' };
+    return { word, cat: 'being', sub, set: s, role: 'being', attrs: [{ word: assignBeingSex(), sub: 'Sex' }, { word: assignBeingAge(), sub: 'Age' }], identity: [{ word, sub }], sexSeed: seed, gender: (seed % 2) ? 'female' : 'male' };
   }
   const item = { word, cat: catId, sub, set: s, role: 'word' };
   if (GUIDE_IDS.has(catId)){ item.role = 'constraint'; item._descCollapsed = false; }   // guides/exercises open expanded
@@ -11883,7 +11888,7 @@ function coverErrMsg(e){
 
 /* ---------------- import a story (prose → new story + AI element extraction) ---------------- */
 function makeElementItem(cat, word, set, sub){
-  if (cat === 'being'){ const id = sub || 'Archetype'; const seed = hashStr(word); return { word, cat: 'being', sub: id, set, role: 'being', attrs: [{ word: assignBeingSex(), sub: 'Sex' }], identity: [{ word, sub: id }], sexSeed: seed, gender: (seed % 2) ? 'female' : 'male' }; }
+  if (cat === 'being'){ const id = sub || 'Archetype'; const seed = hashStr(word); return { word, cat: 'being', sub: id, set, role: 'being', attrs: [{ word: assignBeingSex(), sub: 'Sex' }, { word: assignBeingAge(), sub: 'Age' }], identity: [{ word, sub: id }], sexSeed: seed, gender: (seed % 2) ? 'female' : 'male' }; }
   const cc = getCat(cat); const s = sub || ((cc && cc.subcategories[0]) ? cc.subcategories[0].name : '');
   const item = { word, cat, sub: s, set, role: 'word' };
   if (cat === 'event') item.frame = state.frameIdx || 0;
@@ -15905,6 +15910,37 @@ document.addEventListener('DOMContentLoaded', init);
       const cur=((w.attrs)||[]).find(a=>a.sub==='Sex'); const curw=cur?cur.word:'';
       groups.forEach(g=>{ if(g.name){ const h=document.createElement('div'); h.textContent=g.name; h.style.cssText='font-family:var(--sans); font-size:7.5px; letter-spacing:.16em; text-transform:uppercase; color:var(--ink-faint); padding:6px 11px 2px'; menu.appendChild(h); }
         g.values.forEach(v=>{ const b=document.createElement('button'); b.textContent=(curw===v?'✓ ':'')+v; b.addEventListener('click', ev=>{ ev.stopPropagation(); menu.style.display='none'; setBeingSex(i, v); }); menu.appendChild(b); }); });
+      menu.style.left=Math.max(8, Math.min(x||200, window.innerWidth-200))+'px';
+      menu.style.top=Math.max(8, Math.min(y||200, window.innerHeight-300))+'px';
+      menu.style.display='block';
+    }
+    function ensureBeingAge(i){
+      const w=state.prompt && state.prompt.words[i]; if(!w || w.role!=='being') return;
+      if(((w.attrs)||[]).some(a=>a.sub==='Age')) return;
+      if(typeof addsLocked==='function' && addsLocked()) return;   // don't mutate mid-session
+      w.attrs=w.attrs||[]; const si=w.attrs.findIndex(a=>a.sub==='Sex'); const aa={ word:(typeof assignBeingAge==='function'?assignBeingAge():'Adult'), sub:'Age' };
+      if(si>=0) w.attrs.splice(si+1,0,aa); else w.attrs.unshift(aa);
+      if(state.nodes[i]) state.nodes[i].attrs=w.attrs;
+      if(state.session){ state.session.words=state.prompt.words; if(typeof scheduleAutosave==='function') scheduleAutosave(); }
+    }
+    function setBeingAge(i, value){
+      const w=state.prompt && state.prompt.words[i]; if(!w) return;
+      if(typeof addsLocked==='function' && addsLocked()){ if(typeof flashStatus==='function') flashStatus('The session is underway — end it to change age'); return; }
+      if(typeof pushUndo==='function') pushUndo();
+      w.attrs=w.attrs||[]; let a=w.attrs.find(x=>x.sub==='Age'); const old=a?a.word:null;
+      if(a) a.word=value; else { const si=w.attrs.findIndex(x=>x.sub==='Sex'); const aa={ word:value, sub:'Age' }; if(si>=0) w.attrs.splice(si+1,0,aa); else w.attrs.unshift(aa); }
+      if(state.nodes[i]) state.nodes[i].attrs=w.attrs;
+      if(old && state.cardTrait===old) state.cardTrait=value;   // keep the open note sub-tab pointed at the renamed age
+      if(state.session){ state.session.words=state.prompt.words; if(typeof scheduleAutosave==='function') scheduleAutosave(); }
+      renderNpCard(); if(typeof renderNotepad==='function') renderNotepad();
+    }
+    function openAgeMenu(i, x, y){
+      const w=state.prompt && state.prompt.words[i]; if(!w) return;
+      const vals=(typeof ageMenuValues==='function')?ageMenuValues():['Infant','Toddler','Child','Young Adult','Adult','Elder','Unspecified'];
+      const menu=$('aspectMenu'); if(!menu) return; menu.innerHTML='';
+      if(menu.parentElement!==document.body) document.body.appendChild(menu);
+      const cur=((w.attrs)||[]).find(a=>a.sub==='Age'); const curw=cur?cur.word:'';
+      vals.forEach(v=>{ const b=document.createElement('button'); b.textContent=(curw===v?'✓ ':'')+v; b.addEventListener('click', ev=>{ ev.stopPropagation(); menu.style.display='none'; setBeingAge(i, v); }); menu.appendChild(b); });
       menu.style.left=Math.max(8, Math.min(x||200, window.innerWidth-200))+'px';
       menu.style.top=Math.max(8, Math.min(y||200, window.innerHeight-300))+'px';
       menu.style.display='block';
