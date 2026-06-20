@@ -10361,6 +10361,10 @@ async function generateSessionGoal(hostId){
       const traits = (w.attrs || []).map(a => a.word).filter(Boolean);
       if (traits.length) lines.push('  Traits: ' + traits.join(', '));
       if (w.motivation && w.motivation.want){ let mv = '  Motivation: ' + w.motivation.want;
+        const motv = w.motivation.motivator;
+        if (motv){ const rel = w.motivation.rel || 'of';
+          let mname = motv.key ? (function(){ const mw = (typeof npFindEl==='function') ? npFindEl(motv.key) : null; return mw ? (elDisplayName(mw) + (motv.trait ? (' ('+motv.trait+')') : '')) : ''; })() : (motv.word || '');
+          if (mname) mv += ' ' + rel + ' ' + mname; }
         const obs = (typeof window.motObstacles==='function') ? window.motObstacles(w) : (w.motivation.obstacleKey ? [{key:w.motivation.obstacleKey}] : []);
         const onames = obs.map(p => { if (p.key){ const ow = (typeof npFindEl==='function') ? npFindEl(p.key) : null; return ow ? (elDisplayName(ow) + (p.trait ? (' ('+p.trait+')') : '')) : null; } return p.word || null; }).filter(Boolean);
         if (onames.length) mv += ' — blocked by ' + onames.join(', ');
@@ -14933,7 +14937,7 @@ function setWriting(on){
     { const dg = $('deskStatus'); if (dg) dg.textContent = 'Roll and gather elements, shape the map, and note ideas as they come.'; }
   }
 }
-const DYSTORIA_BUILD = '2026-06-20 #172 — card: trait/motivation/obstacle pills + add button shrunk to General Notes pill height, add-trait is now just "+"; session prompt now tells the generator a named being owns the character and its type/archetype/occupation is only a trait (unnamed → type IS the character)';
+const DYSTORIA_BUILD = '2026-06-20 #173 — motivation line now reads "Motivated by [want] of [motivator]": a connector dropdown (of/for/by/in… association words) + a motivator pill that points the motivation at any element, sub-element (trait), or a created concept; motivator gets its own notes tab and feeds the session-prompt dossier';
 // ---- silent-error visibility -------------------------------------------------------------
 // Uncaught errors used to fail invisibly (e.g. the guest-comment bug). Surface them as a small,
 // throttled toast + console so the writer sees that something hiccuped instead of nothing.
@@ -15760,6 +15764,10 @@ document.addEventListener('DOMContentLoaded', init);
   #npCard .npc-pill.want.on{background:var(--gold); border-color:var(--gold); color:#241c0f}
   #npCard .npc-pill.obs{border-color:#9c5f54}
   #npCard .npc-pill.obs.on{background:#9c5f54; border-color:#9c5f54; color:#fff}
+  #npCard .npc-pill.mot{border-color:#5f7f9c}
+  #npCard .npc-pill.mot.on{background:#5f7f9c; border-color:#5f7f9c; color:#fff}
+  #npCard .npc-rel{font-family:var(--serif); font-style:italic; font-size:13.5px; color:var(--ink-faint); margin:0 5px; cursor:pointer; border-bottom:1px dotted var(--line); padding-bottom:1px}
+  #npCard .npc-rel:hover{color:var(--ink); border-color:var(--ink-faint)}
   #npCard .npc-pill.concept{border-style:dashed}
   #npCard .npc-pill .pmini{font-size:10px; line-height:1; opacity:.55}
   #npCard .npc-pill .pmini:hover{opacity:1}
@@ -15899,6 +15907,23 @@ document.addEventListener('DOMContentLoaded', init);
         if(!els.length && !pool.length && !raw){ const e=document.createElement('div'); e.className='tp-empty'; e.textContent='Search a story element or an obstacle concept…'; res.appendChild(e); }
         return;
       }
+      if(TP.mode==='motivator'){
+        // any current story element (or sub-element via the ▾ trait menu), or create-your-own
+        const ws=(state.prompt&&state.prompt.words)||[]; const els=[];
+        ws.forEach((w,idx)=>{ if(idx===TP.i) return; if(typeof npIsElement==='function' && !npIsElement(w)) return;
+          const nm=(typeof elDisplayName==='function')?elDisplayName(w):(w.word||''); if(q && nm.toLowerCase().indexOf(q)<0) return; els.push({idx,w,nm}); });
+        if(els.length){ const h=document.createElement('div'); h.className='tp-grouphd'; h.textContent='Story elements'; res.appendChild(h);
+          els.slice(0,30).forEach(o=>{ const b=document.createElement('button'); b.className='ec-opt';
+            const cn=(getCat(o.w.cat)||{}).name||o.w.cat;
+            b.innerHTML='<span class="ec-w">'+o.nm.replace(/</g,'&lt;')+'</span><span class="ec-sub" style="color:'+catColor(o.w.cat)+'">'+cn+'</span>';
+            b.addEventListener('click', ()=>{ setMotivatorElement(TP.i, o.idx); closeTraitPicker(); }); res.appendChild(b); }); }
+        if(raw){ const exact=els.some(e=>e.nm.toLowerCase()===q);
+          if(!exact){ const b=document.createElement('button'); b.className='ec-opt tp-new';
+            b.innerHTML='<span class="ec-w">+ Create “'+raw.replace(/</g,'&lt;')+'”</span><span class="ec-sub">motivator</span>';
+            b.addEventListener('click', ()=>{ setMotivatorWord(TP.i, raw); closeTraitPicker(); }); res.appendChild(b); } }
+        if(!els.length && !raw){ const e=document.createElement('div'); e.className='tp-empty'; e.textContent='Search a story element or name something…'; res.appendChild(e); }
+        return;
+      }
       // trait + motivation: search a word pool, allow create-your-own
       const sub = TP.mode==='motivation' ? 'Motivation' : TP.sub;
       const cat = TP.mode==='motivation' ? 'being' : TP.cat;
@@ -15967,6 +15992,50 @@ document.addEventListener('DOMContentLoaded', init);
     }
     // an obstacle can have multiple parts: element links (optionally narrowed to a being's trait) and/or obstacle concept words
     function motObstacles(w){ const m=w&&w.motivation; if(!m) return []; if(Array.isArray(m.obstacles)) return m.obstacles; if(m.obstacleKey) return [{key:m.obstacleKey}]; return []; }
+    // ---- Motivator: what a motivation points at (one element/sub-element, or a free concept) + the connector word ("of", "for", "by"…) ----
+    const MOT_RELS=['of','for','by','in','from','to','toward','against','over','with','about','through','upon','within','without','beyond'];
+    function motMotivator(w){ const m=w&&w.motivation; return (m&&m.motivator)?m.motivator:null; }
+    function motRel(w){ const m=w&&w.motivation; return (m&&m.rel)?m.rel:'of'; }
+    function _persistMotivation(i){ const w=state.prompt&&state.prompt.words[i]; if(!w) return; if(state.nodes[i]) state.nodes[i].motivation=w.motivation; if(state.session){ state.session.words=state.prompt.words; if(typeof scheduleAutosave==='function') scheduleAutosave(); } }
+    function setMotivationRel(i, rel){ const w=state.prompt&&state.prompt.words[i]; if(!w||!w.motivation) return; if(typeof pushUndo==='function') pushUndo(); w.motivation.rel=rel||'of'; _persistMotivation(i); renderNpCard(); }
+    function setMotivatorElement(i, j){ const w=state.prompt&&state.prompt.words[i], o=state.prompt&&state.prompt.words[j]; if(!w||!o||i===j||!w.motivation) return; if(typeof pushUndo==='function') pushUndo(); w.motivation.motivator={ key:wordKey(o) }; _persistMotivation(i); renderNpCard(); }
+    function setMotivatorWord(i, word){ const w=state.prompt&&state.prompt.words[i]; if(!w||!word||!w.motivation) return; if(typeof pushUndo==='function') pushUndo(); w.motivation.motivator={ word }; _persistMotivation(i); renderNpCard(); }
+    function clearMotivator(i){ const w=state.prompt&&state.prompt.words[i]; if(!w||!w.motivation) return; if(typeof pushUndo==='function') pushUndo(); delete w.motivation.motivator; if(state.cardTrait==='@motivator') state.cardTrait=null; _persistMotivation(i); renderNpCard(); }
+    function setMotivatorTrait(i, trait){ const w=state.prompt&&state.prompt.words[i]; if(!w||!w.motivation||!w.motivation.motivator) return; if(typeof pushUndo==='function') pushUndo(); if(trait) w.motivation.motivator.trait=trait; else delete w.motivation.motivator.trait; _persistMotivation(i); renderNpCard(); }
+    function openMotivatorPicker(i, x, y){
+      const w=state.prompt && state.prompt.words[i]; if(!w) return;
+      TP={ i, cat:w.cat, sub:'', mode:'motivator' };
+      tpEl().querySelector('.tp-title').textContent='Motivator — what the motivation points at';
+      tpEl().querySelector('.tp-search').placeholder='search elements or name something…';
+      tpOpen(i, x, y);
+    }
+    function openMotRelMenu(i, x, y){
+      const w=state.prompt&&state.prompt.words[i]; if(!w||!w.motivation) return;
+      const menu=$('aspectMenu'); if(!menu) return; menu.innerHTML='';
+      if(menu.parentElement!==document.body) document.body.appendChild(menu);
+      const cur=motRel(w);
+      MOT_RELS.forEach(r=>{ const b=document.createElement('button'); b.textContent=(cur===r?'✓ ':'')+r; b.addEventListener('click', ev=>{ ev.stopPropagation(); menu.style.display='none'; setMotivationRel(i, r); }); menu.appendChild(b); });
+      menu.style.left=Math.max(8, Math.min(x||200, window.innerWidth-200))+'px';
+      menu.style.top=Math.max(8, Math.min(y||200, window.innerHeight-340))+'px';
+      menu.style.display='block';
+    }
+    function openMotivatorTraitMenu(i, x, y){
+      const w=state.prompt&&state.prompt.words[i]; if(!w||!w.motivation||!w.motivation.motivator||!w.motivation.motivator.key) return;
+      const part=w.motivation.motivator;
+      const bw=(typeof npFindEl==='function')?npFindEl(part.key):null; if(!bw) return;
+      const menu=$('aspectMenu'); if(!menu) return; menu.innerHTML='';
+      if(menu.parentElement!==document.body) document.body.appendChild(menu);
+      const add=(label,fn)=>{ const b=document.createElement('button'); b.textContent=label; b.addEventListener('click', ev=>{ ev.stopPropagation(); menu.style.display='none'; fn(); }); menu.appendChild(b); };
+      add((!part.trait?'✓ ':'')+'The whole element', ()=>setMotivatorTrait(i, null));
+      const traits=((bw.attrs)||[]).map(a=>a.word).filter(Boolean);
+      if(!traits.length){ const e=document.createElement('div'); e.className='np-empty'; e.style.padding='6px 10px'; e.textContent='No traits on this element yet'; menu.appendChild(e); }
+      traits.forEach(t=> add((part.trait===t?'✓ ':'')+t, ()=>setMotivatorTrait(i, t)));
+      menu.style.left=Math.max(8, Math.min(x||200, window.innerWidth-200))+'px';
+      menu.style.top=Math.max(8, Math.min(y||200, window.innerHeight-260))+'px';
+      menu.style.display='block';
+    }
+    function motivatorLabel(baseKey){ const bw=(typeof npFindEl==='function')?npFindEl(baseKey):null; const part=motMotivator(bw); if(!part) return 'motivator';
+      if(part.key){ const ow=npFindEl(part.key); return (ow?elDisplayName(ow):'?')+(part.trait?(' · '+part.trait):''); } return part.word||'motivator'; }
     function ensureTopElements(){
       const wrap=document.getElementById('npWrap'); if(!wrap) return; const lower=wrap.parentElement; if(!lower) return;
       const els=document.getElementById('npElements'); if(!els) return;
@@ -16094,7 +16163,7 @@ document.addEventListener('DOMContentLoaded', init);
       const traits=traitWords(key);
       // valid note sub-tabs: each trait, plus (for beings) the motivation and each obstacle part — drop cardTrait if its tab is gone
       const _valid=new Set(traits.map(t=>t.word));
-      if(wEl.role==='being'){ const _m=wEl.motivation||null; if(_m && _m.want) _valid.add('@motivation'); if(_m) motObstacles(wEl).forEach(p=>_valid.add('@obstacle:'+obstaclePartId(p))); }
+      if(wEl.role==='being'){ const _m=wEl.motivation||null; if(_m && _m.want) _valid.add('@motivation'); if(_m && _m.motivator) _valid.add('@motivator'); if(_m) motObstacles(wEl).forEach(p=>_valid.add('@obstacle:'+obstaclePartId(p))); }
       if(state.cardTrait && !_valid.has(state.cardTrait)) state.cardTrait=null;
       const imgBox=document.createElement('div'); imgBox.className='npc-img';
       const src=(state.session&&state.session.npImages&&state.session.npImages[key])||'';
@@ -16124,6 +16193,21 @@ document.addEventListener('DOMContentLoaded', init);
           if(bi>=0){ const ed=document.createElement('span'); ed.className='pmini'; ed.textContent='✎'; ed.title='Change'; ed.addEventListener('click',e=>{e.stopPropagation(); openMotivationPicker(bi,e.clientX,e.clientY);}); pill.appendChild(ed);
             const x=document.createElement('span'); x.className='pmini'; x.textContent='×'; x.title='Clear motivation'; x.addEventListener('click',e=>{e.stopPropagation(); clearMotivation(bi);}); pill.appendChild(x); }
           sen.appendChild(pill);
+          // connector ("of" — a dropdown of association words) + the motivator it points the motivation at
+          const motr=mot.motivator||null;
+          if(motr || bi>=0){ const relSp=document.createElement('span'); relSp.className='npc-rel'; relSp.textContent=motRel(w); relSp.title='Change the connector';
+            if(bi>=0) relSp.addEventListener('click', e=>{e.stopPropagation(); openMotRelMenu(bi, e.clientX, e.clientY);});
+            sen.appendChild(relSp); }
+          if(motr){
+            const isEl=!!motr.key, ow=isEl?npFindEl(motr.key):null, isBeing=isEl&&ow&&ow.role==='being';
+            const mp=document.createElement('span'); mp.className='npc-pill mot'+(isEl?'':' concept')+(state.cardTrait==='@motivator'?' on':''); mp.title='Click to write notes on the motivator';
+            const mlbl=document.createElement('span'); mlbl.textContent= isEl ? ((ow?elDisplayName(ow):'?')+(motr.trait?(' · '+motr.trait):'')) : motr.word; mp.appendChild(mlbl);
+            mp.addEventListener('click', e=>{ e.stopPropagation(); setTrait('@motivator'); });
+            if(bi>=0){ if(isBeing){ const dv=document.createElement('span'); dv.className='pmini'; dv.textContent='▾'; dv.title='Point at one of its traits?'; dv.addEventListener('click',e=>{e.stopPropagation(); openMotivatorTraitMenu(bi, e.clientX, e.clientY);}); mp.appendChild(dv); }
+              const ed2=document.createElement('span'); ed2.className='pmini'; ed2.textContent='✎'; ed2.title='Change'; ed2.addEventListener('click',e=>{e.stopPropagation(); openMotivatorPicker(bi, e.clientX, e.clientY);}); mp.appendChild(ed2);
+              const x2=document.createElement('span'); x2.className='pmini'; x2.textContent='×'; x2.title='Clear motivator'; x2.addEventListener('click',e=>{e.stopPropagation(); clearMotivator(bi);}); mp.appendChild(x2); }
+            sen.appendChild(mp);
+          } else if(bi>=0){ const madd=document.createElement('span'); madd.className='npc-add'; madd.textContent='+ motivator'; madd.title='Point this motivation at an element or something specific'; madd.addEventListener('click',e=>{e.stopPropagation(); openMotivatorPicker(bi, e.clientX, e.clientY);}); sen.appendChild(madd); }
         } else if(bi>=0){ const add=document.createElement('span'); add.className='npc-add'; add.textContent='+ motivation'; add.addEventListener('click',e=>{e.stopPropagation(); openMotivationPicker(bi,e.clientX,e.clientY);}); sen.appendChild(add); }
         else { const q=document.createElement('span'); q.className='lead'; q.textContent='…'; sen.appendChild(q); }
         const parts=motObstacles(w);
@@ -16168,6 +16252,7 @@ document.addEventListener('DOMContentLoaded', init);
         const nm=(w&&typeof elDisplayName==='function')?elDisplayName(w):'Element';
         let label = tab;
         if(tab==='@motivation') label='Motivation';
+        else if(tab==='@motivator') label='→ '+motivatorLabel(base);
         else if(tab.indexOf('@obstacle:')===0) label='vs '+obstacleLabel(base, tab.slice(10));
         return { word: nm+' · '+label, cat:'', catId:null }; } return _lf.apply(this,arguments); }; }
       // the quill shortcut (map + focus panel) jumps the top bar to this element's category filter, with it selected
