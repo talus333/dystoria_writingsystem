@@ -14901,7 +14901,7 @@ function setWriting(on){
     { const dg = $('deskStatus'); if (dg) dg.textContent = 'Roll and gather elements, shape the map, and note ideas as they come.'; }
   }
 }
-const DYSTORIA_BUILD = '2026-06-20 #166 — notes sheet is now 3 columns: elements rail | element card with a boxed Motivation | notepad (pushed right). Multi-part obstacles from earlier build.';
+const DYSTORIA_BUILD = '2026-06-20 #167 — Motivation reads as the character sentence ("motivated by [want] with these obstacles: […]"); want + obstacle pills are selectable note tabs alongside traits. Reverted the box/3-column layout.';
 // ---- silent-error visibility -------------------------------------------------------------
 // Uncaught errors used to fail invisibly (e.g. the guest-comment bug). Surface them as a small,
 // throttled toast + console so the writer sees that something hiccuped instead of nothing.
@@ -15931,6 +15931,10 @@ document.addEventListener('DOMContentLoaded', init);
     }
     // an obstacle can have multiple parts: element links (optionally narrowed to a being's trait) and/or obstacle concept words
     function motObstacles(w){ const m=w&&w.motivation; if(!m) return []; if(Array.isArray(m.obstacles)) return m.obstacles; if(m.obstacleKey) return [{key:m.obstacleKey}]; return []; }
+    function obstaclePartId(p){ return p.key ? p.key : ('w:'+(p.word||'')); }
+    function obstacleLabel(baseKey, id){ const bw=(typeof npFindEl==='function')?npFindEl(baseKey):null; const parts=motObstacles(bw);
+      for(const p of parts){ if(obstaclePartId(p)===id){ if(p.key){ const ow=npFindEl(p.key); return (ow?elDisplayName(ow):'?')+(p.trait?(' · '+p.trait):''); } return p.word; } } return 'obstacle'; }
+    window.obstaclePartId=obstaclePartId;
     function _persistObstacles(i, arr){ const w=state.prompt&&state.prompt.words[i]; if(!w) return; w.motivation=w.motivation||{}; w.motivation.obstacles=arr; delete w.motivation.obstacleKey; if(state.nodes[i]) state.nodes[i].motivation=w.motivation; }
     function _dropObstacleLink(i, obKey){
       const j=elIndexByKey(obKey); if(j<0) return;
@@ -16043,7 +16047,10 @@ document.addEventListener('DOMContentLoaded', init);
       if(!cardable){ state.cardTrait=null; card.style.display='none'; return; }   // only beings/settings/objects get the card; others look like the General tab
       card.style.display='flex'; card.innerHTML='';
       const traits=traitWords(key);
-      if(state.cardTrait && !traits.some(t=>t.word===state.cardTrait)) state.cardTrait=null;   // trait removed → fall back to General
+      // valid note sub-tabs: each trait, plus (for beings) the motivation and each obstacle part — drop cardTrait if its tab is gone
+      const _valid=new Set(traits.map(t=>t.word));
+      if(wEl.role==='being'){ const _m=wEl.motivation||null; if(_m && _m.want) _valid.add('@motivation'); if(_m) motObstacles(wEl).forEach(p=>_valid.add('@obstacle:'+obstaclePartId(p))); }
+      if(state.cardTrait && !_valid.has(state.cardTrait)) state.cardTrait=null;
       const imgBox=document.createElement('div'); imgBox.className='npc-img';
       const src=(state.session&&state.session.npImages&&state.session.npImages[key])||'';
       if(src){ const im=document.createElement('img'); im.src=src; imgBox.appendChild(im); imgBox.title='Click to replace the image'; }
@@ -16057,37 +16064,35 @@ document.addEventListener('DOMContentLoaded', init);
       if(w && w.role==='being'){ const roles=[]; if(w.narrator) roles.push('Narrator'); if(w.mainChar) roles.push('Main Character'); if(w.antagonist) roles.push('Antagonist');
         if(roles.length){ const rs=document.createElement('span'); rs.className='npc-role'; rs.textContent=' — '+roles.join(' · '); t.appendChild(rs); } }   // role at the end of the name line
       body.appendChild(t);
-      // elevated Motivation (beings): label + want + obstacle, all on one row
+      // Motivation continues the character line as a sentence; want + obstacle pills are selectable note tabs
       if(w && w.role==='being'){
         const bi=elIndexByKey(key), mot=w.motivation||null;
-        const sec=document.createElement('div'); sec.className='npc-mot';
-        const lab=document.createElement('span'); lab.className='npc-mot-lab'; lab.textContent='Motivation'; sec.appendChild(lab);
-        // want
-        if(mot && mot.want){ const span=document.createElement('span'); span.className='npc-mot-wanttext'; span.textContent=mot.want;
-          if(bi>=0){ span.style.cursor='pointer'; span.title='Change motivation'; span.addEventListener('click',e=>{e.stopPropagation(); openMotivationPicker(bi,e.clientX,e.clientY);}); }
-          sec.appendChild(span);
-          if(bi>=0){ const x=document.createElement('span'); x.className='npc-tx'; x.textContent='×'; x.title='Clear motivation'; x.addEventListener('click',e=>{e.stopPropagation(); clearMotivation(bi);}); sec.appendChild(x); } }
-        else if(bi>=0){ const add=document.createElement('span'); add.className='npc-mot-add'; add.textContent='+ want'; add.title='What do they want?'; add.addEventListener('click',e=>{e.stopPropagation(); openMotivationPicker(bi,e.clientX,e.clientY);}); sec.appendChild(add); }
-        else { const none=document.createElement('span'); none.className='npc-mot-none'; none.textContent='—'; sec.appendChild(none); }
-        // blocked by → one or more obstacle parts (element links, optionally a being's trait; and/or obstacle concept words)
-        const bl=document.createElement('span'); bl.className='npc-mot-obslab'; bl.textContent='blocked by'; sec.appendChild(bl);
+        const sen=document.createElement('div'); sen.className='npc-sentence';
+        const lead1=document.createElement('span'); lead1.className='lead'; lead1.textContent='motivated by '; sen.appendChild(lead1);
+        if(mot && mot.want){
+          const pill=document.createElement('span'); pill.className='npc-pill want'+(state.cardTrait==='@motivation'?' on':''); pill.title='Click to write notes on this motivation';
+          const lbl=document.createElement('span'); lbl.textContent=mot.want; pill.appendChild(lbl);
+          pill.addEventListener('click', e=>{ e.stopPropagation(); setTrait('@motivation'); });
+          if(bi>=0){ const ed=document.createElement('span'); ed.className='pmini'; ed.textContent='✎'; ed.title='Change'; ed.addEventListener('click',e=>{e.stopPropagation(); openMotivationPicker(bi,e.clientX,e.clientY);}); pill.appendChild(ed);
+            const x=document.createElement('span'); x.className='pmini'; x.textContent='×'; x.title='Clear motivation'; x.addEventListener('click',e=>{e.stopPropagation(); clearMotivation(bi);}); pill.appendChild(x); }
+          sen.appendChild(pill);
+        } else if(bi>=0){ const add=document.createElement('span'); add.className='npc-add'; add.textContent='+ motivation'; add.addEventListener('click',e=>{e.stopPropagation(); openMotivationPicker(bi,e.clientX,e.clientY);}); sen.appendChild(add); }
+        else { const q=document.createElement('span'); q.className='lead'; q.textContent='…'; sen.appendChild(q); }
         const parts=motObstacles(w);
+        const lead2=document.createElement('span'); lead2.className='lead'; lead2.textContent=parts.length?' with these obstacles: ':' with these obstacles: '; sen.appendChild(lead2);
         parts.forEach((part, idx)=>{
-          if(part.key){ const ow=npFindEl(part.key); if(!ow) return;
-            const isBeing=ow.role==='being';
-            const chip=document.createElement('span'); chip.className='npc-mot-obschip'+(isBeing?' being':'');
-            chip.textContent=elDisplayName(ow)+(part.trait?(' · '+part.trait):'');
-            chip.title=isBeing?'Click to choose which trait blocks them':'Click to find on the map';
-            chip.addEventListener('click',e=>{ e.stopPropagation();
-              if(isBeing && bi>=0){ openObstacleTraitMenu(bi, idx, e.clientX, e.clientY); }
-              else { const oi=elIndexByKey(part.key); if(oi>=0){ state.selNode=oi; if(typeof renderConstellation==='function') renderConstellation(); } } });
-            sec.appendChild(chip);
-          } else if(part.word){ const chip=document.createElement('span'); chip.className='npc-mot-obschip concept'; chip.textContent=part.word; chip.title=part.sub||'Obstacle concept'; sec.appendChild(chip); }
-          if(bi>=0){ const x=document.createElement('span'); x.className='npc-tx'; x.textContent='×'; x.title='Remove this obstacle'; x.addEventListener('click',e=>{e.stopPropagation(); removeObstaclePart(bi, idx);}); sec.appendChild(x); }
+          const id='@obstacle:'+obstaclePartId(part);
+          const isEl=!!part.key, ow=isEl?npFindEl(part.key):null, isBeing=isEl&&ow&&ow.role==='being';
+          const pill=document.createElement('span'); pill.className='npc-pill obs'+(isEl?'':' concept')+(state.cardTrait===id?' on':''); pill.title='Click to write notes on this obstacle';
+          const lbl=document.createElement('span'); lbl.textContent= isEl ? ((ow?elDisplayName(ow):'?')+(part.trait?(' · '+part.trait):'')) : part.word; pill.appendChild(lbl);
+          pill.addEventListener('click', e=>{ e.stopPropagation(); setTrait(id); });
+          if(bi>=0){ if(isBeing){ const dv=document.createElement('span'); dv.className='pmini'; dv.textContent='▾'; dv.title='Which trait blocks them?'; dv.addEventListener('click',e=>{e.stopPropagation(); openObstacleTraitMenu(bi, idx, e.clientX, e.clientY);}); pill.appendChild(dv); }
+            const x=document.createElement('span'); x.className='pmini'; x.textContent='×'; x.title='Remove'; x.addEventListener('click',e=>{e.stopPropagation(); removeObstaclePart(bi, idx);}); pill.appendChild(x); }
+          sen.appendChild(pill);
+          const gap=document.createElement('span'); gap.className='lead'; gap.textContent=' '; sen.appendChild(gap);
         });
-        if(bi>=0){ const add=document.createElement('span'); add.className='npc-mot-add'; add.textContent=parts.length?'+':'+ obstacle'; add.title='Add an obstacle (an element or a concept)'; add.addEventListener('click',e=>{e.stopPropagation(); openObstaclePicker(bi,e.clientX,e.clientY);}); sec.appendChild(add); }
-        else if(!parts.length){ const none=document.createElement('span'); none.className='npc-mot-none'; none.textContent='—'; sec.appendChild(none); }
-        body.appendChild(sec);
+        if(bi>=0){ const add=document.createElement('span'); add.className='npc-add'; add.textContent=parts.length?'+':'+ obstacle'; add.title='Add an obstacle (an element or a concept)'; add.addEventListener('click',e=>{e.stopPropagation(); openObstaclePicker(bi,e.clientX,e.clientY);}); sen.appendChild(add); }
+        body.appendChild(sen);
       }
       const sh=document.createElement('div'); sh.className='npc-subhead'; sh.textContent='Notes'; body.appendChild(sh);
       const tr=document.createElement('div'); tr.className='npc-traits';
@@ -16115,8 +16120,12 @@ document.addEventListener('DOMContentLoaded', init);
       // --- per-trait note scoping: the "active" notes key becomes "<element><trait>" while a sub-tab is selected
       const _ak=window.npActiveKey, _lf=window.npLabelFor;
       if(_ak){ window.npActiveKey=function(){ const b=state.npActive||'general'; return (b!=='general'&&state.cardTrait)? b+SEP+state.cardTrait : b; }; }
-      if(_lf){ window.npLabelFor=function(k){ if(typeof k==='string'&&k.indexOf(SEP)>=0){ const p=k.split(SEP), w=(typeof npFindEl==='function')?npFindEl(p[0]):null;
-        return { word:((w&&typeof elDisplayName==='function')?elDisplayName(w):'Element')+' · '+p[1], cat:'', catId:null }; } return _lf.apply(this,arguments); }; }
+      if(_lf){ window.npLabelFor=function(k){ if(typeof k==='string'&&k.indexOf(SEP)>=0){ const p=k.split(SEP), base=p[0], tab=p[1], w=(typeof npFindEl==='function')?npFindEl(base):null;
+        const nm=(w&&typeof elDisplayName==='function')?elDisplayName(w):'Element';
+        let label = tab;
+        if(tab==='@motivation') label='Motivation';
+        else if(tab.indexOf('@obstacle:')===0) label='vs '+obstacleLabel(base, tab.slice(10));
+        return { word: nm+' · '+label, cat:'', catId:null }; } return _lf.apply(this,arguments); }; }
       // switching elements resets the sub-tab to General
       const _sel=window.npSelect; if(_sel){ window.npSelect=function(){ state.cardTrait=null; _sel.apply(this,arguments); try{renderNpCard();}catch(e){} }; }
       const _add=window.addAspect; if(_add){ window.addAspect=function(){ const r=_add.apply(this,arguments); try{renderNpCard();}catch(e){} return r; }; }
