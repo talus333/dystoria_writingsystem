@@ -5047,6 +5047,10 @@ function beingArticle(nd){
   if (base === 'a' && /^[aeiou]/i.test(nd.word || '')) return 'an';   // a → an before a vowel
   return base;
 }
+// Sex is auto-assigned to every generated being and surfaced as its first trait (changeable in the card).
+// Distribution: ~48.5% Male, ~48.5% Female, 3% Unspecified.
+const SEX_VALUES = ['Male', 'Female', 'Unspecified'];
+function assignBeingSex(){ const r = Math.random(); return r < 0.485 ? 'Male' : (r < 0.97 ? 'Female' : 'Unspecified'); }
 function drawBeing(set, used, genres){
   const cat = getCat('being');
   const sel = state.selection.being;
@@ -5067,7 +5071,7 @@ function drawBeing(set, used, genres){
   });
   const seed = hashStr(parts.map(p => p.word).join('|'));
   return { word: parts.map(p => p.word).join(' '), cat: 'being', sub: parts[0].sub, set, role: 'being',
-    attrs: [], identity: parts, sexSeed: seed, gender: (seed % 2) ? 'female' : 'male' };
+    attrs: [{ word: assignBeingSex(), sub: 'Sex' }], identity: parts, sexSeed: seed, gender: (seed % 2) ? 'female' : 'male' };
 }
 
 function generatePrompt(){
@@ -5781,7 +5785,7 @@ function ecBuildItem(word, sub, s, catId){
   catId = catId || EC.cat;
   if (catId === 'being'){
     const seed = hashStr(word);
-    return { word, cat: 'being', sub, set: s, role: 'being', attrs: [], identity: [{ word, sub }], sexSeed: seed, gender: (seed % 2) ? 'female' : 'male' };
+    return { word, cat: 'being', sub, set: s, role: 'being', attrs: [{ word: assignBeingSex(), sub: 'Sex' }], identity: [{ word, sub }], sexSeed: seed, gender: (seed % 2) ? 'female' : 'male' };
   }
   const item = { word, cat: catId, sub, set: s, role: 'word' };
   if (GUIDE_IDS.has(catId)){ item.role = 'constraint'; item._descCollapsed = false; }   // guides/exercises open expanded
@@ -11859,7 +11863,7 @@ function coverErrMsg(e){
 
 /* ---------------- import a story (prose → new story + AI element extraction) ---------------- */
 function makeElementItem(cat, word, set, sub){
-  if (cat === 'being'){ const id = sub || 'Archetype'; const seed = hashStr(word); return { word, cat: 'being', sub: id, set, role: 'being', attrs: [], identity: [{ word, sub: id }], sexSeed: seed, gender: (seed % 2) ? 'female' : 'male' }; }
+  if (cat === 'being'){ const id = sub || 'Archetype'; const seed = hashStr(word); return { word, cat: 'being', sub: id, set, role: 'being', attrs: [{ word: assignBeingSex(), sub: 'Sex' }], identity: [{ word, sub: id }], sexSeed: seed, gender: (seed % 2) ? 'female' : 'male' }; }
   const cc = getCat(cat); const s = sub || ((cc && cc.subcategories[0]) ? cc.subcategories[0].name : '');
   const item = { word, cat, sub: s, set, role: 'word' };
   if (cat === 'event') item.frame = state.frameIdx || 0;
@@ -14937,7 +14941,7 @@ function setWriting(on){
     { const dg = $('deskStatus'); if (dg) dg.textContent = 'Roll and gather elements, shape the map, and note ideas as they come.'; }
   }
 }
-const DYSTORIA_BUILD = '2026-06-20 #173 — motivation line now reads "Motivated by [want] of [motivator]": a connector dropdown (of/for/by/in… association words) + a motivator pill that points the motivation at any element, sub-element (trait), or a created concept; motivator gets its own notes tab and feeds the session-prompt dossier';
+const DYSTORIA_BUILD = '2026-06-20 #174 — every generated being is assigned a sex (≈48.5% Male / 48.5% Female / 3% Unspecified) shown as its FIRST trait in the card; change it via the ▾ menu (Male / Female / Unspecified); older beings are back-filled on open. Plus #173: motivation line "Motivated by [want] of [motivator]" with connector dropdown + motivator pill';
 // ---- silent-error visibility -------------------------------------------------------------
 // Uncaught errors used to fail invisibly (e.g. the guest-comment bug). Surface them as a small,
 // throttled toast + console so the writer sees that something hiccuped instead of nothing.
@@ -15786,6 +15790,9 @@ document.addEventListener('DOMContentLoaded', init);
   #npCard .npc-trait:hover .npc-tx{opacity:.8}
   #npCard .npc-tx:hover{opacity:1; color:#c0584a}
   #npCard .npc-trait.on .npc-tx:hover{color:#ffb3a8}
+  #npCard .sexpill .npc-tx{opacity:.55; color:var(--ink-soft)}
+  #npCard .sexpill .npc-tx:hover{opacity:1; color:var(--ink)}
+  #npCard .sexpill.on .npc-tx,#npCard .sexpill.on .npc-tx:hover{color:#fff}
   #npCard .npc-add{border-style:dashed; color:var(--ink-faint)}
   #npCard .npc-add:hover{color:var(--gold); border-color:var(--gold); background:none}
   /* searchable trait picker (mirrors the element ADD card) */
@@ -15850,6 +15857,37 @@ document.addEventListener('DOMContentLoaded', init);
     }
     let TP={ i:-1, cat:'', sub:'', mode:'trait' };
     function elIndexByKey(key){ const ws=(state.prompt&&state.prompt.words)||[]; return ws.findIndex(w=>wordKey(w)===key); }
+    // ---- Sex: every being carries one as its first trait; back-fill older beings, and let it be changed ----
+    function ensureBeingSex(i){
+      const w=state.prompt && state.prompt.words[i]; if(!w || w.role!=='being') return;
+      if(((w.attrs)||[]).some(a=>a.sub==='Sex')) return;
+      if(typeof addsLocked==='function' && addsLocked()) return;   // don't mutate mid-session
+      w.attrs=w.attrs||[]; w.attrs.unshift({ word:(typeof assignBeingSex==='function'?assignBeingSex():'Unspecified'), sub:'Sex' });
+      if(state.nodes[i]) state.nodes[i].attrs=w.attrs;
+      if(state.session){ state.session.words=state.prompt.words; if(typeof scheduleAutosave==='function') scheduleAutosave(); }
+    }
+    function setBeingSex(i, value){
+      const w=state.prompt && state.prompt.words[i]; if(!w) return;
+      if(typeof addsLocked==='function' && addsLocked()){ if(typeof flashStatus==='function') flashStatus('The session is underway — end it to change sex'); return; }
+      if(typeof pushUndo==='function') pushUndo();
+      w.attrs=w.attrs||[]; let a=w.attrs.find(x=>x.sub==='Sex'); const old=a?a.word:null;
+      if(a) a.word=value; else w.attrs.unshift({ word:value, sub:'Sex' });
+      if(state.nodes[i]) state.nodes[i].attrs=w.attrs;
+      if(old && state.cardTrait===old) state.cardTrait=value;   // keep the open note sub-tab pointed at the renamed sex
+      if(state.session){ state.session.words=state.prompt.words; if(typeof scheduleAutosave==='function') scheduleAutosave(); }
+      renderNpCard(); if(typeof renderNotepad==='function') renderNotepad();
+    }
+    function openSexMenu(i, x, y){
+      const w=state.prompt && state.prompt.words[i]; if(!w) return;
+      const vals=(typeof SEX_VALUES!=='undefined')?SEX_VALUES:['Male','Female','Unspecified'];
+      const menu=$('aspectMenu'); if(!menu) return; menu.innerHTML='';
+      if(menu.parentElement!==document.body) document.body.appendChild(menu);
+      const cur=((w.attrs)||[]).find(a=>a.sub==='Sex'); const curw=cur?cur.word:'';
+      vals.forEach(v=>{ const b=document.createElement('button'); b.textContent=(curw===v?'✓ ':'')+v; b.addEventListener('click', ev=>{ ev.stopPropagation(); menu.style.display='none'; setBeingSex(i, v); }); menu.appendChild(b); });
+      menu.style.left=Math.max(8, Math.min(x||200, window.innerWidth-200))+'px';
+      menu.style.top=Math.max(8, Math.min(y||200, window.innerHeight-200))+'px';
+      menu.style.display='block';
+    }
     function tpEl(){
       let p=document.getElementById('traitPicker');
       if(!p){ p=document.createElement('div'); p.id='traitPicker';
@@ -16228,8 +16266,17 @@ document.addEventListener('DOMContentLoaded', init);
       }
       const tr=document.createElement('div'); tr.className='npc-traits';
       const trlead=document.createElement('span'); trlead.className='npc-lead'; trlead.textContent='Traits: '; tr.appendChild(trlead);   // matches the "Motivated by" lead
-      // one sub-tab per trait — word · subcategory · delete; each holds its own notes
-      traits.forEach(tw=>{ const c=document.createElement('span'); c.className='npc-trait npc-traitpill'+(state.cardTrait===tw.word?' on':'');
+      const ei=((state.prompt&&state.prompt.words)||[]).findIndex(p=>wordKey(p)===key);
+      // Sex is always the first trait for a being — auto-assigned by the generator, changed via ▾ (Male / Female / Unspecified)
+      if(w && w.role==='being'){ if(ei>=0) ensureBeingSex(ei);
+        const sx=((w.attrs)||[]).find(a=>a.sub==='Sex');
+        if(sx){ const c=document.createElement('span'); c.className='npc-trait npc-traitpill sexpill'+(state.cardTrait===sx.word?' on':'');
+          const lbl=document.createElement('span'); lbl.className='npc-tw'; lbl.textContent=sx.word; c.appendChild(lbl);
+          const sb=document.createElement('span'); sb.className='npc-tsub'; sb.textContent='Sex'; c.appendChild(sb);
+          if(ei>=0){ const dv=document.createElement('span'); dv.className='npc-tx'; dv.textContent='▾'; dv.title='Change sex'; dv.addEventListener('click', ev=>{ ev.stopPropagation(); openSexMenu(ei, ev.clientX, ev.clientY); }); c.appendChild(dv); }
+          c.addEventListener('click', ev=>{ ev.stopPropagation(); setTrait(sx.word); }); tr.appendChild(c); } }
+      // one sub-tab per trait — word · subcategory · delete; each holds its own notes (sex is rendered above)
+      traits.forEach(tw=>{ if(tw.sub==='Sex') return; const c=document.createElement('span'); c.className='npc-trait npc-traitpill'+(state.cardTrait===tw.word?' on':'');
         const lbl=document.createElement('span'); lbl.className='npc-tw'; lbl.textContent=tw.word; c.appendChild(lbl);
         if(tw.sub){ const sb=document.createElement('span'); sb.className='npc-tsub'; sb.textContent=tw.sub; c.appendChild(sb); }
         const x=document.createElement('span'); x.className='npc-tx'; x.textContent='×'; x.title='Remove this trait';
