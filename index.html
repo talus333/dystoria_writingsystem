@@ -3177,6 +3177,8 @@ function drawItem(cat, set, used, genres, fixedSub){
    words whose genre tags match the set's drawn genres are 5x more likely; theme matches add 4x */
 function pickWeighted(pool, genres, used, themes){
   const expand = [];
+  const gt = state._goalTokens;   // story-goal keyword bias (local; AI-assisted roll can hook in here later)
+  const gtOn = gt && gt.size;
   pool.forEach(it => {
     const word = typeof it === 'string' ? it : it.w;
     if (used.has(word)) return;
@@ -3185,7 +3187,16 @@ function pickWeighted(pool, genres, used, themes){
     const base = typeof it === 'string' ? 1 : (it.wt || 1);
     const gMul = (gTags && genres && genres.length && gTags.some(t => genres.indexOf(t) >= 0)) ? 5 : 1;
     const tMul = (tTags && themes && themes.length && tTags.some(t => themes.indexOf(t) >= 0)) ? 4 : 1;
-    expand.push([word, base * gMul * tMul]);
+    // nudge words toward the writer's stated goal: the word itself, or any of its genre/theme tags, sharing a goal keyword
+    let goalMul = 1;
+    if (gtOn){
+      const wl = word.toLowerCase();
+      let hit = gt.has(wl) || wl.split(/[^a-z]+/).some(p => p.length >= 4 && gt.has(p));
+      if (!hit && gTags) hit = gTags.some(t => gt.has(String(t).toLowerCase()));
+      if (!hit && tTags) hit = tTags.some(t => gt.has(String(t).toLowerCase()));
+      if (hit) goalMul = 3;
+    }
+    expand.push([word, base * gMul * tMul * goalMul]);
   });
   if (!expand.length){ const it = pick(pool); return typeof it === 'string' ? it : it.w; }
   const total = expand.reduce((acc, e) => acc + e[1], 0);
@@ -5264,14 +5275,21 @@ function readStartGoal(m){
   const nt = m.querySelector('#sg_notes'); if (nt) g.notes = nt.value.trim();
   return g;
 }
-/* persist whatever goal the writer typed onto the (new) session */
+/* persist whatever goal the writer typed onto the (new) session.
+   When nothing is typed we DON'T spin up an empty "Untitled" session — we leave the
+   workspace untouched so "clean slate" / closing the card behaves exactly as before. */
 function applyStartGoal(m){
   const g = readStartGoal(m);
+  if (goalIsEmpty(g)){
+    if (state.session) state.session.goal = null;
+    refreshGoalTokens();
+    return null;
+  }
   ensureSession();
-  state.session.goal = goalIsEmpty(g) ? null : g;
+  state.session.goal = g;
   refreshGoalTokens();
   scheduleAutosave(500);
-  return state.session.goal;
+  return g;
 }
 function openStartCard(){
   let m = $('startModal');
@@ -5363,6 +5381,47 @@ function seedRandomLocked(minutes){
   finalizeSeed({ lock: true });
   if (minutes > 0){ $('timerLen').value = String(minutes); setupTimer(); startTimerIfArmed(); flashStatus('Locked set — ' + minutes + ' min on the clock. Write!'); }
   else flashStatus('Locked starting set ready');
+}
+/* Goal-informed starter set: roll a cast (already biased toward the goal via pickWeighted),
+   show it immediately, then make ONE AI call to name the cast + sketch a premise around the
+   stated goal. Real pool words are kept (so placement/wiki stay valid) — the AI only names. */
+async function seedFromGoal(){
+  refreshGoalTokens();
+  const used = new Set(); const words = [];
+  const add = (cid, n) => { for (let k = 0; k < n; k++){ const it = cid === 'being' ? drawBeing(0, used, []) : drawItem(getCat(cid), 0, used, []); if (it) words.push(it); } };
+  add('being', 3); add('setting', 2); add('object', 1);
+  state.prompt = { words, sets: 1, links: [], removedLinks: [] };
+  const idxOf = cid => words.map((w, i) => (w.cat === cid && w.role !== 'frame') ? i : -1).filter(i => i >= 0);
+  const bs = idxOf('being'), ss = idxOf('setting'), os = idxOf('object');
+  if (bs.length >= 2) starterBond(bs[0], bs[1]);
+  if (bs.length && ss.length) starterBond(bs[0], ss[0]);
+  if (bs.length > 1 && os.length) starterBond(bs[1], os[0]);
+  finalizeSeed({});
+  flashStatus('Starter set ready' + (goalContext() ? ' — shaping it to your goal…' : ''));
+  // If there's no goal or no AI available, the biased random cast is the result.
+  if (goalIsEmpty(state.session && state.session.goal) || !(cloud && cloud.token)) return;
+  try {
+    const nameable = words.map((w, i) => ({ i, w })).filter(o => ['being', 'setting', 'object'].includes(o.w.cat));
+    const roster = nameable.map((o, n) => (n + 1) + '. ' + (getCat(o.w.cat) || {}).name + ' — ' + o.w.word).join('\n');
+    const sys = 'You help a writer launch a story from a small, fixed cast of elements. You will be given the writer’s goal and a numbered roster of elements (characters, settings, objects) already chosen for them. Give each a fitting proper NAME that suits the goal’s mood, style, and inspirations — do not change what each element IS, only name it. Then write a one-sentence premise that ties the cast together and serves the goal. Return ONLY JSON: {"names":["name for 1","name for 2",...],"premise":"..."} with exactly as many names as roster items, in order. Names only — no titles, no descriptions.';
+    const prompt = goalContext() + '\n\nRoster (' + nameable.length + ' items, name each in order):\n' + roster + '\n\nReturn the JSON:';
+    const raw = await aiCall(sys, prompt, { json: true, maxTokens: 500 });
+    let data = null;
+    try { data = (typeof parseJsonLoose === 'function') ? parseJsonLoose(raw) : JSON.parse(raw); } catch (e){ data = null; }
+    if (data && Array.isArray(data.names)){
+      nameable.forEach((o, n) => { const nm = (data.names[n] || '').toString().trim(); if (nm) words[o.i].name = nm; });
+      if (state.prompt) state.prompt.words = words;
+      layoutConstellation(); renderConstellation();
+    }
+    if (data && data.premise){
+      try {
+        const cur = (typeof npGetNotes === 'function') ? (npGetNotes('general') || '').replace(/<[^>]*>/g, '').trim() : 'x';
+        if (typeof npSetNotes === 'function' && !cur){ npSetNotes('general', '<p><em>Premise:</em> ' + esc(data.premise) + '</p>'); if (typeof renderNotepad === 'function') renderNotepad(); }
+      } catch (e){}
+    }
+    scheduleAutosave(400);
+    flashStatus('Starter set ready — named around your goal');
+  } catch (e){ /* leave the biased random cast as-is */ }
 }
 function rollStakeWord(){ const pool = (((getCat('stakes') || {}).subcategories) || []).reduce((a, s) => a.concat(s.words || []), []).map(x => typeof x === 'string' ? x : x.w); return pool.length ? pool[Math.floor(Math.random() * pool.length)] : 'Everything'; }
 async function guidedSetup(){
@@ -8245,19 +8304,20 @@ SETTING_SVG['Forest'] = () => {
   return s;
 };
 SETTING_SVG['Jungle'] = () => {
+  let s = '';
   const f = n => n.toFixed(2);
-  const leaf = (tx, ty, rx, ry, c) => {           // broad rounded banana leaf from the crown at (0,-7)
-    const cx = tx / 2, cy = (ty - 7) / 2, ang = Math.atan2(ty - (-7), tx) * 180 / Math.PI;
-    return '<g transform="translate(' + f(cx) + ' ' + f(cy) + ') rotate(' + f(ang) + ')">' +
-      '<ellipse cx="0" cy="0" rx="' + f(rx) + '" ry="' + f(ry) + '" style="fill:' + c + ';stroke:' + SVC.leafS + ';stroke-width:0.4"/>' +
-      '<line x1="' + f(-rx) + '" y1="0" x2="' + f(rx) + '" y2="0" style="stroke:' + SVC.leafS + ';stroke-width:0.4"/></g>';
-  };
-  return svP('M-1.2 0 L-0.7 -7 H0.7 L1.2 0 Z', SVC.trunk, { s: null }) +
-    leaf(-9, -3, 4.6, 2.4, '#4e7a40') +
-    leaf(9, -3, 4.6, 2.4, '#56823f') +
-    leaf(-5.5, -12, 4.4, 2.3, '#5e8a4e') +
-    leaf(5.5, -12, 4.4, 2.3, '#5e8a4e') +
-    leaf(0.4, -14, 4.2, 2.3, '#6e9a58');
+  const leaf = (tx, ty, bx, by, ry, c) => { const cx = (tx + bx) / 2, cy = (ty + by) / 2, ang = Math.atan2(ty - by, tx - bx) * 180 / Math.PI, len = Math.hypot(tx - bx, ty - by); return '<g transform="translate(' + f(cx) + ' ' + f(cy) + ') rotate(' + f(ang) + ')"><ellipse cx="0" cy="0" rx="' + f(len / 2) + '" ry="' + f(ry) + '" style="fill:' + c + ';stroke:' + SVC.leafS + ';stroke-width:0.35"/><line x1="' + f(-len / 2) + '" y1="0" x2="' + f(len / 2) + '" y2="0" style="stroke:' + SVC.leafS + ';stroke-width:0.3"/></g>'; };
+  s += svP('M-13 0 Q-6 -1.4 0 -0.9 Q6 -1.4 13 -0.6 V0 Z', '#46613a', { s: null });
+  s += '<g style="fill:#4e7a40;stroke:none"><circle cx="-8" cy="-9" r="3.4"/><circle cx="-3" cy="-10.6" r="3.8"/><circle cx="2.5" cy="-10.2" r="3.6"/><circle cx="7.5" cy="-9.2" r="3.3"/><circle cx="-10.5" cy="-7.6" r="2.4"/><circle cx="10.5" cy="-7.6" r="2.4"/></g>';
+  s += '<g style="fill:#5e8a4e;stroke:none"><circle cx="-5" cy="-11.2" r="2"/><circle cx="0.5" cy="-12.2" r="2.2"/><circle cx="5" cy="-11" r="1.9"/></g>';
+  s += '<g style="fill:#7aa860;stroke:none"><circle cx="-3.5" cy="-12.6" r="1.2"/><circle cx="2" cy="-12.6" r="1"/></g>';
+  s += svP('M-4 0 Q-4.6 -6 -3.5 -9', null, { s: '#5a3f22', w: 1.4 }) + svP('M4.5 0 Q5 -5 4 -8.5', null, { s: '#5a3f22', w: 1.2 });
+  s += '<g style="fill:none;stroke:#5e8a4e;stroke-width:0.4"><path d="M-1 -10 q1 3 0 5.5 M6.5 -9 q-0.8 2.5 0.2 4.5"/></g>';
+  s += svC(-1, -4.4, 0.4, '#6e9a58', { s: null }) + svC(6.7, -4.4, 0.4, '#6e9a58', { s: null });
+  s += leaf(-9.5, -2.5, -4, -6, 2.3, '#56823f') + leaf(9.5, -2.5, 4, -6, 2.3, '#4e7a40') + leaf(0, -0.6, 0, -6.4, 2.6, '#5e8a4e');
+  s += '<g style="fill:none;stroke:#6e9a4e;stroke-width:0.35;stroke-linecap:round"><path d="M-7 0 q-0.5 -2 0.2 -3 M-6.6 0 q0.1 -2.2 0.5 -3.2 M-6.2 0 q0.7 -1.8 1.4 -2.6 M6.4 0 q0.5 -2 -0.2 -3 M6.8 0 q-0.1 -2.2 -0.5 -3.2"/></g>';
+  s += svC(-6.4, -3.2, 0.5, '#e0556a', { s: null }) + svC(-6.4, -3.2, 0.18, '#f4dc5e', { s: null }) + svC(7, -3.2, 0.45, '#e8983a', { s: null }) + svC(7, -3.2, 0.16, '#f4dc5e', { s: null });
+  return s;
 };
 SETTING_SVG['Bamboo Forest'] = () => '<g style="stroke:#7aa84e;stroke-width:1.6"><path d="M-6 0 V-12 M-2 0 V-13 M2 0 V-11 M6 0 V-12.5"/></g>' + '<g style="stroke:#5e8a3a;stroke-width:0.6"><path d="M-7 -4 H-5 M-3 -5 H-1 M1 -4 H3 M5 -5 H7 M-7 -8 H-5 M-3 -9 H-1 M5 -9 H7"/></g>' + '<g style="fill:#8fc060;stroke:none"><path d="M-2 -13 q3 -1 4 1 q-3 0 -4 -1Z"/><path d="M2 -11 q-3 -1 -4 1 q3 0 4 -1Z"/></g>';
 SETTING_SVG['Mountains'] = () => {
@@ -10932,8 +10992,10 @@ async function runSessionSummary(wovenNames){
   const goals = (state.focusKeys || []).map(k => { const w = words.find(x => wordKey(x) === k); return w ? elDisplayName(w) : null; }).filter(Boolean);
   const guides = words.filter(isGuideWord).map(w => '- ' + w.word + (w.sub ? ' (' + w.sub + ')' : '') + ': ' + (descFor(w) || '') + (w.flagged ? '  [marked as not met]' : ''));
   try {
-    const sys = 'You give blunt, specific end-of-session feedback — no sugar-coating, no praise padding, no story summary, no wiki-building, no hedging. Judge ONLY whether the writing delivered on its focus elements and any writing guides/exercises. For each focus element: did it actually make it onto the page, and is it pulling weight or just named in passing? Name what is missing, thin, or ignored. For each guide/exercise: say plainly whether it was followed. Keep it tight — at most a few short, direct lines (or one line per element), no preamble, no flattery, no words like "perhaps" or "nicely".';
-    const prompt = (goals.length ? ('Focus elements: ' + goals.join(', ') + '\n' + (wovenNames && wovenNames.length ? ('Detected on the page: ' + wovenNames.join(', ') + '\n') : '') + '\n') : 'No focus elements were set.\n')
+    const gc = goalContext();
+    const sys = 'You give blunt, specific end-of-session feedback — no sugar-coating, no praise padding, no story summary, no wiki-building, no hedging. Judge whether the writing delivered on its focus elements and any writing guides/exercises, AND whether it moved toward the writer’s stated goal for the story (its kind, feel, audience, style). For each focus element: did it actually make it onto the page, and is it pulling weight or just named in passing? Name what is missing, thin, or ignored. For each guide/exercise: say plainly whether it was followed. If a goal is given, end with one short line on whether this session served it or drifted. Keep it tight — at most a few short, direct lines, no preamble, no flattery, no words like "perhaps" or "nicely".';
+    const prompt = (gc ? (gc + '\n\n') : '')
+      + (goals.length ? ('Focus elements: ' + goals.join(', ') + '\n' + (wovenNames && wovenNames.length ? ('Detected on the page: ' + wovenNames.join(', ') + '\n') : '') + '\n') : 'No focus elements were set.\n')
       + (guides.length ? ('Writing guides & exercises in play:\n' + guides.join('\n') + '\n\n') : '')
       + 'Passage:\n\n' + chunk.slice(0, 12000) + '\n\nGive the blunt feedback:';
     const text = await aiCall(sys, prompt);
@@ -11038,7 +11100,9 @@ async function generateSessionGoal(hostId){
   host.textContent = 'Conjuring…';
   try {
     const sys = 'You write ONE short, punchy prompt to spark a single timed writing session — a question, or a one-line directive. Pick just ONE or TWO of the focus elements (whichever sparks the most intriguing prompt); you do NOT need to use them all — other sessions can explore the rest. Treat each focus element as its OWN distinct thing: the focus elements are THIS session\'s subject and may be brand new to the story — do NOT assume they already appear in the existing writing, and never conflate them with a different character or element that earlier passages were about. When a focus character is written as "Name, the Type" (e.g. "Eloise, the Follower"), that is ONE character: "Name" is who they are and "the Type" is merely a descriptive trait of them — never split them into two separate characters or treat the type/role as its own person. When a character has no name, refer to them by their type, archetype, or occupation (e.g. "the Follower") — that descriptor IS the character. If a writing guide or exercise is given, you may fold ONE in as a technique constraint. Existing writing is background/tone only — bring the CURRENT focus elements into play. Keep it under ~12 words, concrete and evocative, never yes/no. Output ONLY the prompt — no preamble, no quotation marks. Examples: "Why does the Victim carry a crutch?" / "What does the Reconstruction mean to the Challenger?" / "Through only descriptions of the Setting, reveal the Victim’s state of mind."';
-    const prompt = (goals.length ? ('This session\'s focus elements: ' + goals.join(', ') + '\n') : '')
+    const _gc = goalContext();
+    const prompt = (_gc ? (_gc + '\nLet this goal shape the prompt’s mood, angle, and style (without naming the goal in the prompt itself).\n\n') : '')
+      + (goals.length ? ('This session\'s focus elements: ' + goals.join(', ') + '\n') : '')
       + (castNotes ? ('How to read the focus characters (name vs. type):\n' + castNotes + '\n') : '')
       + (guides.length ? ('Writing guides & exercises (optional technique): ' + guides.join('; ') + '\n') : '')
       + (elemNotes ? ('\nNotes from the author’s notepad about these elements (draw on them):\n' + elemNotes + '\n') : '')
@@ -11675,6 +11739,7 @@ function ensureSession(){
     updated: new Date().toISOString(),
     categories: [], words: [], sets: 1, links: [], removedLinks: [],
     timerLen: parseInt($('timerLen').value, 10),
+    goal: null,
     text: '', ink: null
   };
   updateMeta();
@@ -12153,6 +12218,8 @@ function openSession(id){
   rebuildPools();
   state.plotGaps = s.plotGaps || {};
   state.focusKeys = s.focusKeys || [];
+  if (!state.session.goal) state.session.goal = null;
+  refreshGoalTokens();   // rebuild the goal-bias tokens for this story's rolls
   state.deaths = s.deaths || 0; state.deathLog = s.deathLog || []; state.ruinsLog = s.ruinsLog || []; updateDeaths();
   $('storyName').value = s.name;
   $('sectionTitle').value = s.section || '';
@@ -12267,6 +12334,7 @@ function newSession(){
   state.deaths = 0; state.deathLog = []; state.ruinsLog = []; updateDeaths();
   state.plotGaps = {};
   state.focusKeys = [];
+  state._goalTokens = new Set();   // no story open → no goal bias on rolls
   renderFocus();
   state.game = null;
   updateGameUI();
@@ -14205,8 +14273,9 @@ async function aiRephrase(rng){
   try {
     const ctx = snippetAround(rng);
     const isWord = !/\s/.test(selText);
-    const sys = 'You are a precise literary editor. Given a highlighted excerpt from a story and its surrounding context, propose three strong alternative ' + (isWord ? 'words' : 'phrasings') + ' that preserve the meaning and fit the voice. For each, return: "text" (the replacement only), "definition" (a brief, plain definition when it is a single less-common word; otherwise an empty string), and "reason" (one concise line on why it strengthens the writing). Vary the options. Return ONLY a JSON array of exactly three objects with keys text, definition, reason — no prose, no code fences.';
-    const prompt = 'Surrounding context: …' + ctx.before + '〈' + ctx.sel + '〉' + ctx.after + '…\n\nHighlighted text to rework: "' + selText + '"';
+    const gc = goalContext();
+    const sys = 'You are a precise literary editor. Given a highlighted excerpt from a story and its surrounding context, propose three strong alternative ' + (isWord ? 'words' : 'phrasings') + ' that preserve the meaning and fit the voice. When the writer’s overall goal for the story is provided, favour options that match its stated mood, style, and audience. For each, return: "text" (the replacement only), "definition" (a brief, plain definition when it is a single less-common word; otherwise an empty string), and "reason" (one concise line on why it strengthens the writing). Vary the options. Return ONLY a JSON array of exactly three objects with keys text, definition, reason — no prose, no code fences.';
+    const prompt = (gc ? (gc + '\n\n') : '') + 'Surrounding context: …' + ctx.before + '〈' + ctx.sel + '〉' + ctx.after + '…\n\nHighlighted text to rework: "' + selText + '"';
     const arr = aiParseList(await aiCall(sys, prompt));
     renderAiSug(selText, arr);
   } catch (e){
@@ -14820,8 +14889,10 @@ async function runWikiQuestions(){
   const names = (woven.length ? woven : els).map(e => e.name ? (e.word + ' “' + e.name + '”') : e.word);
   wrap.innerHTML = '<div class="wk-q-head">Questions the story raises</div><div class="wk-aitext wk-empty"><span class="spin"></span>Raising questions…</div>';
   try {
-    const sys = 'You read a story and raise sharp, open questions it provokes — food for thought for the writer, never direct critique or praise. For several of the key elements, pose ONE genuine question the narrative raises from THAT element’s perspective: about its motives, contradictions, silences, or where it might be heading. Use ONLY what the prose contains; do not invent or answer. Output one per line as "Element — question". A handful total, no preamble.';
-    const prompt = (names.length ? ('Elements: ' + names.join(', ') + '\n\n') : '')
+    const gc = goalContext();
+    const sys = 'You read a story and raise sharp, open questions it provokes — food for thought for the writer, never direct critique or praise. For several of the key elements, pose ONE genuine question the narrative raises from THAT element’s perspective: about its motives, contradictions, silences, or where it might be heading. When the writer’s goal for the story is given, lean toward questions that probe whether the story is reaching for that goal. Use ONLY what the prose contains; do not invent or answer. Output one per line as "Element — question". A handful total, no preamble.';
+    const prompt = (gc ? (gc + '\n\n') : '')
+      + (names.length ? ('Elements: ' + names.join(', ') + '\n\n') : '')
       + 'Story so far:\n\n' + text.slice(0, 16000)
       + '\n\nRaise the questions:';
     const out = await aiCall(sys, prompt);
