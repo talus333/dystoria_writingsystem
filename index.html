@@ -1392,6 +1392,24 @@
   #startModal .sm-go.ghost{background:var(--paper); color:var(--ink-soft); border:1px solid var(--line)}
   #startModal .sm-go:hover{opacity:.92}
   #startModal .sm-free{background:#f3efe6; border-style:dashed}
+  /* goal capture */
+  #startModal .sm-goalgrid{display:grid; grid-template-columns:1fr 1fr; gap:9px 12px; margin-top:11px}
+  #startModal .sm-gfield{display:flex; flex-direction:column; gap:3px}
+  #startModal .sm-gfield.sm-wide{grid-column:1 / -1}
+  #startModal .sm-glabel{font-family:var(--sans); font-size:10.5px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; color:var(--ink-soft)}
+  #startModal .sm-gfield input, #startModal .sm-gfield textarea{font-family:var(--sans); font-size:12px; padding:6px 8px; border:1px solid var(--line); border-radius:6px; background:var(--paper); color:var(--ink); width:100%; box-sizing:border-box}
+  #startModal .sm-gfield textarea{resize:vertical; min-height:46px; line-height:1.4}
+  #startModal .sm-gfield input::placeholder, #startModal .sm-gfield textarea::placeholder{color:var(--ink-faint)}
+  #startModal .sm-maps{display:flex; gap:11px; margin-top:16px}
+  #startModal .sm-map{flex:1; text-align:left; border:1px solid var(--line); border-radius:11px; padding:13px 15px; background:var(--paper); cursor:pointer; transition:border-color .12s, background .12s}
+  #startModal .sm-map:hover{border-color:var(--ink-faint); background:#faf7f0}
+  #startModal .sm-map .smm-t{display:block; font-family:var(--sans); font-size:13px; font-weight:700; color:var(--ink)}
+  #startModal .sm-map .smm-d{display:block; font-size:11px; color:var(--ink-soft); margin-top:3px; line-height:1.35}
+  #startModal .sm-map.smm-primary{background:var(--ink); border-color:var(--ink)}
+  #startModal .sm-map.smm-primary .smm-t{color:var(--paper)}
+  #startModal .sm-map.smm-primary .smm-d{color:rgba(255,255,255,.72)}
+  #startModal .sm-map.smm-primary:hover{opacity:.93; background:var(--ink)}
+  #startModal .sm-map[disabled]{opacity:.55; cursor:default}
   body.eink #startModal .sm-panel{border:1px solid #000}
   #customWordsModal{position:fixed; inset:0; z-index:200; display:none; align-items:center; justify-content:center; background:rgba(22,19,15,.42)}
   #customWordsModal.show{display:flex}
@@ -5204,45 +5222,85 @@ function generatePrompt(){
 /* ================= new-story start window ================= */
 function startSeedCats(){ return ['being', 'setting', 'object'].filter(id => { const c = getCat(id); return c && c.subcategories && c.subcategories.length; }); }
 function closeStartCard(){ const m = $('startModal'); if (m) m.classList.remove('show'); }
+/* ---- story goal: structured intention the writer sets before a new story ----
+   It feeds the AI throughout: which elements get biased when rolling (goalTokens),
+   end-of-session review, the generative session prompt, refine-mode suggestions,
+   and the wiki questions. Stored on the session as state.session.goal. */
+const GOAL_FIELDS = [
+  { key: 'kind',        label: 'Kind of story',  ph: 'e.g. a slow-burn mystery, a tender coming-of-age tale' },
+  { key: 'mood',        label: 'Feel / mood',    ph: 'e.g. eerie and intimate; warm but bittersweet' },
+  { key: 'audience',    label: 'Who it’s for',   ph: 'e.g. for my younger sister; literary adults' },
+  { key: 'inspiration', label: 'Inspiration',    ph: 'e.g. Le Guin, coastal folklore, a recurring dream' },
+  { key: 'length',      label: 'Length',         ph: 'e.g. a short story; a novella in three parts' },
+  { key: 'style',       label: 'Style',          ph: 'e.g. spare and lyrical; close third person' }
+];
+function emptyGoal(){ const g = {}; GOAL_FIELDS.forEach(f => g[f.key] = ''); g.notes = ''; return g; }
+function goalIsEmpty(g){ if (!g) return true; return !GOAL_FIELDS.some(f => (g[f.key] || '').trim()) && !((g.notes || '').trim()); }
+/* a compact facts block for AI prompts (empty string when no goal is set) */
+function goalContext(){
+  const g = state.session && state.session.goal;
+  if (goalIsEmpty(g)) return '';
+  const lines = [];
+  GOAL_FIELDS.forEach(f => { const v = (g[f.key] || '').trim(); if (v) lines.push('- ' + f.label + ': ' + v); });
+  const notes = (g.notes || '').trim(); if (notes) lines.push('- In the writer’s words: ' + notes);
+  return 'The writer set this goal/intention for the whole story:\n' + lines.join('\n');
+}
+/* significant lowercased tokens from the goal — used to softly bias which words roll up */
+const GOAL_STOP = new Set('the and for with this that into from your you our are was were will would story tale kind feel mood like about make want it’s its their them they who whom what when where which while a an of to in on it be as or so my me'.split(/\s+/));
+function refreshGoalTokens(){
+  const g = state.session && state.session.goal;
+  const toks = new Set();
+  if (!goalIsEmpty(g)){
+    const blob = GOAL_FIELDS.map(f => g[f.key] || '').concat([g.notes || '']).join(' ').toLowerCase();
+    (blob.match(/[a-z][a-z’'-]{3,}/g) || []).forEach(w => { const t = w.replace(/[’']/g, ''); if (t.length >= 4 && !GOAL_STOP.has(t)) toks.add(t); });
+  }
+  state._goalTokens = toks;
+  return toks;
+}
+/* read the start-card fields back into a goal object */
+function readStartGoal(m){
+  const g = emptyGoal();
+  GOAL_FIELDS.forEach(f => { const el = m.querySelector('#sg_' + f.key); if (el) g[f.key] = el.value.trim(); });
+  const nt = m.querySelector('#sg_notes'); if (nt) g.notes = nt.value.trim();
+  return g;
+}
+/* persist whatever goal the writer typed onto the (new) session */
+function applyStartGoal(m){
+  const g = readStartGoal(m);
+  ensureSession();
+  state.session.goal = goalIsEmpty(g) ? null : g;
+  refreshGoalTokens();
+  scheduleAutosave(500);
+  return state.session.goal;
+}
 function openStartCard(){
   let m = $('startModal');
   if (!m){ m = document.createElement('div'); m.id = 'startModal'; document.body.appendChild(m); }
-  const catOpts = startSeedCats().map(id => '<option value="' + id + '">' + esc(getCat(id).name) + '</option>').join('');
-  const timeOpts = [5, 10, 15, 20, 30].map(n => '<option value="' + n + '"' + (n === 10 ? ' selected' : '') + '>' + n + ' min</option>').join('');
+  const prev = (state.session && state.session.goal) || null;
+  const val = k => esc((prev && prev[k]) || '');
+  const fieldsHtml = GOAL_FIELDS.map((f, i) =>
+    '<div class="sm-gfield' + ((i === GOAL_FIELDS.length - 1) ? ' sm-wide' : '') + '">' +
+      '<label class="sm-glabel" for="sg_' + f.key + '">' + esc(f.label) + '</label>' +
+      '<input id="sg_' + f.key + '" type="text" placeholder="' + esc(f.ph) + '" value="' + val(f.key) + '">' +
+    '</div>').join('');
   m.innerHTML =
     '<div class="sm-panel">' +
-    '<button class="sm-x" id="smClose" title="Explore freely">×</button>' +
+    '<button class="sm-x" id="smClose" title="Skip — explore freely">×</button>' +
     '<h2>Start a new story</h2>' +
-    '<p class="sm-sub">Pick a way in — or close this and explore freely.</p>' +
-    '<div class="sm-opt"><h3>Build around an element</h3><p>Choose a seed and I’ll generate a small cast and starter bonds around it.</p>' +
-      '<div class="sm-row"><select id="smCat">' + catOpts + '</select><select id="smSub"></select><select id="smElem"></select></div>' +
-      '<div class="sm-row"><button class="sm-go" id="smSeedGo">Generate set</button></div></div>' +
-    '<div class="sm-opt"><h3>Guided setup</h3><p>Answer a few questions — who, where, what’s at stake — and the stage fills in.</p>' +
-      '<div class="sm-row"><button class="sm-go" id="smGuideGo">Begin</button></div></div>' +
-    '<div class="sm-opt"><h3>Timed challenge</h3><p>A random, locked set and a countdown. Just write.</p>' +
-      '<div class="sm-row"><select id="smTime">' + timeOpts + '</select><button class="sm-go" id="smTimeGo">Roll &amp; lock</button></div></div>' +
-    '<div class="sm-opt sm-free"><h3>Explore freely</h3><p>Start with an empty map and build however you like.</p>' +
-      '<div class="sm-row"><button class="sm-go ghost" id="smFreeGo">Open empty map</button></div></div>' +
+    '<p class="sm-sub">Set your intention — what this story is, how it should feel, who it’s for. It guides what gets generated, the prompts you’re given, the feedback after each session, and the questions the wiki raises. Every field is optional.</p>' +
+    '<div class="sm-goalgrid">' + fieldsHtml + '</div>' +
+    '<div class="sm-gfield sm-wide" style="margin-top:9px">' +
+      '<label class="sm-glabel" for="sg_notes">Anything else</label>' +
+      '<textarea id="sg_notes" placeholder="Sources of inspiration, themes you’re chasing, a line you want to hit, what you want a reader to walk away with…">' + esc((prev && prev.notes) || '') + '</textarea>' +
+    '</div>' +
+    '<div class="sm-maps">' +
+      '<button class="sm-map" id="smBlank"><span class="smm-t">Start on a clean slate</span><span class="smm-d">An empty map. Build it element by element however you like.</span></button>' +
+      '<button class="sm-map smm-primary" id="smSeed"><span class="smm-t">Give me a starting set</span><span class="smm-d">A small cast and starter bonds, shaped around your goal.</span></button>' +
+    '</div>' +
     '</div>';
-  const fillElem = () => {
-    const cat = getCat(m.querySelector('#smCat').value);
-    const sub = cat.subcategories.find(s => s.name === m.querySelector('#smSub').value);
-    const ws = ((sub && sub.words) || []).map(x => typeof x === 'string' ? x : x.w);
-    m.querySelector('#smElem').innerHTML = '<option value="">✶ Surprise me</option>' + ws.map(w => '<option value="' + esc(w) + '">' + esc(w) + '</option>').join('');
-  };
-  const fillSub = () => {
-    const cat = getCat(m.querySelector('#smCat').value);
-    m.querySelector('#smSub').innerHTML = cat.subcategories.filter(s => !s.retired).map(s => '<option value="' + esc(s.name) + '">' + esc(s.name) + '</option>').join('');
-    fillElem();
-  };
-  m.querySelector('#smCat').addEventListener('change', fillSub);
-  m.querySelector('#smSub').addEventListener('change', fillElem);
-  fillSub();
-  m.querySelector('#smClose').addEventListener('click', closeStartCard);
-  m.querySelector('#smFreeGo').addEventListener('click', closeStartCard);
-  m.querySelector('#smSeedGo').addEventListener('click', () => { const cid = m.querySelector('#smCat').value, sub = m.querySelector('#smSub').value, word = m.querySelector('#smElem').value; closeStartCard(); seedAroundElement(cid, sub, word); });
-  m.querySelector('#smGuideGo').addEventListener('click', () => { guidedSetup(); });
-  m.querySelector('#smTimeGo').addEventListener('click', () => { const mins = parseInt(m.querySelector('#smTime').value, 10) || 10; closeStartCard(); seedRandomLocked(mins); });
+  m.querySelector('#smClose').addEventListener('click', () => { applyStartGoal(m); closeStartCard(); });
+  m.querySelector('#smBlank').addEventListener('click', () => { applyStartGoal(m); closeStartCard(); flashStatus('Empty map ready — your goal is set.'); });
+  m.querySelector('#smSeed').addEventListener('click', () => { applyStartGoal(m); closeStartCard(); seedFromGoal(); });
   m.classList.add('show');
 }
 /* a one-directional starter relationship between two element indices in state.prompt */
@@ -8217,13 +8275,23 @@ SETTING_SVG['Mountains'] = () => {
   s += tp(-10, 2.2) + tp(-7.5, 2.6) + tp(10, 2.3) + tp(7.6, 2.7) + tp(-0.2, 2.4);
   return s;
 };
-SETTING_SVG['Hill'] = () =>
-  svP('M-11 0 Q-3 -13 5 0 Z', '#8aa45e') +
-  svP('M1 0 Q6 -9 11 0 Z', '#7c9850') +
-  svP('M-11 0 Q-7 -6.5 -3 0 Z', '#6e8a46') +
-  svP('M-2.4 -5.2 Q-1.6 -2.6 -1.5 0 L0.4 0 Q-0.4 -2.8 -1.7 -5.2 Z', '#cdbf95', { s: null }) +
-  svP('M-3 -6.4 V-9', null, { s: SVC.trunk, w: 1.3 }) + svC(-3, -10.1, 1.9, '#5e8a4e', { s: SVC.leafS, w: 0.4 }) +
-  '<g style="stroke:#5e8a3e;stroke-width:0.6;stroke-linecap:round"><path d="M-8 0 V-1.8 M-6.5 0 V-1.4 M7 0 V-1.8 M8.6 0 V-1.4"/></g>';
+SETTING_SVG['Hill'] = () => {
+  let s = '';
+  s += svP('M-12 0 Q-4 -9 5 0 Z', '#92ab63', { s: null });
+  s += svP('M0 0 Q7 -7.5 13 0 Z', '#7c9850', { s: null });
+  s += svP('M-13 0 Q-8 -5.5 -2 0 Z', '#6e8a46', { s: null });
+  s += svP('M-8.2 -2.6 Q-7.4 -1.3 -7.6 0 L-6 0 Q-6.4 -1.5 -6.8 -2.6 Z', '#cdbf95', { s: null });
+  s += '<g style="fill:none;stroke:#8c6840;stroke-width:0.3"><path d="M-8.4 -1.8 V-2.6 M-5.9 -1.6 V-2.4 M-8.5 -0.6 V-1.4 M-5.8 -0.5 V-1.3"/></g>';
+  const tx = 6.8;
+  s += svP('M' + tx + ' -3.2 V-6.4', null, { s: '#6e4d2e', w: 1 }) + '<g style="fill:none;stroke:#6e4d2e;stroke-width:0.45"><path d="M' + tx + ' -5 L' + (tx - 1.2) + ' -6.2 M' + tx + ' -5.6 L' + (tx + 1.1) + ' -6.8"/></g>';
+  s += svC(tx, -7.8, 2.3, '#5e8a4e', { s: null }) + svC(tx - 1.6, -7.1, 1.5, '#5e8a4e', { s: null }) + svC(tx + 1.6, -7.1, 1.5, '#5e8a4e', { s: null }) + svC(tx, -9.4, 1.6, '#5e8a4e', { s: null });
+  s += '<g style="fill:#7aa860;stroke:none"><circle cx="' + (tx - 1) + '" cy="-8.3" r="0.95"/><circle cx="' + (tx + 1) + '" cy="-8.5" r="0.8"/><circle cx="' + tx + '" cy="-9.7" r="0.75"/></g>';
+  const sheep = (sx, sy) => '<path d="M' + (sx - 1) + ' ' + sy + ' Q' + (sx - 1.2) + ' ' + (sy - 1.1) + ' ' + (sx - 0.4) + ' ' + (sy - 1.1) + ' Q' + sx + ' ' + (sy - 1.45) + ' ' + (sx + 0.5) + ' ' + (sy - 1.1) + ' Q' + (sx + 1.2) + ' ' + (sy - 1) + ' ' + (sx + 1) + ' ' + sy + ' Q' + sx + ' ' + (sy + 0.3) + ' ' + (sx - 1) + ' ' + sy + ' Z" style="fill:#ece3cd;stroke:#c4b89a;stroke-width:0.2"/><ellipse cx="' + (sx + 1.05) + '" cy="' + (sy - 0.7) + '" rx="0.4" ry="0.5" style="fill:#4a443b;stroke:none"/><g style="fill:none;stroke:#4a443b;stroke-width:0.25"><path d="M' + (sx - 0.4) + ' ' + (sy - 0.1) + ' V' + (sy + 0.6) + ' M' + (sx + 0.3) + ' ' + (sy - 0.1) + ' V' + (sy + 0.6) + '"/></g>';
+  s += sheep(-2.5, -0.7) + sheep(1.6, -0.4);
+  s += '<g style="fill:none;stroke:#5e8a3e;stroke-width:0.3;stroke-linecap:round"><path d="M-10.5 0 V-1.4 M-9.9 0 V-1 M3.5 0 V-1.3 M10.5 0 V-1.2"/></g>';
+  s += '<circle cx="-10.5" cy="-1.6" r="0.22" style="fill:#e8c45a;stroke:none"/><circle cx="3.5" cy="-1.5" r="0.22" style="fill:#d96a7a;stroke:none"/><circle cx="-4.4" cy="-1.2" r="0.2" style="fill:#cf8ad0;stroke:none"/>';
+  return s;
+};
 SETTING_SVG['Valley'] = () =>
   svP('M-7 -2.5 Q-3.5 -8.5 0 -5.5 Q3.5 -8.5 7 -2.5 Q3.5 -5.2 0 -4.4 Q-3.5 -5.2 -7 -2.5 Z', '#a8bcae', { s: null }) +
   svP('M-12 0 V-2.5 Q-9 -9 -5.5 -7 Q-2.2 -5 0 -2.5 Q2.2 -5 5.5 -7 Q9 -9 12 -2.5 V0 Z', '#6e8a50', { s: SV_INK, w: 0.6 }) +
