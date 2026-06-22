@@ -2870,6 +2870,7 @@ const CATS = DYSTORIA_DATA.categories;
 const LS_SESSIONS = 'dystoria.sessions';
 const LS_PREFS = 'dystoria.prefs';
 const LS_DELETED = 'dystoria.deleted';   // tombstoned story ids — never re-shown in the library
+const LS_MAPVIEW = 'dystoria.mapview';   // per-story map pan/zoom, kept LOCAL (not in the cloud doc, so it never jostles a live co-editor's view)
 // Donate / pay-what-you-want link.
 const KOFI_URL = 'https://ko-fi.com/dystoriasystem';
 
@@ -7666,6 +7667,25 @@ function applyView(){
   const [x0, y0, w, h] = viewBoxVals();
   svg.setAttribute('viewBox', x0 + ' ' + y0 + ' ' + w + ' ' + h);
 }
+/* ---- per-story map view (pan + zoom) persistence — LOCAL only, keyed by session id ---- */
+function loadMapViews(){ try { return JSON.parse(localStorage.getItem(LS_MAPVIEW)) || {}; } catch (e){ return {}; } }
+function saveMapView(){
+  if (!state.session || !state.session.id) return;
+  try {
+    const all = loadMapViews();
+    all[state.session.id] = { zoom: state.view.zoom || 1, panX: state.view.panX || 0, panY: state.view.panY || 0 };
+    const keys = Object.keys(all); if (keys.length > 300) delete all[keys[0]];   // cap so it can't grow unbounded
+    localStorage.setItem(LS_MAPVIEW, JSON.stringify(all));
+  } catch (e){}
+}
+let _mapViewT = null;
+function scheduleMapViewSave(){ clearTimeout(_mapViewT); _mapViewT = setTimeout(saveMapView, 400); }   // coalesce a pan/zoom gesture into one write
+function restoreMapView(id){
+  const v = id ? loadMapViews()[id] : null;
+  state.view = (v && typeof v === 'object') ? { zoom: v.zoom || 1, panX: v.panX || 0, panY: v.panY || 0 } : { zoom: 1, panX: 0, panY: 0 };
+  const zs = $('zoomSlider'); if (zs) zs.value = Math.round((state.view.zoom || 1) * 100);
+}
+function forgetMapView(id){ try { const all = loadMapViews(); if (all[id]){ delete all[id]; localStorage.setItem(LS_MAPVIEW, JSON.stringify(all)); } } catch (e){} }
 function snapToBeing(){
   let target = null;
   const beings = state.nodes.map((nd, i) => nd.role === 'being' ? i : -1).filter(i => i >= 0);
@@ -8796,16 +8816,123 @@ SETTING_SVG['Motel'] = () => {
   s += '<g style="fill:#5fd0e0;stroke:none"><path d="M9 -16.6 l0.3 0.7 l0.75 0.07 l-0.57 0.48 l0.18 0.74 l-0.66 -0.4 l-0.66 0.4 l0.18 -0.74 l-0.57 -0.48 l0.75 -0.07 Z"/></g>';
   return s;
 };
-SETTING_SVG['Restaurant'] = () => svP('M-8 0 H8 V-9 H-8 Z', SVC.stoneF) + svP('M6 0 H8 V-9 H6 Z', SVC.stoneS) + svP('M-9 -9 H9 V-7 L7 -5 L5 -7 L3 -5 L1 -7 L-1 -5 L-3 -7 L-5 -5 L-7 -7 L-9 -5 Z', '#c0504a', { s: SVC.darkS, w: 0.6 }) + svP('M-2 0 V-5 H2 V0 Z', SVC.darkS) + svP('M-7 -4.5 H-3 V-1.5 H-7 Z M3 -4.5 H7 V-1.5 H3 Z', SVC.glass);
-SETTING_SVG['Apothecary'] = () => svP('M-7 0 H7 V-9 H-7 Z', SVC.woodF) + svP('M5 0 H7 V-9 H5 Z', SVC.woodS) + svP('M-8 -9 L0 -13 L8 -9 Z', '#5e7a52') + svP('M-1.4 0 V-5 H1.4 V0 Z', SVC.darkS) + svP('M-6 -6.5 H-2.5 V-3.5 H-6 Z M2.5 -6.5 H6 V-3.5 H2.5 Z', SVC.glassL, { s: SVC.woodS }) + svP('M-8.6 -9 V-6 H-6.6 V-9', null, { s: SVC.woodS, w: 0.6 }) + svC(-7.6, -5, 1.3, '#7fae6a', { s: SVC.woodS });
+SETTING_SVG['Restaurant'] = () => {
+  let s = ''; const f = n => (+n).toFixed(2);
+  // building + shadow
+  s += svP('M-8 0 H8 V-8.5 H-8 Z', '#e0d6c2', { s: null }) + svP('M6 0 H8 V-8.5 H6 Z', '#cbbfa6', { s: null });
+  // upper windows
+  s += '<g style="fill:#9cc0d8;stroke:#bcae90;stroke-width:0.15"><rect x="-6.5" y="-7.8" width="2" height="2.2"/><rect x="-1" y="-7.8" width="2" height="2.2"/><rect x="4.5" y="-7.8" width="2" height="2.2"/></g>';
+  // striped awning + scalloped valance
+  let aw = ''; for (let i = 0; i < 8; i++){ aw += '<rect x="' + f(-8.4 + i * 2.12) + '" y="-4.7" width="1.06" height="1.5" fill="' + (i % 2 ? '#efe7d3' : '#c0504a') + '"/>'; }
+  s += svP('M-8.6 -4.7 H8.6 L8 -3.2 H-8 Z', '#c0504a', { s: null }) + '<g style="stroke:none">' + aw + '</g>';
+  let val = ''; for (let x = -8; x < 8; x += 1.3) val += 'M' + f(x) + ' -3.2 l0.65 0.7 l0.65 -0.7 ';
+  s += '<g style="fill:none;stroke:#a83f3a;stroke-width:0.2"><path d="' + val + '"/></g>';
+  // big window with a candlelit table
+  s += svP('M-6.5 0 H-0.5 V-3 H-6.5 Z', '#3a3026', { s: '#bcae90', w: 0.2 }) + svP('M-4.7 -0.4 H-2.3 V-1.2 H-4.7 Z', '#d8cdb6', { s: null }) + svP('M-3.5 -1.2 V-1.7', null, { s: '#e8c45a', w: 0.2 }) + svC(-3.5, -1.85, 0.18, '#f4dc6e', { s: null });
+  // door
+  s += svP('M1 0 V-3 H3.5 V0 Z', '#6e4d2e', { s: '#5a3618', w: 0.2 }) + svC(3, -1.5, 0.1, '#e3c25a', { s: null });
+  // bistro table + umbrella outside
+  s += svP('M4.8 -1.7 V0', null, { s: '#8a8478', w: 0.2 }) + '<ellipse cx="4.8" cy="-1.7" rx="0.9" ry="0.3" fill="#d8cdb6"/>' + svP('M4.8 -1.7 V-3.4', null, { s: '#6e685e', w: 0.18 }) + svP('M3.2 -3.4 Q4.8 -4.7 6.4 -3.4 Z', '#5a9a4e', { s: null });
+  return s;
+};
+SETTING_SVG['Apothecary'] = () => {
+  let s = ''; const f = n => (+n).toFixed(2);
+  // timber shop + shadow
+  s += svP('M-7.5 0 H7.5 V-8 H-7.5 Z', '#b89a6a', { s: null }) + svP('M5.5 0 H7.5 V-8 H5.5 Z', '#9a7c4c', { s: null });
+  s += '<g style="fill:none;stroke:#7a5230;stroke-width:0.2"><path d="M-7.5 -4 H7.5 M-4 -8 L-2.5 -4 M4 -8 L2.5 -4"/></g>';
+  // green gable roof
+  s += svP('M-8.6 -8 L0 -11.8 L8.6 -8 Z', '#4e7a4a', { s: null }) + svP('M0 -11.8 L8.6 -8 L0 -8 Z', '#3e6238', { s: null });
+  // hanging mortar & pestle sign
+  s += svP('M-8.4 -7.6 H-5.6', null, { s: '#5a3f22', w: 0.18 }) + svP('M-7 -7.6 V-6.7', null, { s: '#3a352d', w: 0.14 });
+  s += svP('M-7.8 -5.5 H-6.2 V-6.2 Q-7 -6.6 -7.8 -6.2 Z', '#cfd2d6', { s: '#8a8f93', w: 0.15 }) + svP('M-7.3 -6.5 L-6.5 -7.2', null, { s: '#8a8f93', w: 0.22 });
+  // shop window with colourful potion bottles on shelves
+  s += svP('M-4.6 -2 H-0.6 V-6.4 H-4.6 Z', '#cfe0e6', { s: '#7a5230', w: 0.2 }) + '<g style="fill:none;stroke:#9aa8a4;stroke-width:0.15"><path d="M-4.6 -3.6 H-0.6 M-4.6 -5 H-0.6"/></g>';
+  const bot = (cx, cy, c) => svP('M' + f(cx - 0.25) + ' ' + f(cy) + ' V' + f(cy - 0.7) + ' H' + f(cx + 0.25) + ' V' + f(cy) + ' Z', c, { s: null }) + svP('M' + f(cx - 0.1) + ' ' + f(cy - 0.7) + ' H' + f(cx + 0.1) + ' V' + f(cy - 0.95) + ' H' + f(cx - 0.1) + ' Z', c, { s: null });
+  s += bot(-3.9, -3.7, '#d2473e') + bot(-3.1, -3.7, '#5fc1a0') + bot(-2.3, -3.7, '#5a86c8') + bot(-1.4, -3.7, '#e0a83a');
+  s += bot(-3.9, -5.1, '#b86ad0') + bot(-3.1, -5.1, '#e0884a') + bot(-2.3, -5.1, '#5fc1a0');
+  // arched door + hanging herbs
+  s += svP('M1 0 V-4.4 Q2.4 -5.2 3.8 -4.4 V0 Z', '#6e4d2e', { s: '#5a3618', w: 0.2 }) + svC(3.4, -2.2, 0.1, '#e3c25a', { s: null });
+  s += '<g style="fill:none;stroke:#5e7a3c;stroke-width:0.3;stroke-linecap:round"><path d="M4.7 -4 V-2.6 M5.1 -4 V-2.8 M4.9 -4 V-2.5"/></g>';
+  return s;
+};
 SETTING_SVG['Pawnshop'] = () => svP('M-8 0 H8 V-9 H-8 Z', SVC.stoneS) + svP('M6 0 H8 V-9 H6 Z', SVC.stoneD) + svP('M-9 -9 H9 V-10.6 H-9 Z', SVC.darkS) + svP('M-2 0 V-5 H2 V0 Z', SVC.darkS) + svP('M-6 -6.5 H-3 V-3.5 H-6 Z M3 -6.5 H6 V-3.5 H3 Z', SVC.glass) + '<g style="fill:' + SVC.gold + ';stroke:' + SVC.darkS + ';stroke-width:0.5"><circle cx="-1.2" cy="-12.5" r="1.1"/><circle cx="1.2" cy="-12.5" r="1.1"/><circle cx="0" cy="-14.3" r="1.1"/></g>';
-SETTING_SVG['Workshop'] = () => svP('M-8 0 H8 V-8 H-8 Z', SVC.woodF) + svP('M6 0 H8 V-8 H6 Z', SVC.woodS) + svP('M-9 -8 L0 -11 L9 -8 Z', SVC.metalS) + svP('M1 0 H6 V-5 H1 Z', SVC.darkS) + '<g style="stroke:' + SVC.metalD + ';stroke-width:1.1;fill:none"><path d="M-6.5 -2 L-3 -6 M-6.5 -6 L-3 -2"/></g>';
-SETTING_SVG['Trading Post'] = () => svP('M-8 0 H8 V-8 H-8 Z', SVC.woodF) + svP('M6 0 H8 V-8 H6 Z', SVC.woodS) + svP('M-9 -8 H9 V-10 H-9 Z', SVC.woodS) + svP('M-9 -8 H9 V-6.4 H-9 Z', '#b9744a') + svP('M-2 0 V-5 H2 V0 Z', SVC.darkS) + svP('M-7 -5 H-3 V-2 H-7 Z M3 -5 H7 V-2 H3 Z', SVC.glassL) + svP('M-9 0 V-2.2 H-6.5 V0 Z', '#9a6b3f');
-SETTING_SVG['Junkyard'] = () => svP('M-10 0 H10 V-1.5 H-10 Z', SVC.metalD) + svP('M-8 -1 L-6 -6 L-3 -5 L-2 -8 L1 -6 L3 -9 L5 -5 L8 -7 L9 -1 Z', SVC.metalS, { s: SVC.metalD }) + svP('M2 -6 H5 V-4 H2 Z', '#9a6b3f') + svP('M-4 -5 H-1 V-3 H-4 Z', '#7a8896') + '<g style="stroke:' + SVC.metalD + ';stroke-width:0.5;fill:none"><path d="M-5 -2.5 H-2 M5.5 -4.5 L7 -6"/></g>';
+SETTING_SVG['Workshop'] = () => {
+  let s = ''; const f = n => (+n).toFixed(2);
+  // timber building + shadow
+  s += svP('M-8 0 H8 V-7.5 H-8 Z', '#b07a44', { s: null }) + svP('M6 0 H8 V-7.5 H6 Z', '#8a5c30', { s: null });
+  s += '<g style="fill:none;stroke:#8a5c30;stroke-width:0.14"><path d="M-8 -2.5 H8 M-8 -5 H8 M-3.5 0 V-7.5"/></g>';
+  // gable roof + chimney
+  s += svP('M-9 -7.5 L0 -11.4 L9 -7.5 Z', '#8a5c30', { s: null }) + svP('M0 -11.4 L9 -7.5 L0 -7.5 Z', '#6e4622', { s: null });
+  s += svP('M3 -9.6 H4.4 V-12.4 H3 Z', '#9a5740', { s: null }) + '<g style="fill:#cfc8bc;stroke:none;opacity:0.7"><circle cx="3.7" cy="-13.2" r="0.5"/><circle cx="4" cy="-14.2" r="0.6"/></g>';
+  // tool board on the left wall
+  s += svP('M-7 -6.4 H-4 V-2.6 H-7 Z', '#8a5c30', { s: null });
+  s += '<g style="fill:none;stroke:#6e685e;stroke-width:0.3;stroke-linecap:round"><path d="M-6.4 -5.8 V-3.4"/></g>' + svP('M-6.9 -3.4 H-5.9 V-2.7 H-6.9 Z', '#8a8478', { s: null });
+  s += svP('M-5.3 -5.8 L-3.4 -5.8 V-5.2 Q-4.35 -4.7 -5.3 -5.2 Z', '#c8ccd0', { s: '#6e685e', w: 0.14 }) + '<g style="fill:none;stroke:#9aa0a4;stroke-width:0.09"><path d="M-5.1 -5.1 l0.2 0.2 M-4.6 -5 l0.2 0.2 M-4.1 -5 l0.2 0.2"/></g>';
+  // open doorway + workbench inside
+  s += svP('M0.6 0 H5.6 V-5.2 H0.6 Z', '#2e2620', { s: '#5a3618', w: 0.25 });
+  s += svP('M1.2 -1.6 H5 V-2.3 H1.2 Z', '#8a6a44', { s: null }) + '<g style="fill:none;stroke:#5a3f22;stroke-width:0.2"><path d="M1.8 -1.6 V0 M4.4 -1.6 V0"/></g>';
+  s += '<rect x="2" y="-2.05" width="1" height="0.4" fill="#aeb6bc"/>';
+  // sawhorse + logs outside
+  s += '<g style="fill:none;stroke:#7a5230;stroke-width:0.3"><path d="M-2.4 -1.4 L-3.2 0 M-2.4 -1.4 L-1.6 0 M-3 -1.4 H-1.8"/></g>';
+  s += '<g style="fill:#a9763f;stroke:#6e4622;stroke-width:0.14"><ellipse cx="6.6" cy="-0.5" rx="0.7" ry="0.5"/><ellipse cx="7.6" cy="-0.5" rx="0.7" ry="0.5"/></g>';
+  return s;
+};
+SETTING_SVG['Trading Post'] = () => {
+  let s = ''; const f = n => (+n).toFixed(2);
+  // log building + shadow
+  s += svP('M-8 0 H7 V-7 H-8 Z', '#a9774a', { s: null }) + svP('M5 0 H7 V-7 H5 Z', '#86592f', { s: null });
+  s += '<g style="fill:none;stroke:#86592f;stroke-width:0.16"><path d="M-8 -1.6 H7 M-8 -3.2 H7 M-8 -4.8 H7"/></g>';
+  // false-front parapet + sign board
+  s += svP('M-8.6 -7 H7.6 V-9.6 H-8.6 Z', '#925f33', { s: null }) + svP('M-5 -9 H4 V-7.5 H-5 Z', '#e8d8b0', { s: '#86592f', w: 0.2 }) + '<g style="fill:none;stroke:#7a4a26;stroke-width:0.22"><path d="M-4 -8.2 H3 M-4 -7.8 H2"/></g>';
+  // porch roof + posts
+  s += svP('M-9 -4.4 H4 V-5 H-9 Z', '#6e4622', { s: null }) + '<g style="fill:none;stroke:#6e4622;stroke-width:0.4"><path d="M-8.4 0 V-4.4 M-0.5 0 V-4.4"/></g>';
+  // door + window
+  s += svP('M-3 0 V-4 H-0.6 V0 Z', '#5a3618', { s: null }) + svC(-1, -2, 0.1, '#e3c25a', { s: null });
+  s += svP('M0.6 -2 H3 V-4 H0.6 Z', '#bcd8e0', { s: '#86592f', w: 0.2 });
+  // barrel + crate on the porch
+  s += svP('M-7.4 0 V-1.8 H-6 V0 Z', '#9a6b3f', { s: '#6e4622', w: 0.18 }) + '<g style="fill:none;stroke:#6e4622;stroke-width:0.13"><path d="M-7.4 -0.9 H-6 M-7.4 -1.4 H-6"/></g>';
+  s += svP('M-5.6 0 V-1.4 H-4.2 V0 Z', '#b08a52', { s: '#6e4622', w: 0.18 }) + '<g style="fill:none;stroke:#6e4622;stroke-width:0.12"><path d="M-5.6 -0.7 H-4.2 M-4.9 0 V-1.4"/></g>';
+  // hanging lantern
+  s += svP('M5.4 -4.4 V-3.5', null, { s: '#3a352d', w: 0.16 }) + svC(5.4, -3.1, 0.42, '#e8c45a', { s: '#a8853a', w: 0.18 });
+  return s;
+};
+SETTING_SVG['Junkyard'] = () => {
+  let s = ''; const f = n => (+n).toFixed(2);
+  s += svP('M-11 0 H11 V-1 H-11 Z', '#6e6052', { s: null });
+  // chain-link fence
+  s += '<g style="fill:none;stroke:#8a8f93;stroke-width:0.16"><path d="M-10.5 -1 V-6 M10.5 -1 V-6 M-10.5 -5.7 H10.5"/></g>';
+  let mesh = ''; for (let x = -10.5; x < 10.5; x += 1.3){ mesh += 'M' + f(x) + ' -1 L' + f(x + 1.3) + ' -5.6 M' + f(x + 1.3) + ' -1 L' + f(x) + ' -5.6 '; }
+  s += '<g style="fill:none;stroke:#9aa0a4;stroke-width:0.09;opacity:0.45"><path d="' + mesh + '"/></g>';
+  // crushed cars
+  const car = (cx, cy, c) => svP('M' + f(cx - 2.4) + ' ' + f(cy) + ' Q' + f(cx - 2.4) + ' ' + f(cy - 1.3) + ' ' + f(cx - 1.2) + ' ' + f(cy - 1.5) + ' L' + f(cx - 0.8) + ' ' + f(cy - 2.3) + ' H' + f(cx + 0.9) + ' L' + f(cx + 1.3) + ' ' + f(cy - 1.5) + ' Q' + f(cx + 2.4) + ' ' + f(cy - 1.3) + ' ' + f(cx + 2.4) + ' ' + f(cy) + ' Z', c, { s: null }) + svP('M' + f(cx - 0.6) + ' ' + f(cy - 2.1) + ' H' + f(cx + 0.7) + ' L' + f(cx + 1) + ' ' + f(cy - 1.5) + ' H' + f(cx - 0.9) + ' Z', '#bcd8e0', { s: null }) + svC(cx - 1.4, cy, 0.48, '#2a2722', { s: null }) + svC(cx + 1.4, cy, 0.48, '#2a2722', { s: null });
+  s += car(-5.2, -1, '#b5613a') + car(-5.4, -3.3, '#5a86a8') + car(3.6, -1, '#7a8a52');
+  // tire stack
+  s += '<g style="fill:#2e2a26;stroke:none"><ellipse cx="8.6" cy="-1" rx="1.4" ry="0.7"/><ellipse cx="8.6" cy="-2.2" rx="1.4" ry="0.7"/><ellipse cx="8.6" cy="-3.4" rx="1.4" ry="0.7"/></g><ellipse cx="8.6" cy="-3.5" rx="0.6" ry="0.32" fill="#4a453f"/>';
+  // crane with electromagnet holding scrap
+  s += svP('M0 0 V-9.2', null, { s: '#caa23e', w: 0.7 }) + svP('M0 -9.2 H5.4', null, { s: '#caa23e', w: 0.6 }) + svP('M5.4 -9.2 V-7.4', null, { s: '#3a352d', w: 0.3 });
+  s += svP('M4.4 -7.4 A1 1 0 0 0 6.4 -7.4 Z', '#2e2a26', { s: null }) + svC(5.4, -6.4, 0.45, '#9a6b3f', { s: null });
+  return s;
+};
 SETTING_SVG['Amphitheatre'] = () => svP('M-10 0 H10 V-9 Q0 -11 -10 -9 Z', SVC.stoneF) + svP('M8 0 H10 V-9 Q9 -10 8 -9 Z', SVC.stoneD) + '<g style="fill:' + SVC.darkS + ';stroke:none"><path d="M-8 -2 V-5 Q-6.5 -6 -5 -5 V-2 Z"/><path d="M-3.5 -2 V-5 Q-2 -6 -0.5 -5 V-2 Z"/><path d="M1 -2 V-5 Q2.5 -6 4 -5 V-2 Z"/><path d="M5.5 -2 V-5 Q7 -6 8.5 -5 V-2 Z"/><path d="M-7 -6.5 V-8 Q-5.5 -8.6 -4 -8 V-6.5 Z"/><path d="M-1.5 -6.5 V-8 Q0 -8.6 1.5 -8 V-6.5 Z"/><path d="M4 -6.5 V-8 Q5.5 -8.6 7 -8 V-6.5 Z"/></g>';
 SETTING_SVG['Public Baths'] = () => svP('M-9 -7 L0 -12 L9 -7 Z', SVC.roofF) + svP('M-8 -7 H8 V-6 H-8 Z', SVC.stoneS) + '<g style="stroke:' + SVC.stoneF + ';stroke-width:2;stroke-linecap:butt"><path d="M-6.5 -6 V-2.5"/><path d="M-3.5 -6 V-2.5"/><path d="M0 -6 V-2.5"/><path d="M3.5 -6 V-2.5"/><path d="M6.5 -6 V-2.5"/></g>' + svP('M-9 -2.5 H9 V-1 Q0 0.4 -9 -1 Z', SVC.water) + svC(-2, -9, 1.1, SVC.snowS, { s: null }) + svC(2, -10, 0.9, SVC.snowS, { s: null });
 SETTING_SVG['Orphanage'] = () => svP('M-9 0 H9 V-11 H-9 Z', SVC.stoneS) + svP('M7 0 H9 V-11 H7 Z', SVC.stoneD) + svP('M-10 -11 L0 -15 L10 -11 Z', SVC.roofS) + '<g style="fill:' + SVC.glass + ';stroke:' + SVC.darkS + ';stroke-width:0.5"><rect x="-7" y="-8.5" width="2.4" height="2.4"/><rect x="-1.2" y="-8.5" width="2.4" height="2.4"/><rect x="4.6" y="-8.5" width="2.4" height="2.4"/><rect x="-7" y="-5" width="2.4" height="2.4"/><rect x="4.6" y="-5" width="2.4" height="2.4"/></g>' + svP('M-1.4 0 V-4.5 H1.4 V0 Z', SVC.darkS);
-SETTING_SVG['Slaughterhouse'] = () => svP('M-9 0 H7 V-9 H-9 Z', '#9a6b6b') + svP('M5 0 H7 V-9 H5 Z', '#7a5050') + svP('M-10 -9 H8 V-10.6 H-10 Z', SVC.darkS) + svP('M7 0 H10 V-13 H7 Z', SVC.darkF) + svP('M1 0 H5 V-5 H1 Z', SVC.darkS) + '<path d="M-4 -8 V-5 Q-4 -3.5 -2.5 -3.5" style="fill:none;stroke:' + SVC.metalS + ';stroke-width:0.9"/>';
+SETTING_SVG['Slaughterhouse'] = () => {
+  let s = ''; const f = n => (+n).toFixed(2);
+  // grim brick block + shadow
+  s += svP('M-9 0 H6 V-8.5 H-9 Z', '#8a5a52', { s: null }) + svP('M4 0 H6 V-8.5 H4 Z', '#6e4640', { s: null });
+  s += '<g style="fill:none;stroke:#6e4640;stroke-width:0.14"><path d="M-9 -2.5 H6 M-9 -5 H6 M-9 -7.5 H6"/></g>';
+  // corrugated roof
+  s += svP('M-9.6 -8.5 H6.6 V-9.8 H-9.6 Z', '#5a4a46', { s: null }) + '<g style="fill:none;stroke:#4a3c38;stroke-width:0.14"><path d="M-9 -8.5 V-9.8 M-7 -8.5 V-9.8 M-5 -8.5 V-9.8 M-3 -8.5 V-9.8 M-1 -8.5 V-9.8 M1 -8.5 V-9.8 M3 -8.5 V-9.8 M5 -8.5 V-9.8"/></g>';
+  // tall smokestack + smoke
+  s += svP('M6.5 0 H9.5 V-13 H6.5 Z', '#6e4640', { s: null }) + svP('M8 0 H9.5 V-13 H8 Z', '#553530', { s: null }) + svP('M6.2 -13 H9.8 V-13.9 H6.2 Z', '#4a3230', { s: null });
+  s += '<g style="fill:#cfc8bc;stroke:none;opacity:0.55"><circle cx="7.8" cy="-14.6" r="0.8"/><circle cx="8.3" cy="-16" r="1"/><circle cx="7.7" cy="-17.4" r="1.2"/></g>';
+  // roll-up loading dock + hazard sign
+  s += svP('M-7 0 H-3 V-4.6 H-7 Z', '#4a3c38', { s: null }) + '<g style="fill:none;stroke:#3a2e2a;stroke-width:0.18"><path d="M-7 -1.2 H-3 M-7 -2.4 H-3 M-7 -3.6 H-3"/></g>';
+  s += svP('M-5.6 -5.6 L-5 -6.6 L-4.4 -5.6 Z', '#e8c43a', { s: '#5a4e1a', w: 0.15 }) + '<rect x="-5.15" y="-6.15" width="0.3" height="0.4" fill="#2a2410"/>';
+  // overhead meat-rail with empty hooks
+  s += '<g style="fill:none;stroke:#3a2e2a;stroke-width:0.25"><path d="M-8.5 -6.6 H2"/></g><g style="fill:none;stroke:#9aa0a4;stroke-width:0.18"><path d="M-7.5 -6.6 V-5.7 q0 -0.5 0.5 -0.5 M-5.5 -6.6 V-5.5 q0 -0.5 0.5 -0.5 M0 -6.6 V-5.5 q0 -0.5 0.5 -0.5"/></g>';
+  return s;
+};
 // Settlements
 SETTING_SVG['Village'] = () => {
   let s = '';
@@ -13499,6 +13626,7 @@ function openSession(id){
   renderNotepad();                            // chips rendered after the words load (below) so names resolve
   normalizeLocks();
   state.activeSet = 0; state.linkFrom = null; state.selNode = null;
+  restoreMapView(s.id);   // bring the map back to the pan/zoom this story was last left at (before refreshSky renders it)
   if (s.frames && s.frames.length){
     state.frames = JSON.parse(JSON.stringify(s.frames));
     state.frameIdx = Math.min(s.frameIdx || 0, state.frames.length - 1);
@@ -13650,6 +13778,7 @@ function deleteStory(id){
   const dead = loadDeleted();
   [id, cloudId].forEach(k => { if (k && dead.indexOf(k) < 0) dead.push(k); });
   saveDeleted(dead);
+  forgetMapView(id);   // drop this story's saved map pan/zoom too
   persistSessions(list.filter(x => x.id !== id));
   if (state.session && state.session.id === id){
     state.session = null;
@@ -17363,6 +17492,7 @@ function init(){
         state.view.panX = panning.panX0 - dx / z;
         state.view.panY = panning.panY0 - dy / z;
         applyView();
+        scheduleMapViewSave();
       }
       return;
     }
@@ -17595,6 +17725,7 @@ function init(){
     state.view.zoom = parseInt($('zoomSlider').value, 10) / 100;
     applyView();
     if (mapTerrainKey() && state.prompt) renderConstellation();   // refit the base biome to the new view
+    scheduleMapViewSave();
   });
   // ---- trackpad + touchscreen gestures: two-finger swipe = pan, pinch/spread = zoom ----
   (function(){
@@ -17605,6 +17736,7 @@ function init(){
       applyView();
       const zs = $('zoomSlider'); if (zs) zs.value = Math.round((state.view.zoom || 1) * 100);
       if (mapTerrainKey() && state.prompt){ clearTimeout(refitT); refitT = setTimeout(renderConstellation, 130); }
+      scheduleMapViewSave();
     }
     function clampZoom(z){ return Math.max(ZMIN, Math.min(ZMAX, z)); }
     // pan the viewport; dx/dy are screen px (positive = scroll content toward +x / +y)
