@@ -12937,7 +12937,10 @@ function newSession(){
 }
 function loadDeleted(){ try { return JSON.parse(localStorage.getItem(LS_DELETED)) || []; } catch (e){ return []; } }
 function saveDeleted(arr){ try { localStorage.setItem(LS_DELETED, JSON.stringify(arr.slice(-500))); } catch (e){} }
-function deleteSession(id){
+// Deletes a whole story from the library. NOTE: must NOT be named deleteSession —
+// a second deleteSession() (the in-story session archiver) is declared later and would
+// otherwise hoist over this one, silently breaking library deletion.
+function deleteStory(id){
   const list = loadSessions();
   const sess = list.find(x => x.id === id);
   const cloudId = sess && sess.cloudId;
@@ -13050,7 +13053,7 @@ function renderLibrary(){
     const xb = document.createElement('button'); xb.textContent = 'Export';
     xb.addEventListener('click', e => { e.stopPropagation(); exportSession(s); });
     const db = document.createElement('button'); db.textContent = 'Delete';
-    db.addEventListener('click', async e => { e.stopPropagation(); if (await siteConfirm('Delete “' + s.name + '”? This removes it from your library.', 'Delete')) deleteSession(s.id); });
+    db.addEventListener('click', async e => { e.stopPropagation(); if (await siteConfirm('Delete “' + s.name + '”? This removes it from your library.', 'Delete')) deleteStory(s.id); });
     ra.appendChild(wb); ra.appendChild(cb); ra.appendChild(xb);
     if (cloud.user && s.cloudId && !s._shared){
       const sb = document.createElement('button'); sb.textContent = 'Share';
@@ -16372,9 +16375,24 @@ function init(){
   });
   $('authSignOut').addEventListener('click', async () => {
     if (!supa) return;
-    await supa.auth.signOut();
+    // Sign-out wipes this browser back to a fresh-user state. Confirm first, since any
+    // local story that was never backed up to the account is erased for good.
+    if (!(await siteConfirm('Sign out and clear this browser? Stories saved to your account stay safe in the cloud, but anything in this browser that was never backed up will be erased.', 'Sign out'))) return;
+    try { await supa.auth.signOut(); } catch (e){}
+    // Drop the open story so an autosave can't re-persist it after the purge.
+    try { state.session = null; clearTimeout(autosaveHandle); } catch (e){}
+    // Purge every local Dystoria key (library, prefs, custom words, tombstones, onboarding flags,
+    // and the starter-seed flag) so the next person starts clean — Alice reseeds on reload.
+    try {
+      Object.keys(localStorage)
+        .filter(k => k.indexOf('dystoria.') === 0 || k.indexOf('dystoria_') === 0)
+        .forEach(k => localStorage.removeItem(k));
+    } catch (e){}
+    // Fresh user, but onboarding stays OFF per design.
+    try { localStorage.setItem('dystoria.onboarding', 'off'); } catch (e){}
     $('authCard').classList.remove('show');
-    flashStatus('Signed out');
+    flashStatus('Signed out — library cleared');
+    setTimeout(() => location.reload(), 300);
   });
   $('profSave').addEventListener('click', saveMyUsername);
   $('profUser').addEventListener('keydown', e => { if (e.key === 'Enter') saveMyUsername(); });
