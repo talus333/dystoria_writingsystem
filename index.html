@@ -2307,7 +2307,7 @@
 
     /* ===== Write prep WIZARD (phone): one section at a time, header/mode-bar hidden ===== */
     body.prepwiz > header, body.prepwiz #deskbar{display:none}   /* immersive: hide chrome while stepping the wizard */
-    body.prepwiz #focusPanel{position:static; width:100%; max-width:none; height:auto; max-height:none; overflow:visible; padding:18px 16px 8px}
+    body.prepwiz.writing #focusPanel{position:static; width:100%; max-width:none; height:auto; max-height:none; overflow:visible; padding:18px 16px 8px}
     body.prepwiz #focusPanel .fb-col{display:none}              /* show only the active step */
     body.prepwiz.pw1 .fb-col-elems,
     body.prepwiz.pw2 .fb-col-guides,
@@ -2324,7 +2324,7 @@
     #pwNav button[disabled]{opacity:.35}
     /* final step (pw4): the prior prose fills the screen; clock + Start pinned to the bottom */
     body.prepwiz.pw4 #focusPanel, body.prepwiz.pw4 #pwNav, body.prepwiz.pw4 #prepCaption{display:none}
-    body.prepwiz.pw4 #editor{max-height:none}
+    body.prepwiz.pw4 #editor{max-height:none; padding-bottom:140px}   /* clear the fixed Start bar */
     body.prepwiz.pw4 #startBox{position:fixed; left:0; right:0; bottom:0; z-index:60; margin:0; padding:12px 0 16px;
       background:var(--paper); border-top:1px solid var(--line); box-shadow:0 -6px 20px rgba(0,0,0,.12); width:100%; max-width:none}
     body.prepwiz.pw4 #editor, body.prepwiz.pw4 #sectionTitle{max-width:100%; padding-left:16px; padding-right:16px}
@@ -13889,6 +13889,7 @@ function updateEndBtn(){
   if (!running && !graceOn){   // keep full-screen open during the "finish your thought" grace countdown
     document.body.classList.remove('insession', 'focusdrawer');
     const sg = $('sessionGoal'); if (sg){ sg.classList.remove('show'); sg.textContent = ''; }
+    if (typeof prepWizardSync === 'function') prepWizardSync();   // back to prep → re-enter the mobile wizard
   }
   const mini = $('endSessionMini'), fs = $('fullScreenMini');
   if (mini){ mini.textContent = running ? 'End session' : 'Start session'; mini.classList.toggle('is-end', running); mini.classList.toggle('is-start', !running); }
@@ -14321,6 +14322,7 @@ async function sendFeedback(){
 function startWritingSession(fullscreen){
   if (!document.body.classList.contains('writing')) setWriting(true);
   if (fullscreen) document.body.classList.add('insession');   // minimalist full-screen (only this path sets it)
+  if (typeof prepWizardSync === 'function') prepWizardSync();   // leaving prep → drop the mobile wizard
   startTimerIfArmed();                 // arms the timer (len is always > 0 now)
   setMode(state.inkMode ? 'ink' : 'type');   // now the session has begun, reveal the drawing canvas if E-ink is armed
   updateEndBtn();                      // button becomes "End session"
@@ -18863,7 +18865,47 @@ function setWriting(on){
     if (state.prompt) renderConstellation();
     { const dg = $('deskStatus'); if (dg) dg.textContent = 'Roll and gather elements, shape the map, and note ideas as they come.'; }
   }
+  if (typeof prepWizardSync === 'function') prepWizardSync();   // (re)enter or leave the mobile prep wizard
 }
+/* ---- mobile Write-prep wizard: one section at a time, header + mode bar hidden ---- */
+function ensurePwNav(){
+  const fp = document.getElementById('focusPanel'); if (!fp) return;
+  let nav = document.getElementById('pwNav');
+  if (!nav){
+    nav = document.createElement('div'); nav.id = 'pwNav';
+    const back = document.createElement('button'); back.type = 'button'; back.className = 'pw-back'; back.textContent = 'Back';
+    const dots = document.createElement('span'); dots.className = 'pw-dots';
+    const next = document.createElement('button'); next.type = 'button'; next.className = 'pw-next'; next.textContent = 'Next';
+    back.addEventListener('click', e => { e.stopPropagation(); prepWizardGo((window._pwStep || 1) - 1); });
+    next.addEventListener('click', e => { e.stopPropagation(); prepWizardGo((window._pwStep || 1) + 1); });
+    nav.appendChild(back); nav.appendChild(dots); nav.appendChild(next);
+    fp.appendChild(nav);
+  } else if (nav.parentNode !== fp){ fp.appendChild(nav); }
+}
+function prepWizardGo(step){
+  if (step < 1){ if (typeof setWriting === 'function') setWriting(false); return; }   // back past step 1 → leave to Map
+  step = Math.min(4, step);
+  window._pwStep = step;
+  const b = document.body;
+  b.classList.remove('pw1', 'pw2', 'pw3', 'pw4'); b.classList.add('pw' + step);
+  const nav = document.getElementById('pwNav');
+  if (nav){
+    const dots = nav.querySelector('.pw-dots'); if (dots) dots.textContent = step >= 4 ? '' : '①②③'.charAt(step - 1);
+    const back = nav.querySelector('.pw-back'); if (back) back.textContent = step === 1 ? '‹ Map' : 'Back';
+    const next = nav.querySelector('.pw-next'); if (next) next.textContent = step >= 3 ? 'Review ›' : 'Next';
+  }
+  if (step === 3){ try { const g = document.getElementById('prepPromptBtn'); /* user taps + Prompt themselves */ } catch (e){} }
+  try { const fp = document.getElementById('focusPanel'); if (fp) fp.scrollTop = 0; } catch (e){}
+}
+function prepWizardSync(){
+  const b = document.body;
+  const isPhone = (typeof window.matchMedia === 'function') ? window.matchMedia('(max-width:500px)').matches : (window.innerWidth <= 500);
+  const want = b.classList.contains('writing') && !b.classList.contains('insession') && isPhone;
+  if (!want){ b.classList.remove('prepwiz', 'pw1', 'pw2', 'pw3', 'pw4'); return; }
+  if (!b.classList.contains('prepwiz')){ b.classList.add('prepwiz'); ensurePwNav(); prepWizardGo(1); }
+  else ensurePwNav();
+}
+window.addEventListener('resize', () => { try { prepWizardSync(); } catch (e){} });
 const DYSTORIA_BUILD = '2026-06-21 #181 — ported the Pieces experiment in: beings render as cartoon chess pieces (Pieces/Glyphs toggle), Role · Rank · Group picker (story-role dropdown, rank piece images with editable names, addable/recolorable allegiances using the Refine color picker). Applied surgically over live #165–#180 (sex/age/motivator/Dead/Map/obstacle all intact). #180 — Obstacle removed from the Map-mode Story Elements rail and guarded out of generation, so obstacles never get drawn onto the map; they live only on the character notepad motivation line. The obstacle picker there is unaffected. #179 — renamed the "Think" mode tab to "Map" (all three buttons + tooltip); internal mode id stays notepad. #178 — card image height-cap now measures text height with the image collapsed, so selecting a trait no longer lets a cached image spring back to full height; all card pills (name / motivation / obstacle / trait / add) share one height matched to the Sex pill; delete ×/controls in pills enlarged, vertically centered, gold on hover. (#177 image lightbox+edit; #176 Age/Type/Occupation/Dead)';
 // ---- silent-error visibility -------------------------------------------------------------
 // Uncaught errors used to fail invisibly (e.g. the guest-comment bug). Surface them as a small,
