@@ -1091,7 +1091,7 @@
   body:not(.writing) #notepad{display:block !important}                  /* always the text pad in the sheet — never ink */
   body:not(.writing) #writeArea{display:none !important}
   body:not(.writing) #focusFooter{display:none !important}               /* focus elements belong to Write mode */
-  body:not(.writing) .mode-switch{display:none !important}               /* no ink toggle in Think */
+  body:not(.writing) #inkModeSwitch{display:none !important}               /* no ink/type toggle outside Write (scoped to the ink toggle only — must NOT hide Refine's Suggest/Edit or Read's Suggestions/Original switches, which are also .mode-switch) */
   body:not(.writing) #mapFullToggle{display:none !important}             /* map is already full-screen */
   #npTab{display:none}
   body:not(.writing) #npTab{                                            /* bottom tab, centred over the rail (278px → 139) */
@@ -2380,12 +2380,15 @@
     body.rail-open #railToggle{display:none}                   /* hidden while the rail is open (tap the backdrop to close) */
 
     /* --- Refine / Read / Wiki mode bars: two centred rows, JUST LIKE Map/Write — modes (row 1, darker, full-bleed) with the right-side toggles/buttons moved to row 2 below, a touch smaller than the mode buttons --- */
-    #editMode .ed-head, #readMode .rd-head, .wk-head{flex-wrap:wrap; height:auto; min-height:0; justify-content:center; align-items:center; row-gap:8px; gap:0; padding:0 10px 9px; background:var(--bg2)}
+    #editMode .ed-head, #readMode .rd-head, .wk-head{flex-wrap:wrap; height:auto; min-height:0; justify-content:center; align-items:center; column-gap:0; row-gap:13px; padding:0 10px 11px; background:var(--bg2)}
     #editMode .ed-head .mode-pills, #readMode .rd-head .mode-pills, .wk-head .mode-pills{flex:1 0 100%; display:flex; align-items:center; justify-content:center; flex-wrap:wrap; gap:6px; margin:0 -10px 0; padding:12px 10px; background:var(--modebar); border-bottom:1px solid var(--line)}
     #editMode .ed-head-actions, #readMode .rd-head-actions, .wk-head-actions{flex:1 0 100%; justify-content:center; flex-wrap:wrap; gap:8px}
     /* row-2 controls sit a little smaller than the 10px mode pills */
     #editMode .ed-head-actions button, #readMode .rd-head-actions button, .wk-head-actions button,
     #editMode .ed-head-actions .mode-switch button, #readMode .rd-head-actions .mode-switch button{font-size:9px; padding:4px 9px}
+    /* when a bar's row-2 has no visible controls (e.g. Read with no suggestions), collapse it so no thin empty strip shows */
+    #editMode .ed-head.bar-empty, #readMode .rd-head.bar-empty, .wk-head.bar-empty{padding-bottom:0; row-gap:0}
+    #editMode .ed-head.bar-empty .ed-head-actions, #readMode .rd-head.bar-empty .rd-head-actions, .wk-head.bar-empty .wk-head-actions{display:none}
 
     /* --- Refine highlight→suggest on phone: the desktop floats #sgBar at the caret (collides with the OS selection menu); pin it as a full-width bottom toolbar with bigger tap targets --- */
     #sgBar{left:0 !important; right:0 !important; bottom:0 !important; top:auto !important; transform:none !important; width:100%; border-radius:0; justify-content:center; flex-wrap:wrap; gap:6px; padding:9px 10px calc(9px + env(safe-area-inset-bottom)); box-shadow:0 -3px 14px rgba(0,0,0,.28)}
@@ -17569,6 +17572,34 @@ function edTapSelectWord(ev){
   _edLastRange = r.cloneRange();
   setTimeout(onEditSelect, 0);                                         // surface the bar at once (selectionchange also fires)
 }
+// Phone mode bars: mark a header `.bar-empty` when its row-2 action group has no VISIBLE controls, so the empty strip collapses (e.g. Read with no suggested edits).
+function _syncOneModeBar(actions, head){
+  if (!actions || !head) return;
+  let any = false;
+  Array.from(actions.children).forEach(c => {
+    let cs; try { cs = getComputedStyle(c); } catch (e){ return; }
+    if (cs.display === 'none' || cs.visibility === 'hidden') return;
+    if (c.offsetWidth > 0 || c.offsetHeight > 0 || (c.textContent || '').trim()) any = true;
+  });
+  head.classList.toggle('bar-empty', !any);
+}
+function syncModeBars(){
+  const em = $('editMode');
+  _syncOneModeBar(em && em.querySelector('.ed-head-actions'), em && em.querySelector('.ed-head'));
+  _syncOneModeBar(document.querySelector('.rd-head-actions'), document.querySelector('#readMode .rd-head'));
+  _syncOneModeBar(document.querySelector('.wk-head-actions'), document.querySelector('.wk-head'));
+}
+(function watchModeBars(){
+  const start = () => {
+    const targets = ['.ed-head-actions', '.rd-head-actions', '.wk-head-actions'].map(s => document.querySelector(s)).filter(Boolean);
+    if (!targets.length){ setTimeout(start, 300); return; }
+    let pend = false;
+    const mo = new MutationObserver(() => { if (pend) return; pend = true; requestAnimationFrame(() => { pend = false; syncModeBars(); }); });
+    targets.forEach(t => mo.observe(t, { childList:true, subtree:true, attributes:true, attributeFilter:['style','class'], characterData:true }));
+    syncModeBars();
+  };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start); else start();
+})();
 async function doSg(kind){
   const body = $('editBody'); if (!body) return;
   const sel = window.getSelection(); if (!sel || !sel.rangeCount) return;
