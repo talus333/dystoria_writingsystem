@@ -1579,6 +1579,14 @@
   .draw-body{display:flex; flex-direction:column; gap:7px; padding:0 6px 6px}
   .draw-tool{display:flex; flex-direction:column; gap:6px}
   .draw-pill{font-family:var(--sans); font-size:11px; letter-spacing:.04em; text-align:left; padding:6px 12px; border:1px solid var(--line); border-radius:13px; background:var(--paper); color:var(--ink-soft); cursor:pointer; transition:all .12s}
+  .draw-kinds{display:flex; gap:6px; margin:2px 0 4px}
+  .draw-kind{flex:1; font-family:var(--sans); font-size:10px; letter-spacing:.06em; text-transform:uppercase; padding:5px 6px; border:1px solid var(--line); border-radius:10px; background:var(--paper); color:var(--ink-soft); cursor:pointer; transition:all .12s}
+  .draw-kind:hover{border-color:var(--ink-faint); color:var(--ink)}
+  .draw-kind.on{background:var(--accent); border-color:var(--accent); color:#fff}
+  body:not(.eink) .draw-kind{background:#3a3733; border-color:rgba(255,255,255,.14); color:#cdc6b8}
+  body:not(.eink) .draw-kind.on{background:var(--accent); border-color:var(--accent); color:#fff}
+  body.eink .draw-kind{background:#fff; border-color:#000; color:#000}
+  body.eink .draw-kind.on{background:#000; color:#fff}
   .draw-pill:hover{border-color:var(--gold)}
   .draw-pill.on{background:#e7e2d8; color:#2b2926; border-color:#e7e2d8; font-weight:600}
   .draw-erase.on{background:var(--gold); color:#241f17; border-color:var(--gold)}
@@ -12501,6 +12509,7 @@ function renderTerrains(svg){
   const layer = tEl('g', { 'class': 'terrain-layer' });
   renderMapBackground(layer);                                         // base biome first, behind everything
   words.forEach((w, idx) => { if (w.terrain && w.poly) renderTerrainRegion(w, layer, idx); });
+  words.forEach((w, idx) => { if (w.shape) renderShapeFeature(w, layer, idx); });    // drawn squares / circles / lines
   words.forEach((w, idx) => { if (w.line) renderLineFeature(w, layer, idx); });   // lines sit on top of fills
   svg.appendChild(layer);
   updateMapTerrainPill();
@@ -12525,6 +12534,56 @@ function createTerrainElement(pts, style, color){
   ensureSession(); state.session.words = state.prompt.words;
   scheduleAutosave();
   flashStatus('Drew terrain — keep drawing, or press Esc to stop');
+}
+// A drawn shape (square / circle / line) — a DECORATION with its own colour, border thickness + opacity.
+function renderShapeFeature(w, layer, idx){
+  const sh = w.shape; if (!sh) return;
+  const st = w.lstyle || { stroke: '#9a7747', width: 3.2 };
+  const op = (w.opacity == null) ? 0.7 : w.opacity;
+  const x = Math.min(sh.x0, sh.x1), y = Math.min(sh.y0, sh.y1);
+  const ww = Math.abs(sh.x1 - sh.x0), hh = Math.abs(sh.y1 - sh.y0);
+  const wd = (st.width || 3.2);
+  let main, hit;
+  if (sh.kind === 'line'){
+    main = tEl('line', { x1: sh.x0, y1: sh.y0, x2: sh.x1, y2: sh.y1, stroke: st.stroke, 'stroke-opacity': op, 'stroke-width': wd.toFixed(1), 'stroke-linecap': 'round' });
+    layer.appendChild(main);
+    if (w.deco && idx != null){ hit = tEl('line', { x1: sh.x0, y1: sh.y0, x2: sh.x1, y2: sh.y1, stroke: '#000', 'stroke-opacity': '0', 'stroke-width': Math.max(14, wd + 10).toFixed(1), 'stroke-linecap': 'round', 'class': 'deco-shape' }); }
+  } else if (sh.kind === 'circle'){
+    const cx = x + ww / 2, cy = y + hh / 2, rx = Math.max(0.5, ww / 2), ry = Math.max(0.5, hh / 2);
+    main = tEl('ellipse', { cx: cx, cy: cy, rx: rx, ry: ry, fill: st.stroke, 'fill-opacity': op, stroke: st.stroke, 'stroke-width': wd.toFixed(1) });
+    layer.appendChild(main);
+    if (w.deco && idx != null){ hit = tEl('ellipse', { cx: cx, cy: cy, rx: rx, ry: ry, fill: '#000', 'fill-opacity': '0', stroke: '#000', 'stroke-opacity': '0', 'stroke-width': Math.max(14, wd + 10).toFixed(1), 'class': 'deco-shape' }); }
+  } else {   // rect / square
+    main = tEl('rect', { x: x, y: y, width: Math.max(0.5, ww), height: Math.max(0.5, hh), fill: st.stroke, 'fill-opacity': op, stroke: st.stroke, 'stroke-width': wd.toFixed(1) });
+    layer.appendChild(main);
+    if (w.deco && idx != null){ hit = tEl('rect', { x: x, y: y, width: Math.max(0.5, ww), height: Math.max(0.5, hh), fill: '#000', 'fill-opacity': '0', stroke: '#000', 'stroke-opacity': '0', 'stroke-width': Math.max(14, wd + 10).toFixed(1), 'class': 'deco-shape' }); }
+  }
+  if (hit){ hit.dataset.deco = idx; hit.style.cursor = 'pointer'; layer.appendChild(hit); }
+}
+function shapePreviewPath(kind, a, b){
+  const x0 = a[0], y0 = a[1], x1 = b[0], y1 = b[1];
+  if (kind === 'line') return 'M ' + x0.toFixed(1) + ' ' + y0.toFixed(1) + ' L ' + x1.toFixed(1) + ' ' + y1.toFixed(1);
+  const x = Math.min(x0, x1), y = Math.min(y0, y1), w = Math.abs(x1 - x0), h = Math.abs(y1 - y0);
+  if (kind === 'circle'){
+    const cx = x + w / 2, cy = y + h / 2, rx = Math.max(0.5, w / 2), ry = Math.max(0.5, h / 2);
+    return 'M ' + (cx - rx).toFixed(1) + ' ' + cy.toFixed(1) + ' a ' + rx.toFixed(1) + ' ' + ry.toFixed(1) + ' 0 1 0 ' + (2 * rx).toFixed(1) + ' 0 a ' + rx.toFixed(1) + ' ' + ry.toFixed(1) + ' 0 1 0 ' + (-2 * rx).toFixed(1) + ' 0 Z';
+  }
+  return 'M ' + x.toFixed(1) + ' ' + y.toFixed(1) + ' H ' + (x + w).toFixed(1) + ' V ' + (y + h).toFixed(1) + ' H ' + x.toFixed(1) + ' Z';
+}
+function createShapeElement(kind, x0, y0, x1, y1, color, width, opacity){
+  if (typeof addsLocked === 'function' && addsLocked()){ flashStatus('The session is underway — end it to draw'); return; }
+  if (!state.prompt){ flashStatus('Roll or add an element first to open the map'); return; }
+  if (typeof pushUndo === 'function') pushUndo();
+  const cx = Math.round((x0 + x1) / 2), cy = Math.round((y0 + y1) / 2);
+  const w = { word: '', cat: 'setting', sub: 'Shape', role: 'word', set: (state.activeSet || 0),
+    shape: { kind: kind, x0: Math.round(x0), y0: Math.round(y0), x1: Math.round(x1), y1: Math.round(y1) }, deco: true,
+    lstyle: { stroke: color || '#9a7747', width: width || 3.2 }, opacity: (opacity == null ? 0.7 : opacity),
+    labelPinned: true, fx: cx, fy: cy, attrs: [] };
+  state.prompt.words.push(w);
+  layoutConstellation();
+  ensureSession(); state.session.words = state.prompt.words;
+  scheduleAutosave();
+  flashStatus('Drew a shape — keep drawing, or press Esc to stop');
 }
 // A drawn path — a smoothed DECORATION line (deco:true, no label) with its own colour + thickness.
 // Renders over terrain, under elements; not a story element.
@@ -12576,29 +12635,39 @@ const TERRAIN_PALETTE = [['forest','Forest'], ['grass','Grassland'], ['wetland',
 const DRAW_PATH_COLORS = ['#6a5535', '#9a7747', '#5a86a8', '#8a5a4a', '#4a6a4a', '#7a4a6a', '#3a352c', '#b0622e'];
 function syncDrawCursor(){
   const sky = document.getElementById('skySvg');
-  if (sky) sky.style.cursor = state.eraseDraw ? 'pointer' : ((state.terrainDraw || state.pathDraw) ? 'crosshair' : '');
+  if (sky) sky.style.cursor = state.eraseDraw ? 'pointer' : ((state.terrainDraw || state.pathDraw || state.shapeDraw) ? 'crosshair' : '');
   document.body.classList.toggle('erasing', !!state.eraseDraw);
 }
 function setTerrainDraw(style, color){
   state.terrainDraw = style ? { style: style, color: (color || (TERRAIN_STYLES[style] && TERRAIN_STYLES[style].fill) || null) } : null;
-  if (state.terrainDraw){ state.pathDraw = null; state.eraseDraw = false; }   // only one draw mode at a time
+  if (state.terrainDraw){ state.pathDraw = null; state.shapeDraw = null; state.eraseDraw = false; }   // only one draw mode at a time
   syncDrawCursor(); updateDrawUI();
 }
 function setPathDraw(on){
   state.pathDraw = on ? { color: (state._drawPathColor || '#9a7747'), width: (state._drawPathWidth || 3.2) } : null;
-  if (state.pathDraw){ state.terrainDraw = null; state.eraseDraw = false; }
+  if (state.pathDraw){ state.terrainDraw = null; state.shapeDraw = null; state.eraseDraw = false; }
+  syncDrawCursor(); updateDrawUI();
+}
+// Square / Circle / Line shape tools: same colour + border thickness as the Path tool, plus an opacity.
+function setShapeDraw(kind){
+  state.shapeDraw = kind ? { kind: kind, color: (state._drawShapeColor || state._drawPathColor || '#9a7747'),
+    width: (state._drawShapeWidth != null ? state._drawShapeWidth : (state._drawPathWidth || 3.2)),
+    opacity: (state._drawShapeOpacity == null ? 0.7 : state._drawShapeOpacity) } : null;
+  if (state.shapeDraw){ state.terrainDraw = null; state.pathDraw = null; state.eraseDraw = false; }
   syncDrawCursor(); updateDrawUI();
 }
 function setEraseDraw(on){
   state.eraseDraw = !!on;
-  if (state.eraseDraw){ state.terrainDraw = null; state.pathDraw = null; }
+  if (state.eraseDraw){ state.terrainDraw = null; state.pathDraw = null; state.shapeDraw = null; }
   syncDrawCursor(); updateDrawUI();
 }
 function updateDrawUI(){
-  const tB = document.getElementById('drawTerrainBtn'), pB = document.getElementById('drawPathBtn'), eB = document.getElementById('drawEraseBtn');
+  const tB = document.getElementById('drawTerrainBtn'), pB = document.getElementById('drawPathBtn'), eB = document.getElementById('drawEraseBtn'), sB = document.getElementById('drawShapeBtn');
   if (tB) tB.classList.toggle('on', !!state.terrainDraw);   // highlight only — no ✕ label
   if (pB) pB.classList.toggle('on', !!state.pathDraw);
   if (eB) eB.classList.toggle('on', !!state.eraseDraw);
+  if (sB) sB.classList.toggle('on', !!state.shapeDraw);
+  document.querySelectorAll('#drawShapePanel .draw-kind').forEach(k => k.classList.toggle('on', !!state.shapeDraw && state.shapeDraw.kind === k.dataset.kind));
 }
 // Reuse the app's branded colour picker (#edColorPanel): float it near (x,y), apply via onApply(hex).
 function openBrandedColorPicker(initialHex, x, y, onApply){
@@ -12621,7 +12690,7 @@ function openBrandedColorPicker(initialHex, x, y, onApply){
 let _drawWired = false;
 function wireDrawGlobals(){
   if (_drawWired) return; _drawWired = true;
-  document.addEventListener('keydown', e => { if (e.key === 'Escape' && (state.terrainDraw || state.pathDraw || state.eraseDraw)){ setTerrainDraw(null); setPathDraw(false); setEraseDraw(false); } });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && (state.terrainDraw || state.pathDraw || state.eraseDraw || state.shapeDraw)){ setTerrainDraw(null); setPathDraw(false); setEraseDraw(false); setShapeDraw(null); } });
   document.addEventListener('click', e => {
     if (e.target.closest && (e.target.closest('.draw-group') || e.target.closest('#edColorPanel'))) return;
     document.querySelectorAll('.draw-panel').forEach(p => { p.hidden = true; });
@@ -12684,6 +12753,41 @@ function buildDrawSection(root){
   thick.addEventListener('click', ev => ev.stopPropagation());
   pPanel.appendChild(thick);
   pWrap.appendChild(pBtn); pWrap.appendChild(pPanel); body.appendChild(pWrap);
+
+  // ---- Shapes tool: Square / Circle / Line — picked colour, a border-thickness control like the Path tool, plus opacity ----
+  const sWrap = document.createElement('div'); sWrap.className = 'draw-tool';
+  const sBtn = document.createElement('button'); sBtn.id = 'drawShapeBtn'; sBtn.type = 'button'; sBtn.className = 'draw-pill'; sBtn.textContent = 'Shapes';
+  const sPanel = document.createElement('div'); sPanel.id = 'drawShapePanel'; sPanel.className = 'draw-panel'; sPanel.hidden = true;
+  sBtn.addEventListener('click', e => { e.stopPropagation(); if (!sPanel.hidden){ sPanel.hidden = true; setShapeDraw(null); } else { sPanel.hidden = false; closeOtherPanels(sPanel); } });
+  const sKindLab = document.createElement('div'); sKindLab.className = 'draw-sublabel'; sKindLab.textContent = 'Pick a shape, then drag on the map'; sPanel.appendChild(sKindLab);
+  const sKindRow = document.createElement('div'); sKindRow.className = 'draw-kinds';
+  [['rect', 'Square'], ['circle', 'Circle'], ['line', 'Line']].forEach(([kind, label]) => {
+    const kb = document.createElement('button'); kb.type = 'button'; kb.className = 'draw-kind'; kb.dataset.kind = kind; kb.textContent = label;
+    kb.addEventListener('click', ev => { ev.stopPropagation(); setShapeDraw(state.shapeDraw && state.shapeDraw.kind === kind ? null : kind); });
+    sKindRow.appendChild(kb);
+  });
+  sPanel.appendChild(sKindRow);
+  const sColLab = document.createElement('div'); sColLab.className = 'draw-sublabel'; sColLab.textContent = 'Colour'; sPanel.appendChild(sColLab);
+  const sRow = document.createElement('div'); sRow.className = 'draw-colors';
+  DRAW_PATH_COLORS.forEach(col => {
+    const sw = document.createElement('button'); sw.type = 'button'; sw.className = 'draw-sw'; sw.style.background = col; sw.title = col; sw.dataset.col = col;
+    if ((state._drawShapeColor || '') === col) sw.classList.add('on');
+    sw.addEventListener('click', ev => { ev.stopPropagation(); state._drawShapeColor = col; if (state.shapeDraw) state.shapeDraw.color = col; sRow.querySelectorAll('.draw-sw').forEach(x => x.classList.remove('on')); sw.classList.add('on'); });
+    sRow.appendChild(sw);
+  });
+  sPanel.appendChild(sRow);
+  sPanel.appendChild(customPill(() => state._drawShapeColor || '#9a7747', hex => { state._drawShapeColor = hex; if (state.shapeDraw) state.shapeDraw.color = hex; sRow.querySelectorAll('.draw-sw').forEach(x => x.classList.remove('on')); }));
+  const sThLab = document.createElement('div'); sThLab.className = 'draw-sublabel'; sThLab.textContent = 'Border thickness'; sPanel.appendChild(sThLab);
+  const sThick = document.createElement('input'); sThick.type = 'range'; sThick.className = 'draw-thick'; sThick.min = '1'; sThick.max = '10'; sThick.step = '0.5'; sThick.value = String(state._drawShapeWidth != null ? state._drawShapeWidth : (state._drawPathWidth || 3.2));
+  sThick.addEventListener('input', ev => { ev.stopPropagation(); state._drawShapeWidth = +sThick.value; if (state.shapeDraw) state.shapeDraw.width = +sThick.value; });
+  sThick.addEventListener('click', ev => ev.stopPropagation());
+  sPanel.appendChild(sThick);
+  const sOpLab = document.createElement('div'); sOpLab.className = 'draw-sublabel'; sOpLab.textContent = 'Opacity'; sPanel.appendChild(sOpLab);
+  const sOpac = document.createElement('input'); sOpac.type = 'range'; sOpac.className = 'draw-thick'; sOpac.min = '0.1'; sOpac.max = '1'; sOpac.step = '0.05'; sOpac.value = String(state._drawShapeOpacity == null ? 0.7 : state._drawShapeOpacity);
+  sOpac.addEventListener('input', ev => { ev.stopPropagation(); state._drawShapeOpacity = +sOpac.value; if (state.shapeDraw) state.shapeDraw.opacity = +sOpac.value; });
+  sOpac.addEventListener('click', ev => ev.stopPropagation());
+  sPanel.appendChild(sOpac);
+  sWrap.appendChild(sBtn); sWrap.appendChild(sPanel); body.appendChild(sWrap);
 
   // ---- Erase tool: toggle, then click a drawn terrain/path on the map to delete it ----
   const eBtn = document.createElement('button'); eBtn.id = 'drawEraseBtn'; eBtn.type = 'button'; eBtn.className = 'draw-pill draw-erase'; eBtn.textContent = 'Erase';
@@ -19823,9 +19927,14 @@ function init(){
     if (!terrainDrawing) return;
     if (terrainPreview){ terrainPreview.setAttribute('opacity', '0'); terrainPreview.removeAttribute('d'); }
     const pts = terrainDrawing.pts; const placeIdx = terrainDrawing.placeIdx; const isLine = terrainDrawing.line;
-    const freePath = terrainDrawing.freePath; const td = state.terrainDraw; const pd = state.pathDraw; terrainDrawing = null;
+    const freePath = terrainDrawing.freePath; const shape = terrainDrawing.shape; const td = state.terrainDraw; const pd = state.pathDraw; terrainDrawing = null;
     if (commit){
-      if (freePath){ if (pts.length >= 2 && pd) createPathElement(pts, pd.color, pd.width); }
+      if (shape){
+        const a = pts[0], b = pts[1] || pts[0];
+        const big = (b[0] - a[0]) ** 2 + (b[1] - a[1]) ** 2 > 25;   // ignore an accidental tap (too small to be a shape)
+        if (big) createShapeElement(shape.kind, a[0], a[1], b[0], b[1], shape.color, shape.width, shape.opacity);
+      }
+      else if (freePath){ if (pts.length >= 2 && pd) createPathElement(pts, pd.color, pd.width); }
       else if (isLine && placeIdx != null && pts.length >= 2) commitLinePlacement(placeIdx, pts);
       else if (pts.length >= 3){
         if (placeIdx != null) commitAreaPlacement(placeIdx, pts);
@@ -19852,6 +19961,14 @@ function init(){
     if (state.terrainDraw || state.pathDraw){
       const p = skyPt(e);
       terrainDrawing = { pts: [[p.x, p.y]], pid: e.pointerId, freePath: !!state.pathDraw };
+      if (!terrainPreview){ terrainPreview = tEl('path', { fill: 'none', stroke: '#6a6253', 'stroke-width': '1.5', 'stroke-dasharray': '4 4' }); }
+      sky.appendChild(terrainPreview); terrainPreview.setAttribute('opacity', '0.9');
+      try { sky.setPointerCapture(e.pointerId); } catch (err) {}
+      e.preventDefault(); return;
+    }
+    if (state.shapeDraw){
+      const p = skyPt(e);
+      terrainDrawing = { pts: [[p.x, p.y], [p.x, p.y]], pid: e.pointerId, shape: Object.assign({}, state.shapeDraw) };
       if (!terrainPreview){ terrainPreview = tEl('path', { fill: 'none', stroke: '#6a6253', 'stroke-width': '1.5', 'stroke-dasharray': '4 4' }); }
       sky.appendChild(terrainPreview); terrainPreview.setAttribute('opacity', '0.9');
       try { sky.setPointerCapture(e.pointerId); } catch (err) {}
@@ -19899,7 +20016,13 @@ function init(){
   });
   sky.addEventListener('pointermove', e => {
     if (terrainDrawing){
-      const p = skyPt(e); const last = terrainDrawing.pts[terrainDrawing.pts.length - 1];
+      const p = skyPt(e);
+      if (terrainDrawing.shape){   // rubber-band a square / circle / line from the anchor to the cursor
+        terrainDrawing.pts[1] = [p.x, p.y];
+        terrainPreview.setAttribute('d', shapePreviewPath(terrainDrawing.shape.kind, terrainDrawing.pts[0], terrainDrawing.pts[1]));
+        return;
+      }
+      const last = terrainDrawing.pts[terrainDrawing.pts.length - 1];
       if ((p.x - last[0]) ** 2 + (p.y - last[1]) ** 2 > 36){
         terrainDrawing.pts.push([p.x, p.y]);
         terrainPreview.setAttribute('d', 'M ' + terrainDrawing.pts.map(q => q[0].toFixed(1) + ' ' + q[1].toFixed(1)).join(' L '));
@@ -19964,7 +20087,7 @@ function init(){
   sky.addEventListener('pointercancel', () => { terrainEnd(false); lassoEnd(); endLinkDrag(true); endPan(); endDrag(); });
   sky.addEventListener('click', e => {
     if (state.lastDrag && Date.now() - state.lastDrag < 250) return;
-    if (state.terrainDraw || state.pathDraw || state.eraseDraw) return;   // draw/erase clicks are handled in pointerdown
+    if (state.terrainDraw || state.pathDraw || state.shapeDraw || state.eraseDraw) return;   // draw/erase clicks are handled in pointerdown
     if (state.linkFrom != null){ state.linkFrom = null; renderConstellation(); return; }
     // a click on empty map clears every selection at once — lasso group and the selected element
     let cleared = clearGroupSel();
