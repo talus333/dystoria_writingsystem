@@ -17544,6 +17544,31 @@ function onEditSelect(){
   sb.style.left = Math.max(8, Math.min(window.innerWidth - bw - 8, cx - bw / 2)) + 'px';
   sb.style.top = Math.max(8, cy - 44) + 'px';
 }
+// Phone Suggest mode: a single tap selects the whole tapped word and shows the suggestion bar — no long-press needed.
+// The browser's native selection handles stay in place, so you can drag them to stretch the highlight. Tapping a gap/punctuation leaves the caret (so Insert still works).
+function edTapSelectWord(ev){
+  if (!_phone500() || editDirectOn()) return;                         // phones only; in direct-edit a tap should place the caret to type
+  if (!$('editMode').classList.contains('show')) return;
+  if (ev.target && ev.target.closest && ev.target.closest('.sg-ins,.sg-del,.nt,img,a,button,select')) return;   // let existing handlers act
+  const x = ev.clientX, y = ev.clientY; if (x == null || y == null) return;
+  let range = null;
+  if (document.caretRangeFromPoint) range = document.caretRangeFromPoint(x, y);
+  else if (document.caretPositionFromPoint){ const p = document.caretPositionFromPoint(x, y); if (p){ range = document.createRange(); range.setStart(p.offsetNode, p.offset); } }
+  if (!range) return;
+  const node = range.startContainer; if (!node || node.nodeType !== 3) return;   // text nodes only
+  const body = $('editBody'); if (!body.contains(node)) return;
+  const text = node.textContent || ''; const i = range.startOffset;
+  const isW = c => !!c && /\S/.test(c) && !/[.,;:!?"“”()\[\]{}…—–]/.test(c);     // word chars (keeps apostrophes & hyphens, stops at terminal punctuation)
+  let a = i, b = i;
+  while (a > 0 && isW(text[a - 1])) a--;
+  while (b < text.length && isW(text[b])) b++;
+  if (b <= a) return;                                                  // tapped whitespace/punctuation → leave the caret (Insert flow stays)
+  const sel = window.getSelection(); if (!sel) return;
+  const r = document.createRange(); r.setStart(node, a); r.setEnd(node, b);
+  sel.removeAllRanges(); sel.addRange(r);
+  _edLastRange = r.cloneRange();
+  setTimeout(onEditSelect, 0);                                         // surface the bar at once (selectionchange also fires)
+}
 async function doSg(kind){
   const body = $('editBody'); if (!body) return;
   const sel = window.getSelection(); if (!sel || !sel.rangeCount) return;
@@ -19735,6 +19760,7 @@ function init(){
     const nt = ev.target.closest && ev.target.closest('.nt');
     if (nt){ ev.stopPropagation(); $('editMode').classList.add('show-notes'); scrollToAnchor(nt.dataset.sg); return; }
     closeSgPop();
+    edTapSelectWord(ev);   // phone Suggest mode: a single tap selects the whole word (native handles stay, so you can drag to extend)
   });
   $('editBody').addEventListener('dblclick', ev => {   // double-click a noted span to edit it (backup)
     const nt = ev.target.closest && ev.target.closest('.nt');
