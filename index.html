@@ -1361,7 +1361,9 @@
   #skyCol{flex:1; display:flex; flex-direction:column; min-width:0}
   #frameBar{display:none; gap:20px; align-items:center; min-height:54px; box-sizing:border-box;
     padding:8px 16px; border-bottom:1px solid var(--line); background:var(--bg2)}
-  .fb-chips{display:flex; flex-wrap:wrap; gap:4px 14px; align-items:center; flex:1; min-width:0}
+  .fb-chips{display:flex; flex-wrap:nowrap; overflow-x:auto; overflow-y:hidden; gap:14px; align-items:center; flex:1; min-width:0; -webkit-overflow-scrolling:touch; scrollbar-width:none}   /* one line, horizontally scrollable instead of stacking */
+  .fb-chips::-webkit-scrollbar{display:none}
+  #frameBar .fb-chips > *{flex:none; white-space:nowrap}
   #fbAddSel{font-family:var(--serif); font-style:italic; font-size:11.5px; color:var(--ink-faint);
     border:1px dashed var(--ink-faint); border-radius:14px; padding:2px 8px; background:transparent;
     outline:none; flex:none; -webkit-appearance:none; appearance:none; cursor:pointer}
@@ -14377,6 +14379,15 @@ async function generateSessionGoal(hostId){
   try {
     const sys = 'You write ONE short, punchy prompt to spark a single timed writing session — a question, or a one-line directive. Pick just ONE or TWO of the focus elements (whichever sparks the most intriguing prompt); you do NOT need to use them all — other sessions can explore the rest. Treat each focus element as its OWN distinct thing: the focus elements are THIS session\'s subject and may be brand new to the story — do NOT assume they already appear in the existing writing, and never conflate them with a different character or element that earlier passages were about. When a focus character is written as "Name, the Type" (e.g. "Eloise, the Follower"), that is ONE character: "Name" is who they are and "the Type" is merely a descriptive trait of them — never split them into two separate characters or treat the type/role as its own person. When a character has no name, refer to them by their type, archetype, or occupation (e.g. "the Follower") — that descriptor IS the character. If a writing guide or exercise is given, you may fold ONE in as a technique constraint. Existing writing is background/tone only — bring the CURRENT focus elements into play. Keep it under ~12 words, concrete and evocative, never yes/no. Output ONLY the prompt — no preamble, no quotation marks. Examples: "Why does the Victim carry a crutch?" / "What does the Reconstruction mean to the Challenger?" / "Through only descriptions of the Setting, reveal the Victim’s state of mind."';
     const _gc = goalContext();
+    // ~1 in 3 (on a fresh set), build the spark FROM an open question the wiki raised about a focus element
+    let chosenQ = '';
+    try {
+      if (!prevPrompts.length && Math.random() < 0.34){
+        const eqs = [];
+        (state.focusKeys || []).forEach(k => { const w = words.find(x => wordKey(x) === k); if (w && typeof elementQuestionsFor === 'function') elementQuestionsFor(w).forEach(q => eqs.push(q)); });
+        if (eqs.length) chosenQ = eqs[Math.floor(Math.random() * eqs.length)];
+      }
+    } catch(e){}
     const prompt = (_gc ? (_gc + '\nLet this goal shape the prompt’s mood, angle, and style (without naming the goal in the prompt itself).\n\n') : '')
       + (goals.length ? ('This session\'s focus elements: ' + goals.join(', ') + '\n') : '')
       + (castNotes ? ('How to read the focus characters (name vs. type):\n' + castNotes + '\n') : '')
@@ -14386,6 +14397,7 @@ async function generateSessionGoal(hostId){
       + (earlierEls.length ? ('\nEarlier passages in this section focused on DIFFERENT elements (' + earlierEls.join(', ') + ') — do not assume the focus elements above are the same as those.\n') : '')
       + (written ? ('\nExisting writing in this section (background/tone — it may feature other elements, not the focus):\n' + written.slice(-1800) + '\n') : '')
       + (prevPrompts.length ? ('\nAlready generated for this SAME set — take a genuinely DIFFERENT angle (shift which element leads, the kind of question, or the technique); do NOT rephrase these:\n- ' + prevPrompts.join('\n- ') + '\n') : '')
+      + (chosenQ ? ('\nThe story wiki raised this open question about a focus element — make THIS session’s spark out of it (reframe it into a short, punchy prompt; don’t quote it verbatim):\n"' + chosenQ + '"\n') : '')
       + '\nWrite the one-line prompt:';
     const text = await aiCall(sys, prompt);
     if (host._token !== token || (isFsGoal && !document.body.classList.contains('insession'))){ return; }   // a newer session (or it ended) — drop this result
@@ -18506,9 +18518,21 @@ function renderWikiQuestions(text){
   if (!(state.session && wikiGather && wikiGather().length)) return;   // nothing to ask about yet
   const head = document.createElement('div'); head.className = 'wk-q-head'; head.textContent = 'Questions the story raises'; wrap.appendChild(head);
   if (text){
+    const resolvedSet = new Set();
+    const eq = (state.session && state.session.elementQuestions) || {};
+    Object.keys(eq).forEach(k => eq[k].forEach(it => { if (it.resolved) resolvedSet.add(it.q); }));
     const lines = String(text).split(/\n+/).map(s => s.trim()).filter(Boolean);
-    lines.forEach(line => { const d = document.createElement('div'); d.className = 'wk-q-item' + (/^goal\s*[—\-:]/i.test(line) ? ' wk-q-goal' : ''); d.textContent = line; wrap.appendChild(d); });
+    const resolvedLines = [];
+    lines.forEach(line => {
+      const qpart = ((line.match(/[—–:\-]\s*(.+)$/) || [null, ''])[1] || '').trim();
+      if (qpart && resolvedSet.has(qpart)){ resolvedLines.push(line); return; }
+      const d = document.createElement('div'); d.className = 'wk-q-item' + (/^goal\s*[—\-:]/i.test(line) ? ' wk-q-goal' : ''); d.textContent = line; wrap.appendChild(d);
+    });
     const ref = document.createElement('span'); ref.className = 'wk-airefresh'; ref.textContent = 'refresh questions'; ref.addEventListener('click', runWikiQuestions); wrap.appendChild(ref);
+    if (resolvedLines.length){
+      const rh = document.createElement('div'); rh.className = 'wk-q-head wk-q-rhead'; rh.textContent = 'Resolved'; wrap.appendChild(rh);
+      resolvedLines.forEach(line => { const d = document.createElement('div'); d.className = 'wk-q-item wk-q-resolved'; const ck = document.createElement('span'); ck.className = 'wk-q-ck'; ck.textContent = '✓'; d.appendChild(ck); d.appendChild(document.createTextNode(line)); wrap.appendChild(d); });
+    }
   } else {
     const note = document.createElement('div'); note.className = 'wk-q-note'; note.textContent = (typeof goalIsEmpty === 'function' && !goalIsEmpty(state.session && state.session.goal)) ? 'Open questions the narrative raises — including how the elements are tracking toward your goals, and where they pull against them.' : 'Open questions the narrative raises from each element’s perspective — food for thought.'; wrap.appendChild(note);
     const b = document.createElement('button'); b.className = 'wk-aibtn'; b.textContent = 'Raise questions ✦'; b.addEventListener('click', runWikiQuestions); wrap.appendChild(b);
