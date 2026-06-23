@@ -828,6 +828,11 @@
   #iconGen .ig-title{font-family:var(--serif); font-size:26px; font-weight:600; color:var(--ink); margin:4px 0 6px}
   #iconGen .ig-sub{font-family:var(--serif); font-size:13.5px; line-height:1.5; color:var(--ink-soft); margin:0 0 12px}
   #iconGen #igGuide{width:100%; box-sizing:border-box; font-family:var(--serif); font-size:14px; color:var(--ink); background:var(--bg); border:1px solid var(--line); border-radius:9px; padding:9px 11px; resize:vertical}
+  #iconGen .ig-suggest-row{display:flex; align-items:center; gap:10px; margin-top:7px; flex-wrap:wrap}
+  #iconGen .ig-suggest{font-family:var(--sans); font-size:11px; letter-spacing:.03em; padding:6px 11px; border:1px solid var(--gold); border-radius:8px; background:transparent; color:var(--gold); cursor:pointer; white-space:nowrap}
+  #iconGen .ig-suggest:hover{background:var(--gold); color:#fff}
+  #iconGen .ig-suggest:disabled{opacity:.55; cursor:default}
+  #iconGen .ig-suggest-hint{font-family:var(--serif); font-style:italic; font-size:11.5px; color:var(--ink-faint)}
   #iconGen .ig-row{display:flex; gap:16px; align-items:stretch; margin-top:14px}
   #iconGen .ig-preview{width:150px; height:150px; flex:none; border:1px solid var(--line); border-radius:10px; background:#fff; display:flex; align-items:center; justify-content:center; overflow:hidden}
   #iconGen .ig-preview svg{width:128px; height:128px}
@@ -11720,40 +11725,84 @@ function openIconGenerator(i){
   ov.innerHTML =
     '<div class="ig-card"><button class="ig-x" title="Close">×</button>'
     + '<div class="ig-kicker">Generate icon ✦</div><h2 class="ig-title">' + esc(name) + '</h2>'
-    + '<p class="ig-sub">Describe what you’d like the icon to show — or just generate from the story’s context. The AI draws it in the app’s setting-icon style.</p>'
-    + '<textarea id="igGuide" rows="2" placeholder="e.g. a moss-covered stone well under a willow, dusk light…"></textarea>'
+    + '<p class="ig-sub">Name the <b>one main shape</b> it should read as, then a few details — material, key features, mood. The more concrete, the better it comes out.</p>'
+    + '<textarea id="igGuide" rows="2" placeholder="e.g. a tall crooked cottage of mossy stone — steep thatch roof, round windows, a tilting chimney with smoke"></textarea>'
+    + '<div class="ig-suggest-row"><button id="igSuggest" class="ig-suggest" title="Let the AI draft a description from your story, then tweak it">✨ Describe it for me</button><span class="ig-suggest-hint">drafts from the story — your own words always win</span></div>'
     + '<div class="ig-row"><div id="igPreview" class="ig-preview"><span class="ig-ph">preview</span></div>'
     + '<div class="ig-side"><button id="igGo" class="ig-go">Generate ✦</button><div id="igActions" class="ig-actions" style="display:none"><button id="igUse" class="ig-use">Use this icon</button><button id="igRedo" class="ig-redo">Redo</button></div><div id="igStatus" class="ig-status"></div></div></div></div>';
   let lastSvg = '';
   const q = sel => ov.querySelector(sel);
   const renderPreview = body => { q('#igPreview').innerHTML = '<svg viewBox="-13 -16 26 17">' + body + '</svg>'; };
+  // Shared story context for both the brief-writer and the icon drawer.
+  function gatherCtx(){
+    let notes = ''; try { const k = wordKey(w); const nh = (typeof npGetNotes === 'function') ? npGetNotes(k) : ''; const dv = document.createElement('div'); dv.innerHTML = nh || ''; notes = (dv.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 400); } catch(e){}
+    const others = ((state.prompt && state.prompt.words) || []).filter(x => !x.deco && (x.role === 'being' || x.role === 'word') && x !== w).map(x => x.name || x.word).filter(Boolean).slice(0, 16).join(', ');
+    const gc = (typeof goalContext === 'function') ? goalContext() : '';
+    const prose = (typeof editorText === 'function') ? editorText().trim() : '';
+    return { notes, others, gc, prose };
+  }
+  // Ask the AI to turn name + story context (+ the author's own words, dominant) into a concrete visual brief.
+  async function suggestGuidance(){
+    const status = q('#igStatus'); const btn = q('#igSuggest');
+    const own = (q('#igGuide').value || '').trim();
+    status.textContent = own ? 'Enriching your description…' : 'Imagining a description…'; if (btn) btn.disabled = true; q('#igGo').disabled = true;
+    try {
+      const { notes, others, gc, prose } = gatherCtx();
+      const sysB = 'You help a writer describe a small SETTING icon BEFORE an illustrator draws it. Write ONE short, concrete visual brief — about 25–45 words, plain prose, no lists, no quotes, no preamble. It must name the SINGLE main shape the icon should read as, its material and colour, 2–4 identifying features, and end with a one-word mood. Make it drawable without guessing: vivid and specific, but a SIMPLE bold subject, not a busy scene. Ground every choice in the story context given. If the author already wrote their own description, treat THAT as the dominant spec — keep all their specifics word-for-word in spirit and only enrich and clarify around them; never contradict or replace what they asked for. Reply with the brief only.';
+      const promptB = 'Setting to describe: ' + name + (w.sub ? ('  ·  ' + w.sub) : '') + '\n'
+        + (notes ? ('What it is (notes): ' + notes + '\n') : '')
+        + (gc ? ('Story goal / feel: ' + gc + '\n') : '')
+        + (others ? ('Other elements (for tone): ' + others + '\n') : '')
+        + (prose ? ('Prose so far (flavour):\n' + prose.slice(-700) + '\n') : '')
+        + (own ? ('\nTHE AUTHOR ALREADY WROTE THIS — it dominates, keep all of it: "' + own + '"\n') : '')
+        + '\nWrite the visual brief now:';
+      const out = await aiCall(sysB, promptB, { maxTokens: 220 });
+      let txt = String(out || '').replace(/```[a-z]*|```/gi, '').trim().replace(/^["'\s]+|["'\s]+$/g, '').replace(/\s+/g, ' ');
+      if (txt){ q('#igGuide').value = txt; status.textContent = 'Tweak it if you like, then Generate ✦.'; }
+      else status.textContent = 'Couldn’t draft a description — try writing a line yourself.';
+    } catch (e){ status.textContent = (typeof aiErrMsg === 'function') ? aiErrMsg(e) : 'Couldn’t draft a description'; }
+    if (btn) btn.disabled = false; q('#igGo').disabled = false;
+  }
   async function generate(){
     const guidance = (q('#igGuide').value || '').trim();
     const status = q('#igStatus'); status.textContent = 'Conjuring an icon…'; q('#igGo').disabled = true; q('#igActions').style.display = 'none';
     try {
-      let notes = ''; try { const k = wordKey(w); const nh = (typeof npGetNotes === 'function') ? npGetNotes(k) : ''; const dv = document.createElement('div'); dv.innerHTML = nh || ''; notes = (dv.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 400); } catch(e){}
-      const others = ((state.prompt && state.prompt.words) || []).filter(x => !x.deco && (x.role === 'being' || x.role === 'word') && x !== w).map(x => x.name || x.word).filter(Boolean).slice(0, 16).join(', ');
-      const gc = (typeof goalContext === 'function') ? goalContext() : '';
-      const prose = (typeof editorText === 'function') ? editorText().trim() : '';
-      const sys = 'You are an icon artist for a story-mapping app. You draw a small, flat-vector SETTING icon as RAW SVG markup that goes INSIDE <svg viewBox="-13 -16 26 17">…</svg>.\n'
-        + 'COORDINATE SPACE: x runs left(-13) to right(13). y is INVERTED — the GROUND sits at y≈0 and everything rises UPWARD into negative y (up to about y=-15). Centre the icon on x=0 and rest it on the ground near y=0; keep it within about x:-12..12, y:-15..0.\n'
-        + 'STYLE: a tiny grounded emblem-like scene, clean flat illustration, muted earthy palette, thin dark outlines, gentle shading via a darker side. NO gradients, NO filters, NO text, NO wrapper/defs/style/script tags and no nested svg — ONLY shape elements (path, circle, ellipse, rect, line, polygon, g). Style each shape with the attribute style="fill:HEX;stroke:HEX;stroke-width:N" (stroke-width 0.4–0.9). Build depth from 2–5 layered shapes.\n'
-        + 'PALETTE (use these hex): outline #2b2620; stone #e4ded0/#c6bfac/#a89e87; roof/clay #c87e54/#9f5a3a; wood #b88a55/#8c6840; glass #9fbcd2/#d2e2ec; water #8fb6d0/#6c97b8; green #84ac68/#638a4b; trunk #86683f; dark #6e695f/#403b34; gold #d6af57; snow #eef2f5; rock #b9a98f/#94836a; grass strip #5e8a3e.\n'
-        + 'Output ONLY the raw inner SVG markup — no <svg> wrapper, no code fences, no words.';
-      let exA = '', exB = '';
-      try { exA = SETTING_SVG['Lake'](); } catch(e){}
-      try { exB = SETTING_SVG['Cottage'](); } catch(e){}
+      const { notes, others, gc, prose } = gatherCtx();
+      const sys = 'You are an expert pictogram illustrator for a story-mapping app. You draw ONE small, instantly-recognisable SETTING icon as RAW SVG shape markup that is dropped INSIDE <svg viewBox="-13 -16 26 17">…</svg>. The single most important thing: a viewer must recognise WHAT IT IS at a glance.\n'
+        + 'CANVAS & ORIENTATION: x runs left(-13)→right(13). y is INVERTED — the GROUND is at y=0 and the icon rises UPWARD into NEGATIVE y. So a tall thing goes from y=0 up to about y=-14. Centre everything on x=0.\n'
+        + 'GO BIG (this is where most attempts fail): the subject must FILL the frame. Its main mass should span roughly x:-8..8 and rise from the ground (y=0) up to about y=-13. Do NOT draw small shapes huddled in the middle, and do NOT scatter disconnected bits — one bold subject, sitting on the ground.\n'
+        + 'CONSTRUCTION METHOD — plan, then build in this order: (1) a thin grassy/earth ground strip across the bottom near y=0; (2) the ONE main mass / silhouette as a single large shape resting on the ground; (3) the top — roof, crown, canopy, or cap; (4) 2–4 structural details that say what it is (door, windows, arches, openings, branches); (5) 1–4 tiny accents for the requested flavour. Give big shapes a slightly darker copy down one side for depth. Aim for roughly 6–12 shapes total — bold and clean, never cluttered.\n'
+        + 'STYLE: flat vector, muted earthy palette, thin dark outlines (stroke-width 0.4–0.9), gentle flat shading. NO gradients, NO filters, NO text, NO wrapper/defs/style/script tags and no nested svg — ONLY shape elements (path, circle, ellipse, rect, line, polygon, g). Style every shape with the attribute style="fill:HEX;stroke:HEX;stroke-width:N".\n'
+        + 'PALETTE (use these hex): outline #2b2620; stone/plaster #e4ded0/#c6bfac/#a89e87; roof/clay #c87e54/#9f5a3a; wood #b88a55/#8c6840; glass #9fbcd2/#d2e2ec; water #8fb6d0/#6c97b8; green #84ac68/#638a4b; trunk #86683f; dark #6e695f/#403b34; gold #d6af57; snow #eef2f5; rock #b9a98f/#94836a; grass strip #5e8a3e.\n'
+        + 'You MAY begin with ONE short SVG comment naming your plan, e.g. (planning comment) then the shapes. Output ONLY SVG markup — no prose outside a comment, no code fences, no svg wrapper.';
+      // Two clean, well-proportioned reference skeletons — these teach PROPORTION and the build order, not dense path data.
+      const SKEL_BUILT = '<path d="M-12 0 Q0 -1.4 12 -0.6 V0.6 H-12 Z" style="fill:#5e8a3e;stroke:none"/>\n'
+        + '<rect x="-7.5" y="-11" width="15" height="11" style="fill:#e4ded0;stroke:#2b2620;stroke-width:0.6"/>\n'
+        + '<rect x="2.5" y="-11" width="5" height="11" style="fill:#c6bfac;stroke:none"/>\n'
+        + '<rect x="-7.5" y="-11" width="15" height="11" style="fill:none;stroke:#2b2620;stroke-width:0.6"/>\n'
+        + '<path d="M-9 -11 L0 -15.6 L9 -11 Z" style="fill:#c87e54;stroke:#2b2620;stroke-width:0.6"/>\n'
+        + '<path d="M0 -15.6 L9 -11 L4.5 -11 Z" style="fill:#9f5a3a;stroke:none"/>\n'
+        + '<rect x="5" y="-14.4" width="2" height="3.4" style="fill:#9f5a3a;stroke:#2b2620;stroke-width:0.5"/>\n'
+        + '<rect x="-2" y="-5" width="4" height="5" style="fill:#8c6840;stroke:#2b2620;stroke-width:0.5"/>\n'
+        + '<rect x="-5.4" y="-9" width="2.6" height="2.6" style="fill:#9fbcd2;stroke:#2b2620;stroke-width:0.45"/>\n'
+        + '<rect x="2.8" y="-9" width="2.6" height="2.6" style="fill:#9fbcd2;stroke:#2b2620;stroke-width:0.45"/>';
+      const SKEL_NATURE = '<path d="M-12 0 Q0 -1.4 12 -0.6 V0.6 H-12 Z" style="fill:#5e8a3e;stroke:none"/>\n'
+        + '<path d="M-12 0 Q-3 -9 4 -8 Q11 -7 12 0 Z" style="fill:#84ac68;stroke:#2b2620;stroke-width:0.55"/>\n'
+        + '<path d="M4 -8 Q11 -7 12 0 Q6 0.2 4.5 -0.2 Q5.5 -5 4 -8 Z" style="fill:#638a4b;stroke:none"/>\n'
+        + '<rect x="-6.2" y="-9.5" width="1.6" height="5" style="fill:#86683f;stroke:#2b2620;stroke-width:0.45"/>\n'
+        + '<circle cx="-5.4" cy="-12" r="3.8" style="fill:#638a4b;stroke:#2b2620;stroke-width:0.55"/>\n'
+        + '<circle cx="-3.9" cy="-13.1" r="2.2" style="fill:#84ac68;stroke:none"/>';
+      const wantNature = /natural|terrain|water|wild|forest|river|lake|mountain|garden|grove|woods|sea|coast|field|valley|cave/i.test((w.sub || '') + ' ' + name + ' ' + guidance);
       const prompt = 'Draw an icon for this SETTING:\nName: ' + name + (w.sub ? ('  ·  ' + w.sub) : '') + '\n'
         + (notes ? ('What it is: ' + notes + '\n') : '')
         + (gc ? ('\nStory goal / feel: ' + gc + '\n') : '')
         + (others ? ('\nOther elements in the story (match the world’s tone): ' + others + '\n') : '')
-        + (prose ? ('\nA little of the prose for flavour:\n' + prose.slice(-1100) + '\n') : '')
-        + (guidance ? ('\nThe author specifically wants: ' + guidance + '\n') : '')
-        + '\nTwo example icons in the EXACT format + coordinate space to match for quality and style:\n'
-        + (exA ? ('Example (a lake):\n' + exA + '\n\n') : '')
-        + (exB ? ('Example (a cottage):\n' + exB + '\n\n') : '')
-        + 'Now output ONLY the raw inner SVG markup for the setting above:';
-      const out = await aiCall(sys, prompt, { maxTokens: 1400 });
+        + (prose ? ('\nA little of the prose for flavour:\n' + prose.slice(-900) + '\n') : '')
+        + (guidance ? ('\nWHAT THE AUTHOR WANTS (honour this above all): ' + guidance + '\n') : '')
+        + '\nTwo reference skeletons showing the proportions and build order to match (notice how the subject FILLS the frame and sits on the ground). Adapt the structure that fits — do not copy them literally:\n'
+        + (wantNature ? (SKEL_NATURE + '\n\n' + SKEL_BUILT) : (SKEL_BUILT + '\n\n' + SKEL_NATURE))
+        + '\n\nNow draw the setting above. First decide the 3–6 main shapes that make it unmistakable, then output ONLY the SVG markup (a single optional planning comment is allowed):';
+      const out = await aiCall(sys, prompt, { maxTokens: 1500 });
       const body = cleanIconSvg(out);
       if (!body || !/<(path|circle|ellipse|rect|line|polygon|polyline|g)\b/i.test(body)){ status.textContent = 'That didn’t come out as a drawing — try again, or add a line of guidance.'; q('#igGo').disabled = false; return; }
       lastSvg = body; renderPreview(body); status.textContent = ''; q('#igActions').style.display = 'flex'; q('#igGo').textContent = 'Regenerate ✦';
@@ -11762,6 +11811,7 @@ function openIconGenerator(i){
   }
   q('#igGo').addEventListener('click', generate);
   q('#igRedo').addEventListener('click', generate);
+  q('#igSuggest').addEventListener('click', suggestGuidance);
   q('#igUse').addEventListener('click', () => {
     if (!lastSvg) return; if (typeof pushUndo === 'function') pushUndo();
     w.iconCustom = lastSvg; delete w.icon;
