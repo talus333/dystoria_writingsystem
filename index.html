@@ -18164,12 +18164,12 @@ function buildStoryExport(){
   wrap.querySelectorAll('.rd-prose h3').forEach(n => n.setAttribute('style', "page-break-after:avoid;text-align:center;font-weight:600;font-size:17pt;letter-spacing:.04em;margin:20pt 0 8pt;font-family:'Cormorant SC','Cinzel',Georgia,serif"));
   wrap.querySelectorAll('.rd-prose p').forEach(n => n.setAttribute('style', 'margin:0 0 11pt;text-align:left;text-indent:1.4em;orphans:2;widows:2'));
   wrap.querySelectorAll('img').forEach(n => { const w = n.style.width || ''; n.setAttribute('style', (w ? ('width:' + w + ';') : '') + 'max-width:100%;height:auto;display:block;margin:14pt auto;page-break-inside:avoid'); });
-  // section dividers → centred ◆ + number; SMART PAGE BREAKS: each section on a fresh page (break before every divider EXCEPT the first, which rides page 1 with the title)
+  // section dividers → the NUMBER on its own centred line (section-header font/size) above a centred ◆; SMART PAGE BREAKS: each section on a fresh page (break before every divider EXCEPT the first, which rides page 1 with the title)
   wrap.querySelectorAll('.sec-mark').forEach((n, i) => {
     const num = (n.textContent || '').trim();
-    const d = document.createElement('p'); d.className = 'sec-div'; if (i > 0) d.dataset.brk = '1';
-    d.setAttribute('style', (i > 0 ? 'page-break-before:always;' : '') + 'page-break-after:avoid;text-align:center;font-size:14pt;color:#3a3733;letter-spacing:.18em;margin:24pt 0 4pt');
-    d.textContent = '◆' + (num ? (' ' + num) : '');
+    const d = document.createElement('p'); d.className = 'sec-div'; if (i > 0) d.dataset.brk = '1'; if (num) d.dataset.num = num;
+    d.setAttribute('style', (i > 0 ? 'page-break-before:always;' : '') + 'page-break-after:avoid;text-align:center;margin:24pt 0 4pt');
+    d.innerHTML = (num ? ('<span style="font-family:\'Cormorant SC\',\'Cinzel\',Georgia,serif;font-weight:600;font-size:17pt;letter-spacing:.04em">' + num + '</span><br>') : '') + '<span style="font-size:14pt;color:#3a3733">◆</span>';
     n.replaceWith(d);
   });
   const esc = s => (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -18216,20 +18216,37 @@ function _dxEsc(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').re
 function _dxRun(text, o){ o=o||{}; const pr=[]; if(o.bold)pr.push('<w:b/>'); if(o.italic)pr.push('<w:i/>'); if(o.caps)pr.push('<w:smallCaps/>'); if(o.sz)pr.push('<w:sz w:val="'+o.sz+'"/>'); const rPr=pr.length?('<w:rPr>'+pr.join('')+'</w:rPr>'):''; return '<w:r>'+rPr+'<w:t xml:space="preserve">'+_dxEsc(text)+'</w:t></w:r>'; }
 function _dxRuns(el, base){ base=base||{}; let out=''; el.childNodes.forEach(n=>{ if(n.nodeType===3){ if(n.textContent) out+=_dxRun(n.textContent, base); } else if(n.nodeType===1){ const t=n.tagName.toLowerCase(); if(t==='br'){ out+='<w:r><w:br/></w:r>'; return; } const o=Object.assign({},base); if(t==='em'||t==='i')o.italic=true; if(t==='strong'||t==='b')o.bold=true; out+=_dxRuns(n,o); } }); return out; }
 function _dxPara(runs, o){ o=o||{}; const pr=[]; if(o.pageBreak)pr.push('<w:pageBreakBefore/>'); if(o.align)pr.push('<w:jc w:val="'+o.align+'"/>'); if(o.indent)pr.push('<w:ind w:firstLine="'+o.indent+'"/>'); if(o.after!=null)pr.push('<w:spacing w:after="'+o.after+'"/>'); const pPr=pr.length?('<w:pPr>'+pr.join('')+'</w:pPr>'):''; return '<w:p>'+pPr+(runs||'<w:r><w:t/></w:r>')+'</w:p>'; }
+// markdown inline → docx runs (parses **bold** / *italic*)
+function _dxMdRuns(s, base){
+  base = base || {}; let out = "", last = 0, m; const re = /\*\*([^*]+)\*\*|\*([^*]+)\*/g;
+  while (m = re.exec(s)){
+    if (m.index > last) out += _dxRun(s.slice(last, m.index), base);
+    if (m[1] != null) out += _dxRun(m[1], Object.assign({}, base, { bold:true }));
+    else out += _dxRun(m[2], Object.assign({}, base, { italic:true }));
+    last = re.lastIndex;
+  }
+  if (last < s.length) out += _dxRun(s.slice(last), base);
+  return out || _dxRun(s, base);
+}
 function exportStoryDOCX(){
-  const d = buildStoryExport(); if (!d || !d.node){ flashStatus('Open the story in Read first'); return; }
+  const story = (state.session && state.session.name) || 'Dystoria story';
+  const src = $('readBody'); if (!src){ flashStatus('Open the story in Read first'); return; }
   try {
-    const node = d.node, blocks = [];
-    node.querySelectorAll('.rd-name').forEach(n => blocks.push({ t:'title', el:n }));
-    const prose = node.querySelector('.rd-prose'); if (prose) Array.from(prose.children).forEach(c => blocks.push({ t:'b', el:c }));
-    let xml = '';
-    blocks.forEach(b => {
-      const el = b.el, tag = el.tagName.toLowerCase();
-      if (b.t === 'title'){ xml += _dxPara(_dxRun(el.textContent, { italic:true, sz:56 }), { align:'center', after:240 }); return; }
-      if (el.classList && el.classList.contains('sec-div')){ xml += _dxPara(_dxRun(el.textContent, { sz:28 }), { align:'center', pageBreak: !!(el.dataset && el.dataset.brk), after:80 }); return; }
-      if (tag === 'h3'){ xml += _dxPara(_dxRuns(el, { bold:true, sz:34, caps:true }), { align:'center', after:140 }); return; }
-      if (tag === 'img') return;   // images are omitted from .docx (embedding needs a media part) — use PDF for an image-faithful copy
-      const runs = _dxRuns(el, {}); if (runs.trim()) xml += _dxPara(runs, { indent:420, after:120 });
+    const wrap = src.cloneNode(true);
+    wrap.querySelectorAll('.sg-del').forEach(n => n.remove());
+    wrap.querySelectorAll('.sg-ins').forEach(n => n.replaceWith(document.createTextNode(n.textContent)));
+    wrap.querySelectorAll('.nt').forEach(n => n.replaceWith(document.createTextNode(n.textContent)));
+    wrap.querySelectorAll('.ph, [class*="cmt"], .pub-anchored, .pub-copyright').forEach(n => n.remove());
+    const prose = wrap.querySelector('.rd-prose');
+    const md = (typeof htmlToMd === 'function' && prose) ? htmlToMd(prose.innerHTML) : '';
+    let xml = _dxPara(_dxRun(story, { italic:true, sz:56 }), { align:"center", after:240 });
+    let secIdx = 0;
+    md.split(/\n/).forEach(raw => {
+      const block = raw.trim(); if (!block) return; let m;
+      if (m = block.match(/^#{2,}\s+([\s\S]+)/)){ xml += _dxPara(_dxMdRuns(m[1].replace(/\n/g," "), { bold:true, sz:34, caps:true }), { align:"center", after:140 }); return; }
+      if (m = block.match(/^\u25C6\s*(\d+)?\s*$/)){ secIdx++; const brk = secIdx > 1, num = m[1]; if (num){ xml += _dxPara(_dxRun(num, { bold:true, sz:34 }), { align:"center", pageBreak:brk, after:40 }); xml += _dxPara(_dxRun("\u25C6", { sz:28 }), { align:"center", after:80 }); } else { xml += _dxPara(_dxRun("\u25C6", { sz:28 }), { align:"center", pageBreak:brk, after:80 }); } return; }
+      if (/^-{3,}$/.test(block)) return;
+      xml += _dxPara(_dxMdRuns(block.replace(/\n/g," "), {}), { indent:420, after:120 });
     });
     const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
     const doc = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="'+W+'"><w:body>' + xml
@@ -18246,7 +18263,7 @@ function exportStoryDOCX(){
       { name:'word/styles.xml', data:styles },
     ]);
     const blob = new Blob([zip], { type:'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
-    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = slug(d.story) + '.docx';
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = slug(story) + '.docx';
     document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 800);
     flashStatus('Story exported (.docx)');
   } catch (e){ console.warn('docx export failed:', e); flashStatus('Could not build .docx — try PDF'); }
