@@ -14400,13 +14400,19 @@ function startWritingSession(fullscreen){
       } catch(e){}
       // full-screen only: scroll the active prompt to just under the header so prior sessions slide off-screen above (scroll up to revisit)
       if (fullscreen){
+        const phone = (typeof _phone500 === 'function') && _phone500();
         const doScroll = () => { try {
           const wrap = $('editorWrap'); const target = phEl || ed.lastElementChild; if (!wrap || !target) return;
           const hdr = $('fsHeader'); const hh = hdr ? hdr.getBoundingClientRect().height : 150;
-          const pr = target.getBoundingClientRect(), wr = wrap.getBoundingClientRect();
-          wrap.scrollTop += (pr.top - wr.top) - (hh + 18);
+          target.style.scrollMarginTop = (hh + 14) + 'px';            // land the prompt just under the fixed header
+          try { target.scrollIntoView({ block: 'start' }); } catch(e){}
+          const pr = target.getBoundingClientRect(), wr = wrap.getBoundingClientRect();   // then fine-tune so it sits exactly below the header
+          const delta = (pr.top - wr.top) - (hh + 14);
+          if (Math.abs(delta) > 2) wrap.scrollTop += delta;
         } catch(e){} };
         requestAnimationFrame(doScroll); setTimeout(doScroll, 90);
+        // phone: the soft keyboard + async header padding shift layout after start — re-assert once they settle
+        if (phone){ setTimeout(doScroll, 260); setTimeout(doScroll, 480); }
       }
     }
   }
@@ -17906,7 +17912,19 @@ const AI_ENDPOINT = '/ai';
 const AI_VISION_MODEL = '@cf/google/gemma-4-26b-a4b-it';
 // AI requests carry the signed-in user's Supabase token so the worker can reject anonymous abuse.
 function aiHeaders(){ const h = { 'content-type': 'application/json' }; if (cloud.token) h.Authorization = 'Bearer ' + cloud.token; return h; }
+// AI features require a real (non-anonymous) account — the worker verifies a signed-in token.
+function aiAuthed(){ return !!(typeof cloud !== 'undefined' && cloud.user && !cloud.user.is_anonymous); }
+let _aiGateOpen = false;
+function promptAiSignup(){
+  if (_aiGateOpen) return; _aiGateOpen = true;
+  const done = () => { _aiGateOpen = false; };
+  if (typeof siteConfirm === 'function'){
+    siteConfirm('Sparks, summaries and the Story Wiki run on AI — and that needs a free Dystoria account. Create one to use them?', 'Create free account')
+      .then(ok => { done(); if (ok){ const c = $('authCard'); if (c){ c.classList.add('show'); const e = $('authEmail'); if (e) setTimeout(() => e.focus(), 60); } } });
+  } else { done(); const c = $('authCard'); if (c) c.classList.add('show'); }
+}
 async function aiCall(system, prompt, opts){
+  if (!aiAuthed()){ promptAiSignup(); throw new Error('sign in'); }   // gate every AI feature behind sign-up
   opts = opts || {};
   const body = { system, prompt };
   if (opts.maxTokens) body.max_tokens = opts.maxTokens;
