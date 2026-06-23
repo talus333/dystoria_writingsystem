@@ -8077,6 +8077,11 @@ function restoreMapView(id){
   const zs = $('zoomSlider'); if (zs) zs.value = Math.round((state.view.zoom || 1) * 100);
 }
 function forgetMapView(id){ try { const all = loadMapViews(); const pre = id + ':'; let ch = false; Object.keys(all).forEach(k => { if (k === id || k.indexOf(pre) === 0){ delete all[k]; ch = true; } }); if (ch) localStorage.setItem(LS_MAPVIEW, JSON.stringify(all)); } catch (e){} }
+/* ---- snapping grid (per story): a light dot grid the elements + drawn shapes snap to ---- */
+function gridState(){ if (!state.session) return null; if (!state.session.grid) state.session.grid = { on: false, size: 44 }; return state.session.grid; }
+function gridOn(){ const g = gridState(); return !!(g && g.on); }
+function gridSize(){ const g = gridState(); return Math.max(8, Math.min(160, (g && g.size) || 44)); }
+function snapToGrid(x, y){ if (!gridOn()) return { x: x, y: y }; const s = gridSize(), h = s / 2; return { x: Math.round((x - h) / s) * s + h, y: Math.round((y - h) / s) * s + h }; }
 function snapToBeing(){
   let target = null;
   const beings = state.nodes.map((nd, i) => nd.role === 'being' ? i : -1).filter(i => i >= 0);
@@ -12508,6 +12513,14 @@ function renderTerrains(svg){
   const words = (state.prompt && state.prompt.words) || [];
   const layer = tEl('g', { 'class': 'terrain-layer' });
   renderMapBackground(layer);                                         // base biome first, behind everything
+  if (gridOn()){   // a light, tiling dot grid (snapping points) above the biome, under terrain + elements
+    const gs = gridSize();
+    const gdefs = tEl('defs', {});
+    const pat = tEl('pattern', { id: 'gridDots', width: gs, height: gs, patternUnits: 'userSpaceOnUse' });
+    pat.appendChild(tEl('circle', { cx: (gs / 2).toFixed(2), cy: (gs / 2).toFixed(2), r: Math.max(0.7, gs * 0.035).toFixed(2), fill: '#8a8276', 'fill-opacity': '0.5' }));
+    gdefs.appendChild(pat); layer.appendChild(gdefs);
+    layer.appendChild(tEl('rect', { x: -8000, y: -8000, width: 16000, height: 16000, fill: 'url(#gridDots)', 'pointer-events': 'none' }));
+  }
   words.forEach((w, idx) => { if (w.terrain && w.poly) renderTerrainRegion(w, layer, idx); });
   words.forEach((w, idx) => { if (w.shape) renderShapeFeature(w, layer, idx); });    // drawn squares / circles / lines
   words.forEach((w, idx) => { if (w.line) renderLineFeature(w, layer, idx); });   // lines sit on top of fills
@@ -12713,6 +12726,27 @@ function buildDrawSection(root){
     b.addEventListener('click', ev => { ev.stopPropagation(); openBrandedColorPicker(getHex(), ev.clientX + 12, ev.clientY, hex => { onApply(hex); chip.style.background = hex; }); });
     return b;
   };
+
+  // ---- Grid: a light dot grid that elements + drawn shapes snap to, with adjustable spacing ----
+  const gWrap = document.createElement('div'); gWrap.className = 'draw-tool';
+  const gBtn = document.createElement('button'); gBtn.id = 'drawGridBtn'; gBtn.type = 'button'; gBtn.className = 'draw-pill'; gBtn.title = 'A light grid elements and shapes snap to — keeps the map tidy and helps draw straight lines and even squares & circles';
+  gBtn.textContent = 'Grid';
+  const gPanel = document.createElement('div'); gPanel.id = 'drawGridPanel'; gPanel.className = 'draw-panel'; gPanel.hidden = true;
+  gBtn.addEventListener('click', e => { e.stopPropagation();
+    const gst = gridState(); if (!gst){ flashStatus('Roll or add an element first to open the map'); return; }
+    gst.on = !gst.on; gPanel.hidden = !gst.on; if (gst.on) closeOtherPanels(gPanel);
+    if (state.session){ state.session.grid = gst; scheduleAutosave(); }
+    gBtn.classList.toggle('on', gst.on);
+    if (typeof renderConstellation === 'function') renderConstellation();
+  });
+  const gLab = document.createElement('div'); gLab.className = 'draw-sublabel'; gLab.textContent = 'Spacing'; gPanel.appendChild(gLab);
+  const gSpace = document.createElement('input'); gSpace.type = 'range'; gSpace.className = 'draw-thick'; gSpace.min = '16'; gSpace.max = '120'; gSpace.step = '4';
+  gSpace.value = String((gridState() && gridState().size) || 44);
+  gSpace.addEventListener('input', ev => { ev.stopPropagation(); const gst = gridState(); if (!gst) return; gst.size = +gSpace.value; if (!gst.on){ gst.on = true; gBtn.classList.add('on'); } if (state.session){ state.session.grid = gst; scheduleAutosave(); } if (typeof renderConstellation === 'function') renderConstellation(); });
+  gSpace.addEventListener('click', ev => ev.stopPropagation());
+  gPanel.appendChild(gSpace);
+  gWrap.appendChild(gBtn); gWrap.appendChild(gPanel); body.appendChild(gWrap);
+  gBtn.classList.toggle('on', gridOn()); gPanel.hidden = !gridOn();
 
   // ---- Terrain tool: biome-colour palette (named on hover) + branded custom colour. Draws a decoration, never an element. ----
   const tWrap = document.createElement('div'); tWrap.className = 'draw-tool';
@@ -19967,7 +20001,7 @@ function init(){
       e.preventDefault(); return;
     }
     if (state.shapeDraw){
-      const p = skyPt(e);
+      const p0 = skyPt(e); const p = gridOn() ? snapToGrid(p0.x, p0.y) : p0;   // snap the anchor to the grid
       terrainDrawing = { pts: [[p.x, p.y], [p.x, p.y]], pid: e.pointerId, shape: Object.assign({}, state.shapeDraw) };
       if (!terrainPreview){ terrainPreview = tEl('path', { fill: 'none', stroke: '#6a6253', 'stroke-width': '1.5', 'stroke-dasharray': '4 4' }); }
       sky.appendChild(terrainPreview); terrainPreview.setAttribute('opacity', '0.9');
@@ -20017,8 +20051,9 @@ function init(){
   sky.addEventListener('pointermove', e => {
     if (terrainDrawing){
       const p = skyPt(e);
-      if (terrainDrawing.shape){   // rubber-band a square / circle / line from the anchor to the cursor
-        terrainDrawing.pts[1] = [p.x, p.y];
+      if (terrainDrawing.shape){   // rubber-band a square / circle / line from the anchor to the cursor (snapped to grid)
+        const sp = gridOn() ? snapToGrid(p.x, p.y) : p;
+        terrainDrawing.pts[1] = [sp.x, sp.y];
         terrainPreview.setAttribute('d', shapePreviewPath(terrainDrawing.shape.kind, terrainDrawing.pts[0], terrainDrawing.pts[1]));
         return;
       }
@@ -20059,11 +20094,13 @@ function init(){
     if (!dragging.moved) return;
     const p = skyPt(e);
     if (dragging.group && dragging.groupOrig){
-      const gdx = p.x - dragging.spx, gdy = p.y - dragging.spy;
+      let gdx = p.x - dragging.spx, gdy = p.y - dragging.spy;
+      if (gridOn()){ const s = gridSize(); gdx = Math.round(gdx / s) * s; gdy = Math.round(gdy / s) * s; }   // move the group in whole grid steps
       dragging.groupOrig.forEach(o => { const n = state.nodes[o.j]; if (n){ n.x = o.x + gdx; n.y = o.y + gdy; n.amp = 0; } });
     } else {
       const nd = state.nodes[dragging.i];
       nd.x = dragging.ox + (p.x - dragging.spx); nd.y = dragging.oy + (p.y - dragging.spy);
+      if (gridOn()){ const sn = snapToGrid(nd.x, nd.y); nd.x = sn.x; nd.y = sn.y; }   // snap the dragged element onto the nearest grid point
     }
     positionConstellation(0);
   });
