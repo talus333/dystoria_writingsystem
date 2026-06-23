@@ -11728,11 +11728,23 @@ function openIconGenerator(i){
     + '<p class="ig-sub">Name the <b>one main shape</b> it should read as, then a few details — material, key features, mood. The more concrete, the better it comes out.</p>'
     + '<textarea id="igGuide" rows="2" placeholder="e.g. a tall crooked cottage of mossy stone — steep thatch roof, round windows, a tilting chimney with smoke"></textarea>'
     + '<div class="ig-suggest-row"><button id="igSuggest" class="ig-suggest" title="Let the AI draft a description from your story, then tweak it">✨ Describe it for me</button><span class="ig-suggest-hint">drafts from the story — your own words always win</span></div>'
-    + '<div class="ig-row"><div id="igPreview" class="ig-preview"><span class="ig-ph">preview</span></div>'
-    + '<div class="ig-side"><button id="igGo" class="ig-go">Generate ✦</button><div id="igActions" class="ig-actions" style="display:none"><button id="igUse" class="ig-use">Use this icon</button><button id="igRedo" class="ig-redo">Redo</button></div><div id="igStatus" class="ig-status"></div></div></div></div>';
-  let lastSvg = '';
+    + '<div class="ig-row"><div id="igGrid" class="ig-grid"></div>'
+    + '<div class="ig-side"><button id="igGo" class="ig-go">Generate 4 ✦</button><div id="igActions" class="ig-actions" style="display:none"><button id="igUse" class="ig-use">Use this icon</button><button id="igEnhance" class="ig-enhance" title="Polish the selected icon — adds shading, texture, tighter proportions">Enhance ✨</button></div><div id="igStatus" class="ig-status"></div></div></div></div>';
+  const N = 4;
+  let cands = new Array(N).fill(null);   // candidate SVG bodies
+  let selIdx = -1;                       // selected candidate index
+  let lastSvg = '';                      // the selected body (for Use / Enhance)
   const q = sel => ov.querySelector(sel);
-  const renderPreview = body => { q('#igPreview').innerHTML = '<svg viewBox="-13 -16 26 17">' + body + '</svg>'; };
+  const cellAt = idx => ov.querySelector('#igGrid .ig-cell[data-idx="' + idx + '"]');
+  function renderGrid(){
+    let h = ''; for (let k = 0; k < N; k++) h += '<div class="ig-cell loading" data-idx="' + k + '"><span class="ig-spin"></span></div>';
+    q('#igGrid').innerHTML = h;
+    ov.querySelectorAll('#igGrid .ig-cell').forEach(c => c.addEventListener('click', () => { const k = +c.dataset.idx; if (cands[k]) selectCand(k); }));
+  }
+  function renderCell(idx){ const c = cellAt(idx); if (!c) return; c.classList.remove('loading', 'failed'); c.innerHTML = '<svg viewBox="-13 -16 26 17">' + cands[idx] + '</svg>'; }
+  function failCell(idx){ const c = cellAt(idx); if (!c) return; c.classList.remove('loading'); c.classList.add('failed'); c.innerHTML = '<span class="ig-ph">—</span>'; }
+  function selectCand(idx){ if (!cands[idx]) return; selIdx = idx; lastSvg = cands[idx]; ov.querySelectorAll('#igGrid .ig-cell').forEach(c => c.classList.toggle('sel', +c.dataset.idx === idx)); }
+  const isDrawing = b => !!b && /<(path|circle|ellipse|rect|line|polygon|polyline|g)\b/i.test(b);
   // Shared story context for both the brief-writer and the icon drawer.
   function gatherCtx(){
     let notes = ''; try { const k = wordKey(w); const nh = (typeof npGetNotes === 'function') ? npGetNotes(k) : ''; const dv = document.createElement('div'); dv.innerHTML = nh || ''; notes = (dv.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 400); } catch(e){}
@@ -11765,16 +11777,19 @@ function openIconGenerator(i){
   }
   async function generate(){
     const guidance = (q('#igGuide').value || '').trim();
-    const status = q('#igStatus'); status.textContent = 'Conjuring an icon…'; q('#igGo').disabled = true; q('#igActions').style.display = 'none';
+    const status = q('#igStatus'); q('#igGo').disabled = true; q('#igActions').style.display = 'none';
+    cands = new Array(N).fill(null); selIdx = -1; lastSvg = ''; renderGrid();
+    status.textContent = 'Sketching ' + N + ' options…';
     try {
       const { notes, others, gc, prose } = gatherCtx();
       const sys = 'You are an expert pictogram illustrator for a story-mapping app. You draw ONE small, instantly-recognisable SETTING icon as RAW SVG shape markup that is dropped INSIDE <svg viewBox="-13 -16 26 17">…</svg>. The single most important thing: a viewer must recognise WHAT IT IS at a glance.\n'
         + 'CANVAS & ORIENTATION: x runs left(-13)→right(13). y is INVERTED — the GROUND is at y=0 and the icon rises UPWARD into NEGATIVE y. So a tall thing goes from y=0 up to about y=-14. Centre everything on x=0.\n'
         + 'GO BIG (this is where most attempts fail): the subject must FILL the frame. Its main mass should span roughly x:-8..8 and rise from the ground (y=0) up to about y=-13. Do NOT draw small shapes huddled in the middle, and do NOT scatter disconnected bits — one bold subject, sitting on the ground.\n'
-        + 'CONSTRUCTION METHOD — plan, then build in this order: (1) a thin grassy/earth ground strip across the bottom near y=0; (2) the ONE main mass / silhouette as a single large shape resting on the ground; (3) the top — roof, crown, canopy, or cap; (4) 2–4 structural details that say what it is (door, windows, arches, openings, branches); (5) 1–4 tiny accents for the requested flavour. Give big shapes a slightly darker copy down one side for depth. Aim for roughly 6–12 shapes total — bold and clean, never cluttered.\n'
-        + 'STYLE: flat vector, muted earthy palette, thin dark outlines (stroke-width 0.4–0.9), gentle flat shading. NO gradients, NO filters, NO text, NO wrapper/defs/style/script tags and no nested svg — ONLY shape elements (path, circle, ellipse, rect, line, polygon, g). Style every shape with the attribute style="fill:HEX;stroke:HEX;stroke-width:N".\n'
-        + 'PALETTE (use these hex): outline #2b2620; stone/plaster #e4ded0/#c6bfac/#a89e87; roof/clay #c87e54/#9f5a3a; wood #b88a55/#8c6840; glass #9fbcd2/#d2e2ec; water #8fb6d0/#6c97b8; green #84ac68/#638a4b; trunk #86683f; dark #6e695f/#403b34; gold #d6af57; snow #eef2f5; rock #b9a98f/#94836a; grass strip #5e8a3e.\n'
-        + 'You MAY begin with ONE short SVG comment naming your plan, e.g. (planning comment) then the shapes. Output ONLY SVG markup — no prose outside a comment, no code fences, no svg wrapper.';
+        + 'CONSTRUCTION — build in this order: (1) a thin grassy/earth ground strip across the bottom near y=0; (2) the ONE main mass / silhouette as a single large shape resting on the ground; (3) the top — roof, crown, canopy, or cap; (4) 3–5 structural details that say what it is (door, windows, arches, openings, branches); (5) a few small accents for the requested flavour.\n'
+        + 'CRAFT — this is what separates a polished icon from a flat one. Do ALL of it: (a) give every large fill its OWN darker shadow copy down one side (same outline shape, a darker hex, stroke:none) for depth; (b) add fine TEXTURE as thin stroked groups — wood grain, brick/stone courses, thatch, roof tiles, foliage flecks, water ripples — like (g fill:none stroke:HEX stroke-width:0.22 with a path inside); (c) keep outlines thin and CONSISTENT: about 0.3 on filled shapes, 0.22 on texture; (d) use 12–22 shapes total — richer reads as higher quality, but keep the silhouette clean.\n'
+        + 'STYLE: flat vector, muted earthy palette, gentle flat shading. NO gradients, NO filters, NO text, NO wrapper/defs/style/script tags and no nested svg — ONLY shape elements (path, circle, ellipse, rect, line, polygon, g). Style every shape with the attribute style="fill:HEX;stroke:HEX;stroke-width:N".\n'
+        + 'PALETTE (use these hex; pick a darker sibling for each shadow): outline #2b2620; stone/plaster #e4ded0/#c6bfac/#a89e87; roof/clay #c87e54/#9f5a3a; wood #b88a55/#8c6840; glass #9fbcd2/#d2e2ec; water #8fb6d0/#6c97b8; green #84ac68/#638a4b; trunk #86683f; dark #6e695f/#403b34; gold #d6af57; snow #eef2f5; rock #b9a98f/#94836a; grass strip #5e8a3e.\n'
+        + 'You MAY begin with ONE short SVG comment naming your plan, then the shapes. Output ONLY SVG markup — no prose outside a comment, no code fences, no svg wrapper.';
       // Two clean, well-proportioned reference skeletons — these teach PROPORTION and the build order, not dense path data.
       const SKEL_BUILT = '<path d="M-12 0 Q0 -1.4 12 -0.6 V0.6 H-12 Z" style="fill:#5e8a3e;stroke:none"/>\n'
         + '<rect x="-7.5" y="-11" width="15" height="11" style="fill:#e4ded0;stroke:#2b2620;stroke-width:0.6"/>\n'
