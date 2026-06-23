@@ -18462,13 +18462,43 @@ async function runWikiQuestions(){
       + 'Story so far:\n\n' + text.slice(0, 16000)
       + '\n\nRaise the questions' + (gc ? ' (start with the goal-vs-story questions, then the per-element ones)' : '') + ':';
     const out = await aiCall(sys, prompt);
-    if (state.session){ state.session.wikiQuestions = out; scheduleAutosave(500); }
+    if (state.session){ state.session.wikiQuestions = out; captureElementQuestions(out); scheduleAutosave(500); }
     renderWikiQuestions(out);
+    if (typeof renderNpCard === 'function') renderNpCard();   // surface the new per-element questions in the notepad
   } catch (e){
     wrap.innerHTML = '<div class="wk-q-head">Questions the story raises</div>';
     const m = document.createElement('div'); m.className = 'wk-aitext wk-empty'; m.textContent = aiErrMsg(e); wrap.appendChild(m);
     const b = document.createElement('button'); b.className = 'wk-aibtn'; b.textContent = 'Try again'; b.addEventListener('click', runWikiQuestions); wrap.appendChild(b);
   }
+}
+// Parse the wiki's "Subject — question" lines into per-element open questions, so they can surface in the
+// notepad and feed the prompt generator. Goal-level questions are kept story-wide. Resolved flags are preserved
+// across re-runs (Stage 2 marks a question resolved once the prose answers it).
+function captureElementQuestions(text){
+  if (!state.session) return;
+  const els = (typeof wikiGather === 'function') ? wikiGather() : [];
+  const prev = state.session.elementQuestions || {};
+  const eq = {}; const goalQ = [];
+  String(text || '').split(/\n+/).map(s => s.trim()).filter(Boolean).forEach(line => {
+    const m = line.match(/^(.*?)\s*[—–:\-]\s*(.+)$/);   // "Subject — question"
+    const subj = m ? m[1].trim() : '';
+    const q = (m ? m[2].trim() : line);
+    if (/^goal$/i.test(subj)){ goalQ.push(q); return; }
+    const lc = subj.toLowerCase(); let best = null;
+    els.forEach(e => { const nm = (e.name || '').toLowerCase(), wd = (e.word || '').toLowerCase();
+      if ((nm && lc.indexOf(nm) >= 0) || (wd && lc.indexOf(wd) >= 0)) best = e; });
+    if (best){ const k = best.cat + '|' + best.word; (eq[k] = eq[k] || []).push({ q: q, resolved: false }); }
+  });
+  // carry forward resolved flags for questions that persist
+  Object.keys(eq).forEach(k => { const pl = prev[k] || []; eq[k].forEach(it => { const old = pl.find(p => p.q === it.q); if (old && old.resolved) it.resolved = true; }); });
+  state.session.elementQuestions = eq;
+  state.session.goalQuestions = goalQ;
+}
+// Open (unresolved) wiki questions for a focus element, by its word — used by the prompt generator.
+function elementQuestionsFor(w){
+  if (!w || !state.session || !state.session.elementQuestions) return [];
+  const list = state.session.elementQuestions[w.cat + '|' + w.word] || [];
+  return list.filter(q => !q.resolved).map(q => q.q);
 }
 function renderWikiQuestions(text){
   const wrap = $('wikiQuestions'); if (!wrap) return;
@@ -20213,6 +20243,14 @@ document.addEventListener('DOMContentLoaded', init);
 <style id="card-exp-style">
   /* the element "card" banner sits atop the notes sheet: image + the character sentence + note sub-tabs */
   #npCard{display:none; gap:12px; align-items:stretch; padding:11px 16px 12px; border-bottom:1px solid var(--line); background:var(--bg)}
+  #npCard .npc-questions{margin-top:9px; padding-top:8px; border-top:1px dashed var(--line)}
+  #npCard .npc-qhead{font-family:var(--sans); font-size:8.5px; font-weight:700; letter-spacing:.18em; text-transform:uppercase; color:var(--gold); margin-bottom:5px}
+  #npCard .npc-q{font-family:var(--serif); font-size:12.5px; line-height:1.4; color:var(--ink-soft); margin-bottom:4px; padding-left:13px; text-indent:-13px}
+  #npCard .npc-q::before{content:'?'; font-family:var(--sans); font-weight:700; color:var(--gold); margin-right:7px}
+  #npCard .npc-q.resolved{color:var(--ink-faint); text-decoration:line-through; text-decoration-color:var(--line)}
+  #npCard .npc-q.resolved::before{content:''; margin:0}
+  #npCard .npc-qck{color:#2f9e44; font-weight:700; margin-right:6px; text-decoration:none; display:inline-block}
+  body.eink #npCard .npc-qck{color:#1f7a33}
   body.writing #npCard{display:none !important}   /* no card banner in full-screen write mode */
   #npCard .npc-img{position:relative; width:104px; height:auto; align-self:stretch; min-height:64px; flex:none; border-radius:8px; border:1px solid var(--line); overflow:hidden; display:flex; align-items:center; justify-content:center; cursor:pointer; background:var(--bg2)}
   /* with an image: never grow the card taller than the text — cap height to the text, and let the box shrink (and narrow) for short/tall images */
@@ -20832,6 +20870,18 @@ document.addEventListener('DOMContentLoaded', init);
         else if(typeof flashStatus==='function'){ flashStatus('Open this element on the current section’s map to add traits'); } });
       tr.appendChild(add);
       body.appendChild(tr);
+      // Open questions the wiki raised about this element (read-only). Resolved ones show a ✓.
+      try {
+        const qs = (state.session && state.session.elementQuestions && state.session.elementQuestions[wEl.cat + '|' + wEl.word]) || [];
+        if (qs.length){
+          const qb = document.createElement('div'); qb.className = 'npc-questions';
+          const qh = document.createElement('div'); qh.className = 'npc-qhead'; qh.textContent = 'Questions the story raises'; qb.appendChild(qh);
+          qs.forEach(q => { const qi = document.createElement('div'); qi.className = 'npc-q' + (q.resolved ? ' resolved' : '');
+            if (q.resolved){ const ck = document.createElement('span'); ck.className = 'npc-qck'; ck.textContent = '✓'; qi.appendChild(ck); }
+            qi.appendChild(document.createTextNode(q.q)); qb.appendChild(qi); });
+          body.appendChild(qb);
+        }
+      } catch(e){}
       card.appendChild(body);
       // cap the image height to the text height so adding one never grows the card; short/tall images shrink the box instead.
       // measure the text height with the image momentarily collapsed, else align-items:stretch lets a tall image inflate body.offsetHeight (the cap would then never bite on re-render).
