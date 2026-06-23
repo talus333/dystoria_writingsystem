@@ -7367,6 +7367,7 @@ function renderTimeline(){
     gh.style.marginLeft = '10px';
     tl.appendChild(gh);
   }
+  try { requestAnimationFrame(positionNotesTab); } catch(e){ positionNotesTab(); }   // park the Notes tab under the "Timeline" label on phone
 }
 
 /* ---------------- add / remove without regenerating ---------------- */
@@ -14393,7 +14394,7 @@ function startWritingSession(fullscreen){
         const d = document.createElement('div'); d.className = 'ph'; d.dataset.ph = hasProse ? 'Continue\u2026' : 'Begin\u2026';
         if (lastK && lastK.nextSibling) ed.insertBefore(d, lastK.nextSibling); else ed.appendChild(d);
       }
-      ed.focus();
+      try { ed.focus({ preventScroll: true }); } catch(e){ ed.focus(); }   // preventScroll: stop iOS from scrolling the window to the caret (which pushes the fixed header out of view)
       let phEl = null;
       try {
         phEl = Array.from(ed.children).reverse().find(c => c.classList && c.classList.contains('ph') && (fm ? fm.get(c) : 0) === k);
@@ -14405,6 +14406,9 @@ function startWritingSession(fullscreen){
       if (fullscreen){
         const phone = (typeof _phone500 === 'function') && _phone500();
         const doScroll = () => { try {
+          // keep the page itself pinned — only the editor pane should move, so the fixed header stays in view (iOS)
+          if (window.scrollY) window.scrollTo(0, 0);
+          if (document.scrollingElement && document.scrollingElement.scrollTop) document.scrollingElement.scrollTop = 0;
           const wrap = $('editorWrap'); if (!wrap) return;
           // re-find the active continue/begin prompt each time (focus/keyboard can rebuild selection)
           const target = (phEl && phEl.isConnected) ? phEl
@@ -14412,11 +14416,10 @@ function startWritingSession(fullscreen){
             || ed.lastElementChild;
           if (!target) return;
           const hdr = $('fsHeader'); const hh = hdr ? hdr.getBoundingClientRect().height : 150;
-          target.style.scrollMarginTop = (hh + 14) + 'px';            // land the prompt just under the fixed header
-          try { target.scrollIntoView({ block: 'start' }); } catch(e){}
-          const pr = target.getBoundingClientRect(), wr = wrap.getBoundingClientRect();   // then fine-tune so it sits exactly below the header
-          const delta = (pr.top - wr.top) - (hh + 14);
-          if (Math.abs(delta) > 2) wrap.scrollTop += delta;
+          // scroll ONLY the editor pane (never scrollIntoView — it scrolls the window and pushes the fixed header off-screen on iOS)
+          const pr = target.getBoundingClientRect(), wr = wrap.getBoundingClientRect();
+          const delta = (pr.top - wr.top) - (hh + 12);   // land the prompt just under the header; the .ph's 64px top margin tucks prior prose away above
+          if (Math.abs(delta) > 1) wrap.scrollTop += delta;
         } catch(e){} };
         requestAnimationFrame(doScroll); setTimeout(doScroll, 90);
         // phone: the soft keyboard + async header padding shift layout after start — re-assert as they settle,
@@ -18635,6 +18638,17 @@ function closeNotesSheet(){
   document.body.classList.remove('np-open');
   const t = $('npTab'); if (t){ const l = t.querySelector('.npt-lbl'); if (l) l.textContent = 'Notes'; }
 }
+// Phone: park the Notes tab under the "Timeline" label (empty space) instead of centered over the timeline dots.
+function positionNotesTab(){
+  const t = $('npTab'); if (!t) return;
+  const phone = (typeof _phone500 === 'function') && _phone500();
+  const tl = $('timeline'); const hd = tl && tl.querySelector('.tl-head');
+  if (phone && hd && tl.style.display !== 'none' && !document.body.classList.contains('writing')){
+    const r = hd.getBoundingClientRect();
+    if (r.width){ t.style.left = Math.round(r.left + r.width / 2) + 'px'; return; }
+  }
+  t.style.left = '';   // otherwise fall back to the CSS position (centered)
+}
 // The dock appears only while the ink canvas is actually active (ink mode + notepad, or a running
 // Write session). In plain typing it stays hidden — no empty pill. Overlays always hide it.
 function inkDockVisible(){
@@ -19794,7 +19808,7 @@ function init(){
   if (prefs0.eink === true || (prefs0.eink === undefined && (einkDevice || reduced))) setEink(true);
   setHeaderH();
   window.addEventListener("resize", setHeaderH);
-  window.addEventListener("resize", () => { if (typeof positionInkDock === 'function') positionInkDock(); });
+  window.addEventListener("resize", () => { if (typeof positionInkDock === 'function') positionInkDock(); if (typeof positionNotesTab === 'function') positionNotesTab(); });
   setTimeout(() => { try { maybeBackupNudge(); } catch (e){} }, 5000);   // after cloud auth has had a chance to resolve
   try{ const _hd=document.querySelector("header"); if(_hd) new ResizeObserver(setHeaderH).observe(_hd); }catch(e){}
   window.addEventListener('hashchange', applyHash);   // back/forward + manual URL edits
