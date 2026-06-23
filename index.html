@@ -2239,6 +2239,7 @@
   body.eink .fb-fstoggle.on{color:#000}
   /* full-screen: element/exercise words as centered black pills under the clock, prompt below */
   #fsWords{display:none}
+  #fsPillsToggle{display:none}   /* phone-only; shown in the ≤500 in-session block */
   body.writing.insession #fsWords{display:flex; flex-direction:row; flex-wrap:wrap; align-items:center; justify-content:center; gap:6px 8px; margin:10px auto 0; max-width:760px; pointer-events:none}
   .fs-pill{font-family:var(--sans); font-size:10px; letter-spacing:.1em; text-transform:uppercase; background:var(--ink); color:var(--paper); padding:3px 12px; border-radius:13px}
   .fs-pill.named{background:#7d3550; color:#1c1a15}   /* named character → its color (set inline); dark text since the color is light-ish */
@@ -2335,7 +2336,7 @@
     body.writing:not(.insession) #constraintBar{width:100%; flex-wrap:nowrap; overflow-x:auto; overflow-y:hidden; justify-content:flex-start; gap:10px; margin-top:6px; -webkit-overflow-scrolling:touch; scrollbar-width:none}
     body.writing:not(.insession) #focusList::-webkit-scrollbar, body.writing:not(.insession) #constraintBar::-webkit-scrollbar{display:none}
     body.writing:not(.insession) #focusList>*, body.writing:not(.insession) #constraintBar>*{flex:none; white-space:nowrap}
-    body.writing:not(.insession) #focusList .fp-rule{display:none}   /* the centred divider line breaks the horizontal row — drop it on phone */
+    body.writing:not(.insession) #focusList .fp-rule, body.writing:not(.insession) #constraintBar .fp-rule{display:none}   /* the centred divider line breaks the horizontal row — drop it on phone */
     /* prompt: takes no space until one is generated, then it expands below */
     body.writing:not(.insession) #prepPrompt{width:100%; margin:0; padding:0; min-height:0}
     body.writing:not(.insession) #prepPromptText:empty{display:none}
@@ -2346,8 +2347,11 @@
     body.writing.insession #miniClock{font-size:40px}                       /* compact countdown */
     body.writing.insession #fsHeader{padding:10px 14px 10px}
     body.writing.insession #sessionGoal.show{font-size:16px; margin-top:8px}
-    body.writing.insession #fsWords{margin-top:8px; gap:5px 7px}
-    body.writing.insession .fs-pill{font-size:9.5px; padding:3px 9px}
+    body.writing.insession #fsWords{margin-top:8px; gap:4px 6px}
+    body.writing.insession .fs-pill{font-size:9px; padding:2px 8px; letter-spacing:.06em}
+    /* phone: focus pills are collapsible so they never eat the writing area */
+    body.writing.insession #fsPillsToggle{display:inline-flex; align-items:center; gap:5px; margin:8px auto 0; padding:2px 11px; font-family:var(--sans); font-size:9px; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-soft); background:var(--paper); border:1px solid var(--line); border-radius:13px; pointer-events:auto; cursor:pointer}
+    body.writing.insession.fs-pills-collapsed #fsWords{display:none !important}
     /* (editor top padding is set in JS to the header's real height so nothing overlaps) */
   }
 </style>
@@ -2695,7 +2699,7 @@
     </div>
     <div id="npAddMenu" hidden></div>
     <div id="sessMenu"></div>
-    <div id="fsHeader"><div id="miniClock" title="Time left in this session"></div><div id="fsWords"></div><div id="sessionGoal"></div><div id="fsGoalHint"></div></div>
+    <div id="fsHeader"><div id="miniClock" title="Time left in this session"></div><div id="fsWords"></div><button id="fsPillsToggle" type="button"></button><div id="sessionGoal"></div><div id="fsGoalHint"></div></div>
     <div id="focusTab" title="Peek your focus elements">Focus</div>
     <div id="redoChoice"><div class="rdc-card">
       <div class="rdc-q">Keep this rewrite?</div>
@@ -14290,7 +14294,18 @@ function applyFsHeader(){
     }
     if (fsShow.guides){ words.filter(isGuideWord).forEach(w => pills.push({ text: w.word, named: false })); }
     pills.forEach(p => { const s = document.createElement('span'); s.className = 'fs-pill' + (p.named ? ' named' : ''); s.textContent = p.text; if (p.color) s.style.background = p.color; fsW.appendChild(s); });
-    fsW.style.display = pills.length ? 'flex' : 'none';
+    fsW.style.display = pills.length ? 'flex' : 'none';   // CSS .fs-pills-collapsed overrides this with !important on phone
+    // phone: a small toggle lets the writer hide the focus pills so they never eat the writing area
+    const tog = $('fsPillsToggle');
+    if (tog){
+      const show = _phone500() && pills.length > 0;
+      tog.style.display = show ? '' : 'none';   // '' lets the media query decide (inline-flex on phone, none elsewhere)
+      if (show){
+        const collapsed = document.body.classList.contains('fs-pills-collapsed');
+        tog.textContent = (collapsed ? '▸ Show ' : '▾ Hide ') + pills.length + (pills.length === 1 ? ' element' : ' elements');
+        if (!tog._wired){ tog._wired = true; tog.addEventListener('click', () => { document.body.classList.toggle('fs-pills-collapsed'); applyFsHeader(); }); }
+      }
+    }
   }
   // The full-screen prompt is ONLY the one the author generated in the prep board \u2014 never auto-generated here.
   const sg = $('sessionGoal');
@@ -21352,14 +21367,24 @@ document.addEventListener('DOMContentLoaded', init);
       return { gap: k===0?null:'later', prompt:{ words:words, sets:1, links:links, removedLinks:[] }, stage:0 };
     });
 
-    let html='', text='';
+    const now = new Date().toISOString();
+    let html='', text=''; const sessionLog=[];
     HANSEL.sections.forEach((sec, k) => {
       if(k>0){
         html += '<div class="sec-mark" contenteditable="false"><span class="dia"><span>'+(k+1)+'</span></span></div>';
         html += '<h3 data-frame="'+k+'">'+esc(sec.title)+'</h3>';
       }
       var _ban=HART_SECTION[sec.title]; if(_ban){ html += '<img class="story-img" src="'+_ban+'" alt="'+esc(sec.title)+' — vintage illustration of Hansel and Gretel">'; }
-      sec.prose.forEach(p => { html += '<p>'+esc(p)+'</p>'; text += p + '\n'; });
+      // the worked example's prose is a completed, LOCKED session per section — so opening Write mode
+      // shows it the way a real prior session looks, with a fresh block to continue into below.
+      const sid='seed'+k; let secWords=0;
+      sec.prose.forEach((p, pi) => {
+        const cls='lk'+(pi===0?' session-start':'');
+        const lbl=pi===0?' data-sess-label="Session"':'';
+        html += '<p class="'+cls+'" contenteditable="false" data-sess="'+sid+'"'+lbl+'>'+esc(p)+'</p>';
+        text += p + '\n'; secWords += (p.match(/\S+/g)||[]).length;
+      });
+      sessionLog.push({ id:sid, at:now, words:secWords, html:'', review:'', frame:k });
     });
 
     const np = {};
@@ -21369,12 +21394,11 @@ document.addEventListener('DOMContentLoaded', init);
     const goalItems = HANSEL.goal.map((g, i) => { const id='hgg'+i; if(g.note) np['goal:'+id]='<p>'+esc(g.note)+'</p>'; return { id:id, word:g.w, cat:g.cat||null, sub:g.sub||'' }; });
     const npImages = {}; HANSEL.beings.forEach(o=>{ const u=HART_BEING[o.name]; if(u) npImages[keyOf('being', o.w)]=u; });
 
-    const now = new Date().toISOString();
     return {
       id: HANSEL.id, name: HANSEL.name, created: now, updated: now,
       section: HANSEL.sections[0].title, text: text.trim(), html: html,
       categories: [], words: frames[0].prompt.words, sets: 1, links: frames[0].prompt.links, removedLinks: [],
-      frames: frames, frameIdx: 0, timerLen: 10,
+      frames: frames, frameIdx: 0, timerLen: 10, sessionLog: sessionLog,
       goal: { items: goalItems }, cover: HART_COVER, npImages: npImages,
       notepad: '<p>'+esc(HANSEL.general)+'</p>', npEls: [], npNotes: np,
       focusKeys: [ keyOf('being', HANSEL.beings[0].w) ],
@@ -21432,10 +21456,29 @@ document.addEventListener('DOMContentLoaded', init);
     }catch(e){ console.warn('hansel icon patch failed:', e); }
   }
   window.patchHanselIcons = patchHanselIcons;
+  // One-time migration: rebuild the already-seeded Hansel example so its prose renders as a LOCKED prior
+  // session (older seeds stored it as plain editable paragraphs). Gated by a version flag so it runs once;
+  // cloud linkage and creation date are preserved, then the open story is reloaded so the change is visible.
+  function refreshHanselLocks(){
+    try{
+      const FLAG='dystoria.hanselLockedV1';
+      if(localStorage.getItem(FLAG)) return;
+      if(typeof loadSessions!=='function' || typeof persistSessions!=='function') return;
+      const list=loadSessions(); const i=list.findIndex(x=>x.id===HANSEL.id);
+      if(i<0){ localStorage.setItem(FLAG,'1'); return; }   // nothing seeded yet — fresh builds are already locked
+      const old=list[i];
+      const fresh=buildHansel();
+      fresh.cloudId=old.cloudId; if(old.created) fresh.created=old.created;
+      list[i]=fresh; persistSessions(list);
+      localStorage.setItem(FLAG,'1');
+      if(typeof state!=='undefined' && state.session && state.session.id===HANSEL.id && typeof openSession==='function'){ openSession(HANSEL.id); }
+    }catch(e){ console.warn('hansel lock refresh failed:', e); }
+  }
   // Seed for new users, and open the Hansel example so they land in a finished story (and the onboarding has it as a backdrop).
   function ensureStarterStory(){
     seedOnce();
     ensureHansel();
+    refreshHanselLocks();
     patchHanselIcons();
     try{
       if(typeof state==='undefined' || typeof openSession!=='function') return;
