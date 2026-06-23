@@ -14445,6 +14445,13 @@ async function endWritingSession(){
   if (wrote){ paintSectionFocus(); if (state.session){ state.session.html = editorHTML(); } scheduleAutosave(); }
   flashStatus(wrote ? 'Session ended \u2014 press Start session when you\u2019re ready for the next'
                     : 'Session ended \u2014 nothing written, so no review.');
+  // After a real session, offer to refresh the wiki (and its open questions / resolutions) with what was written.
+  try {
+    if (wrote && typeof aiAuthed === 'function' && aiAuthed() && typeof wikiGather === 'function' && wikiGather().length){
+      setTimeout(() => { siteConfirm('You added to the story. Update the wiki with what you just wrote?', 'Update wiki')
+        .then(yes => { if (yes && typeof runWikiQuestions === 'function') runWikiQuestions(true); }); }, 650);   // let the recap settle first
+    }
+  } catch(e){}
 }
 // Which prep sections the author wants mirrored into the full-screen session (persisted in prefs).
 // Defaults: elements & guides OFF, prompt ON.
@@ -17490,6 +17497,16 @@ function commitEdit(){
   saveSession();
   edPushHistory();
   if ($('editMode') && $('editMode').classList.contains('show') && typeof pubOwnerComments === 'function' && pubOwnerComments().length) renderNotes();   // refresh reader-comment orphan state after edits
+  // Silent wiki freshness: once Refine edits accumulate past a threshold, quietly regenerate the wiki (+ resolutions).
+  try {
+    if (typeof aiAuthed === 'function' && aiAuthed() && typeof wikiGather === 'function' && wikiGather().length){
+      const len = (($('editor').textContent) || '').length;
+      if (state._wikiRefineLen == null) state._wikiRefineLen = len;
+      state._wikiRefineAccum = (state._wikiRefineAccum || 0) + Math.abs(len - state._wikiRefineLen);
+      state._wikiRefineLen = len;
+      if (state._wikiRefineAccum >= 300){ state._wikiRefineAccum = 0; if (typeof runWikiQuestions === 'function') runWikiQuestions(true); }
+    }
+  } catch(e){}
 }
 // --- Refine-mode undo/redo: snapshot the edit body's HTML on every committed change ---
 let _edStates = [], _edIdx = -1, _edHistLock = false;
@@ -18460,15 +18477,21 @@ function renderWikiOverview(text){
   }
 }
 // Closing wiki section: open questions the narrative raises, one per key element — food for thought.
-async function runWikiQuestions(){
+async function runWikiQuestions(silent){
   const wrap = $('wikiQuestions'); if (!wrap) return;
+  if (state._wikiBusy) return;                                   // never run two updates at once
   const text = editorText().trim();
-  if (!text){ flashStatus('Write some prose first'); return; }
+  if (!text){ if (!silent) flashStatus('Write some prose first'); return; }
+  state._wikiBusy = true;
   const els = (typeof wikiGather === 'function') ? wikiGather() : [];
   const lcAll = text.toLowerCase();
   const woven = els.filter(e => textHasWord(lcAll, e.word) || (e.name && textHasWord(lcAll, e.name)));
   const names = (woven.length ? woven : els).map(e => e.name ? (e.word + ' “' + e.name + '”') : e.word);
-  wrap.innerHTML = '<div class="wk-q-head">Questions the story raises</div><div class="wk-aitext wk-empty"><span class="spin"></span>Raising questions…</div>';
+  // prior OPEN questions — the AI will tell us which the prose now answers (→ resolved)
+  const priorOpen = [];
+  const eqPrev = (state.session && state.session.elementQuestions) || {};
+  Object.keys(eqPrev).forEach(k => (eqPrev[k] || []).forEach(it => { if (!it.resolved) priorOpen.push({ q: it.q, item: it }); }));
+  if (!silent) wrap.innerHTML = '<div class="wk-q-head">Questions the story raises</div><div class="wk-aitext wk-empty"><span class="spin"></span>Raising questions…</div>';
   try {
     const gc = goalContext();
     const sys = 'You read a story and raise sharp, open questions it provokes — food for thought for the writer, never direct critique or praise. Use ONLY what the prose and the listed elements contain; never invent facts and never answer your own questions. Output ONE question per line as "Subject — question"; a handful total; no preamble; never yes/no; keep each concrete and grounded in the text.\n'
@@ -18477,16 +18500,23 @@ async function runWikiQuestions(){
     const prompt = (gc ? (gc + '\n\n') : '')
       + (names.length ? ('Story elements: ' + names.join(', ') + '\n\n') : '')
       + 'Story so far:\n\n' + text.slice(0, 16000)
+      + (priorOpen.length ? ('\n\nThese open questions were raised earlier. After your new questions, on a FINAL line write "RESOLVED:" followed by the numbers of any whose answer is now CLEARLY shown in the prose above (comma-separated), or "RESOLVED: none". Only list a number if the prose genuinely answers it.\n' + priorOpen.map((p, i) => (i + 1) + '. ' + p.q).join('\n')) : '')
       + '\n\nRaise the questions' + (gc ? ' (start with the goal-vs-story questions, then the per-element ones)' : '') + ':';
     const out = await aiCall(sys, prompt);
-    if (state.session){ state.session.wikiQuestions = out; captureElementQuestions(out); scheduleAutosave(500); }
-    renderWikiQuestions(out);
-    if (typeof renderNpCard === 'function') renderNpCard();   // surface the new per-element questions in the notepad
+    // split off the RESOLVED line and mark those prior questions resolved
+    let qtext = out; const rm = out.match(/^\s*RESOLVED:\s*(.*)$/im);
+    if (rm){ qtext = out.slice(0, rm.index).trim(); (rm[1].match(/\d+/g) || []).map(Number).forEach(n => { const p = priorOpen[n - 1]; if (p && p.item) p.item.resolved = true; }); }
+    if (state.session){ state.session.wikiQuestions = qtext; captureElementQuestions(qtext); scheduleAutosave(500); }
+    if (!silent) renderWikiQuestions(qtext);
+    if (typeof renderNpCard === 'function') renderNpCard();   // surface the per-element questions in the notepad
+    if (silent) flashStatus('Wiki updated');
   } catch (e){
-    wrap.innerHTML = '<div class="wk-q-head">Questions the story raises</div>';
-    const m = document.createElement('div'); m.className = 'wk-aitext wk-empty'; m.textContent = aiErrMsg(e); wrap.appendChild(m);
-    const b = document.createElement('button'); b.className = 'wk-aibtn'; b.textContent = 'Try again'; b.addEventListener('click', runWikiQuestions); wrap.appendChild(b);
-  }
+    if (!silent){
+      wrap.innerHTML = '<div class="wk-q-head">Questions the story raises</div>';
+      const m = document.createElement('div'); m.className = 'wk-aitext wk-empty'; m.textContent = aiErrMsg(e); wrap.appendChild(m);
+      const b = document.createElement('button'); b.className = 'wk-aibtn'; b.textContent = 'Try again'; b.addEventListener('click', () => runWikiQuestions()); wrap.appendChild(b);
+    }
+  } finally { state._wikiBusy = false; }
 }
 // Parse the wiki's "Subject — question" lines into per-element open questions, so they can surface in the
 // notepad and feed the prompt generator. Goal-level questions are kept story-wide. Resolved flags are preserved
@@ -18508,6 +18538,8 @@ function captureElementQuestions(text){
   });
   // carry forward resolved flags for questions that persist
   Object.keys(eq).forEach(k => { const pl = prev[k] || []; eq[k].forEach(it => { const old = pl.find(p => p.q === it.q); if (old && old.resolved) it.resolved = true; }); });
+  // keep ALL prior RESOLVED questions even if the wiki no longer raises them (so the Resolved section persists)
+  Object.keys(prev).forEach(k => { (prev[k] || []).forEach(it => { if (it.resolved && !(eq[k] || []).some(x => x.q === it.q)){ eq[k] = eq[k] || []; eq[k].push({ q: it.q, resolved: true }); } }); });
   state.session.elementQuestions = eq;
   state.session.goalQuestions = goalQ;
 }
