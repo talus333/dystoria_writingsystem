@@ -910,6 +910,9 @@
   .fp-item.fp-sub{font-size:13.5px; padding:2px 10px; margin-left:18px; width:calc(100% - 18px);
     border-style:dashed; background:transparent}
   .fp-x{color:var(--ink-faint); margin-left:auto; cursor:pointer; font-family:var(--sans); font-size:13px; flex:none}
+  .fp-item .fp-x ~ .fp-x{margin-left:6px}   /* additional controls (flag/reroll/×) cluster on the right */
+  .fp-flag{font-size:11px; opacity:.45}
+  .fp-flag.on{opacity:1; color:#c2691c}
   .fp-x:hover{color:#a05c4d}
   #endSessionBtn{font-family:var(--sans); font-size:10.5px; letter-spacing:.16em; text-transform:uppercase;
     border:1px solid var(--ink-faint); border-radius:14px; padding:4px 14px; color:var(--ink-soft);
@@ -13325,6 +13328,7 @@ function renderMentalOverlay(){
 function renderFrameBar(){
   const fb = $('frameBar');
   fb.style.display = 'flex';
+  const _oldCh = fb.querySelector('.fb-chips'); const _chSX = _oldCh ? _oldCh.scrollLeft : 0;   // keep horizontal scroll across re-render
   fb.innerHTML = '';
   const hd = document.createElement('span');
   hd.className = 'fb-head';
@@ -13400,6 +13404,7 @@ function renderFrameBar(){
       chips.appendChild(it);
     });
   }
+  try { chips.scrollLeft = _chSX; requestAnimationFrame(() => { try { chips.scrollLeft = _chSX; } catch(e){} }); } catch(e){}   // restore scroll
 }
 
 function wordKey(w){ return (w.set || 0) + '|' + w.cat + '|' + w.word; }
@@ -13639,14 +13644,33 @@ function renderFocus(){
     sc.textContent = (hasFocus && found) ? hits + '/' + found : '';
     sc.classList.toggle('full', found > 0 && hits === found);
   }
-  // Pull the added guides & exercises onto the SAME line as the elements (after them) so the focus row
-  // scrolls sideways instead of growing downward. Re-render the constraints here (self-contained — renderFocus
-  // is also called on its own) then move their pills into #focusList, descriptions minimized.
-  { if (typeof renderConstraintBar === 'function') renderConstraintBar();
-    const cb = $('constraintBar');
-    if (cb){
-      Array.from(cb.children).filter(c => c.classList && (c.classList.contains('cb-entry') || c.classList.contains('fb-set'))).forEach(e => fl.appendChild(e));
-      cb.style.display = 'none';
+  // Added guides & exercises ride the SAME line as the elements (after them), styled exactly like the focus
+  // elements (.fp-item) — no expandable description, so nothing opens as a dropdown on mobile. The row scrolls
+  // sideways instead of growing downward. (The standalone #constraintBar is retired.)
+  { const cb = $('constraintBar'); if (cb){ cb.style.display = 'none'; cb.innerHTML = ''; }
+    const gWords = (state.prompt ? state.prompt.words : []).map((w, i) => ({ w: w, i: i })).filter(o => isGuideWord(o.w));
+    if (gWords.length){
+      { const hr = document.createElement('div'); hr.className = 'fp-rule'; fl.appendChild(hr); }   // divider (hidden on phone via CSS)
+      gWords.forEach(({ w, i }) => {
+        const it = document.createElement('div');
+        it.className = 'fp-item fp-guide' + (w.flagged ? ' flagged' : '');
+        it.appendChild(document.createTextNode(w.word));
+        const cat = document.createElement('span'); cat.className = 'fb-cat'; cat.style.color = catColor(w.cat);
+        cat.textContent = w.sub || ((getCat(w.cat) || {}).name || w.cat);
+        it.appendChild(cat);
+        const fg = document.createElement('span'); fg.className = 'fp-x fp-flag' + (w.flagged ? ' on' : ''); fg.textContent = '⚑';
+        fg.title = w.flagged ? 'Flagged — the writing did not meet this guide. Click to clear.' : 'Flag — the writing did not meet this guide';
+        fg.addEventListener('click', ev => { ev.stopPropagation(); w.flagged = !w.flagged; renderConstellation(); if (state.session){ state.session.words = state.prompt.words; scheduleAutosave(); } });
+        it.appendChild(fg);
+        const r2 = document.createElement('span'); r2.className = 'fp-x'; r2.textContent = '↻'; r2.title = 'Reroll this guide';
+        r2.addEventListener('click', ev => { ev.stopPropagation(); rerollWord(i); });
+        it.appendChild(r2);
+        const x = document.createElement('span'); x.className = 'fp-x'; x.textContent = '×'; x.title = 'Remove';
+        x.addEventListener('click', ev => { ev.stopPropagation(); removeNode(i); });
+        it.appendChild(x);
+        const d = descFor(w); if (d){ it.title = d; it.addEventListener('mouseenter', ev => showTip(d, ev)); it.addEventListener('mouseleave', hideTip); }   // description on hover (desktop) — no mobile dropdown
+        fl.appendChild(it);
+      });
     } }
   try { fl.scrollLeft = _flSX; requestAnimationFrame(() => { try { fl.scrollLeft = _flSX; } catch(e){} }); } catch(e){}   // restore scroll after rebuild
   if (typeof updateFsToggles === 'function') updateFsToggles();
