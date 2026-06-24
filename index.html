@@ -11974,7 +11974,7 @@ function openIconGenerator(i){
     + '<textarea id="igGuide" rows="2" placeholder="' + (hasIcon ? 'changes to make — e.g. add a chimney with smoke, make the roof red, round windows' : 'e.g. a tall crooked cottage of mossy stone — steep thatch roof, round windows, a tilting chimney with smoke') + '"></textarea>'
     + '<div class="ig-suggest-row"><button id="igSuggest" class="ig-suggest" title="Let the AI draft a description from your story, then tweak it">✨ Describe it for me</button><span class="ig-suggest-hint">drafts from the story — your own words always win</span></div>'
     + '<div class="ig-row"><div id="igGrid" class="ig-grid"></div>'
-    + '<div class="ig-side"><button id="igGo" class="ig-go">Generate 4 ✦</button><div id="igActions" class="ig-actions" style="display:none"><button id="igUse" class="ig-use">Use this icon</button><button id="igEnhance" class="ig-enhance" title="Apply the changes you typed above (if any) and polish the selected icon">Enhance ✨</button></div><div id="igStatus" class="ig-status"></div></div></div></div>';
+    + '<div class="ig-side"><button id="igGo" class="ig-go">Generate ✦</button><div id="igActions" class="ig-actions" style="display:none"><button id="igUse" class="ig-use">Use this icon</button><button id="igEnhance" class="ig-enhance" title="Apply the changes you typed above (if any) and polish the selected icon — limited to once for now">Enhance ✨</button></div><div id="igStatus" class="ig-status"></div></div></div></div>';
   const N = 1;                           // generations per Generate (cost control: 1 for now; bump for best-of-N)
   const ENHANCE_CAP = 1;                 // max enhances per generated icon (cost control)
   let enhanceCount = 0;
@@ -12059,8 +12059,9 @@ function openIconGenerator(i){
   async function generate(){
     const guidance = (q('#igGuide').value || '').trim();
     const status = q('#igStatus'); q('#igGo').disabled = true; q('#igActions').style.display = 'none';
-    cands = new Array(N).fill(null); selIdx = -1; lastSvg = ''; renderGrid(true);
-    status.textContent = 'Sketching ' + N + ' options…';
+    cands = new Array(N).fill(null); selIdx = -1; lastSvg = ''; enhanceCount = 0; const eb0 = q('#igEnhance'); if (eb0) eb0.disabled = false;
+    renderGrid(true);
+    status.textContent = N > 1 ? ('Sketching ' + N + ' options…') : 'Drawing the icon…';
     try {
       const { notes } = gatherCtx();   // for the DRAW prompt keep it visual: name + notes + guidance only (goal/others/prose just add noise)
       const sys = 'You are an expert pictogram illustrator for a story-mapping app. You draw ONE small, instantly-recognisable SETTING icon as RAW SVG shape markup that is dropped INSIDE <svg viewBox="-13 -16 26 17">…</svg>. The single most important thing: a viewer must recognise WHAT IT IS at a glance.\n'
@@ -12090,13 +12091,13 @@ function openIconGenerator(i){
         + '<circle cx="-5.4" cy="-12" r="3.8" style="fill:#638a4b;stroke:#2b2620;stroke-width:0.55"/>\n'
         + '<circle cx="-3.9" cy="-13.1" r="2.2" style="fill:#84ac68;stroke:none"/>';
       const wantNature = /natural|terrain|water|wild|forest|river|lake|mountain|garden|grove|woods|sea|coast|field|valley|cave/i.test((w.sub || '') + ' ' + name + ' ' + guidance);
-      // A FINISHED icon from the app's own collection — the craft benchmark. Type-matched, first one that renders.
-      function realEx(keys){ for (const k of keys){ try { const fn = SETTING_SVG[k]; if (fn){ const m = fn(); if (m) return { name: k, svg: m }; } } catch(e){} } return null; }
-      const ex = realEx(wantNature ? ['Waterfall','Mesa','Canyon','Cave','Volcano'] : ['Tavern','Mansion','Cathedral','Castle','Lighthouse']);
+      // FINISHED icons from the app's own collection — the craft benchmark. Lead with the highest-quality ones (Embassy, Courthouse).
+      function realExamples(keys, n){ const out = []; for (const k of keys){ if (out.length >= n) break; try { const fn = SETTING_SVG[k]; if (fn){ const m = fn(); if (m) out.push({ name: k, svg: m }); } } catch(e){} } return out; }
+      const exs = realExamples(wantNature ? ['Waterfall', 'Mesa', 'Canyon', 'Cave', 'Volcano'] : ['Embassy', 'Courthouse', 'Tavern', 'Mansion', 'Cathedral'], 2);
       const basePrompt = 'Draw an icon for this SETTING:\nName: ' + name + (w.sub ? ('  ·  ' + w.sub) : '') + '\n'
         + (notes ? ('What it is: ' + notes + '\n') : '')
         + (guidance ? ('\nWHAT THE AUTHOR WANTS (honour this above all): ' + guidance + '\n') : '')
-        + (ex ? ('\nA FINISHED icon from this app’s own collection (a ' + ex.name.toLowerCase() + ') — this is the bar for craft and composition. Match this level of detail, the layered shadows and texture lines, the same coordinate space, the frame-filling silhouette, and this palette of colours. Do NOT copy it — your subject is different:\n' + ex.svg + '\n') : '')
+        + (exs.length ? ('\nFINISHED icons from this app’s own collection (' + exs.map(e => e.name.toLowerCase()).join(', ') + ') — THIS is the quality bar. Match this level of detail: layered shadows, fine texture lines (brick/stone courses, grain, tiles), consistent thin outlines (~0.3), the same coordinate space, a frame-filling silhouette, and this palette. Study them, then draw YOUR OWN subject — do NOT copy them:\n' + exs.map(e => e.svg).join('\n\n') + '\n') : '')
         + '\nAnd a simple skeleton showing the proportions and build order to follow (notice the subject FILLS the frame and sits on the ground). Adapt it to your subject — do not copy it literally:\n'
         + (wantNature ? SKEL_NATURE : SKEL_BUILT);
       const finale = '\n\nNow draw the setting above to the same standard of craft as the finished example — layered shadows, fine texture lines, clean silhouette. First decide the main shapes that make it unmistakable, then output ONLY the SVG markup (a single optional planning comment is allowed):';
@@ -12106,20 +12107,21 @@ function openIconGenerator(i){
       // Draw one at a time (sequential) so the free-tier API isn't hit by a burst — bursts were causing several slots to fail.
       for (let idx = 0; idx < N; idx++){
         const have = cands.filter(Boolean).length;
-        status.textContent = 'Drawing ' + (idx + 1) + ' of ' + N + '…' + (have ? ('  (' + have + ' ready)') : '');
+        status.textContent = N > 1 ? ('Drawing ' + (idx + 1) + ' of ' + N + '…' + (have ? ('  (' + have + ' ready)') : '')) : 'Drawing the icon…';
         await drawSlot(idx);
       }
       const ok = cands.filter(Boolean).length;
-      if (ok){ status.textContent = ok === N ? 'Click your favourite, then Enhance or Use it.' : ('Got ' + ok + ' of ' + N + ' — click an empty slot to retry it, or pick a favourite.'); q('#igActions').style.display = 'flex'; }
-      else status.textContent = 'None came out as drawings — tweak the description and try again.';
-      q('#igGo').textContent = 'Regenerate 4 ✦';
+      if (ok){ status.textContent = (N === 1) ? 'Use it, tweak it (type a change + Enhance), or Regenerate.' : (ok === N ? 'Click your favourite, then Enhance or Use it.' : ('Got ' + ok + ' of ' + N + ' — click an empty slot to retry it, or pick a favourite.')); q('#igActions').style.display = 'flex'; }
+      else status.textContent = 'That didn’t come out as a drawing — tweak the description and try again.';
+      q('#igGo').textContent = 'Regenerate ✦';
     } catch (e){ status.textContent = (typeof aiErrMsg === 'function') ? aiErrMsg(e) : 'Couldn’t generate'; }
     q('#igGo').disabled = false;
   }
   // Refine the selected draft to higher craft, keeping the same subject + composition.
   async function enhance(){
     const status = q('#igStatus');
-    if (selIdx < 0 || !cands[selIdx]){ status.textContent = 'Pick an icon first (click one of the four), then Enhance.'; return; }
+    if (selIdx < 0 || !cands[selIdx]){ status.textContent = 'Generate an icon first, then Enhance.'; return; }
+    if (enhanceCount >= ENHANCE_CAP){ status.textContent = 'Enhance is limited to once for now — Regenerate for a fresh take.'; return; }
     const eb = q('#igEnhance'); eb.disabled = true; q('#igGo').disabled = true;
     const changes = (q('#igGuide').value || '').trim();
     status.textContent = changes ? 'Applying your changes + polishing…' : 'Enhancing the selected icon…';
@@ -12130,10 +12132,10 @@ function openIconGenerator(i){
         + 'Keep the same subject and composition otherwise. Current icon:\n' + cands[selIdx] + '\n\nOutput ONLY the revised inner SVG markup:';
       const out = await aiCall(sysE, promptE, { maxTokens: 3500, kind: 'icon', temperature: 0.4 });
       const body = cleanIconSvg(out);
-      if (isDrawing(body)){ cands[selIdx] = body; renderCell(selIdx); selectCand(selIdx); status.textContent = changes ? 'Done — change applied. Enhance again, or Use it.' : 'Enhanced. Enhance again for more, or Use it.'; }
-      else status.textContent = 'That didn’t come out cleanly — try Enhance again.';
+      if (isDrawing(body)){ cands[selIdx] = body; renderCell(selIdx); selectCand(selIdx); enhanceCount++; status.textContent = (changes ? 'Done — change applied. ' : 'Enhanced. ') + 'Use it, or Regenerate for a fresh take.'; }
+      else status.textContent = 'That didn’t come out cleanly — try again or Regenerate.';
     } catch(e){ status.textContent = (typeof aiErrMsg === 'function') ? aiErrMsg(e) : 'Couldn’t enhance'; }
-    eb.disabled = false; q('#igGo').disabled = false;
+    q('#igGo').disabled = false; eb.disabled = (enhanceCount >= ENHANCE_CAP);   // stay disabled once the cap is reached
   }
   q('#igGo').addEventListener('click', generate);
   q('#igEnhance').addEventListener('click', enhance);
@@ -12151,8 +12153,8 @@ function openIconGenerator(i){
   renderGrid(false);
   if (hasIcon){
     cands[0] = w.iconCustom; renderCell(0); selectCand(0);
-    q('#igActions').style.display = 'flex'; q('#igGo').textContent = 'Regenerate 4 ✦';
-    q('#igStatus').textContent = 'Your current icon. Type any changes above, then Enhance ✨ — or Regenerate for fresh options.';
+    q('#igActions').style.display = 'flex'; q('#igGo').textContent = 'Regenerate ✦';
+    q('#igStatus').textContent = 'Your current icon. Type any changes above, then Enhance ✨ — or Regenerate for a fresh take.';
   }
   ov.classList.add('show');
 }
