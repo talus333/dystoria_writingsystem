@@ -342,10 +342,115 @@ async function handleAI(request, env) {
   return new Response(JSON.stringify({ error: 'AI error: ' + terr }), { status: 502, headers });
 }
 
+// ============================================================
+//  BILLING (Stripe) — Checkout to subscribe, Customer Portal to manage/cancel.
+//  We never build card forms or touch card data; Stripe hosts both pages. The Worker only
+//  creates the sessions and hands back a URL the client redirects to. Entitlement itself is
+//  written by the webhook (next step), never here. Requires these env vars (Jeremy adds them):
+//    STRIPE_SECRET_KEY     (secret)  sk_live_… / sk_test_…
+//    STRIPE_PRICE_MONTHLY  (var)     price_…  — the monthly Pro price
+//    STRIPE_PRICE_ANNUAL   (var)     price_…  — the annual Pro price
+// ============================================================
+
+// Minimal Stripe REST call (form-encoded, Bearer secret). Keys may use Stripe's bracket notation,
+// e.g. 'line_items[0][price]'. Throws with Stripe's own message on a non-2xx.
+async function stripe(env, path, params) {
+  const key = env.STRIPE_SECRET_KEY;
+  if (!key) throw new Error('billing not configured');
+  const form = new URLSearchParams();
+  for (const [k, v] of Object.entries(params || {})) { if (v !== undefined && v !== null) form.append(k, String(v)); }
+  const r = await fetch('https://api.stripe.com/v1/' + path, {
+    method: 'POST',
+    headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: form,
+  });
+  const data = await r.json().catch(() => null);
+  if (!r.ok) throw new Error((data && data.error && data.error.message) || ('Stripe HTTP ' + r.status));
+  return data;
+}
+
+// Read one subscriptions row (service role → bypasses RLS). Returns the row object or null.
+async function subGet(env, userId, select) {
+  const key = env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!key) return null;
+  const url = SUPABASE_URL + '/rest/v1/subscriptions?user_id=eq.' + encodeURIComponent(userId) + '&select=' + encodeURIComponent(select || '*') + '&limit=1';
+  const r = await fetch(url, { headers: { apikey: key, Authorization: 'Bearer ' + key } });
+  if (!r.ok) return null;
+  const rows = await r.json().catch(() => null);
+  return Array.isArray(rows) ? (rows[0] || null) : null;
+}
+
+// Upsert subscription fields for a user (service role). Works whether or not the row exists.
+async function subUpsert(env, userId, fields) {
+  const key = env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!key) return false;
+  const url = SUPABASE_URL + '/rest/v1/subscriptions?on_conflict=user_id';
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: { apikey: key, Authorization: 'Bearer ' + key, 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates,return=minimal' },
+    body: JSON.stringify(Object.assign({ user_id: userId }, fields)),
+  });
+  if (r.ok) _planCache.delete(userId);   // entitlement may have changed → drop the cached plan
+  return r.ok;
+}
+
+// action: 'checkout' (start a subscription) | 'portal' (manage existing subscription)
+async function handleBilling(request, env, action) {
+  const headers = cors(request.headers.get('origin') || '');
+  if (request.method === 'OPTIONS') return new Response(null, { headers });
+  if (request.method !== 'POST') return new Response(JSON.stringify({ error: 'POST only' }), { status: 405, headers });
+  if (!env.STRIPE_SECRET_KEY) return new Response(JSON.stringify({ error: 'Billing isn’t set up yet.' }), { status: 503, headers });
+
+  const token = (request.headers.get('authorization') || '').replace(/^Bearer\s+/i, '').trim();
+  const user = await verifyUser(token);
+  if (!user) return new Response(JSON.stringify({ error: 'Sign in to manage your subscription' }), { status: 401, headers });
+
+  let body = {}; try { body = await request.json(); } catch (e) { /* portal needs no body */ }
+  const origin = request.headers.get('origin');
+  const site = (origin && (ALLOWED.includes(origin) || /\.(pages|workers)\.dev$/.test(origin))) ? origin : 'https://dystoria.net';
+
+  try {
+    // Ensure a Stripe customer exists for this user (reused across checkout + portal; avoids dupes).
+    const row = await subGet(env, user.id, 'stripe_customer_id');
+    let customer = row && row.stripe_customer_id;
+    if (!customer) {
+      const c = await stripe(env, 'customers', { email: user.email || undefined, 'metadata[user_id]': user.id });
+      customer = c.id;
+      await subUpsert(env, user.id, { stripe_customer_id: customer });
+    }
+
+    if (action === 'portal') {
+      const ps = await stripe(env, 'billing_portal/sessions', { customer, return_url: site + '/?billing=done' });
+      return new Response(JSON.stringify({ url: ps.url }), { headers });
+    }
+
+    // checkout
+    const interval = (body && body.interval === 'year') ? 'year' : 'month';
+    const price = interval === 'year' ? env.STRIPE_PRICE_ANNUAL : env.STRIPE_PRICE_MONTHLY;
+    if (!price) return new Response(JSON.stringify({ error: 'The ' + interval + 'ly plan isn’t configured yet.' }), { status: 503, headers });
+    const cs = await stripe(env, 'checkout/sessions', {
+      mode: 'subscription',
+      customer,
+      'line_items[0][price]': price,
+      'line_items[0][quantity]': 1,
+      client_reference_id: user.id,
+      'subscription_data[metadata][user_id]': user.id,   // so the webhook can map the subscription back to the user
+      allow_promotion_codes: 'true',
+      success_url: site + '/?upgraded=1',
+      cancel_url: site + '/?upgrade_cancelled=1',
+    });
+    return new Response(JSON.stringify({ url: cs.url }), { headers });
+  } catch (e) {
+    return new Response(JSON.stringify({ error: 'Billing error: ' + String((e && e.message) || e) }), { status: 502, headers });
+  }
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     if (url.pathname === '/ai') return handleAI(request, env);
+    if (url.pathname === '/billing/checkout') return handleBilling(request, env, 'checkout');
+    if (url.pathname === '/billing/portal') return handleBilling(request, env, 'portal');
     // everything else → the static site
     return env.ASSETS.fetch(request);
   },
