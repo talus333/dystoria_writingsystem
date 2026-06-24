@@ -47,6 +47,9 @@ function dailyOk(user, limit) {
 const MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
 // Vision model — OCR + handwriting recognition. Used when the request carries an image.
 const VISION_MODEL = '@cf/google/gemma-4-26b-a4b-it';
+// Frontier model for ICON drawing only (kind:'icon'). Google AI Studio / Gemini, free tier.
+// Swap to 'gemini-2.5-pro' for higher quality (tighter free limits: ~5 RPM / 100/day).
+const FRONTIER_MODEL = 'gemini-2.5-flash';
 
 // data:image/png;base64,xxxx  ->  Array of byte values (Workers AI vision input)
 function dataUrlToBytes(dataUrl) {
@@ -92,6 +95,29 @@ async function runVision(env, model, system, prompt, dataUrl, maxTokens) {
     raw = text ? { suspect: text.slice(0, 200) } : resp;
   } catch (e) { raw = { error: String(e) }; }
   return { text: '', raw };
+}
+
+// Frontier text generation via Google Gemini (AI Studio REST). Returns '' on any failure so the caller can fall back.
+async function runFrontier(env, system, prompt, maxTokens, temperature) {
+  const key = env.GEMINI_API_KEY;
+  if (!key) return { text: '', error: 'no GEMINI_API_KEY' };
+  const url = 'https://generativelanguage.googleapis.com/v1beta/models/' + FRONTIER_MODEL + ':generateContent?key=' + encodeURIComponent(key);
+  const genCfg = {
+    temperature: isFinite(temperature) ? temperature : 0.6,
+    maxOutputTokens: Math.max(maxTokens, 2048),
+  };
+  // Flash/Lite can skip internal reasoning (thinkingBudget 0) so the full SVG fits the token budget. Pro can't disable it — leave it default there.
+  if (/flash|lite/i.test(FRONTIER_MODEL)) genCfg.thinkingConfig = { thinkingBudget: 0 };
+  const payload = { contents: [{ role: 'user', parts: [{ text: prompt }] }], generationConfig: genCfg };
+  if (system) payload.system_instruction = { parts: [{ text: system }] };
+  try {
+    const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    const data = await r.json().catch(() => null);
+    if (!r.ok) return { text: '', error: (data && data.error && data.error.message) || ('HTTP ' + r.status), status: r.status };
+    let text = '';
+    try { text = (data.candidates[0].content.parts || []).map(p => p.text || '').join(''); } catch (e) {}
+    return { text: (text || '').trim(), raw: data };
+  } catch (e) { return { text: '', error: String(e) }; }
 }
 
 function cors(origin) {
@@ -142,10 +168,18 @@ async function handleAI(request, env) {
   }
 
   // ---- text ----
+  const temperature = (() => { const t = parseFloat(body.temperature); return isFinite(t) ? Math.min(Math.max(t, 0), 1.5) : 0.4; })();
+
+  // Icon drawing → frontier model (Gemini) when a key is set; fall back to Workers AI on any miss/error.
+  if (body.kind === 'icon' && env.GEMINI_API_KEY) {
+    const fr = await runFrontier(env, system, prompt, maxTokens, temperature);
+    if (fr.text) return new Response(JSON.stringify({ text: fr.text, via: 'frontier' }), { headers });
+    // else: fall through to Workers AI below
+  }
+
   const messages = [];
   if (system) messages.push({ role: 'system', content: system });
   messages.push({ role: 'user', content: prompt });
-  const temperature = (() => { const t = parseFloat(body.temperature); return isFinite(t) ? Math.min(Math.max(t, 0), 1.5) : 0.4; })();
   const base = { messages, max_tokens: maxTokens, temperature };
 
   try {
