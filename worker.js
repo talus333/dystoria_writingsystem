@@ -170,8 +170,8 @@ async function handleAI(request, env) {
   // ---- text ----
   const temperature = (() => { const t = parseFloat(body.temperature); return isFinite(t) ? Math.min(Math.max(t, 0), 1.5) : 0.4; })();
 
-  // Icon drawing → frontier model (Gemini) when a key is set; fall back to Workers AI on any miss/error.
-  if (body.kind === 'icon' && env.GEMINI_API_KEY) {
+  // Icon drawing + its description brief → frontier model (Gemini) when a key is set; fall back to Workers AI on any miss/error.
+  if ((body.kind === 'icon' || body.kind === 'brief') && env.GEMINI_API_KEY) {
     const fr = await runFrontier(env, system, prompt, maxTokens, temperature);
     if (fr.text) return new Response(JSON.stringify({ text: fr.text, via: 'frontier' }), { headers });
     // else: fall through to Workers AI below
