@@ -837,10 +837,12 @@
   #iconGen .ig-grid{flex:none; width:200px; display:grid; grid-template-columns:1fr 1fr; gap:8px}
   #iconGen .ig-cell{position:relative; aspect-ratio:1/1; border:1px solid var(--line); border-radius:10px; background:#fff; display:flex; align-items:center; justify-content:center; overflow:hidden; cursor:pointer; transition:border-color .12s, box-shadow .12s}
   #iconGen .ig-cell svg{width:80px; height:80px}
-  #iconGen .ig-cell.loading, #iconGen .ig-cell.failed, #iconGen .ig-cell.empty{cursor:default}
+  #iconGen .ig-cell.loading, #iconGen .ig-cell.empty{cursor:default}
+  #iconGen .ig-cell.failed{cursor:pointer; border-style:dashed}
+  #iconGen .ig-cell.failed .ig-ph{font-size:18px; color:var(--gold)}
   #iconGen .ig-cell.empty{border-style:dashed; background:var(--bg)}
   #iconGen .ig-cell.sel{border-color:var(--gold); box-shadow:0 0 0 2px var(--gold)}
-  #iconGen .ig-cell:not(.loading):not(.failed):hover{border-color:var(--gold)}
+  #iconGen .ig-cell:not(.loading):hover{border-color:var(--gold)}
   #iconGen .ig-cell .ig-ph{font-family:var(--sans); font-size:14px; color:var(--ink-faint)}
   #iconGen .ig-spin{width:18px; height:18px; border:2px solid var(--line); border-top-color:var(--gold); border-radius:50%; animation:igSpin .7s linear infinite}
   @keyframes igSpin{to{transform:rotate(360deg)}}
@@ -11832,17 +11834,35 @@ function openIconGenerator(i){
   let cands = new Array(N).fill(null);   // candidate SVG bodies
   let selIdx = -1;                       // selected candidate index
   let lastSvg = '';                      // the selected body (for Use / Enhance)
+  let drawSpec = null;                   // { sys, basePrompt, finale, variants } so a single slot can be (re)drawn
   const q = sel => ov.querySelector(sel);
   const cellAt = idx => ov.querySelector('#igGrid .ig-cell[data-idx="' + idx + '"]');
   function renderGrid(loading){
     let h = ''; for (let k = 0; k < N; k++) h += '<div class="ig-cell ' + (loading ? 'loading' : 'empty') + '" data-idx="' + k + '">' + (loading ? '<span class="ig-spin"></span>' : '') + '</div>';
     q('#igGrid').innerHTML = h;
-    ov.querySelectorAll('#igGrid .ig-cell').forEach(c => c.addEventListener('click', () => { const k = +c.dataset.idx; if (cands[k]) selectCand(k); }));
+    ov.querySelectorAll('#igGrid .ig-cell').forEach(c => c.addEventListener('click', () => { const k = +c.dataset.idx; if (cands[k]) selectCand(k); else if (drawSpec) drawSlot(k); }));
   }
   function renderCell(idx){ const c = cellAt(idx); if (!c) return; c.classList.remove('loading', 'failed', 'empty'); c.innerHTML = '<svg viewBox="-13 -16 26 17">' + cands[idx] + '</svg>'; }
-  function failCell(idx){ const c = cellAt(idx); if (!c) return; c.classList.remove('loading'); c.classList.add('failed'); c.innerHTML = '<span class="ig-ph">—</span>'; }
+  function loadCell(idx){ const c = cellAt(idx); if (!c) return; c.classList.remove('failed', 'empty'); c.classList.add('loading'); c.removeAttribute('title'); c.innerHTML = '<span class="ig-spin"></span>'; }
+  function failCell(idx){ const c = cellAt(idx); if (!c) return; c.classList.remove('loading'); c.classList.add('failed'); c.title = 'Click to try this one again'; c.innerHTML = '<span class="ig-ph">↻</span>'; }
   function selectCand(idx){ if (!cands[idx]) return; selIdx = idx; lastSvg = cands[idx]; ov.querySelectorAll('#igGrid .ig-cell').forEach(c => c.classList.toggle('sel', +c.dataset.idx === idx)); }
   const isDrawing = b => !!b && /<(path|circle|ellipse|rect|line|polygon|polyline|g)\b/i.test(b);
+  // Draw (or redraw) ONE slot, with a single automatic retry — covers the occasional empty response from the free-tier API.
+  async function drawSlot(idx){
+    if (!drawSpec) return false;
+    loadCell(idx);
+    const vh = drawSpec.variants[idx] || '';
+    const prompt = drawSpec.basePrompt + (vh ? ('\n' + vh + '\n') : '') + drawSpec.finale;
+    for (let attempt = 0; attempt < 2; attempt++){
+      try {
+        const out = await aiCall(drawSpec.sys, prompt, { maxTokens: 2200, kind: 'icon', temperature: 0.7 });
+        const body = cleanIconSvg(out);
+        if (isDrawing(body)){ cands[idx] = body; renderCell(idx); if (selIdx < 0) selectCand(idx); return true; }
+      } catch(e){}
+      if (attempt === 0) await new Promise(r => setTimeout(r, 600));   // brief pause, then one retry
+    }
+    failCell(idx); return false;
+  }
   // Shared story context for both the brief-writer and the icon drawer.
   function gatherCtx(){
     let notes = ''; try { const k = wordKey(w); const nh = (typeof npGetNotes === 'function') ? npGetNotes(k) : ''; const dv = document.createElement('div'); dv.innerHTML = nh || ''; notes = (dv.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 400); } catch(e){}
@@ -11933,19 +11953,17 @@ function openIconGenerator(i){
         + '\nAnd a simple skeleton showing the proportions and build order to follow (notice the subject FILLS the frame and sits on the ground). Adapt it to your subject — do not copy it literally:\n'
         + (wantNature ? SKEL_NATURE : SKEL_BUILT);
       const finale = '\n\nNow draw the setting above to the same standard of craft as the finished example — layered shadows, fine texture lines, clean silhouette. First decide the main shapes that make it unmistakable, then output ONLY the SVG markup (a single optional planning comment is allowed):';
-      // Best-of-N: fire N candidates in parallel, each nudged a little differently for variety.
+      // Best-of-N: each candidate nudged a little differently for variety. Stagger the starts so the free-tier API isn't hit by a simultaneous burst.
       const variants = ['', 'This variation: lean into the single most distinctive feature; bolder and a touch simpler.', 'This variation: try slightly different proportions and a different viewing angle.', 'This variation: push the texture and shading further; warmer, cosier mood.'];
-      let ok = 0;
+      drawSpec = { sys, basePrompt, finale, variants };
       await Promise.allSettled(variants.slice(0, N).map((vh, idx) => (async () => {
-        try {
-          const prompt = basePrompt + (vh ? ('\n' + vh + '\n') : '') + finale;
-          const out = await aiCall(sys, prompt, { maxTokens: 2200, kind: 'icon', temperature: 0.7 });
-          const body = cleanIconSvg(out);
-          if (isDrawing(body)){ cands[idx] = body; renderCell(idx); ok++; if (selIdx < 0) selectCand(idx); status.textContent = 'Picking the best… (' + ok + ' of ' + N + ' ready)'; }
-          else failCell(idx);
-        } catch(e){ failCell(idx); }
+        await new Promise(r => setTimeout(r, idx * 350));   // stagger ~0.35s apart
+        await drawSlot(idx);
+        const n = cands.filter(Boolean).length;
+        status.textContent = 'Drawing… (' + n + ' of ' + N + ' ready)';
       })()));
-      if (ok){ status.textContent = ok === 1 ? 'One option ready — Enhance it, or Use it.' : ('Click your favourite of the ' + ok + ', then Enhance or Use it.'); q('#igActions').style.display = 'flex'; }
+      const ok = cands.filter(Boolean).length;
+      if (ok){ status.textContent = ok === N ? 'Click your favourite, then Enhance or Use it.' : ('Got ' + ok + ' of ' + N + ' — click an empty slot to retry it, or pick a favourite.'); q('#igActions').style.display = 'flex'; }
       else status.textContent = 'None came out as drawings — tweak the description and try again.';
       q('#igGo').textContent = 'Regenerate 4 ✦';
     } catch (e){ status.textContent = (typeof aiErrMsg === 'function') ? aiErrMsg(e) : 'Couldn’t generate'; }
