@@ -8,6 +8,10 @@ const ALLOWED = ['https://dystoria.net', 'https://www.dystoria.net'];
 // AI endpoint can't be hit anonymously to burn Workers AI neurons.
 const SUPABASE_URL = 'https://gurwhrypskhzdledxeqk.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_bb709imkZ55IGfwcAqVGgQ_vTLHGodY';
+// Admin accounts: the only users allowed the paid Claude model + the per-model testing toggles.
+// Everyone else runs the free chain only (enforced server-side in runFrontier — can't be bypassed by the client).
+const ADMIN_EMAILS = ['jeremyplante7@gmail.com'];
+function isAdminEmail(e) { return ADMIN_EMAILS.includes(String(e || '').toLowerCase()); }
 const _tokCache = new Map();   // access token -> { user, t }
 const _rate = new Map();       // user id -> [timestamps] (per-isolate soft limit)
 async function verifyUser(token) {
@@ -19,7 +23,7 @@ async function verifyUser(token) {
     const r = await fetch(SUPABASE_URL + '/auth/v1/user', { headers: { Authorization: 'Bearer ' + token, apikey: SUPABASE_ANON_KEY } });
     if (!r.ok) return null;
     const u = await r.json();
-    const user = u && u.id ? u.id : null;
+    const user = u && u.id ? { id: u.id, email: String(u.email || '').toLowerCase() } : null;
     if (user) { _tokCache.set(token, { user, t: now }); if (_tokCache.size > 600) _tokCache.clear(); }
     return user;
   } catch (e) { return null; }
@@ -206,10 +210,13 @@ function isQuotaErr(e) { return /per ?day|daily|quota|exhaust|4006|neuron|insuff
 // opts.allowPaid=false → free tier (skip Claude); opts.allowLast=false → skip the Workers-AI llama (used for icon SVG).
 async function runFrontier(env, system, prompt, maxTokens, temperature, opts) {
   opts = opts || {};
+  const admin = !!opts.admin;
   let chain = modelChain(env);
-  const testing = Array.isArray(opts.only) && opts.only.length;
+  if (!admin) chain = chain.filter(p => !p.paid);   // Claude (paid) is ADMIN-ONLY — never offered to other users, whatever the request asks for
+  const only = admin ? opts.only : null;            // the per-model testing toggles are admin-only too
+  const testing = Array.isArray(only) && only.length;
   if (testing){
-    chain = chain.filter(p => opts.only.includes(p.name));   // testing override: only the explicitly enabled models, in chain order
+    chain = chain.filter(p => only.includes(p.name));   // testing override: only the explicitly enabled models, in chain order
   } else {
     if (opts.allowPaid === false) chain = chain.filter(p => !p.paid);
     if (opts.allowLast === false) chain = chain.filter(p => !p.last);
@@ -259,8 +266,9 @@ async function handleAI(request, env) {
   const token = (request.headers.get('authorization') || '').replace(/^Bearer\s+/i, '').trim();
   const user = await verifyUser(token);
   if (!user) return new Response(JSON.stringify({ error: 'Sign in to use the AI features' }), { status: 401, headers });
-  if (!rateOk(user, image ? 12 : 45)) return new Response(JSON.stringify({ error: 'Too many AI requests — give it a moment' }), { status: 429, headers });
-  if (!dailyOk(user, image ? 400 : 1200)) return new Response(JSON.stringify({ error: 'You’ve hit today’s AI limit — it resets tomorrow. Reach out if you need more.' }), { status: 429, headers });
+  const admin = isAdminEmail(user.email);
+  if (!rateOk(user.id, image ? 12 : 45)) return new Response(JSON.stringify({ error: 'Too many AI requests — give it a moment' }), { status: 429, headers });
+  if (!dailyOk(user.id, image ? 400 : 1200)) return new Response(JSON.stringify({ error: 'You’ve hit today’s AI limit — it resets tomorrow. Reach out if you need more.' }), { status: 429, headers });
 
   const maxTokens = Math.min(Math.max(parseInt(body.max_tokens, 10) || 600, 64), 4096);
   const model = body.model || (image ? VISION_MODEL : MODEL);
@@ -284,7 +292,7 @@ async function handleAI(request, env) {
   // The chain auto-falls-through when a model is busy or its daily quota is used up. Icons skip the Workers-AI llama (too low quality);
   // briefs may use it as a final resort. `tier:'free'` skips the paid (Claude) model.
   if (body.kind === 'icon' || body.kind === 'brief') {
-    const fr = await runFrontier(env, system, prompt, maxTokens, temperature, { allowPaid: body.tier !== 'free', allowLast: body.kind !== 'icon', only: body.models });
+    const fr = await runFrontier(env, system, prompt, maxTokens, temperature, { admin, allowPaid: body.tier !== 'free', allowLast: body.kind !== 'icon', only: body.models });
     if (fr.text) return new Response(JSON.stringify({ text: fr.text, via: fr.via }), { headers });
     const err = fr.error || '';
     if (fr.exhausted) return new Response(JSON.stringify({ error: 'Free AI models at today’s limit — ' + err, limit: 'day' }), { status: 429, headers });
@@ -294,7 +302,7 @@ async function handleAI(request, env) {
   // ---- general text tasks (writing prompts, Wiki rollups, Import extraction, Refine, etc.) ----
   // Route through the FREE model chain (Gemini → Groq → Mistral → … → Workers AI) for quality + resilience.
   // Skip the paid Claude (allowPaid:false) — Claude is reserved for the premium icon path. Pass json mode through.
-  const tr = await runFrontier(env, system, prompt, maxTokens, temperature, { allowPaid: body.tier === 'pro', json: !!body.json, only: body.models });
+  const tr = await runFrontier(env, system, prompt, maxTokens, temperature, { admin, allowPaid: body.tier === 'pro', json: !!body.json, only: body.models });
   if (tr.text) return new Response(JSON.stringify({ text: tr.text, via: tr.via }), { headers });
   const terr = tr.error || '';
   if (tr.exhausted) return new Response(JSON.stringify({ error: 'Dystoria’s free AI models are all at today’s limit — they reset tomorrow.', limit: 'day' }), { status: 429, headers });
