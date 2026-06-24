@@ -263,15 +263,15 @@ async function handleAI(request, env) {
   // ---- text ----
   const temperature = (() => { const t = parseFloat(body.temperature); return isFinite(t) ? Math.min(Math.max(t, 0), 1.5) : 0.4; })();
 
-  // Icon drawing + its description brief → frontier model (Gemini). When a key is set we commit to Gemini and do NOT
-  // fall back to Workers AI: the free Workers-AI neuron pool is tiny and falling back just burns it / errors (4006),
-  // and a llama icon would be low quality anyway. Surface the real reason so the client can retry.
-  if ((body.kind === 'icon' || body.kind === 'brief') && (env.ANTHROPIC_API_KEY || env.GEMINI_API_KEY)) {
-    const fr = await runFrontier(env, system, prompt, maxTokens, temperature);
-    if (fr.text) return new Response(JSON.stringify({ text: fr.text, via: 'frontier' }), { headers });
+  // Icon drawing + its description brief → quality-ranked model chain (Claude → Gemini Pro → Gemini Flash → Groq → … → Workers AI).
+  // The chain auto-falls-through when a model is busy or its daily quota is used up. Icons skip the Workers-AI llama (too low quality);
+  // briefs may use it as a final resort. `tier:'free'` skips the paid (Claude) model.
+  if (body.kind === 'icon' || body.kind === 'brief') {
+    const fr = await runFrontier(env, system, prompt, maxTokens, temperature, { allowPaid: body.tier !== 'free', allowLast: body.kind !== 'icon' });
+    if (fr.text) return new Response(JSON.stringify({ text: fr.text, via: fr.via }), { headers });
     const err = fr.error || '';
-    if (/per day|PerDay|daily|quota.*exceeded|exceeded.*quota/i.test(err)) return new Response(JSON.stringify({ error: 'Dystoria’s image AI is at today’s shared free limit (Gemini) — it resets tomorrow.', limit: 'day' }), { status: 429, headers });
-    if (/rate|429|RESOURCE_EXHAUSTED|quota/i.test(err)) return new Response(JSON.stringify({ error: 'The image model is busy for a moment — try again shortly.' }), { status: 429, headers });
+    if (fr.exhausted) return new Response(JSON.stringify({ error: 'Dystoria’s free AI models are all at today’s limit — they reset tomorrow, or upgrade for the priority model.', limit: 'day' }), { status: 429, headers });
+    if (/rate|429|busy|RESOURCE_EXHAUSTED/i.test(err)) return new Response(JSON.stringify({ error: 'The image models are busy for a moment — try again shortly.' }), { status: 429, headers });
     return new Response(JSON.stringify({ error: 'Image model error — try again.' + (err ? ' (' + err + ')' : '') }), { status: 502, headers });
   }
 
