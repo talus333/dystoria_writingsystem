@@ -100,16 +100,17 @@ async function runVision(env, model, system, prompt, dataUrl, maxTokens) {
 }
 
 // Gemini (AI Studio REST). Returns '' on any failure so the caller can fall back.
-async function runGemini(env, system, prompt, maxTokens, temperature) {
+async function runGemini(env, system, prompt, maxTokens, temperature, model) {
   const key = env.GEMINI_API_KEY;
   if (!key) return { text: '', error: 'no GEMINI_API_KEY' };
-  const url = 'https://generativelanguage.googleapis.com/v1beta/models/' + FRONTIER_MODEL + ':generateContent?key=' + encodeURIComponent(key);
+  model = model || FRONTIER_MODEL;
+  const url = 'https://generativelanguage.googleapis.com/v1beta/models/' + model + ':generateContent?key=' + encodeURIComponent(key);
   const genCfg = {
     temperature: isFinite(temperature) ? temperature : 0.6,
     maxOutputTokens: Math.max(maxTokens, 2048),
   };
   // Flash/Lite can skip internal reasoning (thinkingBudget 0) so the full SVG fits the token budget. Pro can't disable it — leave it default there.
-  if (/flash|lite/i.test(FRONTIER_MODEL)) genCfg.thinkingConfig = { thinkingBudget: 0 };
+  if (/flash|lite/i.test(model)) genCfg.thinkingConfig = { thinkingBudget: 0 };
   const payload = { contents: [{ role: 'user', parts: [{ text: prompt }] }], generationConfig: genCfg };
   if (system) payload.system_instruction = { parts: [{ text: system }] };
   try {
@@ -147,10 +148,69 @@ async function runClaude(env, system, prompt, maxTokens, temperature) {
   } catch (e) { return { text: '', error: String(e) }; }
 }
 
-// Frontier dispatcher: prefer Claude (ANTHROPIC_API_KEY), else Gemini (GEMINI_API_KEY).
-async function runFrontier(env, system, prompt, maxTokens, temperature) {
-  if (env.ANTHROPIC_API_KEY) return runClaude(env, system, prompt, maxTokens, temperature);
-  return runGemini(env, system, prompt, maxTokens, temperature);
+// OpenAI-compatible chat endpoint — covers most free providers (Groq, Mistral, OpenRouter, Together, DeepSeek, Cerebras…).
+async function runOpenAICompat(key, url, model, system, prompt, maxTokens, temperature, extraHeaders) {
+  if (!key) return { text: '', error: 'no key' };
+  const messages = [];
+  if (system) messages.push({ role: 'system', content: system });
+  messages.push({ role: 'user', content: prompt });
+  try {
+    const r = await fetch(url, { method: 'POST',
+      headers: Object.assign({ 'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json' }, extraHeaders || {}),
+      body: JSON.stringify({ model, messages, max_tokens: Math.max(maxTokens, 1024), temperature: isFinite(temperature) ? temperature : 0.6 }) });
+    const data = await r.json().catch(() => null);
+    if (!r.ok) return { text: '', error: (data && data.error && (data.error.message || data.error)) || ('HTTP ' + r.status), status: r.status };
+    let text = '';
+    try { text = (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || ''; } catch (e) {}
+    return { text: (text || '').trim(), raw: data };
+  } catch (e) { return { text: '', error: String(e) }; }
+}
+// Workers AI (the always-available last resort).
+async function runWorkersChat(env, system, prompt, maxTokens, temperature) {
+  if (!env.AI) return { text: '', error: 'no Workers AI' };
+  const messages = [];
+  if (system) messages.push({ role: 'system', content: system });
+  messages.push({ role: 'user', content: prompt });
+  try {
+    const resp = await env.AI.run(MODEL, { messages, max_tokens: Math.min(maxTokens, 4096), temperature: isFinite(temperature) ? temperature : 0.4 });
+    return { text: extractText(resp), raw: resp };
+  } catch (e) { return { text: '', error: String(e) }; }
+}
+
+// Quality-ranked model chain (best → worst). An entry is included only when its key/binding is present.
+// `paid` entries are skipped for free-tier requests; `last` (Workers AI) is skipped for icon SVG (too low quality).
+// To add a free model: get its key, add it as a CF secret, and add ONE line here in the right rank slot.
+function modelChain(env) {
+  const c = [];
+  if (env.ANTHROPIC_API_KEY)  c.push({ name: 'claude', paid: true, run: (s, p, mt, t) => runClaude(env, s, p, mt, t) });
+  if (env.GEMINI_API_KEY)     c.push({ name: 'gemini-2.5-pro',   run: (s, p, mt, t) => runGemini(env, s, p, mt, t, 'gemini-2.5-pro') });
+  if (env.GEMINI_API_KEY)     c.push({ name: 'gemini-2.5-flash', run: (s, p, mt, t) => runGemini(env, s, p, mt, t, 'gemini-2.5-flash') });
+  if (env.GROQ_API_KEY)       c.push({ name: 'groq-llama-70b',   run: (s, p, mt, t) => runOpenAICompat(env.GROQ_API_KEY, 'https://api.groq.com/openai/v1/chat/completions', 'llama-3.3-70b-versatile', s, p, mt, t) });
+  if (env.MISTRAL_API_KEY)    c.push({ name: 'mistral-large',    run: (s, p, mt, t) => runOpenAICompat(env.MISTRAL_API_KEY, 'https://api.mistral.ai/v1/chat/completions', 'mistral-large-latest', s, p, mt, t) });
+  if (env.OPENROUTER_API_KEY) c.push({ name: 'openrouter-free',  run: (s, p, mt, t) => runOpenAICompat(env.OPENROUTER_API_KEY, 'https://openrouter.ai/api/v1/chat/completions', 'meta-llama/llama-3.3-70b-instruct:free', s, p, mt, t, { 'HTTP-Referer': 'https://dystoria.net', 'X-Title': 'Dystoria' }) });
+  if (env.AI)                 c.push({ name: 'workers-ai', last: true, run: (s, p, mt, t) => runWorkersChat(env, s, p, mt, t) });
+  return c;
+}
+const _cooldown = new Map();   // provider name → epoch ms until which to skip it (set when it hits a DAILY quota)
+function isQuotaErr(e) { return /per ?day|daily|quota|exhaust|4006|neuron|insufficient|billing|credit/i.test(String(e || '')); }
+
+// Try the chain in quality order; skip cooled-down providers; fall through on busy/empty/quota to the next.
+// opts.allowPaid=false → free tier (skip Claude); opts.allowLast=false → skip the Workers-AI llama (used for icon SVG).
+async function runFrontier(env, system, prompt, maxTokens, temperature, opts) {
+  opts = opts || {};
+  let chain = modelChain(env);
+  if (opts.allowPaid === false) chain = chain.filter(p => !p.paid);
+  if (opts.allowLast === false) chain = chain.filter(p => !p.last);
+  const now = Date.now();
+  let lastErr = '';
+  for (const p of chain) {
+    if ((_cooldown.get(p.name) || 0) > now) continue;                       // recently used up — skip for now
+    const r = await p.run(system, prompt, maxTokens, temperature);
+    if (r && r.text) return { text: r.text, via: p.name };
+    lastErr = (r && r.error) || lastErr;
+    if (isQuotaErr(lastErr)) _cooldown.set(p.name, now + 60 * 60 * 1000);   // daily-ish quota → rest this provider for an hour
+  }
+  return { text: '', error: lastErr || 'all models unavailable', exhausted: isQuotaErr(lastErr) };
 }
 
 function cors(origin) {
