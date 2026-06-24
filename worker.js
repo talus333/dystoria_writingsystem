@@ -170,11 +170,14 @@ async function handleAI(request, env) {
   // ---- text ----
   const temperature = (() => { const t = parseFloat(body.temperature); return isFinite(t) ? Math.min(Math.max(t, 0), 1.5) : 0.4; })();
 
-  // Icon drawing + its description brief → frontier model (Gemini) when a key is set; fall back to Workers AI on any miss/error.
+  // Icon drawing + its description brief → frontier model (Gemini). When a key is set we commit to Gemini and do NOT
+  // fall back to Workers AI: the free Workers-AI neuron pool is tiny and falling back just burns it / errors (4006),
+  // and a llama icon would be low quality anyway. Surface the real reason so the client can retry.
   if ((body.kind === 'icon' || body.kind === 'brief') && env.GEMINI_API_KEY) {
     const fr = await runFrontier(env, system, prompt, maxTokens, temperature);
     if (fr.text) return new Response(JSON.stringify({ text: fr.text, via: 'frontier' }), { headers });
-    // else: fall through to Workers AI below
+    const msg = /quota|rate|429|RESOURCE_EXHAUSTED/i.test(fr.error || '') ? 'Gemini is rate-limited for a moment — try again shortly.' : ('Image model error — try again.' + (fr.error ? ' (' + fr.error + ')' : ''));
+    return new Response(JSON.stringify({ error: msg }), { status: 502, headers });
   }
 
   const messages = [];

@@ -18947,17 +18947,22 @@ async function aiCall(system, prompt, opts){
   if (opts.model) body.model = opts.model;
   const r = await fetch(AI_ENDPOINT, { method: 'POST', headers: aiHeaders(), body: JSON.stringify(body) });
   let data; try { data = await r.json(); } catch (e){ throw new Error('HTTP ' + r.status); }
-  if (!r.ok || data.error) throw new Error(data.error || ('HTTP ' + r.status));
+  if (!r.ok || data.error){ const msg = data.error || ('HTTP ' + r.status); if (data.limit === 'day' || aiIsDailyLimit(msg)) aiDailyNotice(); throw new Error(msg); }
   return (data.text || '').trim();
 }
+// True when an error is the shared/account-wide DAILY cap being exhausted (not a transient per-minute hiccup).
+function aiIsDailyLimit(m){ return /today.?s (free |shared )?limit|resets tomorrow|10,?000 neurons|4006|free allocation|daily (free )?(limit|allocation)|RESOURCE_EXHAUSTED|PerDay|per day/i.test(String(m || '')); }
 function aiErrMsg(e){
   const m = String((e && e.message) || e || '');
   if (/sign in|401/i.test(m)) return 'Sign in to use the AI features.';
-  if (/not configured|AI not/i.test(m)) return 'Summaries aren’t set up yet — add the Workers AI binding in Cloudflare and redeploy.';
-  if (/Failed to fetch|HTTP 404|Load failed/i.test(m)) return 'Summaries are unavailable — this works on dystoria.net once deployed.';
-  if (/too many|quota|rate|429/i.test(m)) return 'Too many AI requests — give it a moment and try again.';
-  return 'Couldn’t summarize: ' + m;
+  if (/not configured|AI not/i.test(m)) return 'AI isn’t set up yet — add the keys/bindings in Cloudflare and redeploy.';
+  if (/Failed to fetch|HTTP 404|Load failed/i.test(m)) return 'AI is unavailable — this works on dystoria.net once deployed.';
+  if (aiIsDailyLimit(m)) return 'Dystoria’s AI features are at today’s shared free limit — they reset tomorrow. (The whole site shares one daily AI quota.)';
+  if (/too many|quota|rate|429|busy|rate-limited/i.test(m)) return 'The AI is busy for a moment — give it a few seconds and try again.';
+  return 'Couldn’t reach the AI: ' + m;
 }
+let _aiDailyNoticed = false;
+function aiDailyNotice(){ if (_aiDailyNoticed) return; _aiDailyNoticed = true; if (typeof flashStatus === 'function') flashStatus('Dystoria’s AI features are at today’s shared free limit — they’ll reset tomorrow.'); }
 function aiSig(el){ const q = wikiAppearances(el); const n = npNotesForEl(el); return q.length + ':' + q.join(' ').length + ':n' + n.length; }
 function npPlain(html){ const d = document.createElement('div'); d.innerHTML = (html || '').replace(/<\/(div|p|li)>/gi, '\n').replace(/<br\s*\/?>/gi, '\n'); return (d.textContent || '').replace(/ /g, ' ').replace(/\n{3,}/g, '\n\n').trim(); }
 function npNotesForEl(el){
