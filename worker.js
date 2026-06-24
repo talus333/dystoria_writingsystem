@@ -99,8 +99,8 @@ async function runVision(env, model, system, prompt, dataUrl, maxTokens) {
   return { text: '', raw };
 }
 
-// Frontier text generation via Google Gemini (AI Studio REST). Returns '' on any failure so the caller can fall back.
-async function runFrontier(env, system, prompt, maxTokens, temperature) {
+// Gemini (AI Studio REST). Returns '' on any failure so the caller can fall back.
+async function runGemini(env, system, prompt, maxTokens, temperature) {
   const key = env.GEMINI_API_KEY;
   if (!key) return { text: '', error: 'no GEMINI_API_KEY' };
   const url = 'https://generativelanguage.googleapis.com/v1beta/models/' + FRONTIER_MODEL + ':generateContent?key=' + encodeURIComponent(key);
@@ -120,6 +120,37 @@ async function runFrontier(env, system, prompt, maxTokens, temperature) {
     try { text = (data.candidates[0].content.parts || []).map(p => p.text || '').join(''); } catch (e) {}
     return { text: (text || '').trim(), raw: data };
   } catch (e) { return { text: '', error: String(e) }; }
+}
+
+// Claude (Anthropic Messages API). Preferred for icons when ANTHROPIC_API_KEY is set.
+async function runClaude(env, system, prompt, maxTokens, temperature) {
+  const key = env.ANTHROPIC_API_KEY;
+  if (!key) return { text: '', error: 'no ANTHROPIC_API_KEY' };
+  const payload = {
+    model: CLAUDE_MODEL,
+    max_tokens: Math.min(Math.max(maxTokens, 1024), 4096),
+    temperature: isFinite(temperature) ? Math.min(Math.max(temperature, 0), 1) : 0.7,
+    messages: [{ role: 'user', content: prompt }],
+  };
+  if (system) payload.system = system;
+  try {
+    const r = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await r.json().catch(() => null);
+    if (!r.ok) return { text: '', error: (data && data.error && data.error.message) || ('HTTP ' + r.status), status: r.status };
+    let text = '';
+    try { text = (data.content || []).map(b => (b && b.type === 'text') ? b.text : '').join(''); } catch (e) {}
+    return { text: (text || '').trim(), raw: data };
+  } catch (e) { return { text: '', error: String(e) }; }
+}
+
+// Frontier dispatcher: prefer Claude (ANTHROPIC_API_KEY), else Gemini (GEMINI_API_KEY).
+async function runFrontier(env, system, prompt, maxTokens, temperature) {
+  if (env.ANTHROPIC_API_KEY) return runClaude(env, system, prompt, maxTokens, temperature);
+  return runGemini(env, system, prompt, maxTokens, temperature);
 }
 
 function cors(origin) {
@@ -175,7 +206,7 @@ async function handleAI(request, env) {
   // Icon drawing + its description brief → frontier model (Gemini). When a key is set we commit to Gemini and do NOT
   // fall back to Workers AI: the free Workers-AI neuron pool is tiny and falling back just burns it / errors (4006),
   // and a llama icon would be low quality anyway. Surface the real reason so the client can retry.
-  if ((body.kind === 'icon' || body.kind === 'brief') && env.GEMINI_API_KEY) {
+  if ((body.kind === 'icon' || body.kind === 'brief') && (env.ANTHROPIC_API_KEY || env.GEMINI_API_KEY)) {
     const fr = await runFrontier(env, system, prompt, maxTokens, temperature);
     if (fr.text) return new Response(JSON.stringify({ text: fr.text, via: 'frontier' }), { headers });
     const err = fr.error || '';
