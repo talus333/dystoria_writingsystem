@@ -47,9 +47,11 @@ function dailyOk(user, limit) {
 const MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
 // Vision model — OCR + handwriting recognition. Used when the request carries an image.
 const VISION_MODEL = '@cf/google/gemma-4-26b-a4b-it';
-// Frontier model for ICON drawing only (kind:'icon'). Google AI Studio / Gemini, free tier.
-// Swap to 'gemini-2.5-pro' for higher quality (tighter free limits: ~5 RPM / 100/day).
-const FRONTIER_MODEL = 'gemini-2.5-flash';
+// Frontier models for ICON drawing + the description brief (kind:'icon'|'brief').
+// Claude is used when ANTHROPIC_API_KEY is set (pay-per-use, far more reliable than the Gemini free tier);
+// otherwise falls back to Gemini if GEMINI_API_KEY is set, otherwise to Workers AI.
+const CLAUDE_MODEL = 'claude-sonnet-4-6';   // swap to 'claude-haiku-4-5-20251001' for lower cost, or 'claude-opus-4-8' for top quality
+const FRONTIER_MODEL = 'gemini-2.5-flash';  // Gemini fallback model (free tier)
 
 // data:image/png;base64,xxxx  ->  Array of byte values (Workers AI vision input)
 function dataUrlToBytes(dataUrl) {
