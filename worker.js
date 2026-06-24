@@ -176,8 +176,10 @@ async function handleAI(request, env) {
   if ((body.kind === 'icon' || body.kind === 'brief') && env.GEMINI_API_KEY) {
     const fr = await runFrontier(env, system, prompt, maxTokens, temperature);
     if (fr.text) return new Response(JSON.stringify({ text: fr.text, via: 'frontier' }), { headers });
-    const msg = /quota|rate|429|RESOURCE_EXHAUSTED/i.test(fr.error || '') ? 'Gemini is rate-limited for a moment — try again shortly.' : ('Image model error — try again.' + (fr.error ? ' (' + fr.error + ')' : ''));
-    return new Response(JSON.stringify({ error: msg }), { status: 502, headers });
+    const err = fr.error || '';
+    if (/per day|PerDay|daily|quota.*exceeded|exceeded.*quota/i.test(err)) return new Response(JSON.stringify({ error: 'Dystoria’s image AI is at today’s shared free limit (Gemini) — it resets tomorrow.', limit: 'day' }), { status: 429, headers });
+    if (/rate|429|RESOURCE_EXHAUSTED|quota/i.test(err)) return new Response(JSON.stringify({ error: 'The image model is busy for a moment — try again shortly.' }), { status: 429, headers });
+    return new Response(JSON.stringify({ error: 'Image model error — try again.' + (err ? ' (' + err + ')' : '') }), { status: 502, headers });
   }
 
   const messages = [];
@@ -197,7 +199,10 @@ async function handleAI(request, env) {
     const text = extractText(resp);
     return new Response(JSON.stringify({ text }), { headers });
   } catch (e) {
-    return new Response(JSON.stringify({ error: 'AI error: ' + String(e) }), { status: 502, headers });
+    const em = String(e);
+    // Account-wide Workers AI daily free cap (10,000 neurons). Normalise to a clear, tagged message.
+    if (/4006|neuron|free allocation|exhaust/i.test(em)) return new Response(JSON.stringify({ error: 'Dystoria’s AI is at today’s shared free limit (Cloudflare Workers AI) — it resets tomorrow.', limit: 'day' }), { status: 429, headers });
+    return new Response(JSON.stringify({ error: 'AI error: ' + em }), { status: 502, headers });
   }
 }
 
