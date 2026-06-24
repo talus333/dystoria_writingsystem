@@ -7145,7 +7145,14 @@ function addAspect(i, subName){
 async function nameElement(i){
   const w = state.prompt && state.prompt.words[i];
   if (!w) return;
-  const name = await sitePrompt('Name this ' + ((getCat(w.cat) || {}).name || 'element'), w.name || '');
+  let _rnCtx='';
+  if (w.role === 'being'){
+    const _tok = (typeof window.beingTokenSVG === 'function') ? window.beingTokenSVG(w) : null;
+    const _src = (state.session && state.session.npImages && state.session.npImages[wordKey(w)]) || '';
+    const _inner = _src ? ('<img src="' + _src + '" style="width:100%;height:100%;object-fit:cover">') : (_tok ? ('<svg viewBox="' + _tok.vb + '" preserveAspectRatio="xMidYMid meet" style="width:100%;height:100%">' + _tok.body + '</svg>') : '');
+    _rnCtx = '<div title="Change icon / image" onclick="ipClose(null); openIconPicker(' + i + ');" style="width:66px;height:66px;margin:0 auto 4px;border:1px solid var(--line);border-radius:9px;display:flex;align-items:center;justify-content:center;cursor:pointer;background:var(--bg2)">' + _inner + '</div><div style="text-align:center;font-size:10px;color:var(--ink-faint);margin-bottom:4px">click to choose an icon or image</div>';
+  }
+  const name = await sitePrompt('Name this ' + ((getCat(w.cat) || {}).name || 'element'), w.name || '', null, _rnCtx);
   if (name === null) return;
   pushUndo();
   const trimmed = name.trim();
@@ -11932,7 +11939,7 @@ function openIconPicker(i){
   const wide = (w.cat === 'setting' || w.cat === 'object' || w.role === 'being');   // wider grid for the detailed hand-drawn designs
   panel.innerHTML = '<div class="ip-head"><span>Choose an icon</span><button class="ip-x" title="Close">\u00D7</button></div><div class="ip-grid' + (wide ? ' faceted' : '') + '"></div>';
   const grid = panel.querySelector('.ip-grid');
-  const setIcon = name => { pushUndo(); if (name) w.icon = name; else delete w.icon; delete w.iconCustom; if (state.nodes[i]){ if (name) state.nodes[i].icon = name; else delete state.nodes[i].icon; delete state.nodes[i].iconCustom; } closeIconPicker(); renderConstellation(); persist(); };
+  const setIcon = name => { pushUndo(); if (name) w.icon = name; else delete w.icon; delete w.iconCustom; if(w.role==='being' && state.session && state.session.npImages){ delete state.session.npImages[wordKey(w)]; } if (state.nodes[i]){ if (name) state.nodes[i].icon = name; else delete state.nodes[i].icon; delete state.nodes[i].iconCustom; } closeIconPicker(); renderConstellation(); if(window.renderNpCard) window.renderNpCard(); persist(); };
   const def = document.createElement('button');
   def.className = 'ip-cell ip-def' + (w.icon || w.iconCustom ? '' : ' on'); def.title = 'Default (auto) icon'; def.textContent = 'Auto';
   def.addEventListener('click', () => setIcon(null));
@@ -11942,6 +11949,12 @@ function openIconPicker(i){
     gen.className = 'ip-cell ip-def ip-gen' + (w.iconCustom ? ' on' : ''); gen.title = 'Generate a custom icon with AI'; gen.innerHTML = '✦ AI';
     gen.addEventListener('click', () => { closeIconPicker(); openIconGenerator(i); });
     grid.appendChild(gen);
+  }
+  if (w.role === 'being'){   // load your own image
+    const up = document.createElement('button');
+    up.className = 'ip-cell ip-def ip-gen'; up.title = 'Load your own image'; up.innerHTML = '⤓ Image';
+    up.addEventListener('click', () => { closeIconPicker(); if (window.npCardPickImage) window.npCardPickImage(wordKey(w)); });
+    grid.appendChild(up);
   }
   if (w.role === 'being' && window.BEING_ICONS && window.beingIconThumb){   // the bespoke being/creature library, like objects/settings
     window.BEING_ICONS.forEach(it => {
@@ -14048,6 +14061,10 @@ function renderConstellation(){
         on: ev => { ev.stopPropagation(); addFocusIdx(i); },
         ic: () => { const t = document.createElementNS(NSx, 'text'); t.setAttribute('class', 'ctl-gly' + (inFocus ? ' infocus' : '')); t.setAttribute('text-anchor', 'middle'); t.setAttribute('y', 4); t.textContent = inFocus ? '◉' : '◎'; return t; }
       });
+      if (nd.role === 'being'){
+        circ.push({ title: 'Open this element’s wiki', on: ev => { ev.stopPropagation(); openElementWiki(i); },
+          ic: () => makeLucide('book-open', { cls: 'ctl-ic', color: 'currentColor', x: 0, y: 0, scale: 0.5, sw: 2 }) });
+      }
       if (nd.role === 'word' && nd.cat === 'object'){   // pick a custom icon (settings get this inside their Edit menu)
         circ.push({
           title: 'Choose an icon for this element',
@@ -14056,13 +14073,9 @@ function renderConstellation(){
         });
       }
       // rename — pencil (settings rename from inside their Edit menu instead)
-      if (!(nd.cat === 'setting' && nd.role === 'word')){
+      if (!(nd.cat === 'setting' && nd.role === 'word') && nd.role !== 'being'){
         circ.push({ title: 'Rename…', on: ev => { ev.stopPropagation(); nameElement(i); },
           ic: () => makeLucide('pencil', { cls: 'ctl-ic', color: 'currentColor', x: 0, y: 0, scale: 0.5, sw: 2 }) });
-      }
-      if (nd.role === 'being'){
-        circ.push({ title: 'Choose or generate an icon', on: ev => { ev.stopPropagation(); openIconPicker(i); },
-          ic: () => makeLucide('palette', { cls: 'ctl-ic', color: 'currentColor', x: 0, y: 0, scale: 0.5, sw: 2 }) });
       }
       // setting: redraw shape / pin label / lock in place
       if (nd.role === 'word' && nd.cat === 'setting' && !nd.destroyed){
@@ -21783,8 +21796,9 @@ document.addEventListener('DOMContentLoaded', init);
           if(!state.session && typeof ensureSession==='function') ensureSession();
           if(!state.session.npImages) state.session.npImages={};
           state.session.npImages[key]=url;
+          { const _w2=(typeof npFindEl==='function')?npFindEl(key):null; if(_w2){ delete _w2.icon; delete _w2.iconCustom; } }
           if(typeof scheduleAutosave==='function') scheduleAutosave();
-          renderNpCard();
+          renderNpCard(); if(typeof renderConstellation==='function') renderConstellation();
         }catch(e){ if(typeof flashStatus==='function') flashStatus('Could not load that image'); }
       });
       inp.click();
@@ -21813,11 +21827,16 @@ document.addEventListener('DOMContentLoaded', init);
       // valid note sub-tabs: each trait, plus (for beings) the motivation and each obstacle part — drop cardTrait if its tab is gone
       const _valid=new Set(traits.map(t=>t.word));
       if(wEl.role==='being'){ const _m=wEl.motivation||null; if(_m && _m.want) _valid.add('@motivation'); if(_m && _m.motivator) _valid.add('@motivator'); if(_m) motObstacles(wEl).forEach(p=>_valid.add('@obstacle:'+obstaclePartId(p)));
-        ['@name','@type','@archetype','@occupation'].forEach(x=>_valid.add(x)); if(wEl.storyRole)_valid.add('@role'); if(wEl.rankName)_valid.add('@position'); { const _g=(typeof window.chessGroup==='function')?window.chessGroup(wEl.group):null; if(_g&&_g.name)_valid.add('@group'); } }
+        ['@name','@type','@archetype','@occupation'].forEach(x=>_valid.add(x)); if(wEl.storyRole)_valid.add('@role'); if(wEl.rankName)_valid.add('@position'); if(wEl.group)_valid.add('@group'); }
       if(state.cardTrait && !_valid.has(state.cardTrait)) state.cardTrait=null;
       const imgBox=document.createElement('div'); imgBox.className='npc-img';
       const src=(state.session&&state.session.npImages&&state.session.npImages[key])||'';
-      if(src){ const im=document.createElement('img'); im.src=src; imgBox.appendChild(im); imgBox.classList.add('has-img'); imgBox.title='Click to view larger';
+      if(wEl.role==='being'){
+        if(src){ const im=document.createElement('img'); im.src=src; imgBox.appendChild(im); imgBox.classList.add('has-img'); }
+        else { const tok=(typeof window.beingTokenSVG==='function')?window.beingTokenSVG(wEl):null; if(tok){ imgBox.classList.add('has-icon'); imgBox.innerHTML='<svg viewBox="'+tok.vb+'" preserveAspectRatio="xMidYMid meet" style="width:88%;height:88%">'+tok.body+'</svg>'; } else { imgBox.classList.add('empty'); imgBox.innerHTML='<span>+ icon</span>'; } }
+        imgBox.title='Choose an icon, generate one, or load an image'; imgBox.style.cursor='pointer';
+        imgBox.addEventListener('click', ()=>{ const ii=(typeof elIndexByKey==='function')?elIndexByKey(key):-1; if(ii>=0) openIconPicker(ii); });
+      } else if(src){ const im=document.createElement('img'); im.src=src; imgBox.appendChild(im); imgBox.classList.add('has-img'); imgBox.title='Click to view larger';
         imgBox.addEventListener('click', ()=>openImageLightbox(src));
         const edit=document.createElement('span'); edit.className='npc-imgedit'; edit.textContent='✎'; edit.title='Replace or delete image';
         edit.addEventListener('click', ev=>{ ev.stopPropagation(); openImageMenu(key, ev.clientX, ev.clientY); }); imgBox.appendChild(edit); }
@@ -21859,7 +21878,7 @@ document.addEventListener('DOMContentLoaded', init);
         if(w.rankName) idl.appendChild(mkPill(w.rankName,'Position',{on:state.cardTrait==='@position', onClick:()=>setTrait('@position'), onChange:e=>window.openBeingPositionMenu&&window.openBeingPositionMenu(eix,e.clientX,e.clientY), onRemove:()=>window.clearBeingPosition&&window.clearBeingPosition(eix)}));
         else idl.appendChild(mkAdd('+ position', e=>window.openBeingPositionMenu&&window.openBeingPositionMenu(eix,e.clientX,e.clientY)));
         const gpn=(typeof window.chessGroup==='function')?window.chessGroup(w.group):null;
-        if(gpn && gpn.name) idl.appendChild(mkPill(gpn.name,'Group',{swatch:gpn.color, on:state.cardTrait==='@group', onClick:()=>setTrait('@group'), onChange:e=>window.openBeingGroupMenu&&window.openBeingGroupMenu(eix,e.clientX,e.clientY)}));
+        if(w.group && gpn) idl.appendChild(mkPill(gpn.name||'(unnamed)','Group',{swatch:gpn.color, on:state.cardTrait==='@group', onClick:()=>setTrait('@group'), onChange:e=>window.openBeingGroupMenu&&window.openBeingGroupMenu(eix,e.clientX,e.clientY)}));
         else idl.appendChild(mkAdd('+ group', e=>window.openBeingGroupMenu&&window.openBeingGroupMenu(eix,e.clientX,e.clientY)));
         body.appendChild(idl);
       }
@@ -21952,6 +21971,7 @@ document.addEventListener('DOMContentLoaded', init);
       try{ const im=imgBox.querySelector('img'); if(im){ const applyCap=()=>{ try{ im.style.maxHeight='0px'; const cap=Math.max(body.offsetHeight||64, 64); im.style.maxHeight=cap+'px'; }catch(e){} }; applyCap(); if(!im.complete) im.addEventListener('load', applyCap); } }catch(e){}
     }
     window.renderNpCard=renderNpCard;
+    window.npCardPickImage=npCardPickImage;
     function start(){
       // --- per-trait note scoping: the "active" notes key becomes "<element><trait>" while a sub-tab is selected
       const _ak=window.npActiveKey, _lf=window.npLabelFor;
@@ -22131,7 +22151,7 @@ document.addEventListener('DOMContentLoaded', init);
     // reuse Refine's bespoke black-mode HSV color picker for allegiance colors
     function openGroupColorPanel(key, x, y){
       const panel=document.getElementById('edColorPanel'); if(!panel || typeof setEdColor!=='function') return;
-      window._cpApply=function(hex){ setGroupColor(key, hex); if(typeof PP!=='undefined' && PP.i!=null && PP.i>=0 && typeof setGroup==='function') setGroup(PP.i, key); if(typeof renderPicker==='function') renderPicker(); };
+      window._cpApply=function(hex){ setGroupColor(key, hex); if(typeof renderPicker==='function') renderPicker(); if(window.renderNpCard) window.renderNpCard(); if(typeof renderConstellation==='function') renderConstellation(); };
       window._cpRestore={ parent: panel.parentNode, css: panel.getAttribute('style')||'' };
       document.body.appendChild(panel);
       panel.style.position='fixed'; panel.style.right='auto'; panel.style.zIndex='340';
@@ -22245,6 +22265,14 @@ function beingRenderOpts(nd){ if(!nd) return null;
       const NS='http://www.w3.org/2000/svg';
       const g=document.createElementNS(NS,'g'); g.setAttribute('class','meeple chess');
       const piece = nd.piece || 'pawn'; const grp = chessGroup(nd.group);
+      var _bimg = (nd.role==='being' && state.session && state.session.npImages) ? state.session.npImages[wordKey(nd)] : '';
+      if (_bimg){
+        var _bi2=document.createElementNS(NS,'image'); _bi2.setAttributeNS('http://www.w3.org/1999/xlink','href',_bimg); _bi2.setAttribute('href',_bimg);
+        _bi2.setAttribute('width',34); _bi2.setAttribute('height',34); _bi2.setAttribute('x',-17); _bi2.setAttribute('y',-49); _bi2.setAttribute('preserveAspectRatio','xMidYMid slice');
+        g.appendChild(_bi2);
+        var _bit=document.createElementNS(NS,'title'); _bit.textContent=(nd.name||capWord(piece)); g.appendChild(_bit);
+        return g;
+      }
       if (nd.iconCustom){
         var _ic=document.createElementNS(NS,'g'); _ic.setAttribute('transform','translate(0,-14) scale(1.6)'); _ic.innerHTML=nd.iconCustom;
         g.appendChild(_ic);
@@ -22599,6 +22627,7 @@ function beingRenderOpts(nd){ if(!nd) return null;
       p.style.left=Math.max(8, Math.min((x||200), window.innerWidth-pw-8))+'px';
       p.style.top=Math.max(8, Math.min((y||120), window.innerHeight-ph-8))+'px'; }
     window.openPiecePicker=openPiecePicker;
+    window.beingTokenSVG=function(nd){ if(!nd) return null; if(nd.iconCustom) return {vb:'-12 -24 24 25', body:nd.iconCustom}; var o=(nd.icon&&beingForce(nd,nd.icon))||beingRenderOpts(nd); if(!o) return null; var r=composeBeing(o); return {vb:r.box.join(' '), body:r.svg}; };
     window.openBeingRoleMenu=function(i,x,y){ var w=state.prompt&&state.prompt.words[i]; if(!w) return; openVocabPicker('role', w.storyRole||'', function(v){ setStoryRole(i, v||''); if(window.renderNpCard) window.renderNpCard(); }, x, y); };
     window.openBeingPositionMenu=function(i,x,y){ var w=state.prompt&&state.prompt.words[i]; if(!w) return; openVocabPicker('position', w.rankName||'', function(v){ setRankName(i, v); if(window.renderNpCard) window.renderNpCard(); }, x, y); };
     window.clearBeingRole=function(i){ setStoryRole(i,''); if(window.renderNpCard) window.renderNpCard(); };
@@ -22607,22 +22636,24 @@ function beingRenderOpts(nd){ if(!nd) return null;
       var w=state.prompt&&state.prompt.words[i]; if(!w) return;
       var p=document.getElementById('beingGroupPop');
       if(!p){ p=document.createElement('div'); p.id='beingGroupPop'; document.body.appendChild(p);
-        document.addEventListener('mousedown', function(ev){ if(p.style.display==='block' && !p.contains(ev.target) && !(ev.target.closest&&ev.target.closest('#edColorPanel'))) p.style.display='none'; }, true); }
+        document.addEventListener('mousedown', function(ev){ if(p.style.display==='block' && !p.contains(ev.target) && !(ev.target.closest&&(ev.target.closest('#edColorPanel')||ev.target.closest('#vocabPicker')))) p.style.display='none'; }, true); }
       p.style.cssText='position:fixed; z-index:360; background:var(--paper); border:1px solid var(--line); border-radius:11px; box-shadow:0 16px 50px rgba(0,0,0,.25); padding:8px; min-width:172px';
       p.innerHTML='';
       var hd=document.createElement('div'); hd.textContent='Group'; hd.style.cssText='font-family:var(--sans); font-size:8px; letter-spacing:.16em; text-transform:uppercase; color:var(--ink-faint); padding:2px 4px 6px'; p.appendChild(hd);
       groupOrder().forEach(function(key){ var gp=chessGroup(key);
         var row=document.createElement('div'); row.style.cssText='display:flex; align-items:center; gap:8px; padding:4px 6px; border-radius:8px; cursor:pointer;'+((w.group||'dark')===key?'background:rgba(0,0,0,.06)':'');
         var sw=document.createElement('span'); sw.style.cssText='width:17px;height:17px;border-radius:50%;border:1px solid rgba(0,0,0,.35);flex:none;cursor:pointer;background:'+gp.color; sw.title='Recolor this group';
-        sw.addEventListener('click', function(e){ e.stopPropagation(); setGroup(i,key); openGroupColorPanel(key, e.clientX, e.clientY); });
+        sw.addEventListener('click', function(e){ e.stopPropagation(); setGroup(i,key); if(window.renderNpCard) window.renderNpCard(); openGroupColorPanel(key, e.clientX, e.clientY); });
         row.appendChild(sw);
         var nm=document.createElement('span'); nm.textContent=gp.name||'(unnamed)'; nm.style.cssText='flex:1; font-family:var(--serif); font-size:13px; color:'+(gp.name?'var(--ink)':'var(--ink-faint)'); row.appendChild(nm);
+        var ren=document.createElement('span'); ren.textContent='✎'; ren.title='Rename group'; ren.style.cssText='opacity:.5; cursor:pointer; padding:0 4px; font-size:12px';
+        ren.addEventListener('click', function(e){ e.stopPropagation(); openVocabPicker('group', gp.name||'', function(v){ setGroupName(key, v); if(window.renderNpCard) window.renderNpCard(); window.openBeingGroupMenu(i,x,y); }, e.clientX, e.clientY); }); row.appendChild(ren);
         if(!GROUP_DEFAULTS[key]){ var del=document.createElement('span'); del.textContent='\u00d7'; del.title='Delete group'; del.style.cssText='color:var(--ink-faint); padding:0 3px; cursor:pointer'; del.addEventListener('click', function(e){ e.stopPropagation(); removeGroup(key); window.openBeingGroupMenu(i,x,y); }); row.appendChild(del); }
         row.addEventListener('click', function(){ setGroup(i,key); p.style.display='none'; if(window.renderNpCard) window.renderNpCard(); });
         p.appendChild(row);
       });
       var add=document.createElement('div'); add.textContent='+ group'; add.style.cssText='font-family:var(--sans); font-size:9px; letter-spacing:.04em; color:var(--ink-faint); border:1px dashed var(--line); border-radius:9px; padding:3px 9px; margin-top:6px; cursor:pointer; display:inline-block';
-      add.addEventListener('click', function(e){ e.stopPropagation(); var k=addGroup(); if(k!=null){ setGroup(i,k); window.openBeingGroupMenu(i,x,y); } });
+      add.addEventListener('click', function(e){ e.stopPropagation(); var k=addGroup(); if(k!=null){ setGroup(i,k); if(window.renderNpCard) window.renderNpCard(); window.openBeingGroupMenu(i,x,y); } });
       p.appendChild(add);
       p.style.display='block';
       p.style.left=Math.max(8, Math.min(x||200, window.innerWidth-190))+'px';
