@@ -105,12 +105,14 @@ async function runGemini(env, system, prompt, maxTokens, temperature, model, jso
   if (!key) return { text: '', error: 'no GEMINI_API_KEY' };
   model = model || FRONTIER_MODEL;
   const url = 'https://generativelanguage.googleapis.com/v1beta/models/' + model + ':generateContent?key=' + encodeURIComponent(key);
+  const isFlash = /flash|lite/i.test(model);
   const genCfg = {
     temperature: isFinite(temperature) ? temperature : 0.6,
-    maxOutputTokens: Math.max(maxTokens, 2048),
+    // Pro spends output tokens on internal "thinking", so give it plenty of headroom or it returns empty.
+    maxOutputTokens: isFlash ? Math.max(maxTokens, 2048) : Math.max(maxTokens * 2, 8192),
   };
-  // Flash/Lite can skip internal reasoning (thinkingBudget 0) so the full SVG fits the token budget. Pro can't disable it — leave it default there.
-  if (/flash|lite/i.test(model)) genCfg.thinkingConfig = { thinkingBudget: 0 };
+  if (isFlash) genCfg.thinkingConfig = { thinkingBudget: 0 };   // Flash/Lite can skip thinking so the full SVG fits
+  else genCfg.thinkingConfig = { thinkingBudget: 1024 };        // Pro: cap thinking so it leaves room for the SVG output
   if (jsonMode) genCfg.responseMimeType = 'application/json';
   const payload = { contents: [{ role: 'user', parts: [{ text: prompt }] }], generationConfig: genCfg };
   if (system) payload.system_instruction = { parts: [{ text: system }] };
@@ -205,22 +207,27 @@ function isQuotaErr(e) { return /per ?day|daily|quota|exhaust|4006|neuron|insuff
 async function runFrontier(env, system, prompt, maxTokens, temperature, opts) {
   opts = opts || {};
   let chain = modelChain(env);
-  if (Array.isArray(opts.only) && opts.only.length){
+  const testing = Array.isArray(opts.only) && opts.only.length;
+  if (testing){
     chain = chain.filter(p => opts.only.includes(p.name));   // testing override: only the explicitly enabled models, in chain order
   } else {
     if (opts.allowPaid === false) chain = chain.filter(p => !p.paid);
     if (opts.allowLast === false) chain = chain.filter(p => !p.last);
   }
   const now = Date.now();
-  let lastErr = '';
+  const tried = [];
+  let exhausted = false;
   for (const p of chain) {
-    if ((_cooldown.get(p.name) || 0) > now) continue;                       // recently used up — skip for now
-    const r = await p.run(system, prompt, maxTokens, temperature, opts.json);
+    if (!testing && (_cooldown.get(p.name) || 0) > now){ tried.push(p.name + ': cooling down'); continue; }   // skip recently-exhausted (but always try in testing)
+    let r;
+    try { r = await p.run(system, prompt, maxTokens, temperature, opts.json); }
+    catch (e){ r = { text: '', error: String(e) }; }
     if (r && r.text) return { text: r.text, via: p.name };
-    lastErr = (r && r.error) || lastErr;
-    if (isQuotaErr(lastErr)) _cooldown.set(p.name, now + 60 * 60 * 1000);   // daily-ish quota → rest this provider for an hour
+    const e = (r && r.error) || 'empty response';
+    tried.push(p.name + ': ' + e);
+    if (isQuotaErr(e)){ exhausted = true; if (!testing) _cooldown.set(p.name, now + 60 * 60 * 1000); }   // daily-ish quota → rest this provider an hour
   }
-  return { text: '', error: lastErr || 'all models unavailable', exhausted: isQuotaErr(lastErr) };
+  return { text: '', error: tried.join('  |  ') || 'no models configured', exhausted };
 }
 
 function cors(origin) {
@@ -280,9 +287,8 @@ async function handleAI(request, env) {
     const fr = await runFrontier(env, system, prompt, maxTokens, temperature, { allowPaid: body.tier !== 'free', allowLast: body.kind !== 'icon', only: body.models });
     if (fr.text) return new Response(JSON.stringify({ text: fr.text, via: fr.via }), { headers });
     const err = fr.error || '';
-    if (fr.exhausted) return new Response(JSON.stringify({ error: 'Dystoria’s free AI models are all at today’s limit — they reset tomorrow, or upgrade for the priority model.', limit: 'day' }), { status: 429, headers });
-    if (/rate|429|busy|RESOURCE_EXHAUSTED/i.test(err)) return new Response(JSON.stringify({ error: 'The image models are busy for a moment — try again shortly.' }), { status: 429, headers });
-    return new Response(JSON.stringify({ error: 'Image model error — try again.' + (err ? ' (' + err + ')' : '') }), { status: 502, headers });
+    if (fr.exhausted) return new Response(JSON.stringify({ error: 'Free AI models at today’s limit — ' + err, limit: 'day' }), { status: 429, headers });
+    return new Response(JSON.stringify({ error: 'Image model error — ' + (err || 'try again') }), { status: 502, headers });
   }
 
   // ---- general text tasks (writing prompts, Wiki rollups, Import extraction, Refine, etc.) ----
