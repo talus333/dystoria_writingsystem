@@ -100,7 +100,7 @@ async function runVision(env, model, system, prompt, dataUrl, maxTokens) {
 }
 
 // Gemini (AI Studio REST). Returns '' on any failure so the caller can fall back.
-async function runGemini(env, system, prompt, maxTokens, temperature, model) {
+async function runGemini(env, system, prompt, maxTokens, temperature, model, jsonMode) {
   const key = env.GEMINI_API_KEY;
   if (!key) return { text: '', error: 'no GEMINI_API_KEY' };
   model = model || FRONTIER_MODEL;
@@ -111,6 +111,7 @@ async function runGemini(env, system, prompt, maxTokens, temperature, model) {
   };
   // Flash/Lite can skip internal reasoning (thinkingBudget 0) so the full SVG fits the token budget. Pro can't disable it — leave it default there.
   if (/flash|lite/i.test(model)) genCfg.thinkingConfig = { thinkingBudget: 0 };
+  if (jsonMode) genCfg.responseMimeType = 'application/json';
   const payload = { contents: [{ role: 'user', parts: [{ text: prompt }] }], generationConfig: genCfg };
   if (system) payload.system_instruction = { parts: [{ text: system }] };
   try {
@@ -149,15 +150,17 @@ async function runClaude(env, system, prompt, maxTokens, temperature) {
 }
 
 // OpenAI-compatible chat endpoint — covers most free providers (Groq, Mistral, OpenRouter, Together, DeepSeek, Cerebras…).
-async function runOpenAICompat(key, url, model, system, prompt, maxTokens, temperature, extraHeaders) {
+async function runOpenAICompat(key, url, model, system, prompt, maxTokens, temperature, extraHeaders, jsonMode) {
   if (!key) return { text: '', error: 'no key' };
   const messages = [];
   if (system) messages.push({ role: 'system', content: system });
   messages.push({ role: 'user', content: prompt });
+  const payload = { model, messages, max_tokens: Math.max(maxTokens, 1024), temperature: isFinite(temperature) ? temperature : 0.6 };
+  if (jsonMode) payload.response_format = { type: 'json_object' };
   try {
     const r = await fetch(url, { method: 'POST',
       headers: Object.assign({ 'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json' }, extraHeaders || {}),
-      body: JSON.stringify({ model, messages, max_tokens: Math.max(maxTokens, 1024), temperature: isFinite(temperature) ? temperature : 0.6 }) });
+      body: JSON.stringify(payload) });
     const data = await r.json().catch(() => null);
     if (!r.ok) return { text: '', error: (data && data.error && (data.error.message || data.error)) || ('HTTP ' + r.status), status: r.status };
     let text = '';
@@ -166,13 +169,16 @@ async function runOpenAICompat(key, url, model, system, prompt, maxTokens, tempe
   } catch (e) { return { text: '', error: String(e) }; }
 }
 // Workers AI (the always-available last resort).
-async function runWorkersChat(env, system, prompt, maxTokens, temperature) {
+async function runWorkersChat(env, system, prompt, maxTokens, temperature, jsonMode) {
   if (!env.AI) return { text: '', error: 'no Workers AI' };
   const messages = [];
   if (system) messages.push({ role: 'system', content: system });
   messages.push({ role: 'user', content: prompt });
+  const base = { messages, max_tokens: Math.min(maxTokens, 4096), temperature: isFinite(temperature) ? temperature : 0.4 };
   try {
-    const resp = await env.AI.run(MODEL, { messages, max_tokens: Math.min(maxTokens, 4096), temperature: isFinite(temperature) ? temperature : 0.4 });
+    let resp;
+    if (jsonMode) { try { resp = await env.AI.run(MODEL, { ...base, response_format: { type: 'json_object' } }); } catch (e) { resp = await env.AI.run(MODEL, base); } }
+    else resp = await env.AI.run(MODEL, base);
     return { text: extractText(resp), raw: resp };
   } catch (e) { return { text: '', error: String(e) }; }
 }
@@ -182,13 +188,13 @@ async function runWorkersChat(env, system, prompt, maxTokens, temperature) {
 // To add a free model: get its key, add it as a CF secret, and add ONE line here in the right rank slot.
 function modelChain(env) {
   const c = [];
-  if (env.ANTHROPIC_API_KEY)  c.push({ name: 'claude', paid: true, run: (s, p, mt, t) => runClaude(env, s, p, mt, t) });
-  if (env.GEMINI_API_KEY)     c.push({ name: 'gemini-2.5-pro',   run: (s, p, mt, t) => runGemini(env, s, p, mt, t, 'gemini-2.5-pro') });
-  if (env.GEMINI_API_KEY)     c.push({ name: 'gemini-2.5-flash', run: (s, p, mt, t) => runGemini(env, s, p, mt, t, 'gemini-2.5-flash') });
-  if (env.GROQ_API_KEY)       c.push({ name: 'groq-llama-70b',   run: (s, p, mt, t) => runOpenAICompat(env.GROQ_API_KEY, 'https://api.groq.com/openai/v1/chat/completions', 'llama-3.3-70b-versatile', s, p, mt, t) });
-  if (env.MISTRAL_API_KEY)    c.push({ name: 'mistral-large',    run: (s, p, mt, t) => runOpenAICompat(env.MISTRAL_API_KEY, 'https://api.mistral.ai/v1/chat/completions', 'mistral-large-latest', s, p, mt, t) });
-  if (env.OPENROUTER_API_KEY) c.push({ name: 'openrouter-free',  run: (s, p, mt, t) => runOpenAICompat(env.OPENROUTER_API_KEY, 'https://openrouter.ai/api/v1/chat/completions', 'meta-llama/llama-3.3-70b-instruct:free', s, p, mt, t, { 'HTTP-Referer': 'https://dystoria.net', 'X-Title': 'Dystoria' }) });
-  if (env.AI)                 c.push({ name: 'workers-ai', last: true, run: (s, p, mt, t) => runWorkersChat(env, s, p, mt, t) });
+  if (env.ANTHROPIC_API_KEY)  c.push({ name: 'claude', paid: true, run: (s, p, mt, t, j) => runClaude(env, s, p, mt, t) });
+  if (env.GEMINI_API_KEY)     c.push({ name: 'gemini-2.5-pro',   run: (s, p, mt, t, j) => runGemini(env, s, p, mt, t, 'gemini-2.5-pro', j) });
+  if (env.GEMINI_API_KEY)     c.push({ name: 'gemini-2.5-flash', run: (s, p, mt, t, j) => runGemini(env, s, p, mt, t, 'gemini-2.5-flash', j) });
+  if (env.GROQ_API_KEY)       c.push({ name: 'groq-llama-70b',   run: (s, p, mt, t, j) => runOpenAICompat(env.GROQ_API_KEY, 'https://api.groq.com/openai/v1/chat/completions', 'llama-3.3-70b-versatile', s, p, mt, t, null, j) });
+  if (env.MISTRAL_API_KEY)    c.push({ name: 'mistral-large',    run: (s, p, mt, t, j) => runOpenAICompat(env.MISTRAL_API_KEY, 'https://api.mistral.ai/v1/chat/completions', 'mistral-large-latest', s, p, mt, t, null, j) });
+  if (env.OPENROUTER_API_KEY) c.push({ name: 'openrouter-free',  run: (s, p, mt, t, j) => runOpenAICompat(env.OPENROUTER_API_KEY, 'https://openrouter.ai/api/v1/chat/completions', 'meta-llama/llama-3.3-70b-instruct:free', s, p, mt, t, { 'HTTP-Referer': 'https://dystoria.net', 'X-Title': 'Dystoria' }, j) });
+  if (env.AI)                 c.push({ name: 'workers-ai', last: true, run: (s, p, mt, t, j) => runWorkersChat(env, s, p, mt, t, j) });
   return c;
 }
 const _cooldown = new Map();   // provider name → epoch ms until which to skip it (set when it hits a DAILY quota)
@@ -205,7 +211,7 @@ async function runFrontier(env, system, prompt, maxTokens, temperature, opts) {
   let lastErr = '';
   for (const p of chain) {
     if ((_cooldown.get(p.name) || 0) > now) continue;                       // recently used up — skip for now
-    const r = await p.run(system, prompt, maxTokens, temperature);
+    const r = await p.run(system, prompt, maxTokens, temperature, opts.json);
     if (r && r.text) return { text: r.text, via: p.name };
     lastErr = (r && r.error) || lastErr;
     if (isQuotaErr(lastErr)) _cooldown.set(p.name, now + 60 * 60 * 1000);   // daily-ish quota → rest this provider for an hour
@@ -275,28 +281,14 @@ async function handleAI(request, env) {
     return new Response(JSON.stringify({ error: 'Image model error — try again.' + (err ? ' (' + err + ')' : '') }), { status: 502, headers });
   }
 
-  const messages = [];
-  if (system) messages.push({ role: 'system', content: system });
-  messages.push({ role: 'user', content: prompt });
-  const base = { messages, max_tokens: maxTokens, temperature };
-
-  try {
-    let resp;
-    if (body.json) {
-      // JSON mode where the model supports it; fall back gracefully otherwise
-      try { resp = await env.AI.run(model, { ...base, response_format: { type: 'json_object' } }); }
-      catch (e) { resp = await env.AI.run(model, base); }
-    } else {
-      resp = await env.AI.run(model, base);
-    }
-    const text = extractText(resp);
-    return new Response(JSON.stringify({ text }), { headers });
-  } catch (e) {
-    const em = String(e);
-    // Account-wide Workers AI daily free cap (10,000 neurons). Normalise to a clear, tagged message.
-    if (/4006|neuron|free allocation|exhaust/i.test(em)) return new Response(JSON.stringify({ error: 'Dystoria’s AI is at today’s shared free limit (Cloudflare Workers AI) — it resets tomorrow.', limit: 'day' }), { status: 429, headers });
-    return new Response(JSON.stringify({ error: 'AI error: ' + em }), { status: 502, headers });
-  }
+  // ---- general text tasks (writing prompts, Wiki rollups, Import extraction, Refine, etc.) ----
+  // Route through the FREE model chain (Gemini → Groq → Mistral → … → Workers AI) for quality + resilience.
+  // Skip the paid Claude (allowPaid:false) — Claude is reserved for the premium icon path. Pass json mode through.
+  const tr = await runFrontier(env, system, prompt, maxTokens, temperature, { allowPaid: body.tier === 'pro', json: !!body.json });
+  if (tr.text) return new Response(JSON.stringify({ text: tr.text, via: tr.via }), { headers });
+  const terr = tr.error || '';
+  if (tr.exhausted) return new Response(JSON.stringify({ error: 'Dystoria’s free AI models are all at today’s limit — they reset tomorrow.', limit: 'day' }), { status: 429, headers });
+  return new Response(JSON.stringify({ error: 'AI error: ' + terr }), { status: 502, headers });
 }
 
 export default {
