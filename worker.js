@@ -205,8 +205,12 @@ function isQuotaErr(e) { return /per ?day|daily|quota|exhaust|4006|neuron|insuff
 async function runFrontier(env, system, prompt, maxTokens, temperature, opts) {
   opts = opts || {};
   let chain = modelChain(env);
-  if (opts.allowPaid === false) chain = chain.filter(p => !p.paid);
-  if (opts.allowLast === false) chain = chain.filter(p => !p.last);
+  if (Array.isArray(opts.only) && opts.only.length){
+    chain = chain.filter(p => opts.only.includes(p.name));   // testing override: only the explicitly enabled models, in chain order
+  } else {
+    if (opts.allowPaid === false) chain = chain.filter(p => !p.paid);
+    if (opts.allowLast === false) chain = chain.filter(p => !p.last);
+  }
   const now = Date.now();
   let lastErr = '';
   for (const p of chain) {
@@ -273,7 +277,7 @@ async function handleAI(request, env) {
   // The chain auto-falls-through when a model is busy or its daily quota is used up. Icons skip the Workers-AI llama (too low quality);
   // briefs may use it as a final resort. `tier:'free'` skips the paid (Claude) model.
   if (body.kind === 'icon' || body.kind === 'brief') {
-    const fr = await runFrontier(env, system, prompt, maxTokens, temperature, { allowPaid: body.tier !== 'free', allowLast: body.kind !== 'icon' });
+    const fr = await runFrontier(env, system, prompt, maxTokens, temperature, { allowPaid: body.tier !== 'free', allowLast: body.kind !== 'icon', only: body.models });
     if (fr.text) return new Response(JSON.stringify({ text: fr.text, via: fr.via }), { headers });
     const err = fr.error || '';
     if (fr.exhausted) return new Response(JSON.stringify({ error: 'Dystoria’s free AI models are all at today’s limit — they reset tomorrow, or upgrade for the priority model.', limit: 'day' }), { status: 429, headers });
@@ -284,7 +288,7 @@ async function handleAI(request, env) {
   // ---- general text tasks (writing prompts, Wiki rollups, Import extraction, Refine, etc.) ----
   // Route through the FREE model chain (Gemini → Groq → Mistral → … → Workers AI) for quality + resilience.
   // Skip the paid Claude (allowPaid:false) — Claude is reserved for the premium icon path. Pass json mode through.
-  const tr = await runFrontier(env, system, prompt, maxTokens, temperature, { allowPaid: body.tier === 'pro', json: !!body.json });
+  const tr = await runFrontier(env, system, prompt, maxTokens, temperature, { allowPaid: body.tier === 'pro', json: !!body.json, only: body.models });
   if (tr.text) return new Response(JSON.stringify({ text: tr.text, via: tr.via }), { headers });
   const terr = tr.error || '';
   if (tr.exhausted) return new Response(JSON.stringify({ error: 'Dystoria’s free AI models are all at today’s limit — they reset tomorrow.', limit: 'day' }), { status: 429, headers });
