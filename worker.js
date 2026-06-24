@@ -145,7 +145,8 @@ async function handleAI(request, env) {
   const messages = [];
   if (system) messages.push({ role: 'system', content: system });
   messages.push({ role: 'user', content: prompt });
-  const base = { messages, max_tokens: maxTokens, temperature: 0.4 };
+  const temperature = (() => { const t = parseFloat(body.temperature); return isFinite(t) ? Math.min(Math.max(t, 0), 1.5) : 0.4; })();
+  const base = { messages, max_tokens: maxTokens, temperature };
 
   try {
     let resp;
