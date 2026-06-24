@@ -28,6 +28,36 @@ async function verifyUser(token) {
     return user;
   } catch (e) { return null; }
 }
+// Entitlement lookup: read the user's row from the subscriptions table (migration v5) with the SERVICE ROLE key,
+// which bypasses RLS. Returns 'pro' only when the row says pro AND the paid period hasn't lapsed (a one-day grace
+// guards against a missed webhook); otherwise 'free'. Cached ~60s per isolate. If the service key isn't configured
+// yet, everyone is 'free' here (admins still get Claude via the separate admin flag). Never throws.
+const _planCache = new Map();   // userId -> { plan, t }
+const _PLAN_GRACE_MS = 24 * 60 * 60 * 1000;
+async function planOf(env, userId) {
+  if (!userId) return 'free';
+  const key = env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!key) return 'free';
+  const now = Date.now();
+  const c = _planCache.get(userId);
+  if (c && now - c.t < 60000) return c.plan;
+  let plan = 'free';
+  try {
+    const url = SUPABASE_URL + '/rest/v1/subscriptions?user_id=eq.' + encodeURIComponent(userId) + '&select=plan,status,current_period_end&limit=1';
+    const r = await fetch(url, { headers: { apikey: key, Authorization: 'Bearer ' + key } });
+    if (r.ok) {
+      const rows = await r.json();
+      const row = Array.isArray(rows) ? rows[0] : null;
+      if (row && row.plan === 'pro') {
+        const end = row.current_period_end ? Date.parse(row.current_period_end) : Infinity;
+        if (!isFinite(end) || end > now - _PLAN_GRACE_MS) plan = 'pro';
+      }
+    }
+  } catch (e) { /* fail closed to free */ }
+  _planCache.set(userId, { plan, t: now });
+  if (_planCache.size > 2000) _planCache.clear();
+  return plan;
+}
 function rateOk(user, limit) {
   const now = Date.now();
   const arr = (_rate.get(user) || []).filter(t => now - t < 60000);
@@ -212,13 +242,12 @@ async function runFrontier(env, system, prompt, maxTokens, temperature, opts) {
   opts = opts || {};
   const admin = !!opts.admin;
   let chain = modelChain(env);
-  if (!admin) chain = chain.filter(p => !p.paid);   // Claude (paid) is ADMIN-ONLY — never offered to other users, whatever the request asks for
-  const only = admin ? opts.only : null;            // the per-model testing toggles are admin-only too
+  const only = admin ? opts.only : null;            // the per-model testing toggles are admin-only
   const testing = Array.isArray(only) && only.length;
   if (testing){
     chain = chain.filter(p => only.includes(p.name));   // testing override: only the explicitly enabled models, in chain order
   } else {
-    if (opts.allowPaid === false) chain = chain.filter(p => !p.paid);
+    if (!opts.allowPaid) chain = chain.filter(p => !p.paid);   // the paid model (Claude) is included ONLY when the caller is entitled (admin or Pro); allowPaid is set server-side from the verified plan, never from the request body
     if (opts.allowLast === false) chain = chain.filter(p => !p.last);
   }
   const now = Date.now();
@@ -267,8 +296,10 @@ async function handleAI(request, env) {
   const user = await verifyUser(token);
   if (!user) return new Response(JSON.stringify({ error: 'Sign in to use the AI features' }), { status: 401, headers });
   const admin = isAdminEmail(user.email);
-  if (!rateOk(user.id, image ? 12 : 45)) return new Response(JSON.stringify({ error: 'Too many AI requests — give it a moment' }), { status: 429, headers });
-  if (!dailyOk(user.id, image ? 400 : 1200)) return new Response(JSON.stringify({ error: 'You’ve hit today’s AI limit — it resets tomorrow. Reach out if you need more.' }), { status: 429, headers });
+  const plan = admin ? 'pro' : await planOf(env, user.id);   // entitlement from the subscriptions table; admin is treated as Pro
+  const paid = admin || plan === 'pro';                       // may use the paid Claude model + gets the higher quotas
+  if (!rateOk(user.id, image ? (paid ? 30 : 12) : (paid ? 120 : 45))) return new Response(JSON.stringify({ error: 'Too many AI requests — give it a moment' }), { status: 429, headers });
+  if (!dailyOk(user.id, image ? (paid ? 1500 : 400) : (paid ? 6000 : 1200))) return new Response(JSON.stringify({ error: 'You’ve hit today’s AI limit — it resets tomorrow. Reach out if you need more.' }), { status: 429, headers });
 
   const maxTokens = Math.min(Math.max(parseInt(body.max_tokens, 10) || 600, 64), 4096);
   const model = body.model || (image ? VISION_MODEL : MODEL);
@@ -290,9 +321,9 @@ async function handleAI(request, env) {
 
   // Icon drawing + its description brief → quality-ranked model chain (Claude → Gemini Pro → Gemini Flash → Groq → … → Workers AI).
   // The chain auto-falls-through when a model is busy or its daily quota is used up. Icons skip the Workers-AI llama (too low quality);
-  // briefs may use it as a final resort. `tier:'free'` skips the paid (Claude) model.
+  // briefs may use it as a final resort. allowPaid (= admin || Pro) decides whether Claude leads; free users get the free chain.
   if (body.kind === 'icon' || body.kind === 'brief') {
-    const fr = await runFrontier(env, system, prompt, maxTokens, temperature, { admin, allowPaid: body.tier !== 'free', allowLast: body.kind !== 'icon', only: body.models });
+    const fr = await runFrontier(env, system, prompt, maxTokens, temperature, { admin, allowPaid: paid, allowLast: body.kind !== 'icon', only: body.models });
     if (fr.text) return new Response(JSON.stringify({ text: fr.text, via: fr.via }), { headers });
     const err = fr.error || '';
     if (fr.exhausted) return new Response(JSON.stringify({ error: 'Free AI models at today’s limit — ' + err, limit: 'day' }), { status: 429, headers });
@@ -300,9 +331,11 @@ async function handleAI(request, env) {
   }
 
   // ---- general text tasks (writing prompts, Wiki rollups, Import extraction, Refine, etc.) ----
-  // Route through the FREE model chain (Gemini → Groq → Mistral → … → Workers AI) for quality + resilience.
-  // Skip the paid Claude (allowPaid:false) — Claude is reserved for the premium icon path. Pass json mode through.
-  const tr = await runFrontier(env, system, prompt, maxTokens, temperature, { admin, allowPaid: body.tier === 'pro', json: !!body.json, only: body.models });
+  // Route through the FREE model chain (Gemini → Groq → Mistral → … → Workers AI) for quality + resilience — for
+  // EVERYONE, including Pro. Gemini 2.5 Pro leads and is already frontier-grade, and text is high-volume, so Claude
+  // stays reserved for the premium ICON path to bound cost. (Only admins get Claude here, for testing.) To also give
+  // Pro subscribers Claude for text, change `allowPaid: admin` → `allowPaid: paid`. Pass json mode through.
+  const tr = await runFrontier(env, system, prompt, maxTokens, temperature, { admin, allowPaid: admin, json: !!body.json, only: body.models });
   if (tr.text) return new Response(JSON.stringify({ text: tr.text, via: tr.via }), { headers });
   const terr = tr.error || '';
   if (tr.exhausted) return new Response(JSON.stringify({ error: 'Dystoria’s free AI models are all at today’s limit — they reset tomorrow.', limit: 'day' }), { status: 429, headers });
