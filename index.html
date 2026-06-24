@@ -19301,11 +19301,17 @@ function aiSig(el){ const q = wikiAppearances(el); const n = npNotesForEl(el); r
 function npPlain(html){ const d = document.createElement('div'); d.innerHTML = (html || '').replace(/<\/(div|p|li)>/gi, '\n').replace(/<br\s*\/?>/gi, '\n'); return (d.textContent || '').replace(/ /g, ' ').replace(/\n{3,}/g, '\n\n').trim(); }
 function npNotesForEl(el){
   if (!el || !(state.session && state.session.npNotes)) return '';
-  const keys = [];
-  if (el.ref) keys.push(wordKey(el.ref));
-  keys.push('0|' + el.cat + '|' + el.word);
-  for (const k of keys){ if (state.session.npNotes[k]) return npPlain(state.session.npNotes[k]); }
-  return '';
+  const NN = state.session.npNotes, SEP = '||TRAIT||';
+  const bases = [];
+  if (el.ref) bases.push(wordKey(el.ref));
+  bases.push('0|' + el.cat + '|' + el.word);
+  const TABLBL = { '@name':'Name','@type':'Type','@archetype':'Archetype','@occupation':'Occupation','@role':'Role','@position':'Position','@group':'Group','@motivation':'Motivation','@motivator':'Motivator' };
+  const out = [], seen = {};
+  bases.forEach(base => {
+    if (NN[base] && !seen[base]){ seen[base]=1; const p=npPlain(NN[base]); if(p) out.push(p); }
+    Object.keys(NN).forEach(k => { if (seen[k]) return; if (k.indexOf(base+SEP)===0){ seen[k]=1; const p=npPlain(NN[k]); if(p){ const tab=k.slice((base+SEP).length); const lbl=TABLBL[tab]||(tab.indexOf('@obstacle:')===0?'Obstacle':tab); out.push(lbl+': '+p); } } });
+  });
+  return out.join('\n');
 }
 async function aiRollup(el){
   const facts = ['Element: ' + el.word + (el.name ? ' (named “' + el.name + '”)' : '') + ' — ' + wikiCatName(el.cat) + (el.sub ? ' · ' + el.sub : '')];
@@ -21323,6 +21329,9 @@ document.addEventListener('DOMContentLoaded', init);
   #npCard .npc-subhead{font-family:var(--sans); font-size:7.5px; letter-spacing:.16em; text-transform:uppercase; color:var(--ink-faint); margin-top:9px}
   #npCard .npc-traits{display:flex; flex-wrap:wrap; align-items:center; gap:5px; margin-top:7px}
   #npCard .npc-identity{margin-top:5px}
+  #npCard .npc-unnamed{font-family:var(--serif); font-style:italic; font-weight:400; font-size:16px; color:var(--ink-faint); border-bottom:1px dashed var(--line); cursor:pointer}
+  #npCard .npc-rename{font-size:12px; margin-left:8px; opacity:.45; cursor:pointer; font-style:normal; font-weight:400}
+  #npCard .npc-rename:hover{opacity:1; color:var(--gold)}
   #npCard .npc-sep{display:inline-block; width:5px; height:5px; border-radius:50%; background:var(--ink); opacity:.5; margin:0 4px; flex:none}
   #npCard .npc-gswatch{display:inline-block; width:12px; height:12px; border-radius:50%; border:1px solid rgba(0,0,0,.3); flex:none}
   #npCard .npc-trait{display:inline-flex; align-items:center; line-height:1.4; font-family:var(--serif); font-size:11px; color:var(--ink); border:1px solid var(--line); border-radius:13px; padding:1px 9px; cursor:pointer; transition:color .12s,border-color .12s,background .12s}
@@ -21803,7 +21812,8 @@ document.addEventListener('DOMContentLoaded', init);
       const traits=traitWords(key);
       // valid note sub-tabs: each trait, plus (for beings) the motivation and each obstacle part — drop cardTrait if its tab is gone
       const _valid=new Set(traits.map(t=>t.word));
-      if(wEl.role==='being'){ const _m=wEl.motivation||null; if(_m && _m.want) _valid.add('@motivation'); if(_m && _m.motivator) _valid.add('@motivator'); if(_m) motObstacles(wEl).forEach(p=>_valid.add('@obstacle:'+obstaclePartId(p))); }
+      if(wEl.role==='being'){ const _m=wEl.motivation||null; if(_m && _m.want) _valid.add('@motivation'); if(_m && _m.motivator) _valid.add('@motivator'); if(_m) motObstacles(wEl).forEach(p=>_valid.add('@obstacle:'+obstaclePartId(p)));
+        ['@name','@type','@archetype','@occupation'].forEach(x=>_valid.add(x)); if(wEl.storyRole)_valid.add('@role'); if(wEl.rankName)_valid.add('@position'); { const _g=(typeof window.chessGroup==='function')?window.chessGroup(wEl.group):null; if(_g&&_g.name)_valid.add('@group'); } }
       if(state.cardTrait && !_valid.has(state.cardTrait)) state.cardTrait=null;
       const imgBox=document.createElement('div'); imgBox.className='npc-img';
       const src=(state.session&&state.session.npImages&&state.session.npImages[key])||'';
@@ -21816,12 +21826,19 @@ document.addEventListener('DOMContentLoaded', init);
       const body=document.createElement('div'); body.className='npc-body';
       const w=(typeof npFindEl==='function')?npFindEl(key):null;
       const t=document.createElement('div'); t.className='npc-title';
-      t.textContent=(w&&typeof elDisplayName==='function')?elDisplayName(w):key;
-      if(w && w.role==='being'){ const roles=[]; if(w.narrator) roles.push('Narrator'); if(w.mainChar) roles.push('Main Character'); if(w.antagonist) roles.push('Antagonist');
-        if(roles.length){ const rs=document.createElement('span'); rs.className='npc-role'; rs.textContent=' — '+roles.join(' · '); t.appendChild(rs); } }   // role at the end of the name line
-      // General Notes lives as a pill at the end of the name line
-      { const gp=document.createElement('span'); gp.className='npc-genpill'+(state.cardTrait?'':' on'); gp.textContent='General Notes'; gp.title='Notes about this element overall';
-        gp.addEventListener('click', ev=>{ ev.stopPropagation(); setTrait(null); }); t.appendChild(gp); }
+      if(w && w.role==='being'){
+        const eix0=(typeof elIndexByKey==='function')?elIndexByKey(key):-1;
+        if(w.name){ t.textContent=w.name; t.style.cursor='pointer';
+          t.addEventListener('click', ev=>{ ev.stopPropagation(); setTrait(state.cardTrait==='@name'?null:'@name'); });
+          const ed=document.createElement('span'); ed.className='npc-rename'; ed.textContent='✎'; ed.title='Rename';
+          ed.addEventListener('click', ev=>{ ev.stopPropagation(); if(eix0>=0) nameElement(eix0); }); t.appendChild(ed); }
+        else { const un=document.createElement('span'); un.className='npc-unnamed'; un.textContent='Unnamed'; un.title='Click to name this being';
+          un.addEventListener('click', ev=>{ ev.stopPropagation(); if(eix0>=0) nameElement(eix0); }); t.appendChild(un); }
+      } else {
+        t.textContent=(w&&typeof elDisplayName==='function')?elDisplayName(w):key;
+        const gp=document.createElement('span'); gp.className='npc-genpill'+(state.cardTrait?'':' on'); gp.textContent='General Notes'; gp.title='Notes about this element overall';
+        gp.addEventListener('click', ev=>{ ev.stopPropagation(); setTrait(null); }); t.appendChild(gp);
+      }
       body.appendChild(t);
       if(w && w.role==='being'){   // identity line: Archetype · Occupation · +trait  ●  Role · Position · Group
         const eix=(typeof elIndexByKey==='function')?elIndexByKey(key):-1;
@@ -21829,19 +21846,20 @@ document.addEventListener('DOMContentLoaded', init);
         const idl=document.createElement('div'); idl.className='npc-traits npc-identity';
         const mkPill=(label,sub,o)=>{ o=o||{}; const c=document.createElement('span'); c.className='npc-trait npc-traitpill'+(o.on?' on':''); if(o.swatch){ const sw=document.createElement('span'); sw.className='npc-gswatch'; sw.style.background=o.swatch; c.appendChild(sw); } const lb=document.createElement('span'); lb.className='npc-tw'; lb.textContent=label; c.appendChild(lb); if(sub){ const sb=document.createElement('span'); sb.className='npc-tsub'; sb.textContent=sub; c.appendChild(sb); } if(o.onChange){ const dv=document.createElement('span'); dv.className='npc-tx'; dv.textContent='▾'; dv.title='Change'; dv.addEventListener('click',e=>{e.stopPropagation(); o.onChange(e);}); c.appendChild(dv);} if(o.onRemove){ const xx=document.createElement('span'); xx.className='npc-tx'; xx.textContent='×'; xx.title='Remove'; xx.addEventListener('click',e=>{e.stopPropagation(); o.onRemove(e);}); c.appendChild(xx);} if(o.onClick) c.addEventListener('click',e=>{e.stopPropagation(); o.onClick(e);}); return c; };
         const mkAdd=(label,onClick)=>{ const a=document.createElement('span'); a.className='npc-trait npc-add'; a.textContent=label; a.addEventListener('click',e=>{e.stopPropagation(); onClick(e);}); return a; };
-        const arche=findSub('Archetype'), occ=findSub('Occupation');
-        if(arche) idl.appendChild(mkPill(arche,'Archetype',{on:state.cardTrait===arche, onClick:()=>setTrait(arche)}));
+        const typ=findSub('Type'), arche=findSub('Archetype'), occ=findSub('Occupation');
+        if(typ) idl.appendChild(mkPill(typ,'Type',{on:state.cardTrait==='@type', onClick:()=>setTrait('@type')}));
+        else idl.appendChild(mkAdd('+ type', e=>{ if(eix>=0) openTraitPicker(eix,e.clientX,e.clientY); }));
+        if(arche) idl.appendChild(mkPill(arche,'Archetype',{on:state.cardTrait==='@archetype', onClick:()=>setTrait('@archetype')}));
         else idl.appendChild(mkAdd('+ archetype', e=>{ if(eix>=0) openTraitPicker(eix,e.clientX,e.clientY); }));
-        if(occ) idl.appendChild(mkPill(occ,'Occupation',{on:state.cardTrait===occ, onClick:()=>setTrait(occ), onRemove:()=>{ if(eix>=0) removeTraitWord(eix,occ); }}));
+        if(occ) idl.appendChild(mkPill(occ,'Occupation',{on:state.cardTrait==='@occupation', onClick:()=>setTrait('@occupation'), onRemove:()=>{ if(eix>=0) removeTraitWord(eix,occ); }}));
         else idl.appendChild(mkAdd('+ occupation', e=>{ if(eix>=0) openTraitPicker(eix,e.clientX,e.clientY); }));
-        idl.appendChild(mkAdd('+', e=>{ if(eix>=0) openTraitPicker(eix,e.clientX,e.clientY); }));
         const sep=document.createElement('span'); sep.className='npc-sep'; idl.appendChild(sep);
-        if(w.storyRole) idl.appendChild(mkPill(w.storyRole,'Role',{onChange:e=>window.openBeingRoleMenu&&window.openBeingRoleMenu(eix,e.clientX,e.clientY), onRemove:()=>window.clearBeingRole&&window.clearBeingRole(eix)}));
+        if(w.storyRole) idl.appendChild(mkPill(w.storyRole,'Role',{on:state.cardTrait==='@role', onClick:()=>setTrait('@role'), onChange:e=>window.openBeingRoleMenu&&window.openBeingRoleMenu(eix,e.clientX,e.clientY), onRemove:()=>window.clearBeingRole&&window.clearBeingRole(eix)}));
         else idl.appendChild(mkAdd('+ role', e=>window.openBeingRoleMenu&&window.openBeingRoleMenu(eix,e.clientX,e.clientY)));
-        if(w.rankName) idl.appendChild(mkPill(w.rankName,'Position',{onChange:e=>window.openBeingPositionMenu&&window.openBeingPositionMenu(eix,e.clientX,e.clientY), onRemove:()=>window.clearBeingPosition&&window.clearBeingPosition(eix)}));
+        if(w.rankName) idl.appendChild(mkPill(w.rankName,'Position',{on:state.cardTrait==='@position', onClick:()=>setTrait('@position'), onChange:e=>window.openBeingPositionMenu&&window.openBeingPositionMenu(eix,e.clientX,e.clientY), onRemove:()=>window.clearBeingPosition&&window.clearBeingPosition(eix)}));
         else idl.appendChild(mkAdd('+ position', e=>window.openBeingPositionMenu&&window.openBeingPositionMenu(eix,e.clientX,e.clientY)));
         const gpn=(typeof window.chessGroup==='function')?window.chessGroup(w.group):null;
-        if(gpn && gpn.name) idl.appendChild(mkPill(gpn.name,'Group',{swatch:gpn.color, onChange:e=>window.openBeingGroupMenu&&window.openBeingGroupMenu(eix,e.clientX,e.clientY)}));
+        if(gpn && gpn.name) idl.appendChild(mkPill(gpn.name,'Group',{swatch:gpn.color, on:state.cardTrait==='@group', onClick:()=>setTrait('@group'), onChange:e=>window.openBeingGroupMenu&&window.openBeingGroupMenu(eix,e.clientX,e.clientY)}));
         else idl.appendChild(mkAdd('+ group', e=>window.openBeingGroupMenu&&window.openBeingGroupMenu(eix,e.clientX,e.clientY)));
         body.appendChild(idl);
       }
@@ -21904,7 +21922,7 @@ document.addEventListener('DOMContentLoaded', init);
         addFixed(((w.attrs)||[]).find(a=>a.sub==='Age'), 'Age', openAgeMenu, 'agepill');
       }
       // one sub-tab per trait — word · subcategory · delete; each holds its own notes (Sex & Age are rendered above)
-      traits.forEach(tw=>{ if(tw.sub==='Sex'||tw.sub==='Age'||tw.sub==='Archetype'||tw.sub==='Occupation') return; const c=document.createElement('span'); c.className='npc-trait npc-traitpill'+(state.cardTrait===tw.word?' on':'');
+      traits.forEach(tw=>{ if(tw.sub==='Sex'||tw.sub==='Age'||tw.sub==='Archetype'||tw.sub==='Occupation'||tw.sub==='Type') return; const c=document.createElement('span'); c.className='npc-trait npc-traitpill'+(state.cardTrait===tw.word?' on':'');
         const lbl=document.createElement('span'); lbl.className='npc-tw'; lbl.textContent=tw.word; c.appendChild(lbl);
         if(tw.sub){ const sb=document.createElement('span'); sb.className='npc-tsub'; sb.textContent=tw.sub; c.appendChild(sb); }
         const x=document.createElement('span'); x.className='npc-tx'; x.textContent='×'; x.title='Remove this trait';
@@ -21944,6 +21962,13 @@ document.addEventListener('DOMContentLoaded', init);
         if(tab==='@motivation') label='Motivation';
         else if(tab==='@motivator') label='→ '+motivatorLabel(base);
         else if(tab.indexOf('@obstacle:')===0) label='vs '+obstacleLabel(base, tab.slice(10));
+        else if(tab==='@name') label='Name';
+        else if(tab==='@type') label='Type';
+        else if(tab==='@archetype') label='Archetype';
+        else if(tab==='@occupation') label='Occupation';
+        else if(tab==='@role') label='Role';
+        else if(tab==='@position') label='Position';
+        else if(tab==='@group') label='Group';
         return { word: nm+' · '+label, cat:'', catId:null }; } return _lf.apply(this,arguments); }; }
       // the quill shortcut (map + focus panel) jumps the top bar to this element's category filter, with it selected
       const _oen=window.openElementNotes; if(_oen){ window.openElementNotes=function(key){ try{ const w=(typeof npFindEl==='function')?npFindEl(key):null; if(w) state.npCatFilter=w.cat; }catch(e){} const r=_oen.apply(this,arguments); try{ if(typeof renderNpElements==='function') renderNpElements(); }catch(e){} return r; }; }
