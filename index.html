@@ -5704,6 +5704,9 @@ Object.assign(WORD_DESC, {
 });
 // Age is auto-assigned to every generated being (its second fixed trait) using the weights already
 // defined on the being "Age" subcategory: Infant 5%, Toddler/Child/Elder 10% each, Young Adult & Adult ~32.5%.
+function assignBeingType(){ if(Math.random()<0.85) return 'Human'; const cat=(typeof getCat==='function')?getCat('being'):null; const sb=cat&&cat.subcategories.find(s=>s.name==='Type'); const ws=(sb&&sb.words)||[]; if(!ws.length) return 'Human'; const x=ws[Math.floor(Math.random()*ws.length)]; return (typeof x==='string')?x:x.w; }
+function assignBeingOccupation(){ const cat=(typeof getCat==='function')?getCat('being'):null; const sb=cat&&cat.subcategories.find(s=>s.name==='Occupation'); const ws=(sb&&sb.words)||[]; if(!ws.length) return null; const x=ws[Math.floor(Math.random()*ws.length)]; return (typeof x==='string')?x:x.w; }
+function beingTriadAttrs(){ const a=[{ word: assignBeingSex(), sub: 'Sex' }, { word: assignBeingAge(), sub: 'Age' }, { word: assignBeingType(), sub: 'Type' }]; const o=assignBeingOccupation(); if(o) a.push({ word:o, sub:'Occupation' }); return a; }
 function ageDefs(){ const cat=(typeof getCat==='function')?getCat('being'):null; const sb=cat&&cat.subcategories.find(s=>s.name==='Age'); const ws=(sb&&sb.words)||[]; return ws.map(x=> typeof x==='string'?{w:x,wt:1}:{w:x.w,wt:(x.wt||1)}); }
 function assignBeingAge(){ const defs=ageDefs(); if(!defs.length) return 'Adult'; const total=defs.reduce((a,d)=>a+d.wt,0); let r=Math.random()*total; for(const d of defs){ r-=d.wt; if(r<0) return d.w; } return defs[defs.length-1].w; }
 function ageMenuValues(){ const v=ageDefs().map(d=>d.w); v.push('Unspecified'); return v; }
@@ -5728,7 +5731,7 @@ function drawBeing(set, used, genres){
   });
   const seed = hashStr(parts.map(p => p.word).join('|'));
   return { word: parts.map(p => p.word).join(' '), cat: 'being', sub: parts[0].sub, set, role: 'being',
-    attrs: [{ word: assignBeingSex(), sub: 'Sex' }, { word: assignBeingAge(), sub: 'Age' }], identity: parts, sexSeed: seed, gender: (seed % 2) ? 'female' : 'male' };
+    attrs: beingTriadAttrs(), identity: parts, sexSeed: seed, gender: (seed % 2) ? 'female' : 'male' };
 }
 
 function generatePrompt(){
@@ -6730,7 +6733,7 @@ function ecBuildItem(word, sub, s, catId){
   catId = catId || EC.cat;
   if (catId === 'being'){
     const seed = hashStr(word);
-    return { word, cat: 'being', sub, set: s, role: 'being', attrs: [{ word: assignBeingSex(), sub: 'Sex' }, { word: assignBeingAge(), sub: 'Age' }], identity: [{ word, sub }], sexSeed: seed, gender: (seed % 2) ? 'female' : 'male' };
+    return { word, cat: 'being', sub, set: s, role: 'being', attrs: beingTriadAttrs(), identity: [{ word, sub }], sexSeed: seed, gender: (seed % 2) ? 'female' : 'male' };
   }
   const item = { word, cat: catId, sub, set: s, role: 'word' };
   if (GUIDE_IDS.has(catId)){ item.role = 'constraint'; item._descCollapsed = false; }   // guides/exercises open expanded
@@ -13787,12 +13790,15 @@ function renderConstellation(){
     const hideArchetype = false;   // keep the being's identity word showing even when named (reads "Name the Archetype")
     const _objParen = (nd.cat === 'object' && !!nd.name);   // named object: show its category in light parentheses, e.g. "(Sword)"
     const _setSub = (nd.cat === 'setting' && !!nd.name && !lineLike);   // named setting: name over a thin rule over a lighter subcategory
+    const _occWord = (nd.role === 'being') ? (((nd.attrs||[]).find(a=>a.sub==='Occupation')||{}).word||'') : '';
+    const _typWord = (nd.role === 'being') ? (((nd.attrs||[]).find(a=>a.sub==='Type')||{}).word||'') : '';
     w.setAttribute('class', (lineLike ? 'w w-connector' : (nd.terrain ? 'w w-terrain' : 'w')) + (archePinned ? ' pinned' : '') + (_setSub ? ' sub-light' : '')); w.setAttribute('text-anchor', 'middle'); if (nameDrop) w.setAttribute('y', nameDrop);
     if (elFill) w.style.fill = elFill;   // inline style beats the .node text CSS fill
     const _art = beingArticle(nd);   // "the"/"a"/"an" linking the name to the identity word
     w.textContent = (nd.cat === 'concept' && nd.role !== 'frame') ? '\u27E8 ' + nd.word + ' \u27E9'
       : _objParen ? nd.word
       : ((_art ? _art + ' ' : '') + nd.word);
+    if (nd.role === 'being' && _occWord) w.textContent = w.textContent + ' ' + _occWord;
     w.addEventListener('mouseenter', ev => {
       if (i !== state.selNode) return;   // description only when the element is selected
       let d = descFor(nd);
@@ -13835,6 +13841,14 @@ function renderConstellation(){
       g.appendChild(dv);
     }
     let tagY = 17 + nameDrop;
+    if (nd.role === 'being' && _typWord){
+      const ty = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      ty.setAttribute('class', 'being-type'); ty.setAttribute('text-anchor', 'middle'); ty.setAttribute('y', nameDrop + 10);
+      ty.style.fontSize = '7px'; ty.style.fill = elFill || '#9b9384'; ty.style.opacity = '0.85'; ty.style.letterSpacing = '0.05em';
+      ty.textContent = _typWord;
+      g.appendChild(ty);
+      tagY += 9;
+    }
     let hiddenAttrs = 0;
     const isMin = state.prompt && state.prompt.words[i] && state.prompt.words[i].min;
     if (!window.HIDE_MAP_TRAITS && (nd.role === 'being' || (nd.role === 'word' && (nd.cat === 'setting' || nd.cat === 'object'))) && nd.attrs && nd.attrs.length){
@@ -13842,6 +13856,7 @@ function renderConstellation(){
       const sel = i === state.selNode;
       const visible = [];
       nd.attrs.forEach((at, ai) => {
+        if (nd.role === 'being' && (at.sub === 'Type' || at.sub === 'Occupation')) return;   // shown in the name line / Type subline instead of as pills
         if ((isMin || collapsedBeing) && !at.keep){ hiddenAttrs++; return; }   // unselected being shows only pinned subcategories
         visible.push([at, ai]);
       });
@@ -16807,7 +16822,7 @@ function coverErrMsg(e){
 
 /* ---------------- import a story (prose → new story + AI element extraction) ---------------- */
 function makeElementItem(cat, word, set, sub){
-  if (cat === 'being'){ const id = sub || 'Archetype'; const seed = hashStr(word); return { word, cat: 'being', sub: id, set, role: 'being', attrs: [{ word: assignBeingSex(), sub: 'Sex' }, { word: assignBeingAge(), sub: 'Age' }], identity: [{ word, sub: id }], sexSeed: seed, gender: (seed % 2) ? 'female' : 'male' }; }
+  if (cat === 'being'){ const id = sub || 'Archetype'; const seed = hashStr(word); return { word, cat: 'being', sub: id, set, role: 'being', attrs: beingTriadAttrs(), identity: [{ word, sub: id }], sexSeed: seed, gender: (seed % 2) ? 'female' : 'male' }; }
   const cc = getCat(cat); const s = sub || ((cc && cc.subcategories[0]) ? cc.subcategories[0].name : '');
   const item = { word, cat, sub: s, set, role: 'word' };
   if (cat === 'event') item.frame = state.frameIdx || 0;
