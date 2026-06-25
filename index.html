@@ -8009,7 +8009,13 @@ function beginRelationship(from, to){
   if (from === to || !state.prompt) return;
   const a = Math.min(from, to), b = Math.max(from, to);
   const side = from < to ? 'fwd' : 'rev';
-  openRelCard(a, b, side, from, to, {});   // link object is created on Set, not before
+  // No popup — create the connection directly; type/stake/notes are added from the notepad.
+  pushUndo();
+  state.prompt.links = state.prompt.links || [];
+  let link = getLink(a, b);
+  if (!link){ link = { a: a, b: b, fwd: null, rev: null }; state.prompt.links.push(link); }
+  if (!link[side]){ const r = blankRel(); r.sub = relSubName(from, to); link[side] = r; }
+  saveLinksAndRender();
 }
 
 let relEdit = null;
@@ -8228,9 +8234,9 @@ function buildRelOverlay(ei, side, from, to, rel, slots, slot){
   er.setAttribute('class', 'rel-ov-editbg'); er.setAttribute('x', -18); er.setAttribute('y', -8); er.setAttribute('width', 36); er.setAttribute('height', 16); er.setAttribute('rx', 8);
   eb.appendChild(er);
   const et = document.createElementNS(NS, 'text');
-  et.setAttribute('class', 'rel-ov-edittx'); et.setAttribute('text-anchor', 'middle'); et.setAttribute('y', 3.4); et.textContent = 'Edit';
+  et.setAttribute('class', 'rel-ov-edittx'); et.setAttribute('text-anchor', 'middle'); et.setAttribute('y', 3.4); et.textContent = 'Notes';
   eb.appendChild(et);
-  eb.addEventListener('click', ev => { ev.stopPropagation(); openRelCard(lo, hi, side, from, to, {}); });
+  eb.addEventListener('click', ev => { ev.stopPropagation(); state.relQuill=null; if(window.openConnectionNotes) window.openConnectionNotes(from, wordKey(state.prompt.words[to])); });
   g.appendChild(eb);
   g.addEventListener('click', ev => { ev.stopPropagation(); state.relExpanded = null; renderConstellation(); });
   return g;
@@ -13776,15 +13782,21 @@ function renderConstellation(){
     const hit = document.createElementNS('http://www.w3.org/2000/svg', 'line');
     hit.setAttribute('class', 'edge-hit'); hit.dataset.edge = ei;
     const ht = document.createElementNS('http://www.w3.org/2000/svg', 'title');
-    ht.textContent = hasRel ? 'Click to edit this relationship' : 'Click to add a relationship';
+    ht.textContent = 'Click for notes on this connection';
     hit.appendChild(ht);
     hit.addEventListener('click', ev => {
       ev.stopPropagation();
-      const side = link.fwd ? 'fwd' : (link.rev ? 'rev' : 'fwd');
-      const from = side === 'fwd' ? a : b, to = side === 'fwd' ? b : a;
-      openRelCard(a, b, side, from, to, {});
+      state.relQuill = (state.relQuill === ei) ? null : ei;
+      renderConstellation();
     });
     svg.appendChild(hit);
+    if (state.relQuill === ei && state.nodes[a] && state.nodes[b]){
+      const _ax=state.nodes[a].x, _ay=state.nodes[a].y, _bx=state.nodes[b].x, _by=state.nodes[b].y;
+      const _dx=_bx-_ax, _dy=_by-_ay, _ll=Math.hypot(_dx,_dy)||1, _ux=_dx/_ll, _uy=_dy/_ll, _off=Math.min(40, _ll*0.34);
+      const _mkQ=(qx,qy,ni,oi)=>{ const okey=wordKey(state.prompt.words[oi]); return makeCircleBtn(Math.round(qx), Math.round(qy), ()=>makeLucide('feather',{cls:'ctl-ic',color:'currentColor',x:0,y:0,scale:0.5,sw:2}), 'Notes about this connection', ev=>{ ev.stopPropagation(); state.relQuill=null; if(window.openConnectionNotes) window.openConnectionNotes(ni, okey); }, {r:10}); };
+      relOvs.push(_mkQ(_ax+_ux*_off, _ay+_uy*_off, a, b));
+      relOvs.push(_mkQ(_bx-_ux*_off, _by-_uy*_off, b, a));
+    }
     if (active && hasRel){
       const sides = [];
       if (link.fwd) sides.push(['fwd', a, b]);
@@ -14138,6 +14150,7 @@ function renderConstellation(){
       if (nd.locked) return;
       if (ev.target.closest && (ev.target.closest('.del') || ev.target.closest('.lnk') || ev.target.closest('.wbook'))) return;   // click the word or the icon (incl. the pawn) to select
       ev.stopPropagation();
+      state.relQuill = null;
       state.selNode = state.selNode === i ? null : i;
       if (table.on && nd.role === 'being' && state.selNode === i){
         table.pov = nd.word;
@@ -22048,8 +22061,8 @@ document.addEventListener('DOMContentLoaded', init);
         const sec=document.createElement('div'); sec.className='npc-traits npc-connections';
         const lab=document.createElement('span'); lab.className='npc-seclbl'; lab.textContent='Connections'; sec.appendChild(lab);
         const conns=[];
-        if(_ei>=0 && state.prompt && state.prompt.links){ state.prompt.links.forEach(l=>{ let oi=-1; if(l.a===_ei) oi=l.b; else if(l.b===_ei) oi=l.a; else return; const ow=state.prompt.words[oi]; if(!ow) return; const types=(typeof linkRelWords==='function')?linkRelWords(l):[]; conns.push({ key:wordKey(ow), name:elDisplayName(ow), type:types.filter(Boolean).join(' · ') }); }); }
-        if(conns.length){ conns.forEach(cn=>{ const tab='@rel:'+cn.key; const c=document.createElement('span'); c.className='npc-trait npc-traitpill'+(state.cardTrait===tab?' on':''); const lb=document.createElement('span'); lb.className='npc-tw'; lb.textContent=cn.name; c.appendChild(lb); if(cn.type){ const sb=document.createElement('span'); sb.className='npc-tsub'; sb.textContent=cn.type; c.appendChild(sb); } c.addEventListener('click', e=>{ e.stopPropagation(); setTrait(tab); }); sec.appendChild(c); }); }
+        if(_ei>=0 && state.prompt && state.prompt.links){ state.prompt.links.forEach(l=>{ let oi=-1; if(l.a===_ei) oi=l.b; else if(l.b===_ei) oi=l.a; else return; const ow=state.prompt.words[oi]; if(!ow) return; const types=(typeof linkRelWords==='function')?linkRelWords(l):[]; const _sd=l[(l.a===_ei)?'fwd':'rev']; conns.push({ key:wordKey(ow), name:elDisplayName(ow), type:types.filter(Boolean).join(' · '), stake:(_sd&&_sd.stake)||'' }); }); }
+        if(conns.length){ conns.forEach(cn=>{ const tab='@rel:'+cn.key; const c=document.createElement('span'); c.className='npc-trait npc-traitpill'+(state.cardTrait===tab?' on':''); const lb=document.createElement('span'); lb.className='npc-tw'; lb.textContent=cn.name; c.appendChild(lb); const sb=document.createElement('span'); sb.className='npc-tsub'; sb.textContent=cn.type||'+ type'; c.appendChild(sb); const dv=document.createElement('span'); dv.className='npc-tx'; dv.textContent='▾'; dv.title='Set the connection type'; dv.addEventListener('click', e=>{ e.stopPropagation(); window.openConnTypeMenu&&window.openConnTypeMenu(_ei, cn.key, e.clientX, e.clientY); }); c.appendChild(dv); const stk=document.createElement('span'); stk.className='npc-tx'; stk.textContent= cn.stake?'◆':'◇'; stk.title= cn.stake?('Stake: '+cn.stake):'Add a stake'; stk.addEventListener('click', e=>{ e.stopPropagation(); window.editConnStake&&window.editConnStake(_ei, cn.key); }); c.appendChild(stk); c.addEventListener('click', e=>{ e.stopPropagation(); setTrait(tab); }); sec.appendChild(c); }); }
         else { const hint=document.createElement('span'); hint.className='npc-add'; hint.textContent='link on the map'; hint.title='Drag the link control from one element onto another to connect them'; sec.appendChild(hint); }
         body.appendChild(sec); }
       // Open questions the wiki raised about this element (read-only). Resolved ones show a ✓.
@@ -22083,6 +22096,12 @@ document.addEventListener('DOMContentLoaded', init);
     }
     window.renderNpCard=renderNpCard;
     window.npCardPickImage=npCardPickImage;
+    window.openConnectionNotes=function(i, otherKey){ const w=state.prompt&&state.prompt.words[i]; if(!w) return; if(typeof openElementNotes==='function') openElementNotes(wordKey(w)); state.cardTrait='@rel:'+otherKey; if(typeof renderNotepad==='function') renderNotepad(); renderNpCard(); if(typeof renderNpElements==='function') renderNpElements(); };
+    function _connLink(i, otherKey){ const j=elIndexByKey(otherKey); if(j<0) return null; const a=Math.min(i,j), b=Math.max(i,j), side=i<j?'fwd':'rev'; state.prompt.links=state.prompt.links||[]; let link=(typeof getLink==='function')?getLink(a,b):null; if(!link){ link={a:a,b:b,fwd:null,rev:null}; state.prompt.links.push(link);} if(!link[side]) link[side]=(typeof blankRel==='function')?blankRel():{type:'',sub:'',intensity:2,valence:'neutral',secret:false,stake:'',hinge:null}; return {link:link, side:side}; }
+    window.setConnType=function(i, otherKey, type){ if(!(state.prompt&&state.prompt.words[i])) return; if(typeof pushUndo==='function') pushUndo(); const r=_connLink(i,otherKey); if(!r) return; r.link[r.side].type=type||''; if(typeof saveLinksAndRender==='function') saveLinksAndRender(); renderNpCard(); };
+    window.setConnStake=function(i, otherKey, stake){ if(!(state.prompt&&state.prompt.words[i])) return; if(typeof pushUndo==='function') pushUndo(); const r=_connLink(i,otherKey); if(!r) return; r.link[r.side].stake=(stake||'').trim(); if(typeof saveLinksAndRender==='function') saveLinksAndRender(); renderNpCard(); };
+    window.openConnTypeMenu=function(i, otherKey, x, y){ const j=elIndexByKey(otherKey); if(j<0) return; const menu=document.getElementById('aspectMenu'); if(!menu) return; menu.innerHTML=''; if(menu.parentElement!==document.body) document.body.appendChild(menu); const pool=(typeof relPool==='function')?relPool(i,j):[]; const add=(label,fn)=>{ const bt=document.createElement('button'); bt.textContent=label; bt.addEventListener('click', ev=>{ ev.stopPropagation(); menu.style.display='none'; fn(); }); menu.appendChild(bt); }; pool.slice(0,18).forEach(t=> add(t, ()=>window.setConnType(i,otherKey,t)) ); add('— clear type —', ()=>window.setConnType(i,otherKey,'')); menu.style.left=Math.max(8, Math.min(x||200, window.innerWidth-210))+'px'; menu.style.top=Math.max(8, Math.min(y||200, window.innerHeight-300))+'px'; menu.style.display='block'; };
+    window.editConnStake=async function(i, otherKey){ const j=elIndexByKey(otherKey); if(j<0) return; const a=Math.min(i,j), b=Math.max(i,j), side=i<j?'fwd':'rev'; const link=(typeof getLink==='function')?getLink(a,b):null; const cur=(link&&link[side]&&link[side].stake)||''; if(typeof sitePrompt==='function'){ const v=await sitePrompt('What is at stake in this connection?', cur); if(v===null) return; window.setConnStake(i,otherKey,v); } };
     function start(){
       // --- per-trait note scoping: the "active" notes key becomes "<element><trait>" while a sub-tab is selected
       const _ak=window.npActiveKey, _lf=window.npLabelFor;
