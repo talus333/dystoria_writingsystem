@@ -3501,12 +3501,19 @@ async function aiFormatBook(input){
 window.aiFormatBook = aiFormatBook;
 function parseFavBooks(text){
   const out=[], seen={};
-  String(text||'').split(/\n+/).map(x=>x.trim()).filter(Boolean).forEach(line=>{
-    const parts = (line.indexOf(' \u2014 ')>=0) ? [line] : line.split(/\s*[,;:]\s*|\s+[\u2013\u2014\-]\s+/);
-    parts.map(x=>x.trim()).filter(Boolean).forEach(b=>{ const k=b.toLowerCase(); if(!seen[k]){ seen[k]=1; out.push(b); } });
-  });
+  String(text||'').split(/\n+/).map(x=>x.trim()).filter(Boolean).forEach(b=>{ const k=b.toLowerCase(); if(!seen[k]){ seen[k]=1; out.push(b); } });
   return out;
 }
+async function aiParseBookList(text){
+  text=String(text||'').trim(); if(!text) return [];
+  if(typeof aiAuthed!=='function' || !aiAuthed()) return parseFavBooks(text);
+  const sys='You are given a reader\u2019s free-form list of favourite books \u2014 they may be separated by commas, line breaks, dashes, or just run together, and may be partial or misspelled. Work out which distinct real books they mean and return them, one per line, each as "Title \u2014 Author" (an em dash between the work\u2019s common title and its author). Return ONLY those lines \u2014 no numbering, no commentary, no quotes. Use the best-known author; omit anything that is not identifiable as a real book.';
+  const prompt='Reader\u2019s favourites (free-form):\n\n'+text+'\n\nEach book as "Title \u2014 Author", one per line:';
+  try{ const o=await aiCall(sys, prompt, { maxTokens: 700, temperature: 0 });
+    return String(o||'').split(/\n+/).map(l=>l.replace(/^[\s\-*\u2022\d.)]+/,'').replace(/^["\u2019\u2018'`\s]+|["\u2019\u2018'`\s]+$/g,'').trim()).filter(Boolean);
+  }catch(e){ return parseFavBooks(text); }
+}
+window.aiParseBookList = aiParseBookList;
 function _bookFromLi(t){ t=String(t||'').replace(/\s+/g,' ').trim(); const i=t.indexOf(':'); return (i>0?t.slice(0,i):t).trim(); }
 function enhanceReadingList(body){
   body = body || document.getElementById('wikiBody'); if(!body) return;
@@ -3564,12 +3571,9 @@ function openAccount(){
   { const so=card.querySelector('.ac-signout'); if(so) so.addEventListener('click', ()=>{ const bx=document.getElementById('authSignOut'); closeAccount(); if(bx) bx.click(); }); }
   { const sn=card.querySelector('.ac-signin'); if(sn) sn.addEventListener('click', ()=>{ closeAccount(); if(typeof updateAccountUI==='function') updateAccountUI(); const c=document.getElementById('authCard'); if(c) c.classList.add('show'); }); }
   card.querySelector('.pf-save').addEventListener('click', async ()=>{ const np=Object.assign({}, loadProfile()); card.querySelectorAll('textarea[data-k]').forEach(t=>{ const v=t.value.trim(); if(v) np[t.dataset.k]=v; else delete np[t.dataset.k]; });
-    if(np.favBooks){
-      const refs=parseFavBooks(np.favBooks); const out=[];
-      const canAI = (typeof aiFormatBook==='function' && typeof aiAuthed==='function' && aiAuthed());
-      if(canAI && refs.length && typeof flashStatus==='function') flashStatus('Tidying your books\u2026');
-      for(const ref of refs){ if(ref.indexOf(' \u2014 ')>=0 || !canAI){ out.push(ref); } else { try{ out.push(await aiFormatBook(ref)); }catch(e){ out.push(ref); } } }
-      np.favBooks=out.join('\n');
+    if(np.favBooks && typeof aiParseBookList==='function' && typeof aiAuthed==='function' && aiAuthed()){
+      if(typeof flashStatus==='function') flashStatus('Reading your favourites\u2026');
+      try{ const books=await aiParseBookList(np.favBooks); const seen={}, out=[]; books.forEach(b=>{ const k=String(b).toLowerCase(); if(b && !seen[k]){ seen[k]=1; out.push(b); } }); if(out.length) np.favBooks=out.join('\n'); }catch(e){}
     }
     saveProfile(np); if(typeof flashStatus==='function') flashStatus('Profile saved'); openAccount(); });
   card.querySelectorAll('.pf-readx').forEach(x=>x.addEventListener('click', ()=>{ removeReadBook(x.dataset.b); openAccount(); }));
