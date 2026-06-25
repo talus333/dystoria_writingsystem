@@ -445,12 +445,44 @@ async function handleBilling(request, env, action) {
   }
 }
 
+// One-time TIP via Stripe Payment Element (embedded — the card form lives inside Dystoria's popup,
+// no redirect even on success). A tip grants no entitlement, so we DON'T require sign-in (max conversions).
+// Amount is set+validated server-side (the client only proposes it); light per-IP throttle guards the endpoint.
+async function handleTip(request, env) {
+  const headers = cors(request.headers.get('origin') || '');
+  if (request.method === 'OPTIONS') return new Response(null, { headers });
+  if (request.method !== 'POST') return new Response(JSON.stringify({ error: 'POST only' }), { status: 405, headers });
+  if (!env.STRIPE_SECRET_KEY) return new Response(JSON.stringify({ error: 'Tips aren’t set up yet.' }), { status: 503, headers });
+
+  let body = {}; try { body = await request.json(); } catch (e) { /* fall through to validation */ }
+  const cents = Math.round(Number(body && body.amount_cents));
+  if (!isFinite(cents) || cents < 100 || cents > 50000) {
+    return new Response(JSON.stringify({ error: 'Pick a tip between $1 and $500.' }), { status: 400, headers });
+  }
+  const ip = request.headers.get('cf-connecting-ip') || 'anon';
+  if (!rateOk('tip:' + ip, 10)) return new Response(JSON.stringify({ error: 'Too many attempts — give it a moment.' }), { status: 429, headers });
+
+  try {
+    const pi = await stripe(env, 'payment_intents', {
+      amount: cents,
+      currency: 'usd',
+      'automatic_payment_methods[enabled]': 'true',
+      description: 'Dystoria tip',
+      'metadata[kind]': 'tip',
+    });
+    return new Response(JSON.stringify({ client_secret: pi.client_secret }), { headers });
+  } catch (e) {
+    return new Response(JSON.stringify({ error: 'Tip error: ' + String((e && e.message) || e) }), { status: 502, headers });
+  }
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     if (url.pathname === '/ai') return handleAI(request, env);
     if (url.pathname === '/billing/checkout') return handleBilling(request, env, 'checkout');
     if (url.pathname === '/billing/portal') return handleBilling(request, env, 'portal');
+    if (url.pathname === '/billing/tip') return handleTip(request, env);
     // everything else → the static site
     return env.ASSETS.fetch(request);
   },
