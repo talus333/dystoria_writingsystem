@@ -7409,6 +7409,7 @@ async function nameElement(i){
   pushUndo();
   const trimmed = name.trim();
   if (trimmed) w.name = trimmed; else delete w.name;
+  if (trimmed && window.cascadeForward) window.cascadeForward(i, 'Name');
   if (state.nodes[i]) state.nodes[i].name = w.name;
   renderConstellation();
   if (state.session){ state.session.words = state.prompt.words; scheduleAutosave(); }
@@ -21873,6 +21874,7 @@ document.addEventListener('DOMContentLoaded', init);
       w.attrs.push({ word, sub }); w.min=false;
       if(state.nodes[i]) state.nodes[i].attrs=w.attrs;
       if(state.session){ state.session.words=state.prompt.words; if(typeof scheduleAutosave==='function') scheduleAutosave(); }
+      cascadeForward(i, sub);
       if(typeof renderNotepad==='function') renderNotepad();
       return true;
     }
@@ -21894,6 +21896,7 @@ document.addEventListener('DOMContentLoaded', init);
       w.attrs=w.attrs||[]; let a=w.attrs.find(x=>x.sub==='Sex'); const old=a?a.word:null;
       if(a) a.word=value; else w.attrs.unshift({ word:value, sub:'Sex' });
       if(state.nodes[i]) state.nodes[i].attrs=w.attrs;
+      cascadeForward(i, 'Sex');
       if(old && state.cardTrait===old) state.cardTrait=value;   // keep the open note sub-tab pointed at the renamed sex
       if(state.session){ state.session.words=state.prompt.words; if(typeof scheduleAutosave==='function') scheduleAutosave(); }
       renderNpCard(); if(typeof renderNotepad==='function') renderNotepad();
@@ -22079,6 +22082,7 @@ document.addEventListener('DOMContentLoaded', init);
       if(typeof pushUndo==='function') pushUndo();
       w.motivation=w.motivation||{}; w.motivation.want=want;
       if(state.nodes[i]) state.nodes[i].motivation=w.motivation;
+      cascadeForward(i, 'Motivation');
       if(state.session){ state.session.words=state.prompt.words; if(typeof scheduleAutosave==='function') scheduleAutosave(); }
     }
     // an obstacle can have multiple parts: element links (optionally narrowed to a being's trait) and/or obstacle concept words
@@ -22293,6 +22297,45 @@ document.addEventListener('DOMContentLoaded', init);
         return log;
       }catch(e){ return []; }
     }
+    // ── Carry-forward: when a category is set in the CURRENT section, fill that same
+    //    category in BLANK later sections, stopping at the first section that already
+    //    holds a value (that boundary stays put and reads as a Change in the timeline). ──
+    function cascadeForward(i, category){
+      try{
+        if(!state.frames || !state.prompt) return;
+        const startIdx = state.frameIdx;
+        if(startIdx<0 || startIdx>=state.frames.length-1) return;          // no later sections to fill
+        const cur = state.prompt.words[i]; if(!cur) return;
+        const cat = cur.cat, word = cur.word;
+        const blank = (tw)=>{ switch(category){
+          case 'Name': return !tw.name;
+          case 'Story Role': return !tw.storyRole;
+          case 'Position': return !tw.rankName;
+          case 'Group': return !tw.group;
+          case 'Motivation': return !(tw.motivation && tw.motivation.want);
+          default: return !((tw.attrs||[]).some(a=>a&&a.sub===category)) && !((tw.identity||[]).some(a=>a&&a.sub===category)) && !(tw.sub===category && tw.word);
+        } };
+        const clone = (v)=>{ try{ return JSON.parse(JSON.stringify(v)); }catch(e){ return v; } };
+        const apply = (tw)=>{ switch(category){
+          case 'Name': tw.name = cur.name; break;
+          case 'Story Role': if(cur.storyRole) tw.storyRole=cur.storyRole; break;
+          case 'Position': if(cur.rankName) tw.rankName=cur.rankName; break;
+          case 'Group': tw.group = cur.group; break;
+          case 'Motivation': if(cur.motivation) tw.motivation = clone(cur.motivation); break;
+          default: { const src=(cur.attrs||[]).filter(a=>a&&a.sub===category); if(src.length){ tw.attrs=tw.attrs||[]; src.forEach(a=> tw.attrs.push(clone(a)) ); tw.min=false; } break; }
+        } };
+        let changed=false;
+        for(let k=startIdx+1; k<state.frames.length; k++){
+          const fp = state.frames[k] && state.frames[k].prompt; if(!fp || !fp.words) continue;
+          const tw = fp.words.find(x=> x && x.cat===cat && x.word===word);
+          if(!tw) continue;                 // element absent from this section — keep scanning
+          if(!blank(tw)) break;             // section already diverges here → stop (Change recorded at this boundary)
+          apply(tw); changed=true;
+        }
+        if(changed){ if(typeof syncFramesToSession==='function') syncFramesToSession(); if(typeof scheduleAutosave==='function') scheduleAutosave(); }
+      }catch(e){}
+    }
+    window.cascadeForward = cascadeForward;
     function renderNpCard(){
       const wrap=document.getElementById('npWrap'); if(!wrap) return;
       const lower=wrap.parentElement;
@@ -22908,6 +22951,7 @@ function beingRenderOpts(nd){ if(!nd) return null;
     function setGroup(i, key){ const w=state.prompt&&state.prompt.words[i]; if(!w) return;
       if(typeof pushUndo==='function') pushUndo(); w.group=key; if(state.nodes[i]) state.nodes[i].group=key;
       if(state.session){ state.session.words=state.prompt.words; if(typeof scheduleAutosave==='function') scheduleAutosave(); }
+      cascadeForward(i, 'Group');
       if(typeof renderConstellation==='function') renderConstellation(); if(typeof renderNpCard==='function') renderNpCard(); renderPicker(); }
     // Story role — a single narrative role for the being, shown in the notepad name line
     const ROLE_OPTS=['Narrator','Protagonist','Deuteragonist','Hero','Antihero','Antagonist','Love Interest','Mentor','Sidekick','Foil','Confidant','Trickster','Comic Relief','Guardian','Herald'];
@@ -22915,6 +22959,7 @@ function beingRenderOpts(nd){ if(!nd) return null;
       if(typeof pushUndo==='function') pushUndo();
       if(role) w.storyRole=role; else delete w.storyRole;
       if(state.nodes[i]){ if(role) state.nodes[i].storyRole=role; else delete state.nodes[i].storyRole; }
+      if(role) cascadeForward(i, 'Story Role');
       if(state.session){ state.session.words=state.prompt.words; if(typeof scheduleAutosave==='function') scheduleAutosave(); }
       if(typeof renderConstellation==='function') renderConstellation(); if(typeof renderNpCard==='function') renderNpCard(); renderPicker(); }
     // Position — per-being name (UI label "Position"); naming one on a colored group saves a reusable preset
@@ -22927,6 +22972,7 @@ function beingRenderOpts(nd){ if(!nd) return null;
       if(typeof pushUndo==='function') pushUndo();
       const v=(name||'').trim(); if(v) w.rankName=v; else delete w.rankName;
       if(state.nodes[i]){ if(v) state.nodes[i].rankName=v; else delete state.nodes[i].rankName; }
+      if(v) cascadeForward(i, 'Position');
       if(v){ const gp=chessGroup(w.group); if(gp&&gp.color) saveRankPreset(w.piece||'pawn', v, gp.color); }   // colored group + named position → reusable preset
       if(state.session){ state.session.words=state.prompt.words; if(typeof scheduleAutosave==='function') scheduleAutosave(); }
       if(typeof renderConstellation==='function') renderConstellation(); if(typeof renderNpCard==='function') renderNpCard(); renderPicker(); }
@@ -22937,6 +22983,7 @@ function beingRenderOpts(nd){ if(!nd) return null;
       if(typeof pushUndo==='function') pushUndo();
       w.piece=preset.piece||'pawn'; w.rankName=preset.name; const gk=groupKeyForColor(preset.color); w.group=gk;
       if(state.nodes[i]){ state.nodes[i].piece=w.piece; state.nodes[i].rankName=w.rankName; state.nodes[i].group=gk; }
+      cascadeForward(i, 'Position'); cascadeForward(i, 'Group');
       if(state.session){ state.session.words=state.prompt.words; if(typeof scheduleAutosave==='function') scheduleAutosave(); }
       if(typeof renderConstellation==='function') renderConstellation(); if(typeof renderNpCard==='function') renderNpCard(); renderPicker(); }
     function setGroupName(key, name){ ensureGroups(); const cur=state.session.groups[key]||{}; const g=chessGroup(key);
