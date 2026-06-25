@@ -1978,6 +1978,8 @@
   .mode-switch{display:flex; border:1px solid var(--line); border-radius:18px; overflow:hidden}
   .mode-switch button{font-size:11px; letter-spacing:.12em; text-transform:uppercase; padding:6px 14px; color:var(--ink-faint)}
   .mode-switch button.active{background:var(--ink); color:var(--paper)}
+  [data-mode="wiki"].wiki-updating::after{content:'•'; margin-left:6px; color:var(--gold); animation:wikiPulse 1s ease-in-out infinite}
+  @keyframes wikiPulse{0%,100%{opacity:.2}50%{opacity:1}}
   .wordcount{font-size:11px; color:var(--ink-faint); font-variant-numeric:tabular-nums}
 
   #writeArea{flex:1; position:relative; min-height:0; overflow:hidden}
@@ -15213,7 +15215,7 @@ function showRecap(){
     const _snap = { id:'sess'+Date.now().toString(36)+Math.random().toString(36).slice(2,5), at:new Date().toISOString(), frame:(state.frameIdx||0), words:wrote, html:currentSectionHtml(), review:'', els:_snapEls, guides:_snapGuides, exercises:_snapExercises, focusPrompt:_snapPrompt };
     state.session.sessionLog.push(_snap); state._lastSnapId = _snap.id; renderSessionHistory(); scheduleAutosave(800);
   }
-  if (wrote){ runSessionSummary(wovenEls.map(e => e.name || e.word)); scanMissedElements(); }   // wiki is rebuilt manually via "Update Wiki"
+  if (wrote){ state._reviewPromise = runSessionSummary(wovenEls.map(e => e.name || e.word)); scanMissedElements(); }   // wiki update is sequenced AFTER the review (see the post-session prompt)
 }
 async function runSessionSummary(wovenNames){
   const wrap = $('rcAi'); if (!wrap) return;
@@ -15419,7 +15421,10 @@ async function endWritingSession(){
   try {
     if (wrote && typeof aiAuthed === 'function' && aiAuthed() && typeof wikiGather === 'function' && wikiGather().length){
       setTimeout(() => { siteConfirm('You added to the story. Update the wiki with what you just wrote?', 'Update wiki')
-        .then(yes => { if (yes && typeof runWikiQuestions === 'function') runWikiQuestions(true); }); }, 650);   // let the recap settle first
+        .then(async yes => { if (!yes) return;
+          try { await (state._reviewPromise || Promise.resolve()); } catch(e){}   // let the session review finish first — they share one AI lane
+          if (typeof runWikiAll === 'function'){ try { await runWikiAll(); } catch(e){} }   // full rebuild, in the background; the WIKI tab shows it's updating
+        }); }, 650);
     }
   } catch(e){}
 }
@@ -17437,6 +17442,14 @@ function renderWikiDoc(md){
   body.innerHTML = ''; body.appendChild(mdToWikiHtml(md));
 }
 // One pass: read prose + notes + element facts, build the whole wiki document.
+function setWikiUpdating(on){
+  state._wikiUpdating = !!on;
+  document.querySelectorAll('[data-mode="wiki"]').forEach(b => {
+    b.classList.toggle('wiki-updating', !!on);
+    if (on) b.title = 'Updating the wiki with your latest writing…'; else b.removeAttribute('title');
+  });
+}
+window.setWikiUpdating = setWikiUpdating;
 let _wikiAllRunning = false;
 async function runWikiAll(){
   if (_wikiAllRunning) return;
@@ -17453,7 +17466,7 @@ async function runWikiAll(){
   const prevDoc = (state.session && state.session.wikiDoc) ? String(state.session.wikiDoc) : '';
   const prevLen = (state.session && state.session.wikiProseLen) || 0;
   const incremental = !!prevDoc && prose.length > prevLen + 40;
-  _wikiAllRunning = true;
+  _wikiAllRunning = true; if (typeof setWikiUpdating === 'function') setWikiUpdating(true);
   const ov = $('wikiOverview'); if (ov) ov.innerHTML = '';
   const wq = $('wikiQuestions'); if (wq) wq.innerHTML = '';
   body.innerHTML = '<div class="wk-doc-empty"><span class="spin"></span> ' + (incremental ? 'Updating the wiki with what’s new…' : 'Reading the prose and notes, building the wiki…') + '</div>';
@@ -17492,6 +17505,7 @@ async function runWikiAll(){
     }
     const out = await aiCall(sys, prompt, { maxTokens: 4096 });   // full document — needs the headroom (worker caps at 4096)
     state.session.wikiDoc = out; state.session.wikiProseLen = prose.length; state.session.wikiSig = wikiSig(); scheduleAutosave(500);
+    try { const qm = out.match(/##\s*Questions[^\n]*\n([\s\S]*)$/i); if (qm && typeof captureElementQuestions === 'function'){ const qtext = qm[1].replace(/^\s*[-*]\s+/gm, '').trim(); captureElementQuestions(qtext); state.session.wikiQuestions = qtext; } } catch(e){}
     renderWikiDoc(out);
     if (typeof updateWikiBtnState === 'function') updateWikiBtnState();   // up to date now → hide the button until prose/notes change
     flashStatus(incremental ? 'Wiki updated with new writing' : 'Wiki built');
@@ -17499,7 +17513,7 @@ async function runWikiAll(){
     body.innerHTML = '';
     const m = document.createElement('div'); m.className = 'wk-doc-empty'; m.textContent = aiErrMsg(e); body.appendChild(m);
     const b = document.createElement('button'); b.className = 'wk-aibtn'; b.textContent = 'Try again'; b.addEventListener('click', runWikiAll); body.appendChild(b);
-  } finally { _wikiAllRunning = false; }
+  } finally { _wikiAllRunning = false; if (typeof setWikiUpdating === 'function') setWikiUpdating(false); }
 }
 function buildWikiDetail(detail, el){
   detail.innerHTML = '';
