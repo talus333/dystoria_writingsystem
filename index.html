@@ -6874,6 +6874,51 @@ function ecBuildItem(word, sub, s, catId){
   if (catId === 'stakes') item.scope = 'story';
   return item;
 }
+/* ---------------- AI stand-in icon for author-added elements (designed set only) ---------------- */
+function _dedupedIconKeys(map){ const seen=new Set(), out=[]; try{ Object.keys(map).forEach(k=>{ const fn=map[k]; if(typeof fn!=='function'||seen.has(fn)) return; seen.add(fn); out.push(k); }); }catch(e){} return out; }
+async function aiPickIcon(word, keys, label){
+  word=String(word||'').trim(); if(!word||!keys.length) return null;
+  const lc=word.toLowerCase();
+  const exact=keys.find(k=>k.toLowerCase()===lc); if(exact) return exact;
+  if(typeof aiAuthed!=='function' || !aiAuthed()) return null;
+  const sys='You match a story element to the single best-fitting icon from a FIXED set. Return EXACTLY one option from the provided list, copied verbatim — nothing else, no explanation, no quotes. Pick the closest in meaning or appearance; if nothing matches well, still return the NEAREST option from the list. Never return anything that is not in the list.';
+  const prompt='Element name: "'+word+'" ('+label+').\nAvailable icons (choose exactly one of these, verbatim):\n'+keys.join(', ')+'\n\nBest icon:';
+  try{
+    const out=await aiCall(sys, prompt, { maxTokens: 24, temperature: 0 });
+    const pick=String(out||'').replace(/[\r\n]/g,' ').replace(/^[\s"'`]+|[\s"'`.]+$/g,'').trim();
+    if(!pick) return keys[0];
+    return keys.find(k=>k.toLowerCase()===pick.toLowerCase())
+        || keys.find(k=>{ const a=k.toLowerCase(), b=pick.toLowerCase(); return a.indexOf(b)>=0 || b.indexOf(a)>=0; })
+        || keys[0];
+  }catch(e){ return null; }
+}
+async function autoAssignIcon(idx, w){
+  try{
+    w = w || (state.prompt && state.prompt.words[idx]); if(!w) return;
+    if(w.icon || w.iconCustom) return;
+    let keys=[], label='', matchWord=w.word;
+    if(w.cat==='object' && typeof OBJECT_SVG!=='undefined'){ keys=_dedupedIconKeys(OBJECT_SVG); label='object / item'; }
+    else if(w.cat==='setting' && typeof SETTING_SVG!=='undefined'){ keys=_dedupedIconKeys(SETTING_SVG); label='place / setting'; }
+    else if(w.cat==='being' && window.BEING_ICONS){ keys=window.BEING_ICONS.map(x=>x.key); label='being / creature type';
+      const fs=(sn)=>{ const a=((w.attrs)||[]).find(x=>x.sub===sn); if(a&&a.word) return a.word; const id=((w.identity)||[]).find(x=>x.sub===sn); if(id&&id.word) return id.word; if(w.sub===sn&&w.word) return w.word; return ''; };
+      matchWord=fs('Type');   // beings: the icon comes from the Type (entered, or auto-generated when the word was added as Archetype/Occupation) — not the name
+    }
+    else return;
+    if(!keys.length || !matchWord) return;
+    const lc=String(matchWord).trim().toLowerCase();
+    if(keys.some(k=>k.toLowerCase()===lc)) return;   // a recognized designed creature/design -> the map composition already renders it (and keeps any Type marks)
+    const pick=await aiPickIcon(matchWord, keys, label);
+    if(!pick) return;
+    const cur=(state.prompt && state.prompt.words[idx]);
+    if(cur && cur.word===w.word && cur.cat===w.cat && !cur.icon && !cur.iconCustom){
+      cur.icon=pick;
+      if(state.nodes && state.nodes[idx]) state.nodes[idx].icon=pick;
+      if(typeof renderConstellation==='function') renderConstellation();
+      if(typeof window.renderNpCard==='function') window.renderNpCard();
+      if(state.session){ state.session.words=state.prompt.words; if(typeof scheduleAutosave==='function') scheduleAutosave(); }
+    }
+  }catch(e){}
+}
 function commitWord(word, sub, catId){
   catId = catId || EC.cat;
   if (EC.mode === 'goal'){ const c = (catId === 'custom' ? null : catId); if (EC.goalTarget === 'session') addSessionGoal(word, sub, c); else addGoalDraftItem(word, sub, c); closeElemCard(); return; }   // capture a story goal, don't place on the map
@@ -6898,6 +6943,7 @@ function commitWord(word, sub, catId){
   const built = ecBuildItem(word, sub, s, catId);
   const builtIdx = state.prompt.words.length;
   state.prompt.words.push(built);
+  if (typeof autoAssignIcon === 'function' && (built.cat === 'object' || built.cat === 'setting' || built.cat === 'being')) autoAssignIcon(builtIdx, built);
   bumpTimerForGuideWord(built);
   $('skyEmpty').style.display = 'none';
   if (isMentalSpace(built)){
