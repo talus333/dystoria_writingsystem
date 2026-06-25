@@ -22070,7 +22070,7 @@ document.addEventListener('DOMContentLoaded', init);
       ov.querySelector('img').src=src; ov.classList.add('show');
     }
     function npCardDeleteImage(key){
-      if(state.session && state.session.npImages){ delete state.session.npImages[key]; if(typeof scheduleAutosave==='function') scheduleAutosave(); }
+      if(state.session && state.session.npImages){ delete state.session.npImages[key]; if(state.session.npImagePos) delete state.session.npImagePos[key]; if(typeof scheduleAutosave==='function') scheduleAutosave(); }
       renderNpCard();
     }
     function openImageMenu(key, x, y){
@@ -22084,6 +22084,8 @@ document.addEventListener('DOMContentLoaded', init);
       menu.style.top=Math.max(8, Math.min(y||200, window.innerHeight-200))+'px';
       menu.style.display='block';
     }
+    function getImagePos(key){ try{ const p=state.session && state.session.npImagePos && state.session.npImagePos[key]; if(p && typeof p.x==='number') return {x:p.x,y:p.y}; }catch(e){} return {x:50,y:50}; }
+    function setImagePos(key,x,y){ if(!state.session && typeof ensureSession==='function') ensureSession(); if(!state.session) return; state.session.npImagePos=state.session.npImagePos||{}; state.session.npImagePos[key]={x:Math.round(x),y:Math.round(y)}; if(typeof scheduleAutosave==='function') scheduleAutosave(); }
     function npCardPickImage(key){
       const inp=document.createElement('input'); inp.type='file'; inp.accept='image/*';
       inp.addEventListener('change', async ()=>{ const f=inp.files&&inp.files[0]; if(!f) return;
@@ -22091,6 +22093,7 @@ document.addEventListener('DOMContentLoaded', init);
           if(!state.session && typeof ensureSession==='function') ensureSession();
           if(!state.session.npImages) state.session.npImages={};
           state.session.npImages[key]=url;
+          if(state.session.npImagePos) delete state.session.npImagePos[key];
           if(typeof scheduleAutosave==='function') scheduleAutosave();
           renderNpCard();
         }catch(e){ if(typeof flashStatus==='function') flashStatus('Could not load that image'); }
@@ -22126,20 +22129,29 @@ document.addEventListener('DOMContentLoaded', init);
       { const _ei=(typeof elIndexByKey==='function')?elIndexByKey(key):-1; if(_ei>=0 && state.prompt && state.prompt.links){ state.prompt.links.forEach(l=>{ let oi=-1; if(l.a===_ei) oi=l.b; else if(l.b===_ei) oi=l.a; else return; const ow=state.prompt.words[oi]; if(ow) _valid.add('@rel:'+wordKey(ow)); }); } }
       if(state.cardTrait && !_valid.has(state.cardTrait)) state.cardTrait=null;
       const imgBox=document.createElement('div'); imgBox.className='npc-img';
+      if(wEl.role==='being') imgBox.classList.add('npc-img-being');
       const src=(state.session&&state.session.npImages&&state.session.npImages[key])||'';
-      if(wEl.role==='being'){
-        imgBox.classList.add('npc-img-being');
-        if(src){ const im=document.createElement('img'); im.src=src; imgBox.appendChild(im); imgBox.classList.add('has-photo');
-          const edit=document.createElement('span'); edit.className='npc-imgedit'; edit.textContent='✎'; edit.title='Replace or remove image';
-          edit.addEventListener('click', ev=>{ ev.stopPropagation(); openImageMenu(key, ev.clientX, ev.clientY); }); imgBox.appendChild(edit); }
-        else { const tok=(typeof window.beingTokenSVG==='function')?window.beingTokenSVG(wEl):null; if(tok){ imgBox.classList.add('has-icon'); imgBox.innerHTML='<svg viewBox="'+tok.vb+'" preserveAspectRatio="xMidYMid meet" style="width:88%;height:88%">'+tok.body+'</svg>'; } else { imgBox.classList.add('empty'); imgBox.innerHTML='<span>+ image</span>'; } }
+      if(src){
+        imgBox.classList.add('has-photo');
+        const im=document.createElement('img'); im.src=src;
+        const pos=getImagePos(key); im.style.objectPosition=pos.x+'% '+pos.y+'%';
+        imgBox.appendChild(im);
+        const edit=document.createElement('span'); edit.className='npc-imgedit'; edit.textContent='✎'; edit.title='Change or remove image';
+        edit.addEventListener('click', ev=>{ ev.stopPropagation(); openImageMenu(key, ev.clientX, ev.clientY); }); imgBox.appendChild(edit);
+        imgBox.title='Drag to reposition · click to view full size'; imgBox.style.cursor='zoom-in';
+        let _d=null;
+        imgBox.addEventListener('pointerdown', ev=>{ if(ev.target.closest && ev.target.closest('.npc-imgedit')) return; _d={x:ev.clientX,y:ev.clientY,moved:false,px:pos.x,py:pos.y,nx:pos.x,ny:pos.y}; try{ imgBox.setPointerCapture(ev.pointerId); }catch(e){} });
+        imgBox.addEventListener('pointermove', ev=>{ if(!_d) return; const dx=ev.clientX-_d.x, dy=ev.clientY-_d.y; if(Math.abs(dx)>3||Math.abs(dy)>3) _d.moved=true; if(_d.moved){ _d.nx=Math.max(0,Math.min(100,_d.px - dx*0.5)); _d.ny=Math.max(0,Math.min(100,_d.py - dy*0.5)); im.style.objectPosition=_d.nx+'% '+_d.ny+'%'; imgBox.style.cursor='grabbing'; } });
+        const _end=()=>{ if(!_d) return; const d=_d; _d=null; imgBox.style.cursor='zoom-in'; if(d.moved) setImagePos(key,d.nx,d.ny); else openImageLightbox(src); };
+        imgBox.addEventListener('pointerup', _end); imgBox.addEventListener('pointercancel', ()=>{ _d=null; imgBox.style.cursor='zoom-in'; });
+      } else if(wEl.role==='being'){
+        const tok=(typeof window.beingTokenSVG==='function')?window.beingTokenSVG(wEl):null;
+        if(tok){ imgBox.classList.add('has-icon'); imgBox.innerHTML='<svg viewBox="'+tok.vb+'" preserveAspectRatio="xMidYMid meet" style="width:88%;height:88%">'+tok.body+'</svg>'; } else { imgBox.classList.add('empty'); imgBox.innerHTML='<span>+ image</span>'; }
         imgBox.title='Click to load an image for these notes'; imgBox.style.cursor='pointer';
         imgBox.addEventListener('click', ()=>npCardPickImage(key));
-      } else if(src){ const im=document.createElement('img'); im.src=src; imgBox.appendChild(im); imgBox.classList.add('has-img'); imgBox.title='Click to view larger';
-        imgBox.addEventListener('click', ()=>openImageLightbox(src));
-        const edit=document.createElement('span'); edit.className='npc-imgedit'; edit.textContent='✎'; edit.title='Replace or delete image';
-        edit.addEventListener('click', ev=>{ ev.stopPropagation(); openImageMenu(key, ev.clientX, ev.clientY); }); imgBox.appendChild(edit); }
-      else { imgBox.classList.add('empty'); imgBox.innerHTML='<span>+ image</span>'; imgBox.title='Add an image'; imgBox.addEventListener('click', ()=>npCardPickImage(key)); }
+      } else {
+        imgBox.classList.add('empty'); imgBox.innerHTML='<span>+ image</span>'; imgBox.title='Add an image'; imgBox.addEventListener('click', ()=>npCardPickImage(key));
+      }
       card.appendChild(imgBox);
       const body=document.createElement('div'); body.className='npc-body';
       const w=(typeof npFindEl==='function')?npFindEl(key):null;
