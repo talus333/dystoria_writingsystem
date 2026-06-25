@@ -52,7 +52,7 @@ ok(/function maybeBackupNudge\(/.test(html), 'backup reminder present');
 // Think redesign (build #133): full-screen map + slide-up notes sheet
 ok(/function buildNotesTab\(/.test(html) && /buildNotesTab\(\);/.test(html), 'notes tab builder present + called');
 ok(/body\.np-open:not\(\.writing\) #lower\{transform:translateY\(0\)\}/.test(html), 'notes sheet slide-up rule present');
-ok(html.includes('open this element in the notes sheet'), 'selected-element notes button present');
+ok(html.includes('Open this element in your notes'), 'selected-element notes button present');
 
 /* ---------- 2 + 3. LOAD in jsdom, then assert runtime invariants ---------- */
 let JSDOM;

@@ -2658,6 +2658,7 @@
     <button class="hbtn" id="accountBtn">Sign In</button>
     <div class="menu-sep"></div>
     <button class="hbtn" id="howToBtn" title="What Dystoria is — the five modes and the writing loop">About Dystoria</button>
+    <button class="hbtn" id="tipBtn" title="Leave a one-time tip to support Dystoria" style="display:none">Support Dystoria ♡</button>
     <div class="menu-sep"></div>
     <button class="hbtn sub" id="autoExpBtn" style="display:none" title="Write a markdown copy of the session to a folder of your choice on every save">Auto-Export<span class="sw"></span></button>
     <button class="hbtn" id="gameBtn" title="Focus game: spend ◆ on adds and rerolls, weave words into the writing to earn more">Game Mode<span class="sw"></span></button>
@@ -3487,6 +3488,17 @@ function addReadBook(bk){ bk=String(bk||'').replace(/\s+/g,' ').trim(); if(!bk) 
 function removeReadBook(bk){ const p=loadProfile(); p.readBooks=(Array.isArray(p.readBooks)?p.readBooks:[]).filter(x=>x.toLowerCase()!==String(bk||'').toLowerCase()); saveProfile(p); }
 function getReadBooksContext(){ const r=getReadBooks(); return r.length ? ('BOOKS THE WRITER HAS ALREADY READ (do NOT recommend any of these again; treat them only as a hint of their taste):\n'+r.map(b=>'- '+b).join('\n')) : ''; }
 window.getReadBooksContext = getReadBooksContext;
+async function aiFormatBook(input){
+  input=String(input||'').replace(/\s+/g,' ').trim(); if(!input) return '';
+  if(typeof aiAuthed!=='function' || !aiAuthed()) return input;
+  const sys='You identify a book from a short, possibly partial or misspelled reference and return it in exactly "Title \u2014 Author" form (an em dash " \u2014 " between the work\u2019s common title and the author\u2019s name). Return ONLY that one line \u2014 no quotes, no commentary, no bullet. If you are not confident it is a real book, return the cleaned-up input as a title with no author.';
+  const prompt='Book reference: "'+input+'"\n\nReturn "Title \u2014 Author":';
+  try{ const out=await aiCall(sys, prompt, { maxTokens:40, temperature:0 });
+    let r=String(out||'').replace(/[\r\n]+/g,' ').replace(/^[-*\s]+/,'').replace(/^["\u2019\u2018'`\s]+|["\u2019\u2018'`.\s]+$/g,'').trim();
+    return r||input;
+  }catch(e){ return input; }
+}
+window.aiFormatBook = aiFormatBook;
 function _bookFromLi(t){ t=String(t||'').replace(/\s+/g,' ').trim(); const i=t.indexOf(':'); return (i>0?t.slice(0,i):t).trim(); }
 function enhanceReadingList(body){
   body = body || document.getElementById('wikiBody'); if(!body) return;
@@ -3543,9 +3555,16 @@ function openAccount(){
   card.querySelector('.pf-x').addEventListener('click', closeAccount);
   { const so=card.querySelector('.ac-signout'); if(so) so.addEventListener('click', ()=>{ const bx=document.getElementById('authSignOut'); closeAccount(); if(bx) bx.click(); }); }
   { const sn=card.querySelector('.ac-signin'); if(sn) sn.addEventListener('click', ()=>{ closeAccount(); if(typeof updateAccountUI==='function') updateAccountUI(); const c=document.getElementById('authCard'); if(c) c.classList.add('show'); }); }
-  card.querySelector('.pf-save').addEventListener('click', ()=>{ const np=Object.assign({}, loadProfile()); card.querySelectorAll('textarea[data-k]').forEach(t=>{ const v=t.value.trim(); if(v) np[t.dataset.k]=v; else delete np[t.dataset.k]; }); saveProfile(np); if(typeof flashStatus==='function') flashStatus('Profile saved'); openAccount(); });
+  card.querySelector('.pf-save').addEventListener('click', async ()=>{ const np=Object.assign({}, loadProfile()); card.querySelectorAll('textarea[data-k]').forEach(t=>{ const v=t.value.trim(); if(v) np[t.dataset.k]=v; else delete np[t.dataset.k]; });
+    if(np.favBooks && typeof aiFormatBook==='function' && typeof aiAuthed==='function' && aiAuthed()){
+      if(typeof flashStatus==='function') flashStatus('Tidying your books\u2026');
+      const lines=String(np.favBooks).split(/\n+/).map(x=>x.trim()).filter(Boolean); const out=[];
+      for(const ln of lines){ if(ln.indexOf(' \u2014 ')>=0){ out.push(ln); } else { try{ out.push(await aiFormatBook(ln)); }catch(e){ out.push(ln); } } }
+      np.favBooks=out.join('\n');
+    }
+    saveProfile(np); if(typeof flashStatus==='function') flashStatus('Profile saved'); openAccount(); });
   card.querySelectorAll('.pf-readx').forEach(x=>x.addEventListener('click', ()=>{ removeReadBook(x.dataset.b); openAccount(); }));
-  { const ab=card.querySelector('.pf-addbook'); if(ab) ab.addEventListener('click', async ()=>{ if(typeof sitePrompt!=='function') return; const v=await sitePrompt('Add a book you\u2019ve read', '', 'Add'); if(v && typeof v==='string' && v.trim()){ addReadBook(v.trim()); openAccount(); } }); }
+  { const ab=card.querySelector('.pf-addbook'); if(ab) ab.addEventListener('click', async ()=>{ if(typeof sitePrompt!=='function') return; const v=await sitePrompt('Add a book you\u2019ve read', '', 'Add'); if(v && typeof v==='string' && v.trim()){ const t=v.trim(); if(typeof flashStatus==='function') flashStatus('Looking up book\u2026'); const fb=(typeof aiFormatBook==='function')? await aiFormatBook(t) : t; addReadBook(fb||t); openAccount(); } }); }
   bd.classList.add('show');
 }
 window.openAccount = openAccount;
@@ -19504,6 +19523,105 @@ const AI_VISION_MODEL = '@cf/google/gemma-4-26b-a4b-it';
 function aiHeaders(){ const h = { 'content-type': 'application/json' }; if (cloud.token) h.Authorization = 'Bearer ' + cloud.token; return h; }
 // AI features require a real (non-anonymous) account — the worker verifies a signed-in token.
 function aiAuthed(){ return !!(typeof cloud !== 'undefined' && cloud.user && !cloud.user.is_anonymous); }
+
+/* ---------------- Tip jar — one-time Stripe support payment, embedded (no redirect) ---------------- */
+// The PUBLISHABLE key is public and safe to ship in the client. Fill with your pk_test_… first, then pk_live_…
+// at launch — it MUST match the same mode (test/live) as the worker's STRIPE_SECRET_KEY. Leave '' to hide the tip UI.
+const STRIPE_PK = '';
+function tipConfigured(){ return !!STRIPE_PK; }
+let _stripeJsP = null;
+function loadStripeJs(){
+  if (window.Stripe) return Promise.resolve();
+  if (_stripeJsP) return _stripeJsP;
+  _stripeJsP = new Promise((res, rej) => { const s = document.createElement('script'); s.src = 'https://js.stripe.com/v3/'; s.onload = res; s.onerror = () => rej(new Error('Could not load Stripe')); document.head.appendChild(s); });
+  return _stripeJsP;
+}
+let _stripeObj = null;
+async function getStripe(){ if (_stripeObj) return _stripeObj; await loadStripeJs(); _stripeObj = Stripe(STRIPE_PK); return _stripeObj; }
+let _tipStyled = false;
+function tipStyles(){
+  if (_tipStyled) return; _tipStyled = true;
+  const css = '#tipJar{position:fixed;inset:0;z-index:9000;display:none;align-items:center;justify-content:center;background:rgba(20,18,15,.5)}'
+    + '#tipJar.show{display:flex}'
+    + '#tipJar .tip-card{position:relative;width:min(92vw,420px);max-height:90vh;overflow:auto;background:var(--bg,#f7f3ea);color:var(--ink,#2b2720);border:1px solid var(--line,#d8d0bf);border-radius:16px;padding:26px 24px;box-shadow:0 24px 70px rgba(0,0,0,.32);font-family:var(--serif,Georgia,serif)}'
+    + '#tipJar .tip-x{position:absolute;top:10px;right:12px;border:none;background:none;font-size:22px;line-height:1;color:#9b9384;cursor:pointer}'
+    + '#tipJar .tip-kick{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:#9b8f6a}'
+    + '#tipJar .tip-title{margin:2px 0 6px;font-size:23px}'
+    + '#tipJar .tip-sub{margin:0 0 16px;font-size:14px;line-height:1.5;color:#6b6457}'
+    + '#tipJar .tip-presets{display:flex;gap:8px;margin-bottom:12px}'
+    + '#tipJar .tip-amt{flex:1;padding:12px 0;font-family:inherit;font-size:16px;border:1px solid var(--line,#d8d0bf);border-radius:10px;background:var(--bg,#f7f3ea);color:var(--ink,#2b2720);cursor:pointer}'
+    + '#tipJar .tip-amt.on{border-color:#b8923f;background:#f3e9cf;font-weight:600}'
+    + '#tipJar .tip-custom{display:flex;align-items:center;gap:6px;font-size:13px;color:#6b6457;margin-bottom:16px}'
+    + '#tipJar .tip-custom span{opacity:.7}'
+    + '#tipJar .tip-custom input{flex:1;font-family:inherit;font-size:15px;padding:9px 11px;border:1px solid var(--line,#d8d0bf);border-radius:9px;background:var(--bg,#f7f3ea);color:var(--ink,#2b2720)}'
+    + '#tipJar .tip-go{width:100%;padding:13px 0;border:none;border-radius:10px;background:#3b362c;color:#f7f3ea;font-family:inherit;font-size:15px;cursor:pointer}'
+    + '#tipJar .tip-go:disabled{opacity:.55;cursor:default}'
+    + '#tipJar .tip-back{display:block;width:100%;margin-top:10px;border:none;background:none;color:#9b8f6a;font-family:inherit;font-size:13px;cursor:pointer}'
+    + '#tipJar .tip-pay-el{margin-bottom:16px;min-height:42px}'
+    + '#tipJar .tip-thanks{font-size:42px;text-align:center;color:#b8923f;margin:6px 0 4px}'
+    + '#tipJar .tip-msg{margin-top:12px;font-size:13px;color:#6b6457;text-align:center;min-height:16px}'
+    + '#tipJar .tip-msg.err{color:#b4452f}';
+  const el = document.createElement('style'); el.textContent = css; document.head.appendChild(el);
+}
+function openTipJar(){
+  if (!tipConfigured()){ if (typeof flashStatus === 'function') flashStatus('Tips aren’t set up yet.'); return; }
+  tipStyles();
+  let ov = document.getElementById('tipJar');
+  if (!ov){ ov = document.createElement('div'); ov.id = 'tipJar'; document.body.appendChild(ov); }
+  let amount = 500;   // cents; default $5 (matches the pre-selected preset)
+  const fmt = c => '$' + (c % 100 ? (c / 100).toFixed(2) : (c / 100).toFixed(0));
+  ov.innerHTML = '<div class="tip-card"><button class="tip-x" title="Close">×</button>'
+    + '<div class="tip-kick">Support Dystoria</div><h2 class="tip-title">Leave a tip ♡</h2>'
+    + '<p class="tip-sub">Dystoria is free to use. If it’s helped your writing, a tip helps keep it going — thank you.</p>'
+    + '<div class="tip-step" data-step="amount">'
+    +   '<div class="tip-presets"><button class="tip-amt" data-cents="300">$3</button><button class="tip-amt on" data-cents="500">$5</button><button class="tip-amt" data-cents="1000">$10</button></div>'
+    +   '<label class="tip-custom">Custom <span>$</span><input id="tipCustom" type="number" min="1" max="500" step="1" placeholder="other amount"></label>'
+    +   '<button id="tipContinue" class="tip-go">Continue</button>'
+    + '</div>'
+    + '<div class="tip-step" data-step="pay" style="display:none"><div id="tip-pay-el" class="tip-pay-el"></div><button id="tipPay" class="tip-go">Tip <span id="tipPayAmt"></span></button><button id="tipBack" class="tip-back">← change amount</button></div>'
+    + '<div class="tip-step" data-step="done" style="display:none"><div class="tip-thanks">♡</div><p class="tip-sub">Thank you — truly. Your support keeps Dystoria going.</p><button class="tip-go tip-close2">Close</button></div>'
+    + '<div id="tipMsg" class="tip-msg"></div></div>';
+  const q = s => ov.querySelector(s);
+  const show = step => ov.querySelectorAll('.tip-step').forEach(s => { s.style.display = (s.dataset.step === step ? '' : 'none'); });
+  const msg = (t, err) => { const m = q('#tipMsg'); m.textContent = t || ''; m.classList.toggle('err', !!err); };
+  const close = () => ov.classList.remove('show');
+  let stripe = null, elements = null;
+  q('.tip-x').addEventListener('click', close);
+  ov.addEventListener('mousedown', e => { if (e.target === ov) close(); });
+  ov.addEventListener('click', e => { if (e.target.classList && e.target.classList.contains('tip-close2')) close(); });
+  ov.querySelectorAll('.tip-amt').forEach(b => b.addEventListener('click', () => { q('#tipCustom').value = ''; amount = +b.dataset.cents; ov.querySelectorAll('.tip-amt').forEach(x => x.classList.toggle('on', x === b)); }));
+  q('#tipCustom').addEventListener('input', e => { const d = parseFloat(e.target.value); if (isFinite(d)){ amount = Math.round(d * 100); ov.querySelectorAll('.tip-amt').forEach(x => x.classList.remove('on')); } });
+  q('#tipContinue').addEventListener('click', async () => {
+    if (!(amount >= 100 && amount <= 50000)){ msg('Pick an amount between $1 and $500.', true); return; }
+    msg('Setting up secure payment…'); q('#tipContinue').disabled = true;
+    try {
+      const r = await fetch('/billing/tip', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ amount_cents: amount }) });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || !data.client_secret) throw new Error(data.error || 'Could not start payment');
+      stripe = await getStripe();
+      elements = stripe.elements({ clientSecret: data.client_secret, appearance: { theme: 'stripe' } });
+      q('#tipPayAmt').textContent = fmt(amount);
+      show('pay'); msg('');
+      elements.create('payment').mount('#tip-pay-el');   // mount AFTER the step is visible so the iframe sizes correctly
+    } catch (e){ msg((e && e.message) || 'Something went wrong', true); }
+    q('#tipContinue').disabled = false;
+  });
+  q('#tipBack').addEventListener('click', () => { show('amount'); msg(''); });
+  q('#tipPay').addEventListener('click', async () => {
+    if (!stripe || !elements) return;
+    q('#tipPay').disabled = true; msg('Processing…');
+    try {
+      const { error, paymentIntent } = await stripe.confirmPayment({ elements, redirect: 'if_required', confirmParams: { return_url: location.origin + '/?tipped=1' } });
+      if (error){ msg(error.message || 'Payment failed', true); q('#tipPay').disabled = false; return; }
+      if (paymentIntent && (paymentIntent.status === 'succeeded' || paymentIntent.status === 'processing')){ msg(''); show('done'); }
+      else { msg('Payment didn’t complete — try again.', true); q('#tipPay').disabled = false; }
+    } catch (e){ msg((e && e.message) || 'Payment failed', true); q('#tipPay').disabled = false; }
+  });
+  show('amount'); msg('');
+  ov.classList.add('show');
+}
+window.openTipJar = openTipJar;
+
 let _aiGateOpen = false;
 function promptAiSignup(){
   if (_aiGateOpen) return; _aiGateOpen = true;
@@ -21523,6 +21641,7 @@ function init(){
   $('undoMapBtn').addEventListener('click', undoMap);
   $('redoMapBtn').addEventListener('click', redoMap);
   { const am = $('aiModelsBtn'); if (am) am.addEventListener('click', () => { if (typeof openAiModelsPanel === 'function') openAiModelsPanel(); }); }
+  { const tb = $('tipBtn'); if (tb && typeof tipConfigured === 'function' && tipConfigured()){ tb.style.display = ''; tb.addEventListener('click', () => { $('appMenu').classList.remove('show'); openTipJar(); }); } }
   $('backupBtn').addEventListener('click', () => { $('appMenu').classList.remove('show'); backupAll(); });
   $('restoreBtn').addEventListener('click', () => { $('appMenu').classList.remove('show'); $('restoreFile').click(); });
   $('customWordsBtn').addEventListener('click', openCustomWordsModal);
