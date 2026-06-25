@@ -476,6 +476,107 @@ async function handleTip(request, env) {
   }
 }
 
+// ============================================================
+//  STRIPE WEBHOOK — the ONLY writer of entitlement. Stripe calls this when a subscription
+//  is created/updated/cancelled or a payment fails; we verify the signature, then sync the
+//  current state into the subscriptions table (service role). Needs env STRIPE_WEBHOOK_SECRET
+//  (whsec_…) — the signing secret shown when you register the endpoint in the Stripe dashboard.
+// ============================================================
+
+// Verify Stripe's 'Stripe-Signature' header (HMAC-SHA256 over `${t}.${rawBody}`) using Web Crypto.
+// Rejects on a missing/old timestamp (>5 min) to block replay. Returns true/false; never throws.
+async function verifyStripeSig(payload, sigHeader, secret) {
+  try {
+    if (!sigHeader || !secret) return false;
+    let t = null; const sigs = [];
+    for (const part of sigHeader.split(',')) { const i = part.indexOf('='); const k = part.slice(0, i).trim(); const v = part.slice(i + 1).trim(); if (k === 't') t = v; else if (k === 'v1') sigs.push(v); }
+    if (!t || !sigs.length) return false;
+    if (Math.abs(Date.now() / 1000 - Number(t)) > 300) return false;
+    const enc = new TextEncoder();
+    const key = await crypto.subtle.importKey('raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+    const buf = await crypto.subtle.sign('HMAC', key, enc.encode(t + '.' + payload));
+    const expected = [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
+    return sigs.some(s => s.length === expected.length && timingSafeEqualHex(expected, s));
+  } catch (e) { return false; }
+}
+function timingSafeEqualHex(a, b) {
+  if (a.length !== b.length) return false;
+  let out = 0; for (let i = 0; i < a.length; i++) out |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return out === 0;
+}
+
+// Read a Stripe object (GET). Used to pull full subscription details on checkout completion.
+async function stripeGet(env, path) {
+  const key = env.STRIPE_SECRET_KEY; if (!key) return null;
+  const r = await fetch('https://api.stripe.com/v1/' + path, { headers: { Authorization: 'Bearer ' + key } });
+  const d = await r.json().catch(() => null);
+  return r.ok ? d : null;
+}
+
+// Find which user a Stripe customer belongs to (when the subscription has no user_id metadata).
+async function subUserByCustomer(env, custId) {
+  const key = env.SUPABASE_SERVICE_ROLE_KEY; if (!key || !custId) return null;
+  const url = SUPABASE_URL + '/rest/v1/subscriptions?stripe_customer_id=eq.' + encodeURIComponent(custId) + '&select=user_id&limit=1';
+  const r = await fetch(url, { headers: { apikey: key, Authorization: 'Bearer ' + key } });
+  if (!r.ok) return null;
+  const rows = await r.json().catch(() => null);
+  return (Array.isArray(rows) && rows[0]) ? rows[0].user_id : null;
+}
+
+function subInterval(sub) { try { return sub.items.data[0].price.recurring.interval; } catch (e) { return null; } }
+// period end moved per-item in newer Stripe API versions — read either spot.
+function subPeriodEnd(sub) { if (sub && sub.current_period_end) return sub.current_period_end; try { return sub.items.data[0].current_period_end; } catch (e) { return null; } }
+// active/trialing/past_due keep Pro (past_due = in grace); anything else → free.
+function planFromStatus(s) { return (s === 'active' || s === 'trialing' || s === 'past_due') ? 'pro' : 'free'; }
+
+// Write one Stripe subscription's current state into our table. forceFree=true for deletions.
+async function applySubscription(env, sub, forceFree) {
+  if (!sub) return false;
+  let userId = sub.metadata && sub.metadata.user_id;
+  if (!userId) userId = await subUserByCustomer(env, sub.customer);
+  if (!userId) return false;   // can't map this subscription to a user → skip
+  const status = forceFree ? 'canceled' : (sub.status || 'inactive');
+  const end = subPeriodEnd(sub);
+  return subUpsert(env, userId, {
+    plan: forceFree ? 'free' : planFromStatus(status),
+    status,
+    billing_interval: subInterval(sub),
+    stripe_customer_id: sub.customer || undefined,
+    stripe_subscription_id: sub.id || undefined,
+    current_period_end: end ? new Date(end * 1000).toISOString() : null,
+    cancel_at_period_end: !!sub.cancel_at_period_end,
+  });
+}
+
+async function handleStripeWebhook(request, env) {
+  if (request.method !== 'POST') return new Response('POST only', { status: 405 });
+  const payload = await request.text();   // RAW body — required for signature verification
+  const sig = request.headers.get('stripe-signature') || '';
+  if (!(await verifyStripeSig(payload, sig, env.STRIPE_WEBHOOK_SECRET))) {
+    return new Response(JSON.stringify({ error: 'invalid signature' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+  }
+  let event; try { event = JSON.parse(payload); } catch (e) { return new Response('bad json', { status: 400 }); }
+  try {
+    const obj = event.data && event.data.object;
+    switch (event.type) {
+      case 'customer.subscription.created':
+      case 'customer.subscription.updated':
+        await applySubscription(env, obj, false); break;
+      case 'customer.subscription.deleted':
+        await applySubscription(env, obj, true); break;
+      case 'checkout.session.completed':
+        // flip to Pro promptly (don't wait on the subscription.* event); fetch full sub for period/interval
+        if (obj && obj.subscription) { const sub = await stripeGet(env, 'subscriptions/' + obj.subscription); if (sub && sub.id) { if (!(sub.metadata && sub.metadata.user_id) && obj.client_reference_id) sub.metadata = Object.assign({}, sub.metadata, { user_id: obj.client_reference_id }); await applySubscription(env, sub, false); } }
+        break;
+      default: break;   // other events acknowledged but not acted on
+    }
+  } catch (e) {
+    // transient failure → 500 so Stripe retries the delivery
+    return new Response(JSON.stringify({ error: 'handler error' }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+  }
+  return new Response(JSON.stringify({ received: true }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -483,6 +584,7 @@ export default {
     if (url.pathname === '/billing/checkout') return handleBilling(request, env, 'checkout');
     if (url.pathname === '/billing/portal') return handleBilling(request, env, 'portal');
     if (url.pathname === '/billing/tip') return handleTip(request, env);
+    if (url.pathname === '/stripe-webhook') return handleStripeWebhook(request, env);
     // everything else → the static site
     return env.ASSETS.fetch(request);
   },
