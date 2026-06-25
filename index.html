@@ -3499,6 +3499,14 @@ async function aiFormatBook(input){
   }catch(e){ return input; }
 }
 window.aiFormatBook = aiFormatBook;
+function parseFavBooks(text){
+  const out=[], seen={};
+  String(text||'').split(/\n+/).map(x=>x.trim()).filter(Boolean).forEach(line=>{
+    const parts = (line.indexOf(' \u2014 ')>=0) ? [line] : line.split(/\s*[,;:]\s*|\s+[\u2013\u2014\-]\s+/);
+    parts.map(x=>x.trim()).filter(Boolean).forEach(b=>{ const k=b.toLowerCase(); if(!seen[k]){ seen[k]=1; out.push(b); } });
+  });
+  return out;
+}
 function _bookFromLi(t){ t=String(t||'').replace(/\s+/g,' ').trim(); const i=t.indexOf(':'); return (i>0?t.slice(0,i):t).trim(); }
 function enhanceReadingList(body){
   body = body || document.getElementById('wikiBody'); if(!body) return;
@@ -3538,8 +3546,8 @@ function openAccount(){
   const acHtml = _si ? ('<div class="ac-row"><span class="ac-k">Signed in as</span><span class="ac-v">'+esc(cloud.user.email||'you')+'</span></div><div class="ac-row"><span class="ac-k">Username</span><span class="ac-v">'+esc((typeof myDisplayName==='function'?myDisplayName():(cloud.username||''))||'\u2014')+'</span></div><div class="ac-actions"><button class="ac-signout">Sign out</button></div>') : ('<div class="ac-row"><span class="ac-v">You are writing locally on this device \u2014 sign in to sync your stories across devices.</span></div><div class="ac-actions"><button class="ac-signin">Sign in</button></div>');
   const _read=getReadBooks(); const seen={}; const merged=[];
   _read.forEach(b=>{ const k=String(b).toLowerCase(); if(!seen[k]){ seen[k]=1; merged.push({book:b, fav:false, rem:true}); } });
-  String(p.favBooks||'').split(/\n+/).map(x=>x.trim()).filter(Boolean).forEach(b=>{ const k=b.toLowerCase(); if(!seen[k]){ seen[k]=1; merged.push({book:b, fav:true, rem:false}); } else { const it=merged.find(m=>m.book.toLowerCase()===k); if(it) it.fav=true; } });
-  const readItems = merged.length ? merged.map(m=>'<div class="pf-readitem'+(m.fav?' is-fav':'')+'"><span class="pf-bookname">'+esc(m.book)+'</span>'+(m.fav?'<span class="pf-favtag" title="From your favourite books">\u2605</span>':'')+(m.rem?'<button class="pf-readx" data-b="'+escA(m.book)+'" title="Remove">\u00d7</button>':'')+'</div>').join('') : '<div class="pf-readempty">No books yet. Check them off in the wiki\u2019s reading list, list favourites on the left, or add one below.</div>';
+  parseFavBooks(p.favBooks).forEach(b=>{ const k=b.toLowerCase(); if(!seen[k]){ seen[k]=1; merged.push({book:b, fav:true, rem:false}); } else { const it=merged.find(m=>m.book.toLowerCase()===k); if(it) it.fav=true; } });
+  const readItems = merged.length ? merged.map(m=>'<div class="pf-readitem'+(m.fav?' is-fav':'')+'">'+(m.fav?'<span class="pf-favtag" title="From your favourite books">\u2605</span>':'')+'<span class="pf-bookname">'+esc(m.book)+'</span>'+(m.rem?'<button class="pf-readx" data-b="'+escA(m.book)+'" title="Remove">\u00d7</button>':'')+'</div>').join('') : '<div class="pf-readempty">No books yet. Check them off in the wiki\u2019s reading list, list favourites on the left, or add one below.</div>';
   const fields = PROFILE_FIELDS.map(f=>'<label class="pf-field"><span class="pf-lbl">'+f.label+'</span><textarea data-k="'+f.k+'" rows="2" placeholder="'+escA(f.ph)+'">'+esc(p[f.k]||'')+'</textarea></label>').join('');
   card.innerHTML = '<div class="pf-head"><span class="pf-title">Your account</span><button class="pf-x" title="Close">\u00d7</button></div>'
     + '<div class="pf-grid"><div class="pf-left">'
@@ -3556,10 +3564,11 @@ function openAccount(){
   { const so=card.querySelector('.ac-signout'); if(so) so.addEventListener('click', ()=>{ const bx=document.getElementById('authSignOut'); closeAccount(); if(bx) bx.click(); }); }
   { const sn=card.querySelector('.ac-signin'); if(sn) sn.addEventListener('click', ()=>{ closeAccount(); if(typeof updateAccountUI==='function') updateAccountUI(); const c=document.getElementById('authCard'); if(c) c.classList.add('show'); }); }
   card.querySelector('.pf-save').addEventListener('click', async ()=>{ const np=Object.assign({}, loadProfile()); card.querySelectorAll('textarea[data-k]').forEach(t=>{ const v=t.value.trim(); if(v) np[t.dataset.k]=v; else delete np[t.dataset.k]; });
-    if(np.favBooks && typeof aiFormatBook==='function' && typeof aiAuthed==='function' && aiAuthed()){
-      if(typeof flashStatus==='function') flashStatus('Tidying your books\u2026');
-      const lines=String(np.favBooks).split(/\n+/).map(x=>x.trim()).filter(Boolean); const out=[];
-      for(const ln of lines){ if(ln.indexOf(' \u2014 ')>=0){ out.push(ln); } else { try{ out.push(await aiFormatBook(ln)); }catch(e){ out.push(ln); } } }
+    if(np.favBooks){
+      const refs=parseFavBooks(np.favBooks); const out=[];
+      const canAI = (typeof aiFormatBook==='function' && typeof aiAuthed==='function' && aiAuthed());
+      if(canAI && refs.length && typeof flashStatus==='function') flashStatus('Tidying your books\u2026');
+      for(const ref of refs){ if(ref.indexOf(' \u2014 ')>=0 || !canAI){ out.push(ref); } else { try{ out.push(await aiFormatBook(ref)); }catch(e){ out.push(ref); } } }
       np.favBooks=out.join('\n');
     }
     saveProfile(np); if(typeof flashStatus==='function') flashStatus('Profile saved'); openAccount(); });
