@@ -3072,6 +3072,7 @@
   <div class="ec-head"><span id="authTitle">Sign in to Dystoria</span><button id="authClose" title="Close">×</button></div>
   <div id="authedView" style="display:none">
     <p class="auth-who"></p>
+    <div id="planRow" class="plan-row" style="display:none"><span class="plan-badge" id="planBadge"></span><span class="plan-note" id="planNote"></span><button id="planAction" class="plan-action"></button></div>
     <p class="auth-note">Your username is how collaborators see you when you share a story.</p>
     <div class="prof-row"><input id="profUser" type="text" placeholder="username" maxlength="24"><button id="profSave">Save</button></div>
     <button id="authSignOut">Sign out</button>
@@ -19659,6 +19660,114 @@ function openTipJar(){
   ov.classList.add('show');
 }
 window.openTipJar = openTipJar;
+
+/* ---------------- subscription (Pro) — plan badge, upgrade, manage ---------------- */
+// Billing UI shows only when Stripe is configured client-side (same key the tip jar uses).
+function billingConfigured(){ return tipConfigured(); }
+let _userPlan = 'free';        // 'free' | 'pro' — last value read from the user's subscriptions row
+let _planInfo = null;          // the row (status, current_period_end, cancel_at_period_end)
+function aiPlan(){ return _userPlan; }
+async function loadUserPlan(){
+  if (!billingConfigured() || typeof supa === 'undefined' || !supa || !(cloud && cloud.user)){ _userPlan = 'free'; _planInfo = null; return _userPlan; }
+  try {
+    const { data } = await supa.from('subscriptions').select('plan,status,current_period_end,cancel_at_period_end').eq('user_id', cloud.user.id).single();
+    _planInfo = data || null;
+    _userPlan = (data && data.plan === 'pro') ? 'pro' : 'free';
+  } catch (e){ _userPlan = 'free'; _planInfo = null; }
+  return _userPlan;
+}
+function refreshPlanUI(){
+  const row = $('planRow'); if (!row) return;
+  if (!billingConfigured() || !(cloud && cloud.user)){ row.style.display = 'none'; return; }
+  row.style.display = 'flex';
+  const badge = $('planBadge'), note = $('planNote'), act = $('planAction');
+  const pro = (_userPlan === 'pro');
+  badge.textContent = pro ? 'Pro' : 'Free';
+  badge.classList.toggle('pro', pro);
+  let n = '';
+  if (pro && _planInfo){
+    const end = _planInfo.current_period_end ? new Date(_planInfo.current_period_end) : null;
+    const when = end ? end.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : '';
+    if (_planInfo.cancel_at_period_end) n = when ? ('Ends ' + when) : 'Cancels at period end';
+    else if (_planInfo.status === 'past_due') n = 'Payment issue — update card';
+    else if (when) n = 'Renews ' + when;
+  }
+  note.textContent = n;
+  act.textContent = pro ? 'Manage' : 'Upgrade to Pro';
+  act.onclick = pro ? openPortal : openUpgrade;
+}
+async function refreshPlanAndUI(){ await loadUserPlan(); refreshPlanUI(); }
+function billingStyles(){
+  if (window._billingStyled) return; window._billingStyled = true;
+  const css = '.plan-row{display:flex;align-items:center;gap:9px;margin:0 0 10px;flex-wrap:wrap}'
+    + '.plan-badge{font-family:var(--serif,Georgia,serif);font-size:12px;font-weight:600;letter-spacing:.04em;padding:2px 9px;border-radius:999px;border:1px solid var(--line,#d8d0bf);color:#6b6457;background:var(--bg,#f7f3ea)}'
+    + '.plan-badge.pro{border-color:#b8923f;background:#f3e9cf;color:#7a5e1f}'
+    + '.plan-note{font-family:var(--serif,Georgia,serif);font-size:12px;color:#9b8f6a;flex:1;min-width:80px}'
+    + '.plan-action{font-family:var(--serif,Georgia,serif);font-size:13px;padding:6px 12px;border:none;border-radius:8px;background:#3b362c;color:#f7f3ea;cursor:pointer}'
+    + '#upgradeCard{position:fixed;inset:0;z-index:9000;display:none;align-items:center;justify-content:center;background:rgba(20,18,15,.5)}'
+    + '#upgradeCard.show{display:flex}'
+    + '#upgradeCard .up-card{position:relative;width:min(92vw,400px);background:var(--bg,#f7f3ea);color:var(--ink,#2b2720);border:1px solid var(--line,#d8d0bf);border-radius:16px;padding:24px;box-shadow:0 24px 70px rgba(0,0,0,.32);font-family:var(--serif,Georgia,serif)}'
+    + '#upgradeCard .up-x{position:absolute;top:10px;right:12px;border:none;background:none;font-size:22px;color:#9b9384;cursor:pointer}'
+    + '#upgradeCard h2{margin:0 0 4px;font-size:22px}'
+    + '#upgradeCard .up-sub{margin:0 0 16px;font-size:14px;color:#6b6457;line-height:1.5}'
+    + '#upgradeCard .up-opt{display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;padding:13px 15px;margin-bottom:10px;border:1px solid var(--line,#d8d0bf);border-radius:11px;background:var(--bg,#f7f3ea);color:var(--ink,#2b2720);font-family:inherit;font-size:15px;cursor:pointer;text-align:left}'
+    + '#upgradeCard .up-opt:hover{border-color:#b8923f}'
+    + '#upgradeCard .up-opt .tag{font-size:11px;color:#7a5e1f;background:#f3e9cf;border-radius:999px;padding:2px 8px}'
+    + '#upgradeCard .up-msg{margin-top:8px;font-size:13px;color:#b4452f;text-align:center;min-height:15px}';
+  const el = document.createElement('style'); el.textContent = css; document.head.appendChild(el);
+}
+async function billingPost(path){
+  const r = await fetch(path, { method: 'POST', headers: aiHeaders(), body: JSON.stringify({}) });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok || !data.url) throw new Error(data.error || 'Billing is unavailable right now');
+  return data.url;
+}
+async function startCheckout(interval){
+  const r = await fetch('/billing/checkout', { method: 'POST', headers: aiHeaders(), body: JSON.stringify({ interval }) });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok || !data.url) throw new Error(data.error || 'Could not start checkout');
+  location.href = data.url;   // → Stripe-hosted Checkout
+}
+async function openPortal(){
+  try { const url = await billingPost('/billing/portal'); location.href = url; }
+  catch (e){ if (typeof flashStatus === 'function') flashStatus((e && e.message) || 'Billing unavailable'); }
+}
+function openUpgrade(){
+  if (!aiAuthed()){ if (typeof promptAiSignup === 'function') promptAiSignup(); return; }
+  billingStyles();
+  let ov = $('upgradeCard');
+  if (!ov){ ov = document.createElement('div'); ov.id = 'upgradeCard'; document.body.appendChild(ov); }
+  ov.innerHTML = '<div class="up-card"><button class="up-x" title="Close">×</button>'
+    + '<h2>Dystoria Pro</h2>'
+    + '<p class="up-sub">Sharper AI-drawn icons (top-tier model), higher daily AI limits, and your support keeps Dystoria growing.</p>'
+    + '<button class="up-opt" data-int="month"><span>Monthly</span></button>'
+    + '<button class="up-opt" data-int="year"><span>Annual</span><span class="tag">best value</span></button>'
+    + '<div class="up-msg" id="upMsg"></div></div>';
+  const close = () => ov.classList.remove('show');
+  ov.querySelector('.up-x').addEventListener('click', close);
+  ov.addEventListener('mousedown', e => { if (e.target === ov) close(); });
+  ov.querySelectorAll('.up-opt').forEach(b => b.addEventListener('click', async () => {
+    ov.querySelectorAll('.up-opt').forEach(x => x.disabled = true);
+    $('upMsg').textContent = 'Taking you to secure checkout…';
+    try { await startCheckout(b.dataset.int); }
+    catch (e){ $('upMsg').textContent = (e && e.message) || 'Something went wrong'; ov.querySelectorAll('.up-opt').forEach(x => x.disabled = false); }
+  }));
+  ov.classList.add('show');
+}
+window.openUpgrade = openUpgrade;
+// On returning from Stripe Checkout (?upgraded=1), confirm + refresh the badge (webhook may lag a beat).
+function handleBillingReturn(){
+  try {
+    const p = new URLSearchParams(location.search);
+    if (p.get('upgraded') === '1'){ if (typeof flashStatus === 'function') flashStatus('Welcome to Pro — thank you! ♡'); setTimeout(refreshPlanAndUI, 1500); }
+    if (p.get('tipped') === '1' && typeof flashStatus === 'function') flashStatus('Thank you for the tip! ♡');
+    if (p.get('upgraded') || p.get('upgrade_cancelled') || p.get('tipped') || p.get('billing')){
+      ['upgraded', 'upgrade_cancelled', 'tipped', 'billing'].forEach(k => p.delete(k));
+      const qs = p.toString();
+      history.replaceState(null, '', location.pathname + (qs ? ('?' + qs) : ''));
+    }
+  } catch (e){}
+}
 
 let _aiGateOpen = false;
 function promptAiSignup(){
