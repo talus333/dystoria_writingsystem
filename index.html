@@ -122,6 +122,18 @@
   #mapContainerBtn:hover{background:#4a4a50}
   #mapContainerBtn.set{border-color:var(--accent)}
   #evOverlay,#mentalOverlay{display:flex; flex-flow:row wrap; gap:4px; align-items:center; max-width:100%; pointer-events:auto}
+  #threadsBar{display:flex; flex-flow:row wrap; gap:5px; align-items:center; max-width:100%; pointer-events:auto}
+  #threadsBar:empty{display:none}
+  .thread-chip{display:inline-flex; align-items:center; gap:4px; padding:1px 8px 1px 6px; border:1px solid var(--line); border-radius:11px; font-family:var(--sans); font-size:10.5px; color:var(--ink-soft); cursor:pointer; background:var(--bg2)}
+  .thread-chip .thread-dot{width:8px; height:8px; border-radius:50%; background:var(--tc,#888); flex:0 0 auto}
+  .thread-chip:hover{border-color:var(--ink-faint)}
+  .thread-chip.on{color:#fff; background:var(--tc,#888); border-color:var(--tc,#888)}
+  .thread-chip.on .thread-dot{background:#fff}
+  .thread-add{font-family:var(--sans); font-size:10px; color:var(--ink-faint); cursor:pointer; padding:1px 7px; border:1px dashed var(--line); border-radius:11px}
+  .thread-add:hover{color:var(--ink); border-color:var(--ink-faint)}
+  .thread-clear{font-family:var(--sans); font-size:10px; color:var(--gold); cursor:pointer; padding:1px 6px}
+  .node.thread-dim{opacity:.16; transition:opacity .15s}
+  .edge.thread-dim{opacity:.05}
   #evOverlay:empty{display:none}
   #mentalOverlay[hidden]{display:none}
   #mapHead .evo-head,#mapHead .mo-head{align-self:center; margin-right:1px}
@@ -2970,6 +2982,7 @@
         </div>
         <div id="evOverlay"></div>
         <div id="mentalOverlay" hidden></div>
+        <div id="threadsBar"></div>
       </div>
       <div id="mapTools">
         <div id="autoPlaceWrap" hidden>
@@ -14464,7 +14477,7 @@ function renderConstellation(){
     const intensity = relIntensity(link);
     const colA = catColor(state.nodes[a].cat), colB = catColor(state.nodes[b].cat);
     const ln = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-    ln.setAttribute('class', 'edge' + (active ? ' active' : '') + (hasRel ? ' rel' : ''));
+    ln.setAttribute('class', 'edge' + (active ? ' active' : '') + (hasRel ? ' rel' : '') + (state.activeThread && !(wordThreadIds(state.prompt.words[a]).indexOf(state.activeThread) >= 0 && wordThreadIds(state.prompt.words[b]).indexOf(state.activeThread) >= 0) ? ' thread-dim' : ''));
     ln.dataset.edge = ei;
     if (relSecret(link)) ln.setAttribute('stroke-dasharray', '6 5');
     if (state.relQuill === ei && hasRel){
@@ -14531,7 +14544,7 @@ function renderConstellation(){
     if (nd.deco) return;                                  // pure decoration (drawn terrain/path) → shape only, no label/icon/handle
     if (isMentalSpace(nd)) return;                        // off-scale place → lives in the mental-space sidebar
     const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-    g.setAttribute('class', 'node ' + nd.role + ' ' + nd.cat + (i === state.linkFrom ? ' link-src' : '') + (i === state.selNode ? ' sel' : '') + (nd.destroyed ? ' destroyed' : '') + (nd.locked ? ' is-locked' : ''));
+    g.setAttribute('class', 'node ' + nd.role + ' ' + nd.cat + (i === state.linkFrom ? ' link-src' : '') + (i === state.selNode ? ' sel' : '') + (nd.destroyed ? ' destroyed' : '') + (nd.locked ? ' is-locked' : '') + (state.activeThread && state.prompt && state.prompt.words[i] && wordThreadIds(state.prompt.words[i]).indexOf(state.activeThread) < 0 ? ' thread-dim' : ''));
     g.dataset.node = i;
     let catName = (getCat(nd.cat) || {}).name || nd.cat;
     if (nd.cat === 'concept') catName = MOTIF_SUBS.has(nd.sub) ? 'Motif' : 'Driver';
@@ -14804,6 +14817,9 @@ function renderConstellation(){
       const inFocus = (state.focusKeys || []).includes(wordKey(nd));
       circ.push({ title: inFocus ? 'Remove from the Writing Focus' : 'Add to the Writing Focus', on: ev => { ev.stopPropagation(); addFocusIdx(i); },
         ic: () => { const t = document.createElementNS(NSx, 'text'); t.setAttribute('class', 'ctl-gly' + (inFocus ? ' infocus' : '')); t.setAttribute('text-anchor', 'middle'); t.setAttribute('y', 4); t.textContent = inFocus ? '◉' : '◎'; return t; } });
+      // thread tag — group this element into a storyline
+      circ.push({ title: 'Add to a thread\u2026', on: ev => { ev.stopPropagation(); openThreadMenu(i, ev.clientX || 200, ev.clientY || 200); },
+        ic: () => { const c = document.createElementNS(NSx, 'circle'); c.setAttribute('r', '3.2'); const _w = state.prompt && state.prompt.words[i]; const ids = (typeof wordThreadIds === 'function') ? wordThreadIds(_w) : []; if (ids.length){ const t = (typeof threadById === 'function') ? threadById(ids[0]) : null; c.setAttribute('fill', t ? t.color : '#888'); } else { c.setAttribute('fill', 'none'); c.setAttribute('stroke', 'currentColor'); c.setAttribute('stroke-width', '1.4'); } return c; } });
       // relationship link — between Focus and Wiki
       circ.push({ title: 'Drag onto another element to build a relationship', down: true,
         on: ev => { ev.stopPropagation(); ev.preventDefault(); startLinkDrag(i, ev); },
@@ -14953,6 +14969,7 @@ function renderConstellation(){
   const rn = $('railNote');
   if (rn) rn.style.display = (state.prompt && state.prompt.words && state.prompt.words.length) ? 'none' : '';
   markGroupSel();   // re-apply lasso-group highlight rings after a fresh render
+  if (typeof renderThreadsBar === 'function') renderThreadsBar();
 }
 function renderEvOverlay(){
   const ov = $('evOverlay');
@@ -15122,6 +15139,49 @@ function renderFrameBar(){
 }
 
 function wordKey(w){ return (w.set || 0) + '|' + w.cat + '|' + w.word; }
+// ---- Threads: colour-coded storylines grouping beings/stakes/motivations/events (keyed by wordKey so they hold across sections) ----
+function threadsList(){ return (state.session && Array.isArray(state.session.threads)) ? state.session.threads : []; }
+const THREAD_COLORS = ['#e0884a','#5fa9d6','#7bbf6a','#c46ad0','#e0b84a','#5fc1a0','#d8748a','#8a86d8','#c98a5a','#6a9a86'];
+function ensureThreads(){ if (!state.session) return; if (!Array.isArray(state.session.threads)) state.session.threads = []; if (!state.session.threadTags || typeof state.session.threadTags !== 'object') state.session.threadTags = {}; }
+function addThread(name){ ensureThreads(); if (!state.session) return null; const used = threadsList().map(t => t.color); const color = THREAD_COLORS.find(c => used.indexOf(c) < 0) || THREAD_COLORS[threadsList().length % THREAD_COLORS.length]; const id = 'th' + Date.now().toString(36) + Math.floor(Math.random() * 900 + 100); state.session.threads.push({ id, name: (name || '').trim() || 'Thread', color }); if (typeof scheduleAutosave === 'function') scheduleAutosave(); return id; }
+function removeThread(id){ ensureThreads(); if (!state.session) return; state.session.threads = threadsList().filter(t => t.id !== id); const tt = state.session.threadTags || {}; Object.keys(tt).forEach(k => { tt[k] = (tt[k] || []).filter(x => x !== id); if (!tt[k].length) delete tt[k]; }); if (state.activeThread === id) state.activeThread = null; if (typeof scheduleAutosave === 'function') scheduleAutosave(); }
+function renameThread(id, name){ const t = threadsList().find(x => x.id === id); if (t){ t.name = (name || '').trim() || t.name; if (typeof scheduleAutosave === 'function') scheduleAutosave(); } }
+function threadById(id){ return threadsList().find(t => t.id === id) || null; }
+function wordThreadIds(w){ if (!w || !state.session || !state.session.threadTags) return []; return state.session.threadTags[wordKey(w)] || []; }
+function toggleWordThread(w, id){ ensureThreads(); if (!w || !state.session) return; const k = wordKey(w); const arr = (state.session.threadTags[k] || []).slice(); const i = arr.indexOf(id); if (i >= 0) arr.splice(i, 1); else arr.push(id); if (arr.length) state.session.threadTags[k] = arr; else delete state.session.threadTags[k]; if (typeof scheduleAutosave === 'function') scheduleAutosave(); }
+function renderThreadsBar(){
+  const bar = document.getElementById('threadsBar'); if (!bar) return;
+  bar.innerHTML = '';
+  threadsList().forEach(t => {
+    const chip = document.createElement('span'); chip.className = 'thread-chip' + (state.activeThread === t.id ? ' on' : '');
+    chip.style.setProperty('--tc', t.color);
+    const dot = document.createElement('span'); dot.className = 'thread-dot'; chip.appendChild(dot);
+    const lbl = document.createElement('span'); lbl.className = 'thread-lbl'; lbl.textContent = t.name; chip.appendChild(lbl);
+    chip.title = 'Click to highlight this thread \u00B7 double-click to rename or remove';
+    chip.addEventListener('click', () => { state.activeThread = (state.activeThread === t.id) ? null : t.id; renderConstellation(); });
+    chip.addEventListener('dblclick', async ev => { ev.stopPropagation(); const nm = await sitePrompt('Rename this thread (leave blank to delete it)', t.name); if (nm === null) return; if (nm.trim() === ''){ removeThread(t.id); } else renameThread(t.id, nm); renderConstellation(); });
+    bar.appendChild(chip);
+  });
+  const add = document.createElement('span'); add.className = 'thread-add'; add.textContent = '+ thread'; add.title = 'Create a thread to group beings, stakes, motivations and events';
+  add.addEventListener('click', async () => { const nm = await sitePrompt('Name this thread (e.g. \u201CThe Crown\u201D)', ''); if (nm === null) return; const id = addThread(nm); state.activeThread = id; renderConstellation(); });
+  bar.appendChild(add);
+  if (state.activeThread){ const clr = document.createElement('span'); clr.className = 'thread-clear'; clr.textContent = 'show all'; clr.addEventListener('click', () => { state.activeThread = null; renderConstellation(); }); bar.appendChild(clr); }
+}
+function openThreadMenu(i, x, y){
+  const w = state.prompt && state.prompt.words[i]; if (!w) return;
+  const menu = $('aspectMenu'); if (!menu) return; menu.innerHTML = '';
+  if (menu.parentElement !== document.body) document.body.appendChild(menu);
+  const add = (label, fn, on) => { const b = document.createElement('button'); b.textContent = (on ? '\u2713 ' : '') + label; b.addEventListener('click', ev => { ev.stopPropagation(); menu.style.display = 'none'; fn(); }); menu.appendChild(b); };
+  const ths = threadsList();
+  if (!ths.length){ const e = document.createElement('div'); e.className = 'np-empty'; e.style.padding = '6px 10px'; e.textContent = 'No threads yet'; menu.appendChild(e); }
+  ths.forEach(t => add(t.name, () => { toggleWordThread(w, t.id); renderConstellation(); }, wordThreadIds(w).indexOf(t.id) >= 0));
+  const nb = document.createElement('button'); nb.textContent = '\uFF0B New thread\u2026'; nb.style.fontStyle = 'italic';
+  nb.addEventListener('click', async ev => { ev.stopPropagation(); menu.style.display = 'none'; const nm = await sitePrompt('Name this thread', ''); if (nm === null) return; const id = addThread(nm); toggleWordThread(w, id); state.activeThread = id; renderConstellation(); });
+  menu.appendChild(nb);
+  menu.style.left = Math.max(8, Math.min(x || 200, window.innerWidth - 210)) + 'px';
+  menu.style.top = Math.max(8, Math.min(y || 200, window.innerHeight - 320)) + 'px';
+  menu.style.display = 'block';
+}
 function focusBook(i, wstate){
   const span = document.createElement('span');
   span.className = 'fp-book ' + (wstate === 1 ? 'cur' : wstate === 2 ? 'other' : 'none');
@@ -17307,7 +17367,7 @@ function openSession(id){
   $('sectionTitle').value = s.section || '';
   if (s.html) $('editor').innerHTML = s.html;
   else $('editor').textContent = s.text || '';
-  state.npActive = s.npActive || 'general'; state.cardTrait = (s.cardTrait != null ? s.cardTrait : null); state.npCatFilter = s.npCatFilter || 'all'; state.relQuill = null;   // restore THIS story's last notepad selection (overwrites the previous story's)
+  state.npActive = s.npActive || 'general'; state.cardTrait = (s.cardTrait != null ? s.cardTrait : null); state.npCatFilter = s.npCatFilter || 'all'; state.relQuill = null; state.activeThread = null;   // restore THIS story's last notepad selection (overwrites the previous story's)
   if (!Array.isArray(s.npEls)) s.npEls = [];
   if (!s.npNotes || typeof s.npNotes !== 'object') s.npNotes = {};
   renderNotepad();                            // chips rendered after the words load (below) so names resolve
@@ -17444,7 +17504,7 @@ function newSession(){
   $('storyName').value = ''; $('sectionTitle').value = ''; $('editor').innerHTML = '';
   ['readBody','editBody','editChrome','sessionHistory','wmTitleBar','notesList','gcList'].forEach(id => { const e = $(id); if (e) e.innerHTML = ''; });
   state._lastSnapId = null; state._readSug = 'suggested'; document.body.classList.remove('recap','show-notes','show-comments');
-  state.npActive = 'general'; state.cardTrait = null; state.npCatFilter = 'all'; state.relQuill = null;
+  state.npActive = 'general'; state.cardTrait = null; state.npCatFilter = 'all'; state.relQuill = null; state.activeThread = null;
   if (state.session){ state.session.npEls = []; state.session.npNotes = {}; }
   if ($('notepad')) $('notepad').innerHTML = '';
   if (typeof renderNpElements === 'function') renderNpElements();
