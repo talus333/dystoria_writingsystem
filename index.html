@@ -6442,41 +6442,47 @@ function seedRandomLocked(minutes){
    stated goal. Real pool words are kept (so placement/wiki stay valid) — the AI only names. */
 async function seedFromGoal(){
   refreshGoalTokens();
-  const used = new Set(); const words = [];
-  const add = (cid, n) => { for (let k = 0; k < n; k++){ const it = cid === 'being' ? drawBeing(0, used, []) : drawItem(getCat(cid), 0, used, []); if (it) words.push(it); } };
-  add('being', 3); add('setting', 2); add('object', 1);
-  state.prompt = { words, sets: 1, links: [], removedLinks: [] };
+  const goal = goalContext();
+  const haveGoal = !goalIsEmpty(state.session && state.session.goal);
+  const aiOk = haveGoal && cloud && cloud.token && (typeof aiAuthed !== 'function' || aiAuthed());
+  state.prompt = { words: [], sets: 1, links: [], removedLinks: [] };
+  if (state.frames && state.frames.length) state.frames[state.frameIdx].prompt = state.prompt;
+  else { state.frames = [{ gap: null, prompt: state.prompt }]; state.frameIdx = 0; }
+  ensureSession(); state.session.customWords = state.session.customWords || {};
+  const words = state.prompt.words;
+  const used = new Set();
+  const addRandom = (cid, n) => { for (let k = 0; k < n; k++){ const it = cid === 'being' ? drawBeing(0, used, []) : drawItem(getCat(cid), 0, used, []); if (it){ words.push(it); used.add(it.word); } } };
+  const buildEl = (cat, word, sub, nm, summary) => {
+    word = String(word || '').trim().slice(0, 60); if (!word) return false;
+    const item = makeElementItem(cat, word, 0, validImportSub(cat, sub));
+    // names are left to the writer — only the kind/descriptor word is seeded
+    words.push(item); used.add(word);
+    state.session.customWords[cat] = state.session.customWords[cat] || [];
+    if (!state.session.customWords[cat].some(e => e.word === word)) state.session.customWords[cat].push({ word, sub: item.sub, desc: summary || '', g: [] });
+    if (summary){ state.session.wikiAI = state.session.wikiAI || {}; state.session.wikiAI[cat + '|' + word] = { text: summary, sig: 0 }; }
+    return true;
+  };
+  let aiPlaced = 0;
+  if (aiOk){
+    try {
+      const sys = 'You help a writer launch a story from their stated goal. Choose a small starting cast that clearly fits the goal’s SUBJECT and MOOD — give them the key pieces that match: if the goal is about a clock-maker, include a clock-maker character; if it feels sad, pick elements that quietly carry that sadness. Return 5–6 elements — 2–3 beings, 1–2 settings, 1 object, and you MAY add 1 concept (an abstract driver like Grief or Memory). Make ONE element a gentle surprise that still fits the mood. Do NOT give anything a proper name; writers like to name things themselves — describe only WHAT each element is. For each element give: "cat" (being | setting | object | concept), "word" = WHAT it is (a being’s role/occupation/archetype such as "Clock-maker"; a setting / object / concept in 1–3 words), a one-word "sub" (e.g. Occupation, Building, Tool, Driver), and a one-sentence "summary" grounding it in the goal. Return ONLY JSON: {"elements":[{"cat":"","word":"","sub":"","summary":""}],"premise":"one sentence tying them together"}.';
+      const raw = await aiCall(sys, goal + '\n\nReturn the JSON:', { json: true, maxTokens: 900 });
+      const data = (typeof parseJsonLoose === 'function') ? parseJsonLoose(raw) : null;
+      const els = (data && Array.isArray(data.elements)) ? data.elements : [];
+      els.forEach(e => { if (!e) return; let cat = String(e.cat || e.type || '').toLowerCase(); cat = IMP_TMAP[cat] || (['being','setting','object','concept'].includes(cat) ? cat : ''); if (!cat) return; if (buildEl(cat, e.word || e.name, e.sub, e.name, e.summary)) aiPlaced++; });
+      if (data && data.premise){ try { const cur = (typeof npGetNotes === 'function') ? (npGetNotes('general') || '').replace(/<[^>]*>/g, '').trim() : 'x'; if (typeof npSetNotes === 'function' && !cur){ npSetNotes('general', '<p><em>Premise:</em> ' + esc(String(data.premise)) + '</p>'); } } catch (e){} }
+    } catch (e){ /* fall back to a random cast below */ }
+  }
+  if (!aiPlaced){ addRandom('being', 3); addRandom('setting', 2); addRandom('object', 1); }
+  else { addRandom('being', 1); addRandom('object', 1); }
   const idxOf = cid => words.map((w, i) => (w.cat === cid && w.role !== 'frame') ? i : -1).filter(i => i >= 0);
   const bs = idxOf('being'), ss = idxOf('setting'), os = idxOf('object');
   if (bs.length >= 2) starterBond(bs[0], bs[1]);
   if (bs.length && ss.length) starterBond(bs[0], ss[0]);
   if (bs.length > 1 && os.length) starterBond(bs[1], os[0]);
   finalizeSeed({});
-  flashStatus('Starter set ready' + (goalContext() ? ' — shaping it to your goal…' : ''));
-  // If there's no goal or no AI available, the biased random cast is the result.
-  if (goalIsEmpty(state.session && state.session.goal) || !(cloud && cloud.token)) return;
-  try {
-    const nameable = words.map((w, i) => ({ i, w })).filter(o => ['being', 'setting', 'object'].includes(o.w.cat));
-    const roster = nameable.map((o, n) => (n + 1) + '. ' + (getCat(o.w.cat) || {}).name + ' — ' + o.w.word).join('\n');
-    const sys = 'You help a writer launch a story from a small, fixed cast of elements. You will be given the writer’s goal and a numbered roster of elements (characters, settings, objects) already chosen for them. Give each a fitting proper NAME that suits the goal’s mood, style, and inspirations — do not change what each element IS, only name it. Then write a one-sentence premise that ties the cast together and serves the goal. Return ONLY JSON: {"names":["name for 1","name for 2",...],"premise":"..."} with exactly as many names as roster items, in order. Names only — no titles, no descriptions.';
-    const prompt = goalContext() + '\n\nRoster (' + nameable.length + ' items, name each in order):\n' + roster + '\n\nReturn the JSON:';
-    const raw = await aiCall(sys, prompt, { json: true, maxTokens: 500 });
-    let data = null;
-    try { data = (typeof parseJsonLoose === 'function') ? parseJsonLoose(raw) : JSON.parse(raw); } catch (e){ data = null; }
-    if (data && Array.isArray(data.names)){
-      nameable.forEach((o, n) => { const nm = (data.names[n] || '').toString().trim(); if (nm) words[o.i].name = nm; });
-      if (state.prompt) state.prompt.words = words;
-      layoutConstellation(); renderConstellation();
-    }
-    if (data && data.premise){
-      try {
-        const cur = (typeof npGetNotes === 'function') ? (npGetNotes('general') || '').replace(/<[^>]*>/g, '').trim() : 'x';
-        if (typeof npSetNotes === 'function' && !cur){ npSetNotes('general', '<p><em>Premise:</em> ' + esc(data.premise) + '</p>'); if (typeof renderNotepad === 'function') renderNotepad(); }
-      } catch (e){}
-    }
-    scheduleAutosave(400);
-    flashStatus('Starter set ready — named around your goal');
-  } catch (e){ /* leave the biased random cast as-is */ }
+  if (typeof renderNotepad === 'function') renderNotepad();
+  flashStatus(aiPlaced ? 'Starter set ready — shaped to your goal' : (haveGoal ? 'Starter set ready — lightly shaped to your goal' : 'Starter set ready'));
 }
 function rollStakeWord(){ const pool = (((getCat('stakes') || {}).subcategories) || []).reduce((a, s) => a.concat(s.words || []), []).map(x => typeof x === 'string' ? x : x.w); return pool.length ? pool[Math.floor(Math.random() * pool.length)] : 'Everything'; }
 async function guidedSetup(){
