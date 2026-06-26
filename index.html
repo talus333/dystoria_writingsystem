@@ -1420,7 +1420,7 @@
     color:var(--ink-faint); margin-right:12px; flex:none; align-self:flex-start; height:28px; display:flex; align-items:center}
   .strip-guide{font-family:var(--serif); font-style:italic; font-size:12px; color:#bcb9b2}
   .tl-guide{align-self:flex-start; height:28px; display:flex; align-items:center}
-  .tl-plot-col{display:flex; flex-direction:column; flex:none; align-self:flex-start}
+  .tl-plot-col{display:flex; flex-direction:column; gap:4px; flex:none; align-self:flex-start; padding-right:10px; margin-right:4px; border-right:1px solid var(--line)}
   .tl-head-sub{font-size:9px; font-weight:600; letter-spacing:.2em; color:#bf7d22; margin-top:17px; align-self:center}
   .tl-stage{font-family:var(--sans); font-size:9px; letter-spacing:.1em; text-transform:uppercase;
     color:var(--ink-soft); max-width:120px; margin-top:6px; text-align:center; cursor:pointer;
@@ -1458,10 +1458,16 @@
   .tl-dot.ghost:hover{border-color:var(--ink); color:var(--ink)}
   .tl-pt.ghost .tl-stage{opacity:.7}
   .tl-plot{font-family:var(--serif); font-style:italic; font-size:14.5px; letter-spacing:.03em;
-    color:#96606f; padding-right:12px; margin-right:2px; border-right:1px solid var(--line); flex:none; white-space:nowrap;
-    display:flex; align-items:center; height:22px}
-  .tl-plot .fb-r,.tl-plot .fb-x{display:none}
-  .tl-plot.sel .fb-r,.tl-plot.sel .fb-x{display:inline}
+    color:#96606f; flex:none; white-space:nowrap; display:flex; align-items:center; gap:5px; height:22px;
+    padding:1px 7px; border-radius:6px; border:1px solid transparent; cursor:pointer}
+  .tl-plot:hover{border-color:#cd92a2}
+  .tl-plot.sel{border-color:#cd92a2; background:rgba(150,96,111,.10)}
+  .tl-plot-note{display:inline-flex; align-items:center; color:var(--ink-faint)}
+  .tl-plot-note:hover{color:#96606f}
+  .tl-plot-note svg{display:block}
+  .tl-plot-x{color:#a05c4d; font-family:var(--sans); font-size:13px; cursor:pointer; opacity:0; line-height:1}
+  .tl-plot:hover .tl-plot-x,.tl-plot.sel .tl-plot-x{opacity:1}
+  .tl-dot.plot-rel{border-color:#cd92a2; box-shadow:0 0 0 2px rgba(205,146,162,.5)}
   body.eink .tl-plot{color:#6b2640}
   body.eink #timeline{background:#fff}
 
@@ -7029,8 +7035,11 @@ function commitWord(word, sub, catId){
     return;
   }
   // add mode
-  if (EC.mode === 'add' && catId === 'plot' && typeof findPlotWord === 'function' && findPlotWord() && typeof PLOT_STAGES !== 'undefined' && PLOT_STAGES[word]){
-    closeElemCard(); plotAddChoice(word); return;   // a second archetype plot → ask how it fits (append/insert/replace)
+  if (EC.mode === 'add' && catId === 'plot' && typeof PLOT_STAGES !== 'undefined' && PLOT_STAGES[word]){
+    const _pc = (typeof plotCount === 'function') ? plotCount() : ((typeof findPlotWord === 'function' && findPlotWord()) ? 1 : 0);
+    if (_pc >= 2){ closeElemCard(); plotLimitNotice(); return; }       // two plots already → ask to remove one
+    if (_pc >= 1){ closeElemCard(); plotAddChoice(word); return; }     // second plot → append / insert / replace
+    // first plot → fall through to the normal add below
   }
   const freeAdd = FRAME_IDS.has(catId) || GUIDE_IDS.has(catId);
   if (!freeAdd && !spendGen()){ closeElemCard(); return; }
@@ -7993,6 +8002,26 @@ function addPlotToTimeline(word, mode){
   renderTimeline(); syncFramesToSession();
   flashStatus('Added the plot \u201C' + word + '\u201D');
 }
+function plotNamesInStory(){ const out = [], seen = new Set(); const push = n => { if (n && typeof PLOT_STAGES !== 'undefined' && PLOT_STAGES[n] && !seen.has(n)){ seen.add(n); out.push(n); } }; (state.frames || []).forEach(fr => push(framePlotName(fr))); if (state.prompt) (state.prompt.words || []).forEach(w => { if (w.cat === 'plot') push(w.word); }); return out; }
+function plotCount(){ return plotNamesInStory().length; }
+function removePlotByName(name){
+  if (typeof pushUndo === 'function') pushUndo();
+  (state.frames || []).forEach(fr => { const ws = (fr.prompt && fr.prompt.words) || []; for (let i = ws.length - 1; i >= 0; i--){ if (ws[i].cat === 'plot' && ws[i].word === name) ws.splice(i, 1); } if (fr.plotWord === name) delete fr.plotWord; });
+  if (state.prompt){ const ws = state.prompt.words || []; for (let i = ws.length - 1; i >= 0; i--){ if (ws[i].cat === 'plot' && ws[i].word === name) ws.splice(i, 1); } }
+  if (state.selPlot === name) state.selPlot = null;
+  if (state.session){ state.session.words = state.prompt ? state.prompt.words : []; state.session.frames = state.frames; scheduleAutosave(); }
+  renderConstellation();
+}
+function plotLimitNotice(){
+  let m = document.getElementById('plotLimitBd');
+  if (!m){ m = document.createElement('div'); m.id = 'plotLimitBd'; m.className = 'plotchoice-bd'; document.body.appendChild(m); m.addEventListener('click', e => { if (e.target === m) m.classList.remove('show'); }); }
+  m.innerHTML = '';
+  const card = document.createElement('div'); card.className = 'plotchoice-card';
+  const h = document.createElement('div'); h.className = 'pc-h'; h.textContent = 'Remove a plot to add another'; card.appendChild(h);
+  const sub = document.createElement('div'); sub.className = 'pc-sub'; sub.textContent = 'A story holds at most two plots. Two running in parallel \u2014 affecting each other \u2014 can be powerful; to balance many storylines, use Threads instead.'; card.appendChild(sub);
+  const ok = document.createElement('button'); ok.className = 'pc-cancel'; ok.textContent = 'OK'; ok.addEventListener('click', () => m.classList.remove('show')); card.appendChild(ok);
+  m.appendChild(card); m.classList.add('show');
+}
 function plotAddChoice(word){
   const exist = (typeof findPlotWord === 'function') ? findPlotWord() : null;
   let m = document.getElementById('plotChoice');
@@ -8044,33 +8073,31 @@ function renderTimeline(){
   plotCol.className = 'tl-plot-col';
   tl.appendChild(plotCol);
 
-  if (stages){
-    const pIdx = state.prompt ? state.prompt.words.indexOf(plotW) : -1;
-    const plSel = pIdx >= 0 && state.selNode === pIdx;
-    const pl = document.createElement('span');
-    pl.className = 'tl-plot' + (plSel ? ' sel' : '');
-    pl.appendChild(document.createTextNode(plotW.name || plotW.word));
-    pl.title = 'Plot \u2014 its stages are mapped onto the timeline; click for \u21BB and \u00D7';
-    if (pIdx >= 0){
-      const r2 = document.createElement('span');
-      r2.className = 'fb-r';
-      r2.textContent = '\u21BB';
-      r2.title = 'Reroll the plot';
-      r2.addEventListener('click', ev => { ev.stopPropagation(); rerollWord(pIdx); });
-      pl.appendChild(r2);
-      const x = document.createElement('span');
-      x.className = 'fb-x';
-      x.textContent = '\u00D7';
-      x.title = 'Remove the plot';
-      x.addEventListener('click', ev => { ev.stopPropagation(); removeNode(pIdx); });
+  {
+    // every distinct plot that touches the timeline, stacked vertically
+    const plotNames = [], seenP = new Set();
+    const pushP = n => { if (n && PLOT_STAGES[n] && !seenP.has(n)){ seenP.add(n); plotNames.push(n); } };
+    (state.frames || []).forEach(fr => pushP(framePlotName(fr)));
+    if (state.prompt) (state.prompt.words || []).forEach(w => { if (w.cat === 'plot') pushP(w.word); });
+    const plotWordObj = name => { let f = null; const scan = ws => (ws || []).forEach(w => { if (!f && w.cat === 'plot' && w.word === name) f = w; }); if (state.prompt) scan(state.prompt.words); (state.frames || []).forEach(fr => scan(fr.prompt && fr.prompt.words)); return f; };
+    plotNames.forEach(name => {
+      const pw = plotWordObj(name);
+      const sel = state.selPlot === name;
+      const pl = document.createElement('span');
+      pl.className = 'tl-plot' + (sel ? ' sel' : '');
+      pl.appendChild(document.createTextNode((pw && pw.name) || name));
+      pl.title = 'Plot \u2014 click to highlight the sections it runs through';
+      const note = document.createElement('span'); note.className = 'tl-plot-note'; note.title = 'Open this plot in the notepad';
+      note.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' + (LUCIDE['feather'] || '') + '</svg>';
+      note.addEventListener('click', ev => { ev.stopPropagation(); if (pw && typeof openElementNotes === 'function') openElementNotes(wordKey(pw)); });
+      pl.appendChild(note);
+      const x = document.createElement('span'); x.className = 'tl-plot-x'; x.textContent = '\u00D7'; x.title = 'Remove this plot';
+      x.addEventListener('click', ev => { ev.stopPropagation(); removePlotByName(name); });
       pl.appendChild(x);
       pl.style.cursor = 'pointer';
-      pl.addEventListener('click', () => {
-        state.selNode = state.selNode === pIdx ? null : pIdx;
-        renderConstellation();
-      });
-    }
-    plotCol.appendChild(pl);
+      pl.addEventListener('click', () => { state.selPlot = (state.selPlot === name) ? null : name; renderTimeline(); });
+      plotCol.appendChild(pl);
+    });
   }
 
   tFrames.forEach((fr, k) => {
@@ -8085,7 +8112,8 @@ function renderTimeline(){
     const pt = document.createElement('span');
     pt.className = 'tl-pt' + (k === state.frameIdx ? ' on' : '');
     const dot = document.createElement('button');
-    dot.className = 'tl-dot' + (k === state.frameIdx ? ' on' : '');
+    const _plotRel = state.selPlot && (typeof framePlotName === 'function') && framePlotName(fr) === state.selPlot;
+    dot.className = 'tl-dot' + (k === state.frameIdx ? ' on' : '') + (_plotRel ? ' plot-rel' : '');
     dot.innerHTML = '<span>' + (k + 1) + '</span>';
     dot.title = plotStageName(k) || ('Timeframe ' + (k + 1));
     const evs = ((fr.prompt && fr.prompt.words) || [])
@@ -8124,7 +8152,8 @@ function renderTimeline(){
       const pt = document.createElement('span');
       pt.className = 'tl-pt ghost';
       const dot = document.createElement('button');
-      dot.className = 'tl-dot ghost';
+      const _gRel = state.selPlot && (typeof framePlotName === 'function') && framePlotName(_lf) === state.selPlot;
+      dot.className = 'tl-dot ghost' + (_gRel ? ' plot-rel' : '');
       dot.innerHTML = '<span>' + (k2 + 1) + '</span>';
       dot.title = _ls[k2] + ' \u2014 click to carry the story forward to this stage';
       const go = ((j) => () => extendToStage(j))(k2);
@@ -8152,7 +8181,17 @@ function renderTimeline(){
 /* ---------------- add / remove without regenerating ---------------- */
 function addFromCategory(catId, subName){
   if (addsLocked()){ flashStatus('The session is underway \u2014 end it to add elements'); return; }
-  if (catId === 'plot' && findPlotWord()){ flashStatus('A story carries one plot \u2014 reroll it on the timeline'); return; }
+  if (catId === 'plot'){
+    const _pc = (typeof plotCount === 'function') ? plotCount() : (findPlotWord() ? 1 : 0);
+    if (_pc >= 2){ plotLimitNotice(); return; }                       // two plots already → ask to remove one
+    if (_pc >= 1){                                                    // second plot via Roll → pick a fresh archetype and ask how it fits
+      const _avail = Object.keys(PLOT_STAGES).filter(n => plotNamesInStory().indexOf(n) < 0);
+      const _w = _avail.length ? _avail[Math.floor(Math.random() * _avail.length)] : null;
+      if (_w) plotAddChoice(_w); else plotLimitNotice();
+      return;
+    }
+    // first plot → fall through and add it normally
+  }
   const cat = getCat(catId);
   const freeAdd = FRAME_IDS.has(catId) || GUIDE_IDS.has(catId);
   if (!freeAdd && !spendGen()) return;
@@ -15173,12 +15212,6 @@ function renderFrameBar(){
       cat.style.color = catColor(w.cat);
       cat.textContent = (w.cat === 'theme' && MOTIF_SUBS.has(w.sub)) ? 'Motif' : ((getCat(w.cat) || {}).name || w.cat);
       it.appendChild(cat);
-      const r2 = document.createElement('span');
-      r2.className = 'fb-r';
-      r2.textContent = '\u21BB';
-      r2.title = 'Reroll this word';
-      r2.addEventListener('click', ev => { ev.stopPropagation(); rerollWord(i); });
-      it.appendChild(r2);
       if (w.cat === 'theme' || w.cat === 'stakes'){
         const dn = document.createElement('span');
         dn.className = 'fb-r';
