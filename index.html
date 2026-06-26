@@ -6858,7 +6858,6 @@ function renderECPills(){
 function openElemCard(catId, mode, node){
   if (addsLocked()){ flashStatus('The session is underway \u2014 end it to add elements'); return; }
   if ($('ecScope')) $('ecScope').checked = false;
-  if (mode === 'add' && catId === 'plot' && findPlotWord()){ flashStatus('A story carries one plot \u2014 edit it on the timeline'); return; }
   EC.cat = catId; EC.cats = null; EC.mode = mode || 'add'; EC.node = (node == null ? -1 : node); EC.block = null;
   { const s = $('ecSurprise'); if (s) s.style.display = 'none'; }
   const cat = getCat(catId);
@@ -7004,6 +7003,9 @@ function commitWord(word, sub, catId){
     return;
   }
   // add mode
+  if (EC.mode === 'add' && catId === 'plot' && typeof findPlotWord === 'function' && findPlotWord() && typeof PLOT_STAGES !== 'undefined' && PLOT_STAGES[word]){
+    closeElemCard(); plotAddChoice(word); return;   // a second archetype plot → ask how it fits (append/insert/replace)
+  }
   const freeAdd = FRAME_IDS.has(catId) || GUIDE_IDS.has(catId);
   if (!freeAdd && !spendGen()){ closeElemCard(); return; }
   pushUndo();
@@ -7834,6 +7836,8 @@ function findPlotWord(){
   return p || null;
 }
 function frameStage(fr, k){ return (fr && fr.stage != null) ? fr.stage : k; }
+function framePlotName(fr){ return (fr && fr.plotWord) || (findPlotWord() ? findPlotWord().word : null); }   // which plot this section belongs to (multi-plot); legacy → the single plot
+function framePlotStages(fr){ const n = framePlotName(fr); return (n && typeof PLOT_STAGES !== 'undefined' && PLOT_STAGES[n]) || null; }
 function pruneEventsFromCopy(p){
   const words = p.words || [];
   const drop = new Set();
@@ -7852,12 +7856,66 @@ function pruneEventsFromCopy(p){
 }
 function extendToStage(idx){
   if (addsLocked()){ flashStatus('The session is underway \u2014 end it to add timeframes'); return; }
-  while (state.frames.length <= idx){
-    const k = state.frames.length;
-    const copy = pruneEventsFromCopy(JSON.parse(JSON.stringify(state.frames[k - 1].prompt)));
-    state.frames.push({ gap: (state.plotGaps && state.plotGaps[k]) || 'later', prompt: copy, stage: k });
+  const word = (state.frames && state.frames.length) ? framePlotName(state.frames[state.frames.length - 1]) : null;
+  while (true){
+    const last = state.frames[state.frames.length - 1];
+    const lastStage = frameStage(last, state.frames.length - 1);
+    if (lastStage >= idx) break;
+    const copy = pruneEventsFromCopy(JSON.parse(JSON.stringify(last.prompt)));
+    const nf = { gap: (state.plotGaps && state.plotGaps[lastStage + 1]) || 'later', prompt: copy, stage: lastStage + 1 };
+    if (last.plotWord) nf.plotWord = last.plotWord;
+    state.frames.push(nf);
   }
-  switchFrame(idx);
+  switchFrame(state.frames.length - 1);
+}
+function addPlotToTimeline(word, mode){
+  if (addsLocked()){ flashStatus('The session is underway \u2014 end it to add'); return; }
+  const stages = (typeof PLOT_STAGES !== 'undefined' && PLOT_STAGES[word]) ? PLOT_STAGES[word] : null;
+  if (!stages) return;
+  if (!state.prompt){ state.prompt = { words: [], sets: 1, links: [], removedLinks: [] }; state.activeSet = 0; state.frames = [{ gap: null, prompt: state.prompt, stage: 0 }]; state.frameIdx = 0; }
+  pushUndo();
+  const refIdx = Math.min(state.frameIdx || 0, state.frames.length - 1);
+  const refPrompt = state.frames[refIdx].prompt;
+  const s0 = state.activeSet || 0;
+  const mkFrames = () => stages.map((st, i) => {
+    const copy = pruneEventsFromCopy(JSON.parse(JSON.stringify(refPrompt)));
+    copy.words = (copy.words || []).filter(w => w.cat !== 'plot');                  // don't carry another plot's word into this block
+    copy.words.push({ word, cat: 'plot', sub: '', set: s0, role: 'word' });          // this plot is an element on its own sections
+    return { gap: 'later', prompt: copy, stage: i, plotWord: word, stageName: '' };
+  });
+  let at;
+  if (mode === 'append'){ at = state.frames.length; state.frames.splice(at, 0, ...mkFrames()); }
+  else if (mode === 'insert'){ at = (state.frameIdx || 0) + 1; state.frames.splice(at, 0, ...mkFrames()); }
+  else if (mode === 'replace'){
+    const curWord = framePlotName(state.frames[state.frameIdx || 0]);
+    let lo = state.frameIdx || 0, hi = lo;
+    while (lo > 0 && framePlotName(state.frames[lo - 1]) === curWord) lo--;
+    while (hi < state.frames.length - 1 && framePlotName(state.frames[hi + 1]) === curWord) hi++;
+    state.frames.splice(lo, hi - lo + 1, ...mkFrames());
+    at = lo;
+  } else return;
+  if (state.frames[0]) state.frames[0].gap = null;
+  ensureSession();
+  switchFrame(Math.min(at, state.frames.length - 1));
+  renderTimeline(); syncFramesToSession();
+  flashStatus('Added the plot \u201C' + word + '\u201D');
+}
+function plotAddChoice(word){
+  const exist = (typeof findPlotWord === 'function') ? findPlotWord() : null;
+  let m = document.getElementById('plotChoice');
+  if (!m){ m = document.createElement('div'); m.id = 'plotChoice'; m.className = 'plotchoice-bd'; document.body.appendChild(m);
+    m.addEventListener('click', e => { if (e.target === m) m.classList.remove('show'); }); }
+  const close = () => m.classList.remove('show');
+  m.innerHTML = '';
+  const card = document.createElement('div'); card.className = 'plotchoice-card';
+  const h = document.createElement('div'); h.className = 'pc-h'; h.textContent = 'Add the plot \u201C' + word + '\u201D'; card.appendChild(h);
+  const sub = document.createElement('div'); sub.className = 'pc-sub'; sub.textContent = 'Your story already has a plot' + (exist ? ' (\u201C' + exist.word + '\u201D)' : '') + '. How should this one fit in?'; card.appendChild(sub);
+  const mk = (label, desc, fn) => { const b = document.createElement('button'); b.className = 'pc-opt'; const bb = document.createElement('b'); bb.textContent = label; const sp = document.createElement('span'); sp.textContent = desc; b.appendChild(bb); b.appendChild(sp); b.addEventListener('click', () => { close(); fn(); }); card.appendChild(b); };
+  mk('Append', 'Add its stages as new sections at the end', () => addPlotToTimeline(word, 'append'));
+  mk('Insert here', 'Insert its stages at your current section', () => addPlotToTimeline(word, 'insert'));
+  mk('Replace', 'Swap the current section\u2019s plot for this one', () => addPlotToTimeline(word, 'replace'));
+  const cancel = document.createElement('button'); cancel.className = 'pc-cancel'; cancel.textContent = 'Cancel'; cancel.addEventListener('click', close); card.appendChild(cancel);
+  m.appendChild(card); m.classList.add('show');
 }
 async function editPlotGap(k){
   const cur = (state.plotGaps && state.plotGaps[k]) || 'later';
@@ -7936,15 +7994,14 @@ function renderTimeline(){
     const dot = document.createElement('button');
     dot.className = 'tl-dot' + (k === state.frameIdx ? ' on' : '');
     dot.innerHTML = '<span>' + (k + 1) + '</span>';
-    dot.title = (stages && stages[frameStage(fr, k)]) ? stages[frameStage(fr, k)] : 'Timeframe ' + (k + 1);
+    dot.title = plotStageName(k) || ('Timeframe ' + (k + 1));
     const evs = ((fr.prompt && fr.prompt.words) || [])
       .filter(w2 => w2.cat === 'event' && w2.role === 'word' && (w2.frame == null ? k === 0 : w2.frame === k))
       .map(w2 => w2.name || w2.word);
     if (evs.length) dot.title += ' \u2014 ' + evs.join(', ');
     dot.addEventListener('click', () => switchFrame(k));
     pt.appendChild(dot);
-    const stName = (fr.stageName != null && fr.stageName !== '') ? fr.stageName
-      : ((stages && stages[frameStage(fr, k)]) || '');
+    const stName = (fr.stageName != null && fr.stageName !== '') ? fr.stageName : (plotStageName(k) || '');
     const cap = document.createElement('span');
     cap.className = 'tl-stage' + (stName ? '' : ' empty');
     cap.textContent = stName || 'name stage';
@@ -7961,10 +8018,10 @@ function renderTimeline(){
       tl.appendChild(rm);
     }
   });
-  if (stages){
-    let maxStage = -1;
-    tFrames.forEach((fr, k) => { maxStage = Math.max(maxStage, frameStage(fr, k)); });
-    for (let k2 = maxStage + 1; k2 < stages.length; k2++){
+  { const _lf = tFrames[tFrames.length - 1]; const _ls = (typeof framePlotStages === 'function') ? framePlotStages(_lf) : stages;
+  if (_ls){
+    const _lstage = frameStage(_lf, tFrames.length - 1);
+    for (let k2 = _lstage + 1; k2 < _ls.length; k2++){
       const gapEl = document.createElement('button');
       gapEl.className = 'tl-gap ghost';
       gapEl.textContent = (state.plotGaps && state.plotGaps[k2]) || 'later';
@@ -7976,13 +8033,13 @@ function renderTimeline(){
       const dot = document.createElement('button');
       dot.className = 'tl-dot ghost';
       dot.innerHTML = '<span>' + (k2 + 1) + '</span>';
-      dot.title = stages[k2] + ' \u2014 click to carry the story forward to this stage';
+      dot.title = _ls[k2] + ' \u2014 click to carry the story forward to this stage';
       const go = ((j) => () => extendToStage(j))(k2);
       dot.addEventListener('click', go);
       pt.appendChild(dot);
       tl.appendChild(pt);
     }
-  }
+  } }
   const add = document.createElement('button');
   add.className = 'tl-add';
   add.textContent = '+';
@@ -17989,10 +18046,8 @@ function wikiAppearances(el){
 }
 function wikiCatName(cat){ const c = getCat(cat); return c ? c.name : cat; }
 function plotStageName(fi){
-  if (typeof findPlotWord !== 'function') return '';
-  const pw = findPlotWord(); if (!pw || typeof PLOT_STAGES === 'undefined') return '';
-  const stages = PLOT_STAGES[pw.word]; if (!stages) return '';
-  const fr = (state.frames || [])[fi];
+  const fr = (state.frames || [])[fi]; if (!fr) return '';
+  const stages = (typeof framePlotStages === 'function') ? framePlotStages(fr) : null; if (!stages) return '';
   const st = Math.min(typeof frameStage === 'function' ? frameStage(fr, fi) : fi, stages.length - 1);
   return stages[st] || '';
 }
@@ -22335,6 +22390,17 @@ document.addEventListener('DOMContentLoaded', init);
   #npCard .npc-tlgap{align-self:center; border:none; background:none; font-family:var(--sans); font-size:9px; color:var(--ink-faint); cursor:pointer; padding:0 4px; letter-spacing:.04em; white-space:nowrap}
   #npCard .npc-tlgap:hover{color:var(--ink); text-decoration:underline}
   #npCard .npc-plotempty{color:var(--ink-faint); font-style:italic; font-size:12px}
+  .plotchoice-bd{position:fixed; inset:0; z-index:500; display:none; align-items:center; justify-content:center; background:rgba(20,18,16,.42)}
+  .plotchoice-bd.show{display:flex}
+  .plotchoice-card{background:var(--paper); border:1px solid var(--line); border-radius:12px; box-shadow:0 18px 60px rgba(0,0,0,.25); padding:16px 16px 13px; width:300px; max-width:90vw}
+  .plotchoice-card .pc-h{font-family:var(--serif); font-style:italic; font-weight:700; font-size:16px; color:var(--ink); margin-bottom:4px}
+  .plotchoice-card .pc-sub{font-family:var(--sans); font-size:11px; color:var(--ink-faint); line-height:1.45; margin-bottom:12px}
+  .plotchoice-card .pc-opt{display:block; width:100%; text-align:left; border:1px solid var(--line); border-radius:8px; background:var(--bg2); padding:8px 11px; margin-bottom:7px; cursor:pointer; transition:border-color .12s, background .12s}
+  .plotchoice-card .pc-opt:hover{border-color:var(--gold); background:rgba(250,154,49,.08)}
+  .plotchoice-card .pc-opt b{display:block; font-family:var(--serif); font-size:13px; color:var(--ink)}
+  .plotchoice-card .pc-opt span{display:block; font-family:var(--sans); font-size:10.5px; color:var(--ink-soft); margin-top:1px}
+  .plotchoice-card .pc-cancel{display:block; margin:4px auto 0; border:none; background:none; font-family:var(--sans); font-size:11px; color:var(--ink-faint); cursor:pointer; padding:4px 10px}
+  .plotchoice-card .pc-cancel:hover{color:var(--ink)}
   #npCard .npc-connections{margin-top:7px}
   #npCard .npc-changes{margin-top:14px; clear:both}
   #npCard .npc-change{display:flex; gap:9px; align-items:baseline; font-family:var(--serif); font-size:13px; color:var(--ink-soft); line-height:1.45; margin-bottom:5px}
@@ -22916,12 +22982,15 @@ document.addEventListener('DOMContentLoaded', init);
           pPill.addEventListener('click', ()=>setTrait(null)); tl.appendChild(pPill); }
         tl.appendChild(Object.assign(document.createElement('div'),{className:'npc-plotdiv'}));
         if (!frames.length){ const e=document.createElement('span'); e.className='npc-plotempty'; e.textContent='No sections yet — add one on the map.'; tl.appendChild(e); }
+        let _pj = 0;
         frames.forEach((fr,k)=>{
-          if (k>0){ const gap=document.createElement('button'); gap.className='npc-tlgap'; gap.textContent=fr.gap||'later'; gap.title='Time between sections — click to edit';
+          if (typeof framePlotName==='function' && framePlotName(fr)!==wEl.word) return;   // only this plot's own sections (multi-plot)
+          if (_pj>0){ const gap=document.createElement('button'); gap.className='npc-tlgap'; gap.textContent=fr.gap||'later'; gap.title='Time between sections — click to edit';
             gap.addEventListener('click', ev=>{ ev.stopPropagation(); Promise.resolve(editGap(k)).then(()=>{ if(typeof renderNpCard==='function') renderNpCard(); }); }); tl.appendChild(gap); }
+          _pj++;
           const selOn = state.cardTrait==='@section:'+k;
           const pill=document.createElement('span'); pill.className='npc-trait npc-traitpill npc-plotstage'+(selOn?' on':'');
-          const num=document.createElement('span'); num.className='npc-tlnum'; num.textContent=(k+1); pill.appendChild(num);
+          const num=document.createElement('span'); num.className='npc-tlnum'; num.textContent=_pj; pill.appendChild(num);
           const nm=document.createElement('span'); nm.className='npc-tw';
           const stName=(fr.stageName!=null&&fr.stageName!=='')?fr.stageName:((_plotStages && typeof frameStage==='function' && _plotStages[frameStage(fr,k)])||'');
           if (stName){ nm.textContent=stName; } else { nm.textContent='name stage'; nm.classList.add('npc-tlempty'); }
