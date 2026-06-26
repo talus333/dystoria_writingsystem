@@ -134,9 +134,14 @@
   .thread-clear{font-family:var(--sans); font-size:10px; color:var(--gold); cursor:pointer; padding:1px 6px}
   .thread-acts{display:inline-flex; gap:4px; margin-left:4px; opacity:0; transition:opacity .12s}
   .thread-chip:hover .thread-acts, .thread-chip.on .thread-acts{opacity:1}
-  .thread-act{cursor:pointer; opacity:.75; font-size:11px; line-height:1}
+  .thread-act{cursor:pointer; opacity:.75; font-size:11px; line-height:1; display:inline-flex; align-items:center}
+  .thread-act svg{display:block}
   .thread-act:hover{opacity:1}
   .thread-chip.on .thread-act{color:#fff}
+  .thread-focus.on{color:#2f9e44; opacity:1}
+  .thread-chip.on .thread-focus.on{color:#9be8a8}
+  .threadwiki-card{width:340px}
+  .threadwiki-text{font-family:var(--serif); font-size:13px; line-height:1.55; color:var(--ink-soft); margin:2px 0 12px; min-height:18px}
   .node.thread-dim{opacity:.16; transition:opacity .15s}
   .edge.thread-dim{opacity:.05}
   #evOverlay:empty{display:none}
@@ -15154,6 +15159,26 @@ function renameThread(id, name){ const t = threadsList().find(x => x.id === id);
 function threadById(id){ return threadsList().find(t => t.id === id) || null; }
 function wordThreadIds(w){ if (!w || !state.session || !state.session.threadTags) return []; return state.session.threadTags[wordKey(w)] || []; }
 function toggleWordThread(w, id){ ensureThreads(); if (!w || !state.session) return; const k = wordKey(w); const arr = (state.session.threadTags[k] || []).slice(); const i = arr.indexOf(id); if (i >= 0) arr.splice(i, 1); else arr.push(id); if (arr.length) state.session.threadTags[k] = arr; else delete state.session.threadTags[k]; if (typeof scheduleAutosave === 'function') scheduleAutosave(); }
+function threadInFocus(id){ const els = threadElements(id); if (!els.length) return false; const fk = state.focusKeys || []; return els.every(e => fk.indexOf(e.key) >= 0); }
+function toggleThreadFocus(id){ if (threadInFocus(id)){ const els = threadElements(id); state.focusKeys = (state.focusKeys || []).filter(k => !els.some(e => e.key === k)); if (typeof renderFocus === 'function') renderFocus(); if (typeof syncFocusToSession === 'function') syncFocusToSession(); renderConstellation(); if (typeof flashStatus === 'function') flashStatus('Removed thread from the Writing Focus'); } else { addThreadToFocus(id); } }
+function openThreadWiki(id){
+  const th = threadById(id); if (!th) return;
+  let m = document.getElementById('threadWiki');
+  if (!m){ m = document.createElement('div'); m.id = 'threadWiki'; m.className = 'plotchoice-bd'; document.body.appendChild(m); m.addEventListener('click', e => { if (e.target === m) m.classList.remove('show'); }); }
+  const close = () => m.classList.remove('show');
+  m.innerHTML = '';
+  const card = document.createElement('div'); card.className = 'plotchoice-card threadwiki-card';
+  const h = document.createElement('div'); h.className = 'pc-h'; const dot = document.createElement('span'); dot.style.cssText = 'display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px;vertical-align:1px;background:' + th.color; h.appendChild(dot); h.appendChild(document.createTextNode(th.name)); card.appendChild(h);
+  const box = document.createElement('div'); box.className = 'threadwiki-text';
+  const cached = (state.session && state.session.threadWiki && state.session.threadWiki[id]) || '';
+  if (cached) box.textContent = cached;
+  card.appendChild(box);
+  const run = async () => { box.innerHTML = '<span class="spin"></span> Summarizing\u2026'; try { const txt = await aiThreadRollup(id); if (!state.session && typeof ensureSession === 'function') ensureSession(); state.session.threadWiki = state.session.threadWiki || {}; state.session.threadWiki[id] = txt; if (typeof scheduleAutosave === 'function') scheduleAutosave(); box.textContent = txt; rb.textContent = '\u2726 Re-roll'; } catch (err){ box.textContent = (typeof aiErrMsg === 'function') ? aiErrMsg(err) : 'Could not summarize right now.'; } };
+  const rb = document.createElement('button'); rb.className = 'pc-opt'; rb.style.textAlign = 'center'; rb.textContent = cached ? '\u2726 Re-roll' : '\u2726 Roll up notes & prose'; rb.addEventListener('click', run); card.appendChild(rb);
+  const cancel = document.createElement('button'); cancel.className = 'pc-cancel'; cancel.textContent = 'Close'; cancel.addEventListener('click', close); card.appendChild(cancel);
+  m.appendChild(card); m.classList.add('show');
+  if (!cached) run();
+}
 function renderThreadsBar(){
   const bar = document.getElementById('threadsBar'); if (!bar) return;
   bar.innerHTML = '';
@@ -15166,9 +15191,13 @@ function renderThreadsBar(){
     chip.addEventListener('click', () => { state.activeThread = (state.activeThread === t.id) ? null : t.id; renderConstellation(); });
     chip.addEventListener('dblclick', async ev => { ev.stopPropagation(); const nm = await sitePrompt('Rename this thread', t.name); if (nm === null) return; renameThread(t.id, nm); renderConstellation(); });
     const acts = document.createElement('span'); acts.className = 'thread-acts';
-    const q = document.createElement('span'); q.className = 'thread-act'; q.textContent = '\u270E'; q.title = 'Open this thread in the notepad'; q.addEventListener('click', ev => { ev.stopPropagation(); if (typeof openThreadNotes === 'function') openThreadNotes(t.id); }); acts.appendChild(q);
-    const fo = document.createElement('span'); fo.className = 'thread-act'; fo.textContent = '\u25CE'; fo.title = 'Send this thread to the Writing Focus'; fo.addEventListener('click', ev => { ev.stopPropagation(); if (typeof addThreadToFocus === 'function') addThreadToFocus(t.id); }); acts.appendChild(fo);
-    const xx = document.createElement('span'); xx.className = 'thread-act thread-x'; xx.textContent = '\u00D7'; xx.title = 'Remove this thread'; xx.addEventListener('click', ev => { ev.stopPropagation(); removeThread(t.id); renderConstellation(); }); acts.appendChild(xx);
+    const _svg = name => { const sv = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); sv.setAttribute('viewBox', '0 0 24 24'); sv.setAttribute('width', '13'); sv.setAttribute('height', '13'); sv.setAttribute('fill', 'none'); sv.setAttribute('stroke', 'currentColor'); sv.setAttribute('stroke-width', '2'); sv.setAttribute('stroke-linecap', 'round'); sv.setAttribute('stroke-linejoin', 'round'); sv.innerHTML = (typeof LUCIDE !== 'undefined' && LUCIDE[name]) || ''; return sv; };
+    const mkAct = (title, fn) => { const a = document.createElement('span'); a.className = 'thread-act'; a.title = title; a.addEventListener('click', ev => { ev.stopPropagation(); fn(); }); return a; };
+    const aNote = mkAct('Open this thread in the notepad', () => { if (typeof openThreadNotes === 'function') openThreadNotes(t.id); }); aNote.appendChild(_svg('feather')); acts.appendChild(aNote);
+    const aWiki = mkAct('Roll up this thread\u2019s notes & prose', () => { if (typeof openThreadWiki === 'function') openThreadWiki(t.id); }); aWiki.appendChild(_svg('book-open')); acts.appendChild(aWiki);
+    const inF = (typeof threadInFocus === 'function') && threadInFocus(t.id);
+    const aFoc = mkAct(inF ? 'In the Writing Focus \u2014 click to remove' : 'Send this thread to the Writing Focus', () => { if (typeof toggleThreadFocus === 'function') toggleThreadFocus(t.id); }); aFoc.className = 'thread-act thread-focus' + (inF ? ' on' : ''); aFoc.textContent = inF ? '\u25C9' : '\u25CE'; acts.appendChild(aFoc);
+    const aX = mkAct('Remove this thread', () => { removeThread(t.id); renderConstellation(); }); aX.className = 'thread-act thread-x'; aX.textContent = '\u00D7'; acts.appendChild(aX);
     chip.appendChild(acts);
     bar.appendChild(chip);
   });
@@ -21294,7 +21323,7 @@ function renderNpElements(){
   els.forEach(e => { const c = e.w.cat; if (!seenC.has(c)){ seenC.add(c); cats.push(c); } });
   const goals = goalItems(state.session && state.session.goal);
   let filter = state.npCatFilter || 'all';
-  if (filter !== 'all' && filter !== 'goals' && cats.indexOf(filter) < 0) filter = 'all';   // a category that no longer exists → fall back
+  if (filter !== 'all' && filter !== 'goals' && filter !== 'threads' && cats.indexOf(filter) < 0) filter = 'all';   // a category that no longer exists → fall back
   {
     const fr = document.createElement('div'); fr.className = 'np-filters';
     const mkF = (cid, label, color) => { const b = document.createElement('button'); b.className = 'np-catfilter' + (filter === cid ? ' on' : ''); b.textContent = label;
@@ -23158,14 +23187,7 @@ document.addEventListener('DOMContentLoaded', init);
           pill.addEventListener('click', ()=>setTrait('@threadel:'+e.key));
           tl.appendChild(pill); });
         body.appendChild(tl);
-        const acts=document.createElement('div'); acts.className='npc-threadacts';
-        const fb=document.createElement('button'); fb.className='npc-threadbtn'; fb.textContent='\u25CE Send to Focus'; fb.title='Add this thread\u2019s elements to the session\u2019s Writing Focus'; fb.addEventListener('click', ()=>{ if(typeof addThreadToFocus==='function') addThreadToFocus(_tid); }); acts.appendChild(fb);
-        const wbox=document.createElement('div'); wbox.className='npc-threadwiki';
-        const cached=(state.session&&state.session.threadWiki&&state.session.threadWiki[_tid])?state.session.threadWiki[_tid]:'';
-        if(cached) wbox.textContent=cached;
-        const wb=document.createElement('button'); wb.className='npc-threadbtn'; wb.textContent=(cached?'\u2726 Re-roll':'\u2726 Roll up'); wb.title='Summarize this thread from its notes and prose';
-        wb.addEventListener('click', async ()=>{ wbox.innerHTML='<span class="spin"></span> Summarizing\u2026'; try{ const txt=await aiThreadRollup(_tid); if(!state.session && typeof ensureSession==='function') ensureSession(); state.session.threadWiki=state.session.threadWiki||{}; state.session.threadWiki[_tid]=txt; if(typeof scheduleAutosave==='function') scheduleAutosave(); wbox.textContent=txt; wb.textContent='\u2726 Re-roll'; }catch(err){ wbox.textContent=(typeof aiErrMsg==='function')?aiErrMsg(err):'Could not summarize right now.'; } });
-        acts.appendChild(wb); body.appendChild(acts); body.appendChild(wbox);
+
         card.appendChild(body);
         return;
       }
