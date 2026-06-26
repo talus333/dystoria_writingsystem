@@ -354,8 +354,8 @@ async function handleAI(request, env) {
 
 // Minimal Stripe REST call (form-encoded, Bearer secret). Keys may use Stripe's bracket notation,
 // e.g. 'line_items[0][price]'. Throws with Stripe's own message on a non-2xx.
-async function stripe(env, path, params) {
-  const key = env.STRIPE_SECRET_KEY;
+async function stripe(env, path, params, key) {
+  key = key || env.STRIPE_SECRET_KEY;   // default = subscription key (test); callers may pass the live key (tips)
   if (!key) throw new Error('billing not configured');
   const form = new URLSearchParams();
   for (const [k, v] of Object.entries(params || {})) { if (v !== undefined && v !== null) form.append(k, String(v)); }
@@ -452,7 +452,10 @@ async function handleTip(request, env) {
   const headers = cors(request.headers.get('origin') || '');
   if (request.method === 'OPTIONS') return new Response(null, { headers });
   if (request.method !== 'POST') return new Response(JSON.stringify({ error: 'POST only' }), { status: 405, headers });
-  if (!env.STRIPE_SECRET_KEY) return new Response(JSON.stringify({ error: 'Tips aren’t set up yet.' }), { status: 503, headers });
+  // Tips run on the LIVE key (real money) if set; otherwise fall back to the default key (test). The client's
+  // STRIPE_PK must be the matching mode (pk_live with STRIPE_LIVE_SECRET_KEY, pk_test otherwise).
+  const tipKey = env.STRIPE_LIVE_SECRET_KEY || env.STRIPE_SECRET_KEY;
+  if (!tipKey) return new Response(JSON.stringify({ error: 'Tips aren’t set up yet.' }), { status: 503, headers });
 
   let body = {}; try { body = await request.json(); } catch (e) { /* fall through to validation */ }
   const cents = Math.round(Number(body && body.amount_cents));
@@ -469,7 +472,7 @@ async function handleTip(request, env) {
       'automatic_payment_methods[enabled]': 'true',
       description: 'Dystoria tip',
       'metadata[kind]': 'tip',
-    });
+    }, tipKey);
     return new Response(JSON.stringify({ client_secret: pi.client_secret }), { headers });
   } catch (e) {
     return new Response(JSON.stringify({ error: 'Tip error: ' + String((e && e.message) || e) }), { status: 502, headers });
