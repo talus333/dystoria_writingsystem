@@ -2736,6 +2736,8 @@
 .group-act{ cursor:pointer; opacity:.5; padding:0 2px; }
 .group-act:hover{ opacity:1; }
 .group-x:hover{ color:#c0392b; }
+.ic-kind{ display:flex; gap:16px; margin:0 0 9px; font-size:12px; align-items:center; }
+.ic-kind label{ display:inline-flex; align-items:center; gap:5px; cursor:pointer; }
 </style>
 </head>
 <body>
@@ -2794,12 +2796,13 @@
 <div id="importCard">
   <div class="ic-head"><span id="importHeadTitle">Import a story</span><button id="importClose" title="Close">×</button></div>
   <div id="importEntry">
+    <div class="ic-kind"><label><input type="radio" name="impkind" value="prose" checked> Story prose</label><label><input type="radio" name="impkind" value="notes"> Notes &amp; worldbuilding</label></div>
     <input id="importTitle" placeholder="Story title (optional)">
     <textarea id="importText" rows="9" placeholder="Paste your story’s prose here…"></textarea>
     <div class="ic-row"><label class="ic-file" for="importFile">Or choose a .txt / .md file</label><input type="file" id="importFile" accept=".txt,.md,text/plain,text/markdown" hidden><span id="importStatus"></span></div>
     <div id="importDestRow" style="display:none">
       <label><input type="radio" name="impdest" value="new" checked> Create a new story</label>
-      <label><input type="radio" name="impdest" value="section"> Add to <b id="importDestName"></b> as a new section</label>
+      <label><input type="radio" name="impdest" value="section"> Add to <b id="importDestName"></b><span id="importDestSuffix"> as a new section</span></label>
     </div>
     <div class="ic-actions"><button id="importGo">Read &amp; Ingest →</button></div>
     <p class="ic-note">Reads your prose and proposes the beings, places, objects, and events to review and approve before the story is built. For a longer work, ingest one chapter or part at a time — each becomes a section on the timeline. Elements stay in this story unless you mark them for all stories.</p>
@@ -18188,7 +18191,7 @@ function normalizeExtract(data){
     sections: Array.isArray(data.sections) ? data.sections : [],
     relationships: Array.isArray(data.relationships) ? data.relationships : [] };
 }
-const IMP = { mode: 'new', title: '', prose: '', overview: '', elements: [], sections: [], relationships: [] };
+const IMP = { mode: 'new', kind: 'prose', title: '', prose: '', overview: '', elements: [], sections: [], relationships: [] };
 // push one reviewed element onto the current map + archive (story or system) + cache its summary
 function placeImportElement(el){
   const word = (el.name || '').trim().slice(0, 60); if (!word) return false;
@@ -18270,10 +18273,22 @@ function importShow(view){
   $('importReview').style.display = view === 'review' ? 'block' : 'none';
   $('importHeadTitle').textContent = view === 'review' ? 'Review the story’s elements' : 'Import a story';
 }
+function importApplyKind(){
+  const k = (document.querySelector('input[name=impkind]:checked') || {}).value || 'prose';
+  IMP.kind = k; const notes = k === 'notes';
+  const tx = $('importText'); if (tx) tx.placeholder = notes ? 'Paste your notes, character sheets or worldbuilding here\u2026' : 'Paste your story\u2019s prose here\u2026';
+  const go = $('importGo'); if (go) go.textContent = notes ? 'Read notes \u2192' : 'Read & Ingest \u2192';
+  const sfx = $('importDestSuffix'); if (sfx) sfx.textContent = notes ? '' : ' as a new section';
+  const note = document.querySelector('#importEntry .ic-note');
+  if (note) note.textContent = notes
+    ? 'Reads your notes and proposes the beings, places, objects and events they describe \u2014 each element\u2019s details are saved into its own notepad (and wiki), not your manuscript. Review and approve before adding.'
+    : 'Reads your prose and proposes the beings, places, objects, and events to review and approve before the story is built. For a longer work, ingest one chapter or part at a time \u2014 each becomes a section on the timeline. Elements stay in this story unless you mark them for all stories.';
+  importConfigForMode();
+}
 function importConfigForMode(){
   const suggest = IMP.mode === 'suggest';
   $('importCard').classList.toggle('suggest', suggest);
-  $('importConfirm').textContent = suggest ? 'Add to story' : 'Confirm & build story';
+  $('importConfirm').textContent = suggest ? 'Add to story' : (IMP.kind === 'notes' ? 'Add notes to story' : 'Confirm & build story');
 }
 function openSuggestReview(){
   if (!state._missed || !state._missed.length) return;
@@ -18290,6 +18305,7 @@ function openImport(){
   closeLibrary();
   IMP.mode = 'new'; importConfigForMode();
   $('importTitle').value = ''; $('importText').value = ''; $('importStatus').textContent = ''; $('importGo').disabled = false;
+  const _pk = document.querySelector('input[name=impkind][value=prose]'); if (_pk) _pk.checked = true; importApplyKind();
   importShow('entry');
   // offer "add as a new section" only when a story is already open with content
   const hasStory = !!(state.session && (editorText().trim() || (state.prompt && state.prompt.words && state.prompt.words.length)));
@@ -18318,13 +18334,25 @@ async function extractImport(){
   IMP.mode = 'new'; IMP.prose = prose; IMP.title = $('importTitle').value.trim();
   $('importGo').disabled = true; $('importStatus').innerHTML = '<span class="spin"></span>Reading &amp; ingesting…';
   const subInfo = 'being ∈ [' + IDENTITY_SUBS.join(', ') + ']; setting ∈ [' + importSubNames('setting').join(', ') + ']; object ∈ [' + importSubNames('object').join(', ') + ']; event ∈ [' + importSubNames('event').join(', ') + ']';
-  const sys = 'You analyze a story for a worldbuilding app and return ONLY valid minified JSON — no prose, no code fences. Schema: {"title":string,"overview":string,"sections":[{"title":string,"opening":string}],"elements":[{"type":"being"|"setting"|"object"|"event","name":string,"summary":string,"sub":string}],"relationships":[{"from":string,"to":string,"type":string}]}. ' +
+  const notesMode = IMP.kind === 'notes';
+  let sys, user;
+  if (notesMode){
+    sys = 'You analyze an author\u2019s NOTES / worldbuilding / character sheets (NOT a finished manuscript) for a worldbuilding app and return ONLY valid minified JSON \u2014 no prose, no code fences. Schema: {"title":string,"overview":string,"elements":[{"type":"being"|"setting"|"object"|"event","name":string,"note":string,"summary":string,"sub":string}],"relationships":[{"from":string,"to":string,"type":string}]}. ' +
+      'Extract EVERY distinct element the notes describe. being = a character or creature; setting = a place; object = a notable physical thing; event = a key happening. ' +
+      'note = that element\u2019s details taken from the notes, cleaned up and consolidated into 1\u20134 sentences, preserving the author\u2019s specifics. summary = ONE short sentence. ' +
+      'sub = the single best-fitting subcategory, chosen from: ' + subInfo + '. ' +
+      'relationships = up to 8 of the clearest bonds between the named elements; from/to are exact element names; type = a short phrase. ' +
+      'overview = 1\u20132 sentences. Use names exactly as written. Invent nothing \u2014 keep only what the notes say.';
+    user = 'Notes:\n\n' + prose.slice(0, 14000) + '\n\nReturn the JSON.';
+  } else {
+    sys = 'You analyze a story for a worldbuilding app and return ONLY valid minified JSON — no prose, no code fences. Schema: {"title":string,"overview":string,"sections":[{"title":string,"opening":string}],"elements":[{"type":"being"|"setting"|"object"|"event","name":string,"summary":string,"sub":string}],"relationships":[{"from":string,"to":string,"type":string}]}. ' +
     'sections = split the story into its parts by chapter/section titles, headers, or clear scene breaks; title = a short section title; opening = the first ~8 words of that section copied EXACTLY/verbatim from the text. If the story is one continuous piece, return a single section. ' +
     'being = a named character or creature; setting = a place; object = a notable physical thing; event = a key happening. summary = ONE short sentence grounded only in the text. ' +
     'sub = the single best-fitting subcategory, chosen from: ' + subInfo + '. ' +
     'relationships = up to 8 of the clearest bonds between the named elements; from/to are exact element names; type = a short relationship phrase such as "Guardian of","Rivalry","Keeper of","Born of","Betrayal". ' +
     'overview = 2 short sentences. Use names exactly as written. Up to 6 elements of each type. Invent nothing.';
-  const user = 'Story:\n\n' + prose.slice(0, 14000) + '\n\nReturn the JSON.';
+    user = 'Story:\n\n' + prose.slice(0, 14000) + '\n\nReturn the JSON.';
+  }
   let norm = null;
   for (let attempt = 0; attempt < 3 && !norm; attempt++){
     if (attempt) $('importStatus').innerHTML = '<span class="spin"></span>Reading again…';
@@ -18342,9 +18370,10 @@ async function extractImport(){
     const cat = IMP_TMAP[String(el.type || '').toLowerCase()];
     if (!cat) return;
     const name = String(el.name).trim().slice(0, 60); if (!name) return;
-    IMP.elements.push({ cat, name, sub: validImportSub(cat, el.sub), summary: String(el.summary || '').trim(), exists: wordExistsSystem(cat, name), include: true, sys: false });
+    const _sum = notesMode ? String(el.note || el.summary || '').trim() : String(el.summary || '').trim();
+    IMP.elements.push({ cat, name, sub: validImportSub(cat, el.sub), summary: _sum, note: _sum, exists: wordExistsSystem(cat, name), include: true, sys: false });
   });
-  IMP.sections = splitProseBySections(IMP.prose, norm.sections);            // [{title, body}]
+  IMP.sections = notesMode ? [] : splitProseBySections(IMP.prose, norm.sections);            // notes have no manuscript to split
   IMP.relationships = Array.isArray(norm.relationships) ? norm.relationships : [];
   $('importGo').disabled = false;
   $('importConfirm').disabled = false;
@@ -18453,6 +18482,7 @@ function renderRecapSuggest(){
 }
 async function confirmImport(){
   if (IMP.mode === 'suggest'){ confirmSuggest(); return; }
+  if (IMP.kind === 'notes'){ confirmNotesImport(); return; }
   IMP.overview = $('importOverview').value.trim();
   IMP.title = $('importTitle').value.trim();
   const dest = (document.querySelector('input[name=impdest]:checked') || {}).value || 'new';
@@ -18527,6 +18557,46 @@ async function confirmImport(){
   const secMsg = secs.length > 1 ? (' across ' + secs.length + ' sections') : '';
   flashStatus(asSection ? ('Added ' + added + ' element' + (added === 1 ? '' : 's') + secMsg) : ('Imported — ' + added + ' element' + (added === 1 ? '' : 's') + secMsg));
   } catch (e){ console.warn('import build error:', e); $('importConfirm').disabled = false; flashStatus('Couldn’t build: ' + e.message); }
+}
+
+function confirmNotesImport(){
+  IMP.overview = $('importOverview').value.trim();
+  IMP.title = $('importTitle').value.trim();
+  const dest = (document.querySelector('input[name=impdest]:checked') || {}).value || 'new';
+  const hasStory = !!(state.session && (editorText().trim() || (state.prompt && state.prompt.words && state.prompt.words.length)));
+  const toCurrent = dest === 'section' && hasStory;
+  $('importConfirm').disabled = true;
+  try {
+    if (!toCurrent){
+      newSession();
+      $('storyName').value = IMP.title || 'Imported notes'; updateWmTitle();
+      const ed = $('editor'); if (ed) ed.innerHTML = '';
+      if (!state.prompt){ state.prompt = { words: [], sets: 1, links: [], removedLinks: [] }; state.frames = [{ gap: null, prompt: state.prompt }]; state.frameIdx = 0; state.activeSet = 0; }
+    }
+    ensureSession();
+    state.session.customWords = state.session.customWords || {};
+    state.session.wikiAI = state.session.wikiAI || {};
+    state.session.npNotes = state.session.npNotes || {};
+    let added = 0;
+    IMP.elements.forEach(el => {
+      if (!el.include) return;
+      if (!placeImportElement(el)) return;
+      added++;
+      const note = String(el.note || el.summary || '').trim();
+      if (!note) return;
+      const word = (el.name || '').trim().slice(0, 60);
+      const key = '0|' + el.cat + '|' + word;
+      const html = note.split(/\n{2,}/).map(p => '<div>' + esc(p.trim()) + '</div>').join('') || ('<div>' + esc(note) + '</div>');
+      if (!state.session.npNotes[key] || !npPlain(state.session.npNotes[key]).trim()) state.session.npNotes[key] = html;
+    });
+    seedImportBonds(IMP.relationships);
+    if (IMP.overview){ state.session.wikiOverview = (state.session.wikiOverview ? (state.session.wikiOverview + ' ') : '') + IMP.overview; }
+    rebuildPools();
+    if (added){ $('skyEmpty').style.display = 'none'; layoutConstellation(); }
+    renderConstellation(); renderTimeline(); if (typeof renderNpElements === 'function') renderNpElements(); saveSession();
+    closeImport();
+    flashStatus('Added ' + added + ' element' + (added === 1 ? '' : 's') + ' with notes');
+  } catch (e){ console.warn('notes import error:', e); $('importConfirm').disabled = false; flashStatus('Couldn\u2019t add notes: ' + e.message); }
 }
 
 /* ---------------- story wiki (deterministic; AI rollups layer later) ---------------- */
@@ -22502,6 +22572,7 @@ function init(){
   });
   $('libImportBtn').addEventListener('click', openImport);
   $('importGo').addEventListener('click', extractImport);
+  document.querySelectorAll('input[name=impkind]').forEach(r => r.addEventListener('change', importApplyKind));
   $('importConfirm').addEventListener('click', confirmImport);
   $('importAddEl').addEventListener('click', addImportEl);
   $('importBack').addEventListener('click', () => importShow('entry'));
