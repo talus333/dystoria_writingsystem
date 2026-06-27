@@ -25992,6 +25992,12 @@ function beingRenderOpts(nd){ if(!nd) return null;
 @keyframes helpspin{to{transform:rotate(360deg)}}
 #helpPanel .help-feedback{display:inline-block; margin-top:11px; font-family:var(--sans,sans-serif); font-size:11px; letter-spacing:.05em; color:#241f1a; background:var(--gold,#cda434); border:none; border-radius:8px; padding:6px 13px; cursor:pointer}
 #helpPanel .help-feedback:hover{opacity:.9}
+#helpPanel .help-item-row{display:flex; align-items:center; justify-content:space-between; gap:8px}
+#helpPanel .help-item-row .help-item-h{flex:1; padding-right:0}
+#helpPanel .help-go{flex:none; font-family:var(--sans,sans-serif); font-size:9px; letter-spacing:.06em; text-transform:uppercase; color:#9a7c2a; background:rgba(205,164,52,.13); border:1px solid rgba(205,164,52,.4); border-radius:7px; padding:3px 9px; margin-right:6px; cursor:pointer; white-space:nowrap}
+#helpPanel .help-go:hover{background:rgba(205,164,52,.26)}
+#helpPanel .help-snippet{padding:0 10px 9px; font-family:var(--serif,serif); font-size:12.5px; line-height:1.5; color:var(--ink-soft,#6a5f4c)}
+#helpPanel mark{background:rgba(205,164,52,.38); color:inherit; border-radius:2px; padding:0 1px}
 body.eink #helpPanel .help-card{border:2px solid #000; box-shadow:none}
 </style>
 <div id="helpPanel">
@@ -26027,14 +26033,50 @@ body.eink #helpPanel .help-card{border:2px solid #000; box-shadow:none}
   }
   function score(sec, terms){ var T=sec.t.toLowerCase(), B=sec.md.toLowerCase(), sc=0; for(var k=0;k<terms.length;k++){ var t=terms[k]; if(!t) continue; if(T.indexOf(t)>=0) sc+=6; var idx=0,c=0; while((idx=B.indexOf(t,idx))>=0){ c++; idx+=t.length; if(c>20) break; } sc+=c; } return sc; }
   function results(){ return document.getElementById('helpResults'); }
-  function renderItem(sec, openIt){ var item=document.createElement('div'); item.className='help-item'+(openIt?' open':''); var h=document.createElement('button'); h.className='help-item-h'; h.textContent=sec.t; item.appendChild(h); var body=document.createElement('div'); body.className='help-item-b'; body.style.display=openIt?'block':'none'; body.innerHTML=mdLite(sec.md); item.appendChild(body); h.addEventListener('click', function(){ var op=body.style.display!=='none'; body.style.display=op?'none':'block'; item.classList.toggle('open', !op); }); return item; }
-  function helpSearch(q){ var res=results(); if(!res) return; res.innerHTML=''; var STOP={how:1,'do':1,i:1,a:1,an:1,the:1,to:1,is:1,'in':1,of:1,my:1,me:1,can:1,what:1,on:1,'for':1,and:1,with:1,'this':1,that:1,dystoria:1,app:1,does:1,it:1,you:1,your:1}; var raw=(q||'').toLowerCase().split(/\s+/).filter(Boolean); var terms=raw.filter(function(t){ return t.length>2 && !STOP[t]; }); if(!terms.length) terms=raw; var list;
+  var ALIAS={character:'being',characters:'being',protagonist:'being',hero:'being',villain:'being',creature:'being',creatures:'being',monster:'being',person:'being',place:'setting',places:'setting',location:'setting',locations:'setting',save:'autosave',saved:'autosave',saving:'autosave',chapter:'section',chapters:'section',scene:'section',scenes:'section',collaborate:'sharing',collaboration:'sharing',coauthor:'sharing',partner:'co-writing',relationship:'connection',relationships:'connection',link:'connection',links:'connection',theme:'concept',themes:'concept',party:'group',army:'group',doc:'export',docx:'export',pdf:'export',word:'export',comment:'comments',feedback:'feedback',account:'account',login:'account',signin:'account',mobile:'e-ink',phone:'e-ink',tablet:'e-ink',ipad:'e-ink',boox:'e-ink'};
+  function escH(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+  function helpSnippet(md, terms){
+    var plain=String(md||'').replace(/\[([^\]]+)\]\([^)]+\)/g,'$1').replace(/[#*`>]/g,' ').replace(/(^|\s)-\s/g,' ').replace(/\s+/g,' ').trim();
+    var lc=plain.toLowerCase(), pos=-1;
+    for(var i=0;i<terms.length;i++){ if(!terms[i]) continue; var p=lc.indexOf(terms[i]); if(p>=0 && (pos<0||p<pos)) pos=p; }
+    if(pos<0) return '';
+    var start=Math.max(0,pos-55); var snip=plain.slice(start, start+150); if(start>0) snip='…'+snip; if(start+150<plain.length) snip+='…';
+    snip=escH(snip);
+    terms.forEach(function(t){ if(!t||t.length<2) return; var re=new RegExp('('+t.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+')','ig'); snip=snip.replace(re,'<mark>$1</mark>'); });
+    return snip;
+  }
+  function helpGo(sec){
+    var t=(sec.t||'').toLowerCase();
+    function mode(m){ return function(){ closeHelp(); var p=document.querySelector('.mode-pills button[data-mode="'+m+'"]'); if(p) p.click(); }; }
+    if(/import/.test(t)) return {label:'Open the importer', run:function(){ closeHelp(); if(typeof openImport==='function') openImport(); }};
+    if(/refine/.test(t)) return {label:'Open Refine', run:mode('edit')};
+    if(/wiki|ai works/.test(t)) return {label:'Open Wiki', run:mode('wiki')};
+    if(/sharing|feedback|co-writing/.test(t)) return {label:'Open Read', run:mode('read')};
+    if(/export|settings|housekeeping/.test(t)) return {label:'Open Settings', run:function(){ closeHelp(); var sm=document.getElementById('settingsModal'); if(sm) sm.classList.add('show'); }};
+    if(/\bwrit/.test(t)) return {label:'Open Write', run:mode('write')};
+    if(/\bread\b/.test(t)) return {label:'Open Read', run:mode('read')};
+    if(/map|element|notepad|section|timeline|being|event|connection|thread|group|goal|drawing/.test(t)) return {label:'Go to the Map', run:mode('notepad')};
+    return null;
+  }
+  function renderItem(sec, openIt, terms){
+    var item=document.createElement('div'); item.className='help-item'+(openIt?' open':'');
+    var row=document.createElement('div'); row.className='help-item-row';
+    var h=document.createElement('button'); h.className='help-item-h'; h.textContent=sec.t; row.appendChild(h);
+    var dest=helpGo(sec);
+    if(dest){ var gb=document.createElement('button'); gb.className='help-go'; gb.textContent=dest.label+' →'; gb.title='Take me there'; gb.addEventListener('click', function(e){ e.stopPropagation(); dest.run(); }); row.appendChild(gb); }
+    item.appendChild(row);
+    if(terms && terms.length){ var sn=helpSnippet(sec.md, terms); if(sn){ var sd=document.createElement('div'); sd.className='help-snippet'; sd.innerHTML=sn; item.appendChild(sd); } }
+    var body=document.createElement('div'); body.className='help-item-b'; body.style.display=openIt?'block':'none'; body.innerHTML=mdLite(sec.md); item.appendChild(body);
+    h.addEventListener('click', function(){ var op=body.style.display!=='none'; body.style.display=op?'none':'block'; item.classList.toggle('open', !op); });
+    return item;
+  }
+  function helpSearch(q){ var res=results(); if(!res) return; res.innerHTML=''; var STOP={how:1,'do':1,i:1,a:1,an:1,the:1,to:1,is:1,'in':1,of:1,my:1,me:1,can:1,what:1,on:1,'for':1,and:1,with:1,'this':1,that:1,dystoria:1,app:1,does:1,it:1,you:1,your:1}; var raw=(q||'').toLowerCase().split(/\s+/).filter(Boolean); var terms=raw.filter(function(t){ return t.length>2 && !STOP[t]; }); if(!terms.length) terms=raw; var ex=terms.slice(); terms.forEach(function(t){ var al=ALIAS[t]; if(al && ex.indexOf(al)<0) ex.push(al); }); terms=ex; var list;
     if(!terms.length){ list=DYSTORIA_GUIDE.map(function(s){ return {s:s, sc:0}; }); }
     else { list=DYSTORIA_GUIDE.map(function(s){ return {s:s, sc:score(s,terms)}; }).filter(function(x){ return x.sc>0; }).sort(function(a,b){ return b.sc-a.sc; }).slice(0,7); }
     if(terms.length && !list.length){ res.innerHTML='<div class="help-empty">No section matches \u201c'+q.replace(/</g,'&lt;')+'\u201d. Try the Ask \u2726 button, or read the full guide.</div>'; return; }
-    list.forEach(function(x){ res.appendChild(renderItem(x.s, terms.length>0 && list.length<=3)); });
+    list.forEach(function(x){ res.appendChild(renderItem(x.s, terms.length>0 && list.length<=3, terms)); });
   }
-  function helpFull(){ var res=results(); if(!res) return; res.innerHTML=''; DYSTORIA_GUIDE.forEach(function(s){ res.appendChild(renderItem(s, true)); }); var inp=document.getElementById('helpInput'); if(inp) inp.value=''; }
+  function helpFull(){ var res=results(); if(!res) return; res.innerHTML=''; DYSTORIA_GUIDE.forEach(function(s){ res.appendChild(renderItem(s, true, null)); }); var inp=document.getElementById('helpInput'); if(inp) inp.value=''; }
   async function helpAsk(q){ q=(q||'').trim(); if(!q) return; var ans=document.getElementById('helpAnswer'); if(!ans) return; ans.style.display='block'; ans.innerHTML='<span class="help-spin"></span> Looking through the guide\u2026';
     try{ var guide=DYSTORIA_GUIDE.map(function(s){ return '## '+s.t+'\n'+s.md; }).join('\n\n');
       var sys='You are the built-in help for Dystoria, a worldbuilding and writing app. Answer the user\u2019s how-to question using ONLY the guide below. Be concise and practical (2\u20135 sentences), name the relevant feature, and give the steps. If the user is asking whether Dystoria has a feature or can do something and the guide shows it does NOT exist, say so warmly in one short line and affirm it would be a good addition, then as the very last line output exactly the token [[SUGGEST]] and nothing after it. If the feature DOES exist or it is a normal how-to question, do not output that token. Never invent features.';
