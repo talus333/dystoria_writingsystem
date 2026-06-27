@@ -15680,6 +15680,42 @@ function openGroupThreadMenu(id, x, y){
   menu.style.top = Math.max(8, Math.min(y || 200, window.innerHeight - 320)) + 'px';
   menu.style.display = 'block';
 }
+const GROUP_CHARS = [
+  { sub:'Kind', words:['Army','War band','Adventuring party','Guild','Order','Council','Mob','Cult','Crew','Retinue','Clan','Regiment','Mercenary company','Posse','Coven','Caravan','Tribe','Militia','Cabal','Crusade'] },
+  { sub:'Morale', words:['Fervent','Disciplined','Steady','Wavering','Weary','Demoralized','Broken','Bloodthirsty','Hopeful','Desperate'] },
+  { sub:'Training', words:['Elite','Veteran','Seasoned','Drilled','Green','Untrained','Rabble','Professional'] },
+  { sub:'Reputation', words:['Legendary','Feared','Respected','Notorious','Honored','Disgraced','Unknown','Whispered-about'] },
+  { sub:'Cohesion', words:['Devoted','Loyal','Tight-knit','Fractious','Divided','Mutinous','Mercenary','Fragile'] },
+  { sub:'Armament', words:['Heavily armed','Well-equipped','Lightly armed','Ragtag','Pike and shield','Cavalry','Archers','Siege engines','Ill-equipped'] },
+  { sub:'Purpose', words:['Conquest','Defense','Raiding','Guarding','Crusade','Mercenary contract','Rebellion','Pilgrimage','The hunt','Escort'] },
+  { sub:'Disposition', words:['Hostile','Wary','Neutral','Friendly','Allied','Predatory','Honor-bound'] },
+  { sub:'Bond', words:['Blood-sworn','Coin','Faith','Fear','Shared loss','Old debt','Kinship','Ambition'] },
+  { sub:'Livery', words:['Crimson','Sable','Azure','Gold','Grey','Forest green','White','Black-and-red','Mismatched'] },
+  { sub:'Banner', words:[] },
+  { sub:'Origin', words:[] }
+];
+function ensureGroupAttrs(g){ if(g && !Array.isArray(g.attrs)) g.attrs = []; return g ? g.attrs : []; }
+function addGroupChar(id, sub, word){ const g = beingGroupById(id); if(!g || !word) return; ensureGroupAttrs(g); const wd = String(word).trim(); if(!wd) return; if(!g.attrs.some(a => a.sub===sub && (a.word||'').toLowerCase()===wd.toLowerCase())) g.attrs.push({ sub: sub||'Trait', word: wd }); if(typeof scheduleAutosave==='function') scheduleAutosave(); if(typeof renderNpCard==='function') renderNpCard(); }
+function removeGroupChar(id, idx){ const g = beingGroupById(id); if(!g || !Array.isArray(g.attrs)) return; g.attrs.splice(idx,1); if(typeof scheduleAutosave==='function') scheduleAutosave(); if(typeof renderNpCard==='function') renderNpCard(); }
+function openGroupCharPicker(id, x, y){
+  const g = beingGroupById(id); if(!g) return; ensureGroupAttrs(g);
+  const menu = $('aspectMenu'); if(!menu) return; if(menu.parentElement!==document.body) document.body.appendChild(menu);
+  const ask = (sub) => { menu.style.display='none'; Promise.resolve(sitePrompt(sub + '\u2026', '')).then(v => { if(v!=null && String(v).trim()) addGroupChar(id, sub, v); }); };
+  const showWords = (c) => { menu.innerHTML='';
+    const back = document.createElement('button'); back.textContent='\u2039 Back'; back.style.fontStyle='italic'; back.addEventListener('click', ev=>{ ev.stopPropagation(); showSubs(); }); menu.appendChild(back);
+    c.words.forEach(wd => { const b=document.createElement('button'); b.textContent=wd; b.addEventListener('click', ev=>{ ev.stopPropagation(); menu.style.display='none'; addGroupChar(id, c.sub, wd); }); menu.appendChild(b); });
+    const cu=document.createElement('button'); cu.textContent='Custom\u2026'; cu.style.fontStyle='italic'; cu.addEventListener('click', ev=>{ ev.stopPropagation(); ask(c.sub); }); menu.appendChild(cu);
+  };
+  const showSubs = () => { menu.innerHTML='';
+    GROUP_CHARS.forEach(c => { const b=document.createElement('button'); b.textContent=c.sub; b.addEventListener('click', ev=>{ ev.stopPropagation(); if(c.words && c.words.length) showWords(c); else ask(c.sub); }); menu.appendChild(b); });
+    const cu=document.createElement('button'); cu.textContent='\uFF0B Custom\u2026'; cu.style.fontStyle='italic'; cu.addEventListener('click', ev=>{ ev.stopPropagation(); menu.style.display='none'; Promise.resolve(sitePrompt('Characteristic \u2014 e.g. \u201CWar cry: For the Crown\u201D', '')).then(v => { if(v==null) return; const t=String(v).trim(); if(!t) return; const ci=t.indexOf(':'); if(ci>0) addGroupChar(id, t.slice(0,ci).trim(), t.slice(ci+1).trim()); else addGroupChar(id, 'Trait', t); }); }); menu.appendChild(cu);
+  };
+  showSubs();
+  menu.style.maxHeight='300px'; menu.style.overflowY='auto';
+  menu.style.left = Math.max(8, Math.min(x || 200, window.innerWidth - 220)) + 'px';
+  menu.style.top = Math.max(8, Math.min(y || 200, window.innerHeight - 320)) + 'px';
+  menu.style.display='block';
+}
 async function aiGroupRollup(id){
   const g = beingGroupById(id); if (!g) return '';
   const lw = (typeof npFindEl === 'function') ? npFindEl(g.leader) : null;
@@ -15687,6 +15723,7 @@ async function aiGroupRollup(id){
   const keys = groupKeys(id); const strip = h => (h || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
   const parts = ['Group / party: "' + nm + '" (about ' + (g.count != null ? g.count : keys.length) + ' members)'];
   const gn = (typeof npGetNotes === 'function') ? strip(npGetNotes('group:' + id)) : ''; if (gn) parts.push('Group notes: ' + gn);
+  if (Array.isArray(g.attrs) && g.attrs.length) parts.push('Characteristics: ' + g.attrs.map(x => (x.sub ? x.sub + ' = ' : '') + x.word).join('; '));
   keys.forEach((k, ix) => { const w = (typeof npFindEl === 'function') ? npFindEl(k) : null; if (!w) return; let line = '- ' + (ix === 0 ? 'Leader: ' : '') + (w.name ? (w.name + ' (' + (w.word || '') + ')') : (w.word || '')); const en = (typeof npNotesForEl === 'function') ? strip(npNotesForEl(w)) : ''; if (en) line += ' \u2014 ' + en; parts.push(line); });
   const sys = 'You write a short story-wiki entry for a GROUP / party / army the author has gathered around a leader. Synthesize who they are, what binds them together, and their role in the story. Use ONLY the given sources; invent nothing; never mention the author or the act of writing. Write 2\u20135 sentences, third person, present tense, no preamble.';
   return aiCall(sys, parts.join('\n') + '\n\nWrite the group entry:');
@@ -23832,6 +23869,7 @@ document.addEventListener('DOMContentLoaded', init);
         const _mk=[ _gr.leader ].concat(_gr.members||[]);
         const _members=_mk.map(k=>({ key:k, w:(typeof npFindEl==='function')?npFindEl(k):null })).filter(x=>x.w);
         const _valid=new Set(_members.map(e=>'@groupel:'+e.key));
+        ((_gr.attrs)||[]).forEach(a=>_valid.add('@gchar:'+a.sub+'|'+a.word));
         if(state.cardTrait && !_valid.has(state.cardTrait)) state.cardTrait=null;
         const _lw=(typeof npFindEl==='function')?npFindEl(_gr.leader):null;
         const _gname=(_gr.name && _gr.name.trim()) ? _gr.name.trim() : ((_lw?(_lw.name||_lw.word):'Group')+'’s group');
@@ -23888,6 +23926,18 @@ document.addEventListener('DOMContentLoaded', init);
         addB.addEventListener('click', ev=>{ ev.stopPropagation(); if(typeof startGroupBuild==='function') startGroupBuild(_gr.leader); });
         gl.appendChild(addB);
         body.appendChild(gl);
+        const ch=document.createElement('div'); ch.className='npc-traits npc-identity';
+        const clab=document.createElement('span'); clab.className='npc-seclbl'; clab.textContent='Characteristics'; ch.appendChild(clab);
+        ((_gr.attrs)||[]).forEach((a,idx)=>{ const tab='@gchar:'+a.sub+'|'+a.word; const selOn=state.cardTrait===tab;
+          const c=document.createElement('span'); c.className='npc-trait npc-traitpill'+(selOn?' on':'');
+          const lbl=document.createElement('span'); lbl.className='npc-tw'; lbl.textContent=a.word; c.appendChild(lbl);
+          if(a.sub){ const sb=document.createElement('span'); sb.className='npc-tsub'; sb.textContent=a.sub; c.appendChild(sb); }
+          try{ const nk=key+'||TRAIT||'+tab; const raw=state.session&&state.session.npNotes&&state.session.npNotes[nk]; if(raw && String(raw).replace(/<[^>]*>/g,'').trim()){ const d=document.createElement('span'); d.className='npc-tldot'; d.title='Has notes'; c.appendChild(d); } }catch(e){}
+          const x=document.createElement('span'); x.className='npc-tx'; x.textContent='×'; x.title='Remove this characteristic'; x.addEventListener('click', ev=>{ ev.stopPropagation(); removeGroupChar(_gid, idx); }); c.appendChild(x);
+          c.addEventListener('click', ()=>setTrait(tab)); ch.appendChild(c); });
+        const addC=document.createElement('span'); addC.className='npc-trait npc-add'; addC.textContent='+ characteristic'; addC.title='Add a group characteristic';
+        addC.addEventListener('click', ev=>{ ev.stopPropagation(); if(typeof openGroupCharPicker==='function') openGroupCharPicker(_gid, ev.clientX, ev.clientY); }); ch.appendChild(addC);
+        body.appendChild(ch);
         card.appendChild(body);
         return;
       }
