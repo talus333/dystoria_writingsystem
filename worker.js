@@ -96,7 +96,7 @@ const FRONTIER_MODEL = 'gemini-2.5-flash';  // Gemini fallback model (free tier)
 // errors and falls through, so this can't break the chain.
 const CEREBRAS_URL = 'https://api.cerebras.ai/v1/chat/completions';
 const CEREBRAS_TEXT_MODEL = 'qwen-3-235b-a22b-instruct-2507';   // creative writing
-const CEREBRAS_ICON_MODEL = 'glm-4.6';                          // SVG / design
+const CEREBRAS_ICON_MODEL = 'zai-glm-4.7';                      // SVG / design (Cerebras slug for Z.ai GLM)
 
 // data:image/png;base64,xxxx  ->  Array of byte values (Workers AI vision input)
 function dataUrlToBytes(dataUrl) {
