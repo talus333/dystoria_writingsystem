@@ -2754,6 +2754,26 @@
 .ic-kind{ display:flex; gap:16px; margin:0 0 9px; font-size:12px; align-items:center; }
 .ic-kind label{ display:inline-flex; align-items:center; gap:5px; cursor:pointer; }
 </style>
+
+<!-- ── Analytics (PostHog) ───────────────────────────────────────────────
+     SETUP: 1) create a free project at https://posthog.com
+            2) Project Settings → copy the "Project API key" (starts phc_)
+            3) paste it into POSTHOG_KEY below and pick the matching host.
+     Until a key is set this whole block no-ops — nothing is sent. -->
+<script>
+(function(){
+  var POSTHOG_KEY  = '';                          // e.g. 'phc_xxxxx' — leave '' to disable
+  var POSTHOG_HOST = 'https://us.i.posthog.com';  // use 'https://eu.i.posthog.com' if you pick the EU region
+  window.DYSTORIA_PH_KEY = POSTHOG_KEY;
+  if (!POSTHOG_KEY) return;                        // analytics off until a key is provided
+  !function(t,e){var o,n,p,r;e.__SV||(window.posthog=e,e._i=[],e.init=function(i,s,a){function g(t,e){var o=e.split(".");2==o.length&&(t=t[o[0]],e=o[1]),t[e]=function(){t.push([e].concat(Array.prototype.slice.call(arguments,0)))}}(p=t.createElement("script")).type="text/javascript",p.crossOrigin="anonymous",p.async=!0,p.src=s.api_host.replace(".i.posthog.com","-assets.i.posthog.com")+"/static/array.js",(r=t.getElementsByTagName("script")[0]).parentNode.insertBefore(p,r);var u=e;for(void 0!==a?u=e[a]=[]:a="posthog",u.people=u.people||[],u.toString=function(t){var e="posthog";return"posthog"!==a&&(e+="."+a),t||(e+=" (stub)"),e},u.people.toString=function(){return u.toString(1)+".people (stub)"},o="init capture register register_once register_for_session unregister unregister_for_session getFeatureFlag getFeatureFlagPayload isFeatureEnabled reloadFeatureFlags updateEarlyAccessFeatureEnrollment getEarlyAccessFeatures on onFeatureFlags onSessionId getSurveys getActiveMatchingSurveys renderSurvey canRenderSurvey getNextSurveyStep identify setPersonProperties group resetGroups setPersonPropertiesForFlags resetPersonPropertiesForFlags setGroupPropertiesForFlags resetGroupPropertiesForFlags reset get_distinct_id getGroups get_session_id get_session_replay_url alias set_config startSessionRecording stopSessionRecording sessionRecordingStarted captureException loadToolbar get_property getSessionProperty createPersonProfile opt_in_capturing opt_out_capturing has_opted_in_capturing has_opted_out_capturing clear_opt_in_out_capturing debug getPageViewId captureTraceFeedback captureTraceMetric".split(" "),n=0;n<o.length;n++)g(u,o[n]);e._i.push([i,s,a])},e.__SV=1)}(document,window.posthog||[]);
+  posthog.init(POSTHOG_KEY, {
+    api_host: POSTHOG_HOST,
+    person_profiles: 'identified_only',  // anonymous visitors stay anonymous; only signed-in writers get a profile
+    capture_pageview: true               // covers basic traffic analytics too
+  });
+})();
+</script>
 </head>
 <body>
 <script>try{if(location.hash.lastIndexOf('#/read/',0)===0)document.body.classList.add('guest');}catch(e){}</script>
@@ -17062,6 +17082,13 @@ try { if (window.supabase && window.supabase.createClient) supa = window.supabas
 console.log('Dystoria cloud — SDK loaded:', !!(window.supabase && window.supabase.createClient), '· client:', !!supa);
 window.__supa = () => ({ sdk: !!window.supabase, client: !!supa, user: cloud.user });
 const cloud = { user: null, username: '', token: '' };
+/* ---- analytics (PostHog) — all calls no-op safely if no key is set ---- */
+function track(name, props){ try { if (window.posthog && posthog.capture) posthog.capture(name, props || {}); } catch (e){} }
+function analyticsIdentify(u, username){
+  // Only real accounts get a profile; anonymous comment sessions stay anonymous.
+  try { if (window.posthog && posthog.identify && u && u.id && !u.is_anonymous) posthog.identify(u.id, { email: u.email || undefined, username: username || undefined }); } catch (e){}
+}
+function analyticsReset(){ try { if (window.posthog && posthog.reset) posthog.reset(); } catch (e){} }
 function cloudReady(){ return !!(supa && cloud.user); }
 function myDisplayName(){ return cloud.username || (cloud.user && (cloud.user.email || '').split('@')[0]) || 'Writer'; }
 async function loadMyProfile(){
@@ -17071,6 +17098,7 @@ async function loadMyProfile(){
     const { data } = await supa.from('profiles').select('username').eq('id', cloud.user.id).single();
     cloud.username = (data && data.username) || '';
   } catch (e){}
+  analyticsIdentify(cloud.user, cloud.username);   // attach username to the analytics profile
   updateAccountUI();
   if (live.on) liveScheduleTrack();
 }
@@ -18034,6 +18062,7 @@ function renderLegend(){
   dead.innerHTML = h + '</div>';
 }
 function newSession(){
+  track('story_started');
   saveSession();
   liveLeave();
   renderShareNote(null);
@@ -19086,6 +19115,7 @@ function overlaySwitch(fn){
 }
 // Unified mode switch from the Notepad/Write/Read/Edit pills (deskbar + Read/Edit headers).
 function goMode(target){
+  track('mode_opened', { mode: target });   // notepad(Map) / write / edit(Refine) / read / wiki
   if (target === 'wiki'){ if (typeof openWiki === 'function') openWiki(); return; }
   if (typeof closeWiki === 'function') closeWiki();   // leaving the wiki for any other mode
   const inRead = $('readMode').classList.contains('show');
@@ -22265,7 +22295,7 @@ function init(){
     if (!supa) return;
     authMsg('');
     const { error } = await supa.auth.signInWithPassword({ email: $('authEmail').value.trim(), password: $('authPass').value });
-    if (error) authMsg(error.message); else { $('authCard').classList.remove('show'); flashStatus('Signed in'); }
+    if (error) authMsg(error.message); else { track('signed_in'); $('authCard').classList.remove('show'); flashStatus('Signed in'); }
   });
   $('authSignUp').addEventListener('click', async () => {
     if (!supa) return;
@@ -22281,11 +22311,12 @@ function init(){
       if (error){ authMsg(error.message); return; }
       try { await supa.from('profiles').update({ username }).eq('id', cloud.user.id); } catch (e){}
       cloud.username = username; updateAccountUI();
+      track('signed_up', { from_anon: true });
       authMsg('Almost there — check your email to confirm, then you’re set as ' + username + '.');
       return;
     }
     const { error } = await supa.auth.signUp({ email, password: pass, options: { data: { username } } });
-    if (error) authMsg(error.message); else authMsg('Account created — check your email if confirmation is on, then sign in.');
+    if (error) authMsg(error.message); else { track('signed_up', { from_anon: false }); authMsg('Account created — check your email if confirmation is on, then sign in.'); }
   });
   $('authSignOut').addEventListener('click', async () => {
     if (!supa) return;
@@ -22319,7 +22350,8 @@ function init(){
       cloud.user = session ? session.user : null;
       cloud.token = session ? session.access_token : '';
       updateAccountUI();
-      if (cloud.user){ loadMyProfile(); cloudPull(); } else { cloud.username = ''; liveLeave(); renderShareNote(null); }
+      if (cloud.user){ analyticsIdentify(cloud.user, cloud.username); loadMyProfile(); cloudPull(); }
+      else { analyticsReset(); cloud.username = ''; liveLeave(); renderShareNote(null); }
     });
     supa.auth.getSession().then(({ data }) => {
       cloud.user = (data && data.session) ? data.session.user : null;
