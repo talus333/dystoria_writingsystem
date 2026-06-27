@@ -2745,8 +2745,6 @@
 .group-act{ cursor:pointer; opacity:.5; padding:0 2px; }
 .group-act:hover{ opacity:1; }
 .group-x:hover{ color:#c0392b; }
-.group-edge{ stroke:var(--gold,#cda434); stroke-width:1.4; stroke-dasharray:4 3; opacity:.7; fill:none; pointer-events:stroke; }
-.group-edge-lbl{ fill:#8a6d22; font-size:9px; font-family:var(--sans, sans-serif); }
 .ic-kind{ display:flex; gap:16px; margin:0 0 9px; font-size:12px; align-items:center; }
 .ic-kind label{ display:inline-flex; align-items:center; gap:5px; cursor:pointer; }
 </style>
@@ -8862,9 +8860,9 @@ function markGroupSel(){
 /* ---------------- drag-to-connect ---------------- */
 let linkDragState = null;
 function linkDragActive(){ return !!linkDragState; }
-function startLinkDrag(i, ev, groupId){
+function startLinkDrag(i, ev){
   const sky = $('skySvg');
-  linkDragState = { from: i, target: null, fromGroup: groupId || null };
+  linkDragState = { from: i, target: null };
   const draft = document.createElementNS('http://www.w3.org/2000/svg', 'line');
   draft.setAttribute('class', 'edge-draft');
   sky.appendChild(draft);
@@ -8880,10 +8878,8 @@ function updateLinkDrag(e){
   const sky = $('skySvg');
   const p = skyPt(e);
   let best = null, bd = 52;
-  const _gExcl = (linkDragState.fromGroup && typeof beingGroupById === 'function') ? beingGroupById(linkDragState.fromGroup) : null;
   state.nodes.forEach((nd, j) => {
     if (j === linkDragState.from) return;
-    if (_gExcl){ const _k = wordKey(nd); if (_gExcl.leader === _k || (_gExcl.members || []).indexOf(_k) >= 0) return; }
     const d = Math.hypot(nd.x - p.x, nd.y - p.y);
     if (d < bd){ bd = d; best = j; }
   });
@@ -8913,47 +8909,10 @@ function endLinkDrag(cancel, ev){
   let target = ld.target;
   if (target == null && ev){   // robustness: the final pointermove can be missed — recompute the drop target from the release point
     const p = skyPt(ev); let best = null, bd = 60;
-    const _gx = (ld.fromGroup && typeof beingGroupById === 'function') ? beingGroupById(ld.fromGroup) : null;
-    state.nodes.forEach((nd, j) => { if (j === ld.from) return; if (_gx){ const _k = wordKey(nd); if (_gx.leader === _k || (_gx.members || []).indexOf(_k) >= 0) return; } const d = Math.hypot(nd.x - p.x, nd.y - p.y); if (d < bd){ bd = d; best = j; } });
+    state.nodes.forEach((nd, j) => { if (j === ld.from) return; const d = Math.hypot(nd.x - p.x, nd.y - p.y); if (d < bd){ bd = d; best = j; } });
     target = best;
   }
-  if (target != null){ if (ld.fromGroup) addGroupLink(ld.fromGroup, target); else beginRelationship(ld.from, target); }
-}
-function renderGroupLinks(svg){
-  try{
-    if (state.groupBuild) return;
-    const NS = 'http://www.w3.org/2000/svg';
-    const groups = (typeof beingGroupsList === 'function') ? beingGroupsList() : [];
-    const findNode = key => (state.nodes || []).findIndex(n => n && (typeof wordKey === 'function') && wordKey(n) === key);
-    groups.forEach(gr => {
-      if (!gr || gr.exploded) return;
-      if (typeof beingGroupActiveHere === 'function' && !beingGroupActiveHere(gr, state.frameIdx)) return;
-      const links = gr.links || []; if (!links.length) return;
-      const li = findNode(gr.leader);
-      const ln = (li >= 0) ? state.nodes[li] : null; if (!ln) return;
-      links.forEach(lk => {
-        const ti = findNode(lk.to); if (ti < 0) return;
-        const tn = state.nodes[ti]; if (!tn) return; if (typeof isMentalSpace === 'function' && isMentalSpace(tn)) return;
-        const qk = gr.id + '||' + lk.to; const sel = (state.groupQuill === qk);
-        const x1 = ln.x, y1 = ln.y + 5, x2 = tn.x, y2 = tn.y + 5;
-        const line = document.createElementNS(NS, 'line'); line.setAttribute('class', 'edge rel groupconn' + (sel ? ' rel-sel' : ''));
-        line.setAttribute('x1', x1); line.setAttribute('y1', y1); line.setAttribute('x2', x2); line.setAttribute('y2', y2);
-        if (sel){ line.style.strokeOpacity = '0.55'; line.style.strokeWidth = '3'; }
-        const tt = document.createElementNS(NS, 'title'); tt.textContent = ((gr.name && gr.name.trim()) ? gr.name.trim() : 'Group') + (lk.type ? (' \u2014 ' + lk.type) : ' \u2014 connected') + ' \u2192 ' + (tn.name || tn.word || ''); line.appendChild(tt);
-        svg.appendChild(line);
-        const hit = document.createElementNS(NS, 'line'); hit.setAttribute('class', 'edge-hit'); hit.setAttribute('x1', x1); hit.setAttribute('y1', y1); hit.setAttribute('x2', x2); hit.setAttribute('y2', y2); hit.style.cursor = 'pointer';
-        hit.addEventListener('click', ev => { ev.stopPropagation(); state.groupQuill = sel ? null : qk; renderConstellation(); });
-        svg.appendChild(hit);
-        if (sel){ const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
-          const q = makeCircleBtn(mx, my, () => makeLucide('feather', { cls: 'ctl-ic', color: 'currentColor', x: 0, y: 0, scale: 0.5, sw: 2 }), 'Notes about this connection', ev => { ev.stopPropagation(); state.groupQuill = null; if (typeof openGroupConnNotes === 'function') openGroupConnNotes(gr.id, lk.to); }, { r: 10 });
-          svg.appendChild(q);
-          const lab = document.createElementNS(NS, 'text'); lab.setAttribute('class', 'rel-quill-type' + (lk.type ? '' : ' empty')); lab.setAttribute('text-anchor', 'middle'); lab.setAttribute('x', mx); lab.setAttribute('y', my + 24); lab.style.cursor = 'pointer'; lab.textContent = lk.type || 'name it';
-          lab.addEventListener('click', ev => { ev.stopPropagation(); Promise.resolve(sitePrompt('Connection type (e.g. \u201CSworn to\u201D, \u201CHunting\u201D)', lk.type || '')).then(t => { if (t !== null && typeof setGroupLinkType === 'function') setGroupLinkType(gr.id, lk.to, t); }); });
-          svg.appendChild(lab);
-        }
-      });
-    });
-  }catch(e){}
+  if (target != null){ beginRelationship(ld.from, target); }
 }
 /* ---------------- constellation ---------------- */
 function layoutConstellation(){
@@ -14816,7 +14775,6 @@ function renderConstellation(){
       });
     }
   });
-  if (typeof renderGroupLinks === 'function') renderGroupLinks(svg);
   state.nodes.forEach((nd, i) => {
     if (nd.role === 'frame' || nd.role === 'constraint') return;
     if (nd.cat === 'event' && nd.role === 'word' && (nd.frame == null ? (state.frameIdx || 0) !== 0 : nd.frame !== (state.frameIdx || 0))) return;
@@ -15159,7 +15117,7 @@ function renderConstellation(){
           ic: () => { const t = document.createElementNS(NSx, 'text'); t.setAttribute('class', 'ctl-gly' + (_gInF ? ' infocus' : '')); t.setAttribute('text-anchor', 'middle'); t.setAttribute('y', 4); t.textContent = _gInF ? '\u25C9' : '\u25CE'; return t; } });
         circ.push({ title: 'Add the group to a thread\u2026', on: ev => { ev.stopPropagation(); openGroupThreadMenu(_gid, ev.clientX || 200, ev.clientY || 200); },
           ic: () => { const ids = (typeof groupThreadIds === 'function') ? groupThreadIds(_gid) : []; const col = ids.length ? (((typeof threadById === 'function') && threadById(ids[0])) ? threadById(ids[0]).color : '#888') : 'currentColor'; const g2 = document.createElementNS(NSx, 'g'); g2.setAttribute('class', 'ctl-ic'); const p = document.createElementNS(NSx, 'path'); p.setAttribute('d', 'M-6.5 0 Q-3.25 -3.4 0 0 T6.5 0'); p.setAttribute('fill', 'none'); p.setAttribute('stroke', col); p.setAttribute('stroke-width', '1'); p.setAttribute('stroke-linecap', 'round'); g2.appendChild(p); [[-6.5,0],[0,0],[6.5,0]].forEach(k => { const c = document.createElementNS(NSx, 'circle'); c.setAttribute('cx', k[0]); c.setAttribute('cy', k[1]); c.setAttribute('r', '1.3'); c.setAttribute('fill', col); g2.appendChild(c); }); return g2; } });
-        circ.push({ title: 'Drag onto another element to connect the group', down: true, on: ev => { ev.stopPropagation(); ev.preventDefault(); startLinkDrag(i, ev, _gid); },
+        circ.push({ title: 'Drag onto another element to connect the group', down: true, on: ev => { ev.stopPropagation(); ev.preventDefault(); startLinkDrag(i, ev); },
           ic: () => makeLucide('link', { cls: 'ctl-ic', color: 'currentColor', x: 0, y: 0, scale: 0.5, sw: 2.2 }) });
         circ.push({ title: 'Open the group\u2019s wiki', on: ev => { ev.stopPropagation(); if (typeof openGroupWiki === 'function') openGroupWiki(_gid); },
           ic: () => makeLucide('book-open', { cls: 'ctl-ic wbook none', color: 'currentColor', x: 0, y: 0, scale: 0.5, sw: 2 }) });
@@ -15710,7 +15668,6 @@ function openThreadMenu(i, x, y){
 function threadElements(id){ if (!state.session || !state.session.threadTags) return []; const out = [], seen = {}; Object.keys(state.session.threadTags).forEach(k => { if ((state.session.threadTags[k] || []).indexOf(id) < 0) return; if (seen[k]) return; seen[k] = 1; const w = (typeof npFindEl === 'function') ? npFindEl(k) : null; if (w) out.push({ key: k, w: w }); }); return out; }
 function openThreadNotes(id){ state.npCatFilter = 'threads'; if (typeof npSelect === 'function') npSelect('thread:' + id); document.body.classList.add('np-open'); const t = $('npTab'); if (t){ const l = t.querySelector('.npt-lbl'); if (l) l.textContent = 'Hide'; } if (typeof renderNpCard === 'function') renderNpCard(); if (typeof renderNpElements === 'function') renderNpElements(); }
 function openGroupNotes(id){ state.npCatFilter = 'groups'; if (typeof npSelect === 'function') npSelect('group:' + id); document.body.classList.add('np-open'); const t = $('npTab'); if (t){ const l = t.querySelector('.npt-lbl'); if (l) l.textContent = 'Hide'; } if (typeof renderNpCard === 'function') renderNpCard(); if (typeof renderNpElements === 'function') renderNpElements(); }
-function openGroupConnNotes(gid, to){ state.npCatFilter = 'groups'; if (typeof npSelect === 'function') npSelect('group:' + gid); state.cardTrait = '@conn:' + to; document.body.classList.add('np-open'); const t = $('npTab'); if (t){ const l = t.querySelector('.npt-lbl'); if (l) l.textContent = 'Hide'; } if (typeof renderNpCard === 'function') renderNpCard(); if (typeof renderNpElements === 'function') renderNpElements(); }
 function groupKeys(id){ const g = beingGroupById(id); return g ? [g.leader].concat(g.members || []) : []; }
 function groupThreadIds(id){ const out = []; groupKeys(id).forEach(k => { const w = (typeof npFindEl === 'function') ? npFindEl(k) : null; ((typeof wordThreadIds === 'function') ? wordThreadIds(w) : []).forEach(tid => { if (out.indexOf(tid) < 0) out.push(tid); }); }); return out; }
 function toggleGroupFocus(id){ const keys = groupKeys(id); if (!keys.length) return; state.focusKeys = state.focusKeys || []; const allIn = keys.every(k => state.focusKeys.indexOf(k) >= 0); if (allIn){ state.focusKeys = state.focusKeys.filter(k => keys.indexOf(k) < 0); } else { keys.forEach(k => { if (state.focusKeys.indexOf(k) < 0) state.focusKeys.push(k); }); } if (typeof renderFocus === 'function') renderFocus(); if (typeof syncFocusToSession === 'function') syncFocusToSession(); renderConstellation(); if (typeof flashStatus === 'function') flashStatus(allIn ? 'Removed the group from the Writing Focus' : 'Added the group to the Writing Focus'); }
@@ -15749,23 +15706,6 @@ function ensureGroupAttrs(g){ if(g && !Array.isArray(g.attrs)) g.attrs = []; ret
 function addGroupChar(id, sub, word){ const g = beingGroupById(id); if(!g || !word) return; ensureGroupAttrs(g); const wd = String(word).trim(); if(!wd) return; if(!g.attrs.some(a => a.sub===sub && (a.word||'').toLowerCase()===wd.toLowerCase())) g.attrs.push({ sub: sub||'Trait', word: wd }); if(typeof scheduleAutosave==='function') scheduleAutosave(); if(typeof renderNpCard==='function') renderNpCard(); }
 function removeGroupChar(id, idx){ const g = beingGroupById(id); if(!g || !Array.isArray(g.attrs)) return; g.attrs.splice(idx,1); if(typeof scheduleAutosave==='function') scheduleAutosave(); if(typeof renderNpCard==='function') renderNpCard(); }
 function openGroupCharPicker(id, x, y){ if(window.openGroupTraitPicker){ window.openGroupTraitPicker(id, x, y); } }
-function addGroupLinkKey(gid, tk, label){ const g = beingGroupById(gid); if(!g || !tk) return; if(tk===g.leader || (g.members||[]).indexOf(tk)>=0){ if(typeof flashStatus==='function') flashStatus('That being is already in the group'); return; } g.links = Array.isArray(g.links) ? g.links : []; if(g.links.some(l=>l.to===tk)){ if(typeof flashStatus==='function') flashStatus('Already connected'); return; } g.links.push({ to: tk, type: '' }); if(typeof scheduleAutosave==='function') scheduleAutosave(); if(typeof renderNpCard==='function') renderNpCard(); renderConstellation(); if(typeof flashStatus==='function') flashStatus('Connected the group to ' + (label || 'element')); }
-function addGroupLink(gid, targetIdx){ const tw = state.prompt && state.prompt.words[targetIdx]; if(!tw) return; addGroupLinkKey(gid, wordKey(tw), tw.name || tw.word || 'element'); }
-function removeGroupLink(gid, to){ const g = beingGroupById(gid); if(!g || !Array.isArray(g.links)) return; g.links = g.links.filter(l => l.to !== to); if(typeof scheduleAutosave==='function') scheduleAutosave(); if(typeof renderNpCard==='function') renderNpCard(); renderConstellation(); }
-function setGroupLinkType(gid, to, type){ const g = beingGroupById(gid); if(!g || !Array.isArray(g.links)) return; const l = g.links.find(x => x.to === to); if(l){ l.type = (type || '').trim(); if(typeof scheduleAutosave==='function') scheduleAutosave(); if(typeof renderNpCard==='function') renderNpCard(); renderConstellation(); } }
-function openGroupConnectPicker(gid, x, y){
-  const g = beingGroupById(gid); if(!g) return;
-  const menu = $('aspectMenu'); if(!menu) return; menu.innerHTML=''; if(menu.parentElement!==document.body) document.body.appendChild(menu);
-  const inGroup = new Set([g.leader].concat(g.members||[])); const linked = new Set((g.links||[]).map(l=>l.to));
-  const els = (typeof npStoryElements==='function') ? npStoryElements() : [];
-  const avail = els.filter(e => !inGroup.has(e.key) && !linked.has(e.key));
-  if(!avail.length){ const d=document.createElement('div'); d.className='np-empty'; d.style.padding='6px 10px'; d.textContent='No other elements to connect'; menu.appendChild(d); }
-  avail.forEach(e => { const w=e.w; const b=document.createElement('button'); b.textContent=(w.name||w.word||'')+' \u00B7 '+(((typeof getCat==='function'&&getCat(w.cat))?getCat(w.cat).name:w.cat)||''); b.addEventListener('click', ev=>{ ev.stopPropagation(); menu.style.display='none'; addGroupLinkKey(gid, e.key, w.name||w.word); }); menu.appendChild(b); });
-  menu.style.maxHeight='300px'; menu.style.overflowY='auto';
-  menu.style.left = Math.max(8, Math.min(x || 200, window.innerWidth - 230)) + 'px';
-  menu.style.top = Math.max(8, Math.min(y || 200, window.innerHeight - 320)) + 'px';
-  menu.style.display='block';
-}
 async function aiGroupRollup(id){
   const g = beingGroupById(id); if (!g) return '';
   const lw = (typeof npFindEl === 'function') ? npFindEl(g.leader) : null;
@@ -15774,7 +15714,6 @@ async function aiGroupRollup(id){
   const parts = ['Group / party: "' + nm + '" (about ' + (g.count != null ? g.count : keys.length) + ' members)'];
   const gn = (typeof npGetNotes === 'function') ? strip(npGetNotes('group:' + id)) : ''; if (gn) parts.push('Group notes: ' + gn);
   if (Array.isArray(g.attrs) && g.attrs.length) parts.push('Characteristics: ' + g.attrs.map(x => (x.sub ? x.sub + ' = ' : '') + x.word).join('; '));
-  if (Array.isArray(g.links) && g.links.length) parts.push('Connections: ' + g.links.map(l => { const w = (typeof npFindEl === 'function') ? npFindEl(l.to) : null; return (l.type ? l.type + ' ' : 'tied to ') + (w ? (w.name || w.word) : l.to); }).join('; '));
   keys.forEach((k, ix) => { const w = (typeof npFindEl === 'function') ? npFindEl(k) : null; if (!w) return; let line = '- ' + (ix === 0 ? 'Leader: ' : '') + (w.name ? (w.name + ' (' + (w.word || '') + ')') : (w.word || '')); const en = (typeof npNotesForEl === 'function') ? strip(npNotesForEl(w)) : ''; if (en) line += ' \u2014 ' + en; parts.push(line); });
   const sys = 'You write a short story-wiki entry for a GROUP / party / army the author has gathered around a leader. Synthesize who they are, what binds them together, and their role in the story. Use ONLY the given sources; invent nothing; never mention the author or the act of writing. Write 2\u20135 sentences, third person, present tense, no preamble.';
   return aiCall(sys, parts.join('\n') + '\n\nWrite the group entry:');
@@ -23934,7 +23873,6 @@ document.addEventListener('DOMContentLoaded', init);
         const _members=_mk.map(k=>({ key:k, w:(typeof npFindEl==='function')?npFindEl(k):null })).filter(x=>x.w);
         const _valid=new Set(_members.map(e=>'@groupel:'+e.key));
         ((_gr.attrs)||[]).forEach(a=>_valid.add('@gchar:'+a.sub+'|'+a.word));
-        ((_gr.links)||[]).forEach(l=>_valid.add('@conn:'+l.to));
         if(state.cardTrait && !_valid.has(state.cardTrait)) state.cardTrait=null;
         const _lw=(typeof npFindEl==='function')?npFindEl(_gr.leader):null;
         const _gname=(_gr.name && _gr.name.trim()) ? _gr.name.trim() : ((_lw?(_lw.name||_lw.word):'Group')+'’s group');
@@ -24007,19 +23945,6 @@ document.addEventListener('DOMContentLoaded', init);
         const addC=document.createElement('span'); addC.className='npc-trait npc-add'; addC.textContent='+ characteristic'; addC.title='Add a group characteristic';
         addC.addEventListener('click', ev=>{ ev.stopPropagation(); if(typeof openGroupCharPicker==='function') openGroupCharPicker(_gid, ev.clientX, ev.clientY); }); ch.appendChild(addC);
         body.appendChild(ch);
-        const cn=document.createElement('div'); cn.className='npc-traits npc-identity';
-        const cnlab=document.createElement('span'); cnlab.className='npc-seclbl'; cnlab.textContent='Connections'; cn.appendChild(cnlab);
-        ((_gr.links)||[]).forEach(lk=>{ const w=(typeof npFindEl==='function')?npFindEl(lk.to):null; const nm=w?(w.name||w.word):lk.to; const selOn=state.cardTrait==='@conn:'+lk.to;
-          const c=document.createElement('span'); c.className='npc-trait npc-traitpill'+(selOn?' on':'');
-          const sw=document.createElement('span'); sw.className='npc-gswatch'; sw.style.background=(w&&typeof catColor==='function')?catColor(w.cat):'#888'; c.appendChild(sw);
-          const lbl=document.createElement('span'); lbl.className='npc-tw'; lbl.textContent=nm; c.appendChild(lbl);
-          const sb=document.createElement('span'); sb.className='npc-tsub'; sb.textContent=lk.type||'connection'; c.appendChild(sb);
-          try{ const nk=key+'||TRAIT||@conn:'+lk.to; const raw=state.session&&state.session.npNotes&&state.session.npNotes[nk]; if(raw && String(raw).replace(/<[^>]*>/g,'').trim()){ const d=document.createElement('span'); d.className='npc-tldot'; d.title='Has notes'; c.appendChild(d); } }catch(e){}
-          const dv=document.createElement('span'); dv.className='npc-tx'; dv.textContent='▾'; dv.title='Set connection type'; dv.addEventListener('click', ev=>{ ev.stopPropagation(); Promise.resolve(sitePrompt('Connection type (e.g. “Sworn to”, “Hunting”)', lk.type||'')).then(t=>{ if(t!==null) setGroupLinkType(_gid, lk.to, t); }); }); c.appendChild(dv);
-          const x=document.createElement('span'); x.className='npc-tx'; x.textContent='×'; x.title='Remove connection'; x.addEventListener('click', ev=>{ ev.stopPropagation(); removeGroupLink(_gid, lk.to); }); c.appendChild(x);
-          c.addEventListener('click', ()=>setTrait('@conn:'+lk.to)); cn.appendChild(c); });
-        const addCn=document.createElement('span'); addCn.className='npc-trait npc-add'; addCn.textContent='+ connection'; addCn.title='Connect the group to another element'; addCn.addEventListener('click', ev=>{ ev.stopPropagation(); if(typeof openGroupConnectPicker==='function') openGroupConnectPicker(_gid, ev.clientX, ev.clientY); }); cn.appendChild(addCn);
-        body.appendChild(cn);
         card.appendChild(body);
         return;
       }
