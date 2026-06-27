@@ -18239,7 +18239,7 @@ function appendImportProse(ed, body){
   String(body || '').split(/\n{2,}/).forEach(p => { const t = p.trim(); if (!t && ed.lastElementChild) return; const x = document.createElement('div'); x.textContent = t; ed.appendChild(x); });
 }
 /* create directed starter bonds from the AI's relationships (by name); heuristic fallback if none */
-function seedImportBonds(rels){
+function seedRelBonds(rels){
   if (!state.prompt) return 0;
   const words = state.prompt.words;
   const findIdx = nm => { const t = String(nm || '').trim().toLowerCase(); if (!t) return -1; return words.findIndex(w => (w.name || '').toLowerCase() === t || (w.word || '').toLowerCase() === t); };
@@ -18254,14 +18254,17 @@ function seedImportBonds(rels){
     const link = { a, b, fwd: null, rev: null }; link[fi < ti ? 'fwd' : 'rev'] = rr;
     state.prompt.links.push(link); made++;
   });
-  if (!made){   // nothing from the AI → connect the cast heuristically, like the start window
-    const idxOf = cid => words.map((w, i) => (w.cat === cid && w.role !== 'frame') ? i : -1).filter(i => i >= 0);
-    const bs = idxOf('being'), ss = idxOf('setting'), os = idxOf('object');
-    bs.forEach((bi, k) => { if (ss.length) starterBond(bi, ss[k % ss.length]); if (os.length) starterBond(bi, os[k % os.length]); });
-    if (bs.length >= 2) starterBond(bs[0], bs[1]);
-  }
   return made;
 }
+function seedHeuristicBonds(){
+  if (!state.prompt) return;
+  const words = state.prompt.words;
+  const idxOf = cid => words.map((w, i) => (w.cat === cid && w.role !== 'frame') ? i : -1).filter(i => i >= 0);
+  const bs = idxOf('being'), ss = idxOf('setting'), os = idxOf('object');
+  bs.forEach((bi, k) => { if (ss.length) starterBond(bi, ss[k % ss.length]); if (os.length) starterBond(bi, os[k % os.length]); });
+  if (bs.length >= 2) starterBond(bs[0], bs[1]);
+}
+function seedImportBonds(rels){ const m = seedRelBonds(rels); if (!m) seedHeuristicBonds(); return m; }
 function importShow(view){
   $('importEntry').style.display = view === 'entry' ? 'block' : 'none';
   $('importReview').style.display = view === 'review' ? 'block' : 'none';
@@ -18475,7 +18478,7 @@ async function confirmImport(){
   ensureSession();
   state.session.customWords = state.session.customWords || {};
   state.session.wikiAI = state.session.wikiAI || {};
-  // the first imported section's prompt receives the cast + bonds; later sections carry them forward
+  // place each element into the section(s) where it actually appears; the cast carries forward, events stay section-level
   let firstIdx, firstPrompt;
   if (asSection){
     firstIdx = state.frames.length;
@@ -18488,16 +18491,31 @@ async function confirmImport(){
     $('sectionTitle').value = secs[0].title || '';
   }
   appendImportProse(ed, secs[0].body);
-  let added = 0;
-  IMP.elements.forEach(el => { if (el.include && placeImportElement(el)) added++; });
-  seedImportBonds(IMP.relationships);
-  for (let i = 1; i < secs.length; i++){                 // carry the cast forward into each later section
-    const idx = firstIdx + i;
-    const copy = pruneEventsFromCopy(JSON.parse(JSON.stringify(firstPrompt)));
-    state.frames.push({ gap: 'later', prompt: copy, stage: idx, stageName: secs[i].title || '' });
-    appendDivider(idx, secs[i].title);
-    appendImportProse(ed, secs[i].body);
+  const _bodies = secs.map(x => String(x.body || '').toLowerCase());
+  const _termOf = el => String(el.name || '').toLowerCase().trim();
+  const _inSec = (el, si) => { const t = _termOf(el); return t ? textHasWord(_bodies[si], t) : false; };
+  const _firstSec = el => { for (let i = 0; i < _bodies.length; i++){ if (_inSec(el, i)) return i; } return 0; };
+  const incl = IMP.elements.filter(el => el.include);
+  let added = 0; const placedKey = new Set(), evPlaced = new Set();
+  for (let si = 0; si < secs.length; si++){
+    const absIdx = firstIdx + si;
+    let prompt;
+    if (si === 0){ prompt = firstPrompt; }
+    else {
+      prompt = pruneEventsFromCopy(JSON.parse(JSON.stringify(state.frames[absIdx - 1].prompt)));
+      state.frames.push({ gap: 'later', prompt: prompt, stage: absIdx, stageName: secs[si].title || '' });
+      appendDivider(absIdx, secs[si].title);
+      appendImportProse(ed, secs[si].body);
+    }
+    state.frameIdx = absIdx; state.prompt = prompt; state.activeSet = 0;
+    incl.forEach(el => { if (el.cat === 'event' || placedKey.has(el)) return; if (_firstSec(el) === si){ if (placeImportElement(el)){ added++; placedKey.add(el); } } });
+    incl.forEach(el => { if (el.cat !== 'event') return; if (_inSec(el, si)){ if (placeImportElement(el)){ added++; evPlaced.add(el); } } });
   }
+  state.frameIdx = firstIdx; state.prompt = state.frames[firstIdx].prompt;
+  incl.forEach(el => { if (el.cat === 'event' && !evPlaced.has(el)){ if (placeImportElement(el)) added++; } });
+  let _bonds = 0;
+  for (let si = 0; si < secs.length; si++){ state.frameIdx = firstIdx + si; state.prompt = state.frames[firstIdx + si].prompt; _bonds += seedRelBonds(IMP.relationships); }
+  if (!_bonds){ const li = firstIdx + secs.length - 1; state.frameIdx = li; state.prompt = state.frames[li].prompt; seedHeuristicBonds(); }
   state.frameIdx = firstIdx; state.prompt = state.frames[firstIdx].prompt;
   if (IMP.overview){ state.session.wikiOverview = asSection && state.session.wikiOverview ? (state.session.wikiOverview + ' ' + IMP.overview) : IMP.overview; }
   state.session.text = editorText(); state.session.html = editorHTML(); state.session.frames = state.frames; state.session.words = state.prompt.words;
