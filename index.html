@@ -15734,25 +15734,7 @@ const GROUP_CHARS = [
 function ensureGroupAttrs(g){ if(g && !Array.isArray(g.attrs)) g.attrs = []; return g ? g.attrs : []; }
 function addGroupChar(id, sub, word){ const g = beingGroupById(id); if(!g || !word) return; ensureGroupAttrs(g); const wd = String(word).trim(); if(!wd) return; if(!g.attrs.some(a => a.sub===sub && (a.word||'').toLowerCase()===wd.toLowerCase())) g.attrs.push({ sub: sub||'Trait', word: wd }); if(typeof scheduleAutosave==='function') scheduleAutosave(); if(typeof renderNpCard==='function') renderNpCard(); }
 function removeGroupChar(id, idx){ const g = beingGroupById(id); if(!g || !Array.isArray(g.attrs)) return; g.attrs.splice(idx,1); if(typeof scheduleAutosave==='function') scheduleAutosave(); if(typeof renderNpCard==='function') renderNpCard(); }
-function openGroupCharPicker(id, x, y){
-  const g = beingGroupById(id); if(!g) return; ensureGroupAttrs(g);
-  const menu = $('aspectMenu'); if(!menu) return; if(menu.parentElement!==document.body) document.body.appendChild(menu);
-  const ask = (sub) => { menu.style.display='none'; Promise.resolve(sitePrompt(sub + '\u2026', '')).then(v => { if(v!=null && String(v).trim()) addGroupChar(id, sub, v); }); };
-  const showWords = (c) => { menu.innerHTML='';
-    const back = document.createElement('button'); back.textContent='\u2039 Back'; back.style.fontStyle='italic'; back.addEventListener('click', ev=>{ ev.stopPropagation(); showSubs(); }); menu.appendChild(back);
-    c.words.forEach(wd => { const b=document.createElement('button'); b.textContent=wd; b.addEventListener('click', ev=>{ ev.stopPropagation(); menu.style.display='none'; addGroupChar(id, c.sub, wd); }); menu.appendChild(b); });
-    const cu=document.createElement('button'); cu.textContent='Custom\u2026'; cu.style.fontStyle='italic'; cu.addEventListener('click', ev=>{ ev.stopPropagation(); ask(c.sub); }); menu.appendChild(cu);
-  };
-  const showSubs = () => { menu.innerHTML='';
-    GROUP_CHARS.forEach(c => { const b=document.createElement('button'); b.textContent=c.sub; b.addEventListener('click', ev=>{ ev.stopPropagation(); if(c.words && c.words.length) showWords(c); else ask(c.sub); }); menu.appendChild(b); });
-    const cu=document.createElement('button'); cu.textContent='\uFF0B Custom\u2026'; cu.style.fontStyle='italic'; cu.addEventListener('click', ev=>{ ev.stopPropagation(); menu.style.display='none'; Promise.resolve(sitePrompt('Characteristic \u2014 e.g. \u201CWar cry: For the Crown\u201D', '')).then(v => { if(v==null) return; const t=String(v).trim(); if(!t) return; const ci=t.indexOf(':'); if(ci>0) addGroupChar(id, t.slice(0,ci).trim(), t.slice(ci+1).trim()); else addGroupChar(id, 'Trait', t); }); }); menu.appendChild(cu);
-  };
-  showSubs();
-  menu.style.maxHeight='300px'; menu.style.overflowY='auto';
-  menu.style.left = Math.max(8, Math.min(x || 200, window.innerWidth - 220)) + 'px';
-  menu.style.top = Math.max(8, Math.min(y || 200, window.innerHeight - 320)) + 'px';
-  menu.style.display='block';
-}
+function openGroupCharPicker(id, x, y){ if(window.openGroupTraitPicker){ window.openGroupTraitPicker(id, x, y); } }
 function addGroupLinkKey(gid, tk, label){ const g = beingGroupById(gid); if(!g || !tk) return; if(tk===g.leader || (g.members||[]).indexOf(tk)>=0){ if(typeof flashStatus==='function') flashStatus('That being is already in the group'); return; } g.links = Array.isArray(g.links) ? g.links : []; if(g.links.some(l=>l.to===tk)){ if(typeof flashStatus==='function') flashStatus('Already connected'); return; } g.links.push({ to: tk, type: '' }); if(typeof scheduleAutosave==='function') scheduleAutosave(); if(typeof renderNpCard==='function') renderNpCard(); renderConstellation(); if(typeof flashStatus==='function') flashStatus('Connected the group to ' + (label || 'element')); }
 function addGroupLink(gid, targetIdx){ const tw = state.prompt && state.prompt.words[targetIdx]; if(!tw) return; addGroupLinkKey(gid, wordKey(tw), tw.name || tw.word || 'element'); }
 function removeGroupLink(gid, to){ const g = beingGroupById(gid); if(!g || !Array.isArray(g.links)) return; g.links = g.links.filter(l => l.to !== to); if(typeof scheduleAutosave==='function') scheduleAutosave(); if(typeof renderNpCard==='function') renderNpCard(); renderConstellation(); }
@@ -22732,6 +22714,7 @@ function init(){
   };
   sky.addEventListener('pointerup', (e) => { terrainEnd(true); lassoEnd(); endLinkDrag(false, e); endPan(); endDrag(); });
   sky.addEventListener('pointercancel', () => { terrainEnd(false); lassoEnd(); endLinkDrag(true); endPan(); endDrag(); });
+  document.addEventListener('pointerup', e => { if (typeof linkDragActive === 'function' && linkDragActive()) endLinkDrag(false, e); }, true);   // guarantee the link drop is handled even if the sky never gets the pointerup
   sky.addEventListener('click', e => {
     if (state.lastDrag && Date.now() - state.lastDrag < 250) return;
     if (state.terrainDraw || state.pathDraw || state.shapeDraw || state.eraseDraw) return;   // draw/erase clicks are handled in pointerdown
@@ -23369,7 +23352,9 @@ document.addEventListener('DOMContentLoaded', init);
     }
 
     /* ---- searchable trait picker (same UX as the element ADD card, + create-your-own) ---- */
+    function groupPoolWords(sub){ try{ if(typeof GROUP_CHARS!=='undefined'){ const c=GROUP_CHARS.find(x=>x.sub===sub); if(c && c.words && c.words.length) return c.words.slice(); } }catch(e){} return poolWords(sub, 'being'); }
     function traitSubs(cat){
+      if(cat==='group'){ const gs=(typeof GROUP_CHARS!=='undefined')?GROUP_CHARS.map(c=>c.sub):[]; return gs.concat(['State','Adjective']); }
       if(cat==='being'){ const ns=getCat('being').subcategories.filter(sb=>!sb.retired && sb.name!=='Archetype' && sb.name!=='Motivation' && sb.name!=='Age').map(sb=>sb.name); ns.push('Adjective'); return ns; }   // Type & Occupation can be added as extra traits; Archetype/Motivation/Age handled elsewhere
       if(cat==='setting') return ['Condition','Control','Function','Scale','Atmosphere','Adjective'];
       if(cat==='object') return ['Material','Condition','Provenance','Charge','Adjective'];
@@ -23549,8 +23534,9 @@ document.addEventListener('DOMContentLoaded', init);
       const sub = TP.mode==='motivation' ? 'Motivation' : TP.sub;
       const cat = TP.mode==='motivation' ? 'being' : TP.cat;
       const w=state.prompt && state.prompt.words[TP.i];
-      const applied = TP.mode==='trait' ? new Set(((w&&w.attrs)||[]).map(a=>a.word.toLowerCase())) : new Set();
-      const seen=new Set(), pool=poolWords(sub, cat);
+      const _gattrs = TP.group ? (((typeof beingGroupById==='function' && beingGroupById(TP.group))||{}).attrs||[]) : null;
+      const applied = TP.mode==='trait' ? new Set((_gattrs || ((w&&w.attrs)||[])).map(a=>a.word.toLowerCase())) : new Set();
+      const seen=new Set(), pool=(TP.group ? groupPoolWords(sub) : poolWords(sub, cat));
       const matches=pool.filter(word=>{ const k=word.toLowerCase(); if(seen.has(k)) return false; seen.add(k);
         if(applied.has(k)) return false; return !q || k.includes(q); }).slice(0,40);
       matches.forEach(word=>{ const b=document.createElement('button'); b.className='ec-opt';
@@ -23565,6 +23551,7 @@ document.addEventListener('DOMContentLoaded', init);
     }
     function tpPick(word, isNew){
       if(TP.mode==='motivation'){ setMotivationWant(TP.i, word, isNew); closeTraitPicker(); renderNpCard(); return; }
+      if(TP.group){ if(typeof addGroupChar==='function') addGroupChar(TP.group, TP.sub, word); closeTraitPicker(); if(typeof renderNpCard==='function') renderNpCard(); setTrait('@gchar:'+TP.sub+'|'+word); return; }
       if(isNew && typeof saveCustomWord==='function'){ try{ saveCustomWord(TP.cat, { word, sub:TP.sub, desc:'', g:[] }, 'story'); }catch(e){} }
       if(TP.replace){ const old=TP.replace; if(old && old.toLowerCase()!==word.toLowerCase()) removeTraitWord(TP.i, old); if(!addTraitWord(TP.i, word, TP.sub)) return; closeTraitPicker(); renderNpCard(); setTrait(word); return; }
       if(!addTraitWord(TP.i, word, TP.sub)) return;
@@ -23582,6 +23569,14 @@ document.addEventListener('DOMContentLoaded', init);
       p.style.top=Math.max(8, Math.min((y||120), window.innerHeight-ph-8))+'px';
       p.querySelector('.tp-search').focus();
     }
+    function openGroupTraitPicker(gid, x, y){
+      const g=(typeof beingGroupById==='function')?beingGroupById(gid):null; if(!g) return;
+      TP={ i:-1, cat:'group', group:gid, sub:traitSubs('group')[0], mode:'trait' };
+      tpEl().querySelector('.tp-title').textContent='Add characteristic';
+      tpEl().querySelector('.tp-search').placeholder='search or name a characteristic\u2026';
+      tpOpen(-1, x, y);
+    }
+    window.openGroupTraitPicker = openGroupTraitPicker;
     function openTraitPicker(i, x, y){
       const w=state.prompt && state.prompt.words[i]; if(!w) return;
       TP={ i, cat:w.cat, sub:traitSubs(w.cat)[0], mode:'trait' };
@@ -23958,6 +23953,10 @@ document.addEventListener('DOMContentLoaded', init);
           un.addEventListener('click', ev=>{ ev.stopPropagation(); _doName(); }); t.appendChild(un); }
         _headcol.appendChild(t);
         const mkPill=(label,sub,o)=>{ o=o||{}; const c=document.createElement('span'); c.className='npc-trait npc-traitpill'+(o.on?' on':''); if(o.swatch){ const sw=document.createElement('span'); sw.className='npc-gswatch'; sw.style.background=o.swatch; c.appendChild(sw); } const lb=document.createElement('span'); lb.className='npc-tw'; lb.textContent=label; c.appendChild(lb); if(sub){ const sb=document.createElement('span'); sb.className='npc-tsub'; sb.textContent=sub; c.appendChild(sb); } if(o.onChange){ const dv=document.createElement('span'); dv.className='npc-tx'; dv.textContent='▾'; dv.title='Change'; dv.addEventListener('click',e=>{e.stopPropagation(); o.onChange(e);}); c.appendChild(dv);} if(o.onClick) c.addEventListener('click',e=>{e.stopPropagation(); o.onClick(e);}); return c; };
+        const mkAdd=(label,onClick)=>{ const a=document.createElement('span'); a.className='npc-trait npc-add'; a.textContent=label; a.addEventListener('click',e=>{ e.stopPropagation(); onClick(e); }); return a; };
+        const _gAll=(_gr.allegiance && window.chessGroup)?window.chessGroup(_gr.allegiance):null;
+        const pAll=_gAll ? mkPill(_gAll.name||'(unnamed)','Allegiance',{swatch:_gAll.color, onChange:e=>{ if(window.openGroupAllegianceMenu) window.openGroupAllegianceMenu(_gid,e.clientX,e.clientY); }, onClick:e=>{ if(window.openGroupAllegianceMenu) window.openGroupAllegianceMenu(_gid,e.clientX,e.clientY); }}) : mkAdd('+ allegiance', e=>{ if(window.openGroupAllegianceMenu) window.openGroupAllegianceMenu(_gid,e.clientX,e.clientY); });
+        { const r=document.createElement('div'); r.className='npc-headrow'; r.appendChild(pAll); _headcol.appendChild(r); }
         const _scopeLabel=(_gr.until!=null ? 'This section' : ((_gr.from||0)>0 ? 'Forward' : 'Every section'));
         const pSize=mkPill(String(_size),'Size',{ onChange: async e=>{ const v=await sitePrompt('How many in the group?', String(_size)); if(v===null) return; const n=parseInt(v,10); if(!isNaN(n)){ _gr.count=Math.max(n,_members.length); if(typeof scheduleAutosave==='function') scheduleAutosave(); renderNpCard(); renderConstellation(); } } });
         const pScope=mkPill(_scopeLabel,'Sections',{});
@@ -25103,6 +25102,34 @@ function beingRenderOpts(nd){ if(!nd) return null;
     window.openBeingPositionMenu=function(i,x,y){ var w=state.prompt&&state.prompt.words[i]; if(!w) return; openVocabPicker('position', w.rankName||'', function(v){ setRankName(i, v); if(window.renderNpCard) window.renderNpCard(); }, x, y); };
     window.clearBeingRole=function(i){ setStoryRole(i,''); if(window.renderNpCard) window.renderNpCard(); };
     window.clearBeingPosition=function(i){ setRankName(i,''); if(window.renderNpCard) window.renderNpCard(); };
+    window.openGroupAllegianceMenu=function(gid,x,y){
+      var g=(typeof beingGroupById==='function')?beingGroupById(gid):null; if(!g) return;
+      var p=document.getElementById('beingGroupPop');
+      if(!p){ p=document.createElement('div'); p.id='beingGroupPop'; document.body.appendChild(p);
+        document.addEventListener('mousedown', function(ev){ if(p.style.display==='block' && !p.contains(ev.target) && !(ev.target.closest&&(ev.target.closest('#edColorPanel')||ev.target.closest('#vocabPicker')))) p.style.display='none'; }, true); }
+      p.style.cssText='position:fixed; z-index:360; background:var(--paper); border:1px solid var(--line); border-radius:11px; box-shadow:0 16px 50px rgba(0,0,0,.25); padding:8px; min-width:172px';
+      p.innerHTML='';
+      var hd=document.createElement('div'); hd.textContent='Allegiance'; hd.style.cssText='font-family:var(--sans); font-size:8px; letter-spacing:.16em; text-transform:uppercase; color:var(--ink-faint); padding:2px 4px 6px'; p.appendChild(hd);
+      var setA=function(key){ g.allegiance=key; if(typeof scheduleAutosave==='function') scheduleAutosave(); if(window.renderNpCard) window.renderNpCard(); if(typeof renderConstellation==='function') renderConstellation(); };
+      groupOrder().forEach(function(key){ var gp=chessGroup(key);
+        var row=document.createElement('div'); row.style.cssText='display:flex; align-items:center; gap:8px; padding:4px 6px; border-radius:8px; cursor:pointer;'+((g.allegiance||'')===key?'background:rgba(0,0,0,.06)':'');
+        var sw=document.createElement('span'); sw.style.cssText='width:17px;height:17px;border-radius:50%;border:1px solid rgba(0,0,0,.35);flex:none;cursor:pointer;background:'+gp.color; sw.title='Recolour this allegiance';
+        sw.addEventListener('click', function(e){ e.stopPropagation(); setA(key); openGroupColorPanel(key, e.clientX, e.clientY); });
+        row.appendChild(sw);
+        var nm=document.createElement('span'); nm.textContent=gp.name||'(unnamed)'; nm.style.cssText='flex:1; font-family:var(--serif); font-size:13px; color:'+(gp.name?'var(--ink)':'var(--ink-faint)'); row.appendChild(nm);
+        var ren=document.createElement('span'); ren.textContent='\u270E'; ren.title='Rename allegiance'; ren.style.cssText='opacity:.5; cursor:pointer; padding:0 4px; font-size:12px';
+        ren.addEventListener('click', function(e){ e.stopPropagation(); openVocabPicker('group', gp.name||'', function(v){ setGroupName(key, v); if(window.renderNpCard) window.renderNpCard(); window.openGroupAllegianceMenu(gid,x,y); }, e.clientX, e.clientY); }); row.appendChild(ren);
+        if(!GROUP_DEFAULTS[key]){ var del=document.createElement('span'); del.textContent='\u00d7'; del.title='Delete allegiance'; del.style.cssText='color:var(--ink-faint); padding:0 3px; cursor:pointer'; del.addEventListener('click', function(e){ e.stopPropagation(); removeGroup(key); if(g.allegiance===key) g.allegiance=null; window.openGroupAllegianceMenu(gid,x,y); }); row.appendChild(del); }
+        row.addEventListener('click', function(){ setA(key); p.style.display='none'; });
+        p.appendChild(row);
+      });
+      var add=document.createElement('div'); add.textContent='+ allegiance'; add.style.cssText='font-family:var(--sans); font-size:9px; letter-spacing:.04em; color:var(--ink-faint); border:1px dashed var(--line); border-radius:9px; padding:3px 9px; margin-top:6px; cursor:pointer; display:inline-block';
+      add.addEventListener('click', function(e){ e.stopPropagation(); var k=addGroup(); if(k!=null){ setA(k); window.openGroupAllegianceMenu(gid,x,y); } });
+      p.appendChild(add);
+      p.style.display='block';
+      p.style.left=Math.max(8, Math.min(x||200, window.innerWidth-190))+'px';
+      p.style.top=Math.max(8, Math.min(y||200, window.innerHeight-280))+'px';
+    };
     window.openBeingGroupMenu=function(i,x,y){
       var w=state.prompt&&state.prompt.words[i]; if(!w) return;
       var p=document.getElementById('beingGroupPop');
