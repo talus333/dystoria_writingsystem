@@ -240,8 +240,8 @@ function modelChain(env) {
   if (env.GEMINI_API_KEY)     c.push({ name: 'gemini-2.5-flash', run: (s, p, mt, t, j) => runGemini(env, s, p, mt, t, 'gemini-2.5-flash', j) });
   // Cerebras (one key, two roles). `best` tags which task each is tuned for; runFrontier swaps the two
   // siblings so GLM leads for icon/brief and Qwen leads for prose. Both sit above Groq in rank.
-  if (env.CEREBRAS_API_KEY)   c.push({ name: 'cerebras-qwen', best: 'text', run: (s, p, mt, t, j) => runOpenAICompat(env.CEREBRAS_API_KEY, CEREBRAS_URL, CEREBRAS_TEXT_MODEL, s, p, mt, t, null, j) });
-  if (env.CEREBRAS_API_KEY)   c.push({ name: 'cerebras-glm',  best: 'icon', run: (s, p, mt, t, j) => runOpenAICompat(env.CEREBRAS_API_KEY, CEREBRAS_URL, CEREBRAS_ICON_MODEL, s, p, mt, t, null, j) });
+  if (env.CEREBRAS_API_KEY)   c.push({ name: 'cerebras-qwen', best: 'text', ctxCap: 8000, run: (s, p, mt, t, j) => runOpenAICompat(env.CEREBRAS_API_KEY, CEREBRAS_URL, CEREBRAS_TEXT_MODEL, s, p, mt, t, null, j) });
+  if (env.CEREBRAS_API_KEY)   c.push({ name: 'cerebras-glm',  best: 'icon', ctxCap: 8000, run: (s, p, mt, t, j) => runOpenAICompat(env.CEREBRAS_API_KEY, CEREBRAS_URL, CEREBRAS_ICON_MODEL, s, p, mt, t, null, j) });
   if (env.GROQ_API_KEY)       c.push({ name: 'groq-llama-70b',   run: (s, p, mt, t, j) => runOpenAICompat(env.GROQ_API_KEY, 'https://api.groq.com/openai/v1/chat/completions', 'llama-3.3-70b-versatile', s, p, mt, t, null, j) });
   if (env.MISTRAL_API_KEY)    c.push({ name: 'mistral-large',    run: (s, p, mt, t, j) => runOpenAICompat(env.MISTRAL_API_KEY, 'https://api.mistral.ai/v1/chat/completions', 'mistral-large-latest', s, p, mt, t, null, j) });
   if (env.OPENROUTER_API_KEY) c.push({ name: 'openrouter-free',  run: (s, p, mt, t, j) => runOpenAICompat(env.OPENROUTER_API_KEY, 'https://openrouter.ai/api/v1/chat/completions', 'openrouter/free', s, p, mt, t, { 'HTTP-Referer': 'https://dystoria.net', 'X-Title': 'Dystoria' }, j) });
@@ -275,7 +275,11 @@ async function runFrontier(env, system, prompt, maxTokens, temperature, opts) {
   const now = Date.now();
   const tried = [];
   let exhausted = false;
+  // Rough token estimate (~4 chars/token) so small-context providers (Cerebras free ~8K) are skipped on big calls —
+  // a whole-story wiki/import then lands on a large-context model instead of truncating mid-sentence.
+  const estTokens = Math.ceil(((system || '').length + (prompt || '').length) / 4) + (maxTokens || 0);
   for (const p of chain) {
+    if (p.ctxCap && estTokens > p.ctxCap * 0.9){ tried.push(p.name + ': prompt too large for its ' + p.ctxCap + '-token context'); continue; }   // too big for this model's window → next provider
     if (!testing && (_cooldown.get(p.name) || 0) > now){ tried.push(p.name + ': cooling down'); continue; }   // skip recently-exhausted (but always try in testing)
     let r;
     try { r = await p.run(system, prompt, maxTokens, temperature, opts.json); }
