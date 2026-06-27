@@ -87,6 +87,17 @@ const VISION_MODEL = '@cf/google/gemma-4-26b-a4b-it';
 const CLAUDE_MODEL = 'claude-sonnet-4-6';   // swap to 'claude-haiku-4-5-20251001' for lower cost, or 'claude-opus-4-8' for top quality
 const FRONTIER_MODEL = 'gemini-2.5-flash';  // Gemini fallback model (free tier)
 
+// Cerebras free tier: ~1M tokens/day, no credit card, OpenAI-compatible, very fast — but an ~8K-token
+// CONTEXT cap on free, so the biggest calls (full-story wiki update, large imports) overflow and fall
+// through to the next provider automatically (harmless). Two roles from ONE key:
+//   • Qwen3-235B  → creative-writing fallback (top creative-alignment scores)
+//   • GLM         → SVG/icon + design (coding-strong models draw the cleanest SVG)
+// Slugs rotate — verify the current ids at https://inference-docs.cerebras.ai/ ; a wrong slug just
+// errors and falls through, so this can't break the chain.
+const CEREBRAS_URL = 'https://api.cerebras.ai/v1/chat/completions';
+const CEREBRAS_TEXT_MODEL = 'qwen-3-235b-a22b-instruct-2507';   // creative writing
+const CEREBRAS_ICON_MODEL = 'glm-4.6';                          // SVG / design
+
 // data:image/png;base64,xxxx  ->  Array of byte values (Workers AI vision input)
 function dataUrlToBytes(dataUrl) {
   const b64 = dataUrl.includes(',') ? dataUrl.split(',')[1] : dataUrl;
@@ -227,6 +238,10 @@ function modelChain(env) {
   if (env.ANTHROPIC_API_KEY)  c.push({ name: 'claude', paid: true, run: (s, p, mt, t, j) => runClaude(env, s, p, mt, t) });
   if (env.GEMINI_API_KEY)     c.push({ name: 'gemini-2.5-pro',   run: (s, p, mt, t, j) => runGemini(env, s, p, mt, t, 'gemini-2.5-pro', j) });
   if (env.GEMINI_API_KEY)     c.push({ name: 'gemini-2.5-flash', run: (s, p, mt, t, j) => runGemini(env, s, p, mt, t, 'gemini-2.5-flash', j) });
+  // Cerebras (one key, two roles). `best` tags which task each is tuned for; runFrontier swaps the two
+  // siblings so GLM leads for icon/brief and Qwen leads for prose. Both sit above Groq in rank.
+  if (env.CEREBRAS_API_KEY)   c.push({ name: 'cerebras-qwen', best: 'text', run: (s, p, mt, t, j) => runOpenAICompat(env.CEREBRAS_API_KEY, CEREBRAS_URL, CEREBRAS_TEXT_MODEL, s, p, mt, t, null, j) });
+  if (env.CEREBRAS_API_KEY)   c.push({ name: 'cerebras-glm',  best: 'icon', run: (s, p, mt, t, j) => runOpenAICompat(env.CEREBRAS_API_KEY, CEREBRAS_URL, CEREBRAS_ICON_MODEL, s, p, mt, t, null, j) });
   if (env.GROQ_API_KEY)       c.push({ name: 'groq-llama-70b',   run: (s, p, mt, t, j) => runOpenAICompat(env.GROQ_API_KEY, 'https://api.groq.com/openai/v1/chat/completions', 'llama-3.3-70b-versatile', s, p, mt, t, null, j) });
   if (env.MISTRAL_API_KEY)    c.push({ name: 'mistral-large',    run: (s, p, mt, t, j) => runOpenAICompat(env.MISTRAL_API_KEY, 'https://api.mistral.ai/v1/chat/completions', 'mistral-large-latest', s, p, mt, t, null, j) });
   if (env.OPENROUTER_API_KEY) c.push({ name: 'openrouter-free',  run: (s, p, mt, t, j) => runOpenAICompat(env.OPENROUTER_API_KEY, 'https://openrouter.ai/api/v1/chat/completions', 'openrouter/free', s, p, mt, t, { 'HTTP-Referer': 'https://dystoria.net', 'X-Title': 'Dystoria' }, j) });
@@ -249,6 +264,13 @@ async function runFrontier(env, system, prompt, maxTokens, temperature, opts) {
   } else {
     if (!opts.allowPaid) chain = chain.filter(p => !p.paid);   // the paid model (Claude) is included ONLY when the caller is entitled (admin or Pro); allowPaid is set server-side from the verified plan, never from the request body
     if (opts.allowLast === false) chain = chain.filter(p => !p.last);
+  }
+  // Icon/brief tasks prefer the design-tuned sibling (GLM) over the prose-tuned one (Qwen). Both occupy the
+  // same rank slot; this just swaps which of the two is tried first — everything else keeps its order.
+  if (opts.kind === 'icon' || opts.kind === 'brief') {
+    const ti = chain.findIndex(p => p.best === 'text');
+    const ii = chain.findIndex(p => p.best === 'icon');
+    if (ti > -1 && ii > -1 && ti < ii) { const tmp = chain[ti]; chain[ti] = chain[ii]; chain[ii] = tmp; }
   }
   const now = Date.now();
   const tried = [];
@@ -323,7 +345,7 @@ async function handleAI(request, env) {
   // The chain auto-falls-through when a model is busy or its daily quota is used up. Icons skip the Workers-AI llama (too low quality);
   // briefs may use it as a final resort. allowPaid (= admin || Pro) decides whether Claude leads; free users get the free chain.
   if (body.kind === 'icon' || body.kind === 'brief') {
-    const fr = await runFrontier(env, system, prompt, maxTokens, temperature, { admin, allowPaid: paid, allowLast: body.kind !== 'icon', only: body.models });
+    const fr = await runFrontier(env, system, prompt, maxTokens, temperature, { admin, allowPaid: paid, allowLast: body.kind !== 'icon', only: body.models, kind: body.kind });
     if (fr.text) return new Response(JSON.stringify({ text: fr.text, via: fr.via }), { headers });
     const err = fr.error || '';
     if (fr.exhausted) return new Response(JSON.stringify({ error: 'Free AI models at today’s limit — ' + err, limit: 'day' }), { status: 429, headers });
