@@ -2708,6 +2708,25 @@
     body.writing.insession.fs-pills-collapsed #fsWords{display:none !important}
     /* (editor top padding is set in JS to the header's real height so nothing overlaps) */
   }
+<style id="groupFeatureCss">
+#groupBuildBanner{ position:fixed; left:50%; top:72px; transform:translateX(-50%); z-index:9300; background:#241f1a; color:#efe7d6; border:1px solid var(--gold,#cda434); border-radius:10px; padding:8px 12px; display:flex; align-items:center; gap:10px; box-shadow:0 6px 24px rgba(0,0,0,.35); font-size:13px; }
+#groupBuildBanner .gbb-txt b{ color:var(--gold,#cda434); }
+#groupBuildBanner button{ border:none; border-radius:7px; padding:5px 12px; font-size:12px; cursor:pointer; }
+#groupBuildBanner .gbb-ok{ background:var(--gold,#cda434); color:#241f1a; font-weight:600; }
+#groupBuildBanner .gbb-ok:disabled{ opacity:.4; cursor:default; }
+#groupBuildBanner .gbb-cancel{ background:transparent; color:#cfc4ad; border:1px solid #5a5145; }
+.gb-ring{ fill:none; stroke:#2f9e44; stroke-width:2.4; pointer-events:none; }
+.gb-ring.leader{ stroke:var(--gold,#cda434); stroke-width:3; }
+.node.being.gb-pickable{ cursor:pointer; }
+#groupsBar{ display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
+.group-chip{ display:inline-flex; align-items:center; gap:5px; padding:3px 9px; border-radius:13px; background:rgba(36,31,26,.06); border:1px solid transparent; cursor:pointer; font-size:12px; }
+.group-chip.on{ border-color:var(--gold,#cda434); background:rgba(205,164,52,.14); }
+.group-dot{ width:7px; height:7px; border-radius:50%; background:#241f1a; box-shadow:4px 3px 0 -2px #8a7d63, -4px 3px 0 -2px #8a7d63; }
+.group-lbl{ font-weight:500; }
+.group-acts{ display:inline-flex; gap:3px; margin-left:2px; }
+.group-act{ cursor:pointer; opacity:.5; padding:0 2px; }
+.group-act:hover{ opacity:1; }
+.group-x:hover{ color:#c0392b; }
 </style>
 </head>
 <body>
@@ -3054,6 +3073,7 @@
         <div id="evOverlay"></div>
         <div id="mentalOverlay" hidden></div>
         <div id="threadsBar"></div>
+        <div id="groupsBar"></div>
       </div>
       <div id="mapTools">
         <div id="autoPlaceWrap" hidden>
@@ -14657,6 +14677,7 @@ function renderConstellation(){
   const relOvs = [];
   if (state.relQuillNew){ const _p = state.relQuillNew; state.relQuillNew = null; const _ix = state.edges.findIndex(e => e[0] === _p[0] && e[1] === _p[1]); if (_ix >= 0) state.relQuill = _ix; }
   state.edges.forEach((e, ei) => {
+    if (state.groupBuild) return;   // hide connections while forming a group
     const a = e[0], b = e[1];
     if (state.placing != null && ((state.nodes[a] && state.nodes[a].needsPlace) || (state.nodes[b] && state.nodes[b].needsPlace))) return;
     if (isMentalSpace(state.nodes[a]) || isMentalSpace(state.nodes[b])) return;   // skip links to off-scale (sidebar) places
@@ -14732,6 +14753,8 @@ function renderConstellation(){
     if (nd.needsPlace && state.placing != null) return;   // hidden until the player places/draws it
     if (nd.deco) return;                                  // pure decoration (drawn terrain/path) → shape only, no label/icon/handle
     if (isMentalSpace(nd)) return;                        // off-scale place → lives in the mental-space sidebar
+    if (state.groupBuild && nd.role !== 'being') return;                                   // forming a group → show only beings
+    if (!state.groupBuild && nd.role === 'being'){ const _gk = wordKey(nd); const _grp = (typeof beingGroupOf === 'function') ? beingGroupOf(_gk) : null; if (_grp && !_grp.exploded && _grp.leader !== _gk) return; }   // collapsed group → members tuck behind the leader
     const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
     g.setAttribute('class', 'node ' + nd.role + ' ' + nd.cat + (i === state.linkFrom ? ' link-src' : '') + (i === state.selNode ? ' sel' : '') + (nd.destroyed ? ' destroyed' : '') + (nd.locked ? ' is-locked' : '') + nodeDimClass(i, state.prompt && state.prompt.words[i]));
     g.dataset.node = i;
@@ -14752,6 +14775,8 @@ function renderConstellation(){
     if (nd.role === 'being'){
       const mp = makeMeeple(nd);
       g.appendChild(mp);
+      if (!state.groupBuild && typeof beingGroupOf === 'function'){ const _gkc = wordKey(nd); const _grpc = beingGroupOf(_gkc); if (_grpc && !_grpc.exploded && _grpc.leader === _gkc && window.makeGroupCluster){ try{ const _cl = window.makeGroupCluster(_grpc); if (_cl) g.insertBefore(_cl, mp); }catch(e){} } }
+      if (state.groupBuild){ const _gkb = wordKey(nd); const _isL = _gkb === state.groupBuild.leader; const _isM = state.groupBuild.members.indexOf(_gkb) >= 0; if (_isL || _isM){ const _rr = document.createElementNS('http://www.w3.org/2000/svg', 'circle'); _rr.setAttribute('class', 'gb-ring' + (_isL ? ' leader' : '')); _rr.setAttribute('cx', 0); _rr.setAttribute('cy', -20); _rr.setAttribute('r', 22); g.appendChild(_rr); } g.classList.add('gb-pickable'); }
       // a being's role shows as a small gold brand-color icon in a fixed arc around the pawn's head,
       // drawn AFTER the pawn so it sits on top: narrator above, main character (protagonist) left, antagonist right.
       const HEAD_Y = -43;   // screen y of the pawn's head centre
@@ -15056,6 +15081,12 @@ function renderConstellation(){
       // thread tag — group this element into a storyline
       circ.push({ title: 'Add to a thread\u2026', on: ev => { ev.stopPropagation(); openThreadMenu(i, ev.clientX || 200, ev.clientY || 200); },
         ic: () => { const _w = state.prompt && state.prompt.words[i]; const ids = (typeof wordThreadIds === 'function') ? wordThreadIds(_w) : []; const col = ids.length ? ((((typeof threadById === 'function') && threadById(ids[0])) ? threadById(ids[0]).color : '#888')) : 'currentColor'; const g2 = document.createElementNS(NSx, 'g'); g2.setAttribute('class', 'ctl-ic'); const p = document.createElementNS(NSx, 'path'); p.setAttribute('d', 'M-6.5 0 Q-3.25 -3.4 0 0 T6.5 0'); p.setAttribute('fill', 'none'); p.setAttribute('stroke', col); p.setAttribute('stroke-width', '1'); p.setAttribute('stroke-linecap', 'round'); g2.appendChild(p); [[-6.5,0],[0,0],[6.5,0]].forEach(k => { const c = document.createElementNS(NSx, 'circle'); c.setAttribute('cx', k[0]); c.setAttribute('cy', k[1]); c.setAttribute('r', '1.3'); c.setAttribute('fill', col); g2.appendChild(c); }); return g2; } });
+      // group — build a party/army around this being as leader
+      if (nd.role === 'being'){
+        const _gpx = (typeof beingGroupOf === 'function') ? beingGroupOf(wordKey(nd)) : null;
+        circ.push({ title: _gpx ? 'Edit this group' : 'Make a group with this being as the leader', on: ev => { ev.stopPropagation(); startGroupBuild(wordKey(nd)); },
+          ic: () => { const g2 = document.createElementNS(NSx, 'g'); g2.setAttribute('class', 'ctl-ic'); [[-3.4,2.4,2.3],[3.4,2.4,2.3],[0,-3.0,2.6]].forEach(k => { const c = document.createElementNS(NSx, 'circle'); c.setAttribute('cx', k[0]); c.setAttribute('cy', k[1]); c.setAttribute('r', k[2]); c.setAttribute('fill', _gpx ? 'var(--gold,#cda434)' : 'currentColor'); g2.appendChild(c); }); return g2; } });
+      }
       // relationship link — between Focus and Wiki
       circ.push({ title: 'Drag onto another element to build a relationship', down: true,
         on: ev => { ev.stopPropagation(); ev.preventDefault(); startLinkDrag(i, ev); },
@@ -15103,6 +15134,7 @@ function renderConstellation(){
       nameElement(i);
     });
     g.addEventListener('click', ev => {
+      if (state.groupBuild){ ev.stopPropagation(); if (nd.role === 'being') groupBuildToggle(wordKey(nd)); return; }
       if (state.lastDrag && Date.now() - state.lastDrag < 250) return;
       if (nd.locked) return;
       if (ev.target.closest && (ev.target.closest('.del') || ev.target.closest('.lnk') || ev.target.closest('.wbook'))) return;   // click the word or the icon (incl. the pawn) to select
@@ -15200,6 +15232,8 @@ function renderConstellation(){
   if (rn) rn.style.display = (state.prompt && state.prompt.words && state.prompt.words.length) ? 'none' : '';
   markGroupSel();   // re-apply lasso-group highlight rings after a fresh render
   if (typeof renderThreadsBar === 'function') renderThreadsBar();
+  if (typeof renderGroupsBar === 'function') renderGroupsBar();
+  if (typeof renderGroupBuildBanner === 'function') renderGroupBuildBanner();
 }
 function renderEvOverlay(){
   const ov = $('evOverlay');
@@ -15377,6 +15411,12 @@ function addBeingToGroup(id, key){ const g = beingGroupById(id); if (!g || !key 
 function removeBeingFromGroup(id, key){ const g = beingGroupById(id); if (!g) return; if (key === g.leader){ dissolveBeingGroup(id); return; } g.members = (g.members || []).filter(k => k !== key); if (typeof scheduleAutosave === 'function') scheduleAutosave(); }
 function dissolveBeingGroup(id){ if (!state.session) return; state.session.beingGroups = beingGroupsList().filter(g => g.id !== id); if (typeof scheduleAutosave === 'function') scheduleAutosave(); }
 function toggleBeingGroupExploded(id){ const g = beingGroupById(id); if (!g) return; g.exploded = !g.exploded; if (typeof scheduleAutosave === 'function') scheduleAutosave(); }
+function startGroupBuild(leaderKey){ if (!leaderKey) return; ensureBeingGroups(); const ex = beingGroupOf(leaderKey); state.groupBuild = { leader: leaderKey, members: ex ? (ex.members || []).slice() : [], editId: ex ? ex.id : null }; state.selNode = null; state.activeThread = null; renderConstellation(); }
+function groupBuildToggle(key){ if (!state.groupBuild || !key) return; if (key === state.groupBuild.leader) return; const ex = beingGroupOf(key); if (ex && ex.id !== state.groupBuild.editId){ if (typeof flashStatus === 'function') flashStatus('That being already belongs to another group'); return; } const arr = state.groupBuild.members; const i = arr.indexOf(key); if (i >= 0) arr.splice(i, 1); else arr.push(key); renderConstellation(); }
+function finishGroupBuild(){ if (!state.groupBuild) return; const gb = state.groupBuild; let id = gb.editId; if (id && beingGroupById(id)){ const g = beingGroupById(id); g.members = gb.members.slice(); g.exploded = false; } else if (gb.members.length){ id = makeBeingGroup(gb.leader); gb.members.forEach(k => addBeingToGroup(id, k)); } state.groupBuild = null; if (typeof scheduleAutosave === 'function') scheduleAutosave(); renderConstellation(); }
+function cancelGroupBuild(){ state.groupBuild = null; renderConstellation(); }
+function renderGroupBuildBanner(){ let b = document.getElementById('groupBuildBanner'); if (!state.groupBuild){ if (b) b.remove(); return; } if (!b){ b = document.createElement('div'); b.id = 'groupBuildBanner'; document.body.appendChild(b); } const lw = (typeof npFindEl === 'function') ? npFindEl(state.groupBuild.leader) : null; const ln = lw ? (lw.name || lw.word || 'this being') : 'this being'; const n = state.groupBuild.members.length; b.innerHTML = ''; const t = document.createElement('span'); t.className = 'gbb-txt'; t.innerHTML = 'Building <b>' + ln + '\u2019s</b> group \u2014 click beings to add them \u00B7 <b>' + n + '</b> selected'; b.appendChild(t); const ok = document.createElement('button'); ok.className = 'gbb-ok'; ok.textContent = 'Create group'; ok.disabled = (n < 1); ok.addEventListener('click', finishGroupBuild); b.appendChild(ok); const cx = document.createElement('button'); cx.className = 'gbb-cancel'; cx.textContent = 'Cancel'; cx.addEventListener('click', cancelGroupBuild); b.appendChild(cx); }
+function renderGroupsBar(){ const bar = document.getElementById('groupsBar'); if (!bar) return; bar.innerHTML = ''; (typeof beingGroupsList === 'function' ? beingGroupsList() : []).forEach(gr => { const lw = (typeof npFindEl === 'function') ? npFindEl(gr.leader) : null; const ln = lw ? (lw.name || lw.word || 'Group') : 'Group'; const chip = document.createElement('span'); chip.className = 'group-chip' + (gr.exploded ? ' on' : ''); const dot = document.createElement('span'); dot.className = 'group-dot'; chip.appendChild(dot); const lbl = document.createElement('span'); lbl.className = 'group-lbl'; lbl.textContent = ln + ' +' + (gr.members || []).length; chip.appendChild(lbl); chip.title = gr.exploded ? 'Click to collapse this group back into a cluster' : 'Click to explode the group and edit individual members'; chip.addEventListener('click', () => { toggleBeingGroupExploded(gr.id); renderConstellation(); }); const acts = document.createElement('span'); acts.className = 'group-acts'; const aEd = document.createElement('span'); aEd.className = 'group-act'; aEd.textContent = '\u270E'; aEd.title = 'Edit who is in this group'; aEd.addEventListener('click', ev => { ev.stopPropagation(); startGroupBuild(gr.leader); }); acts.appendChild(aEd); const aX = document.createElement('span'); aX.className = 'group-act group-x'; aX.textContent = '\u00D7'; aX.title = 'Disband this group'; aX.addEventListener('click', ev => { ev.stopPropagation(); dissolveBeingGroup(gr.id); renderConstellation(); }); acts.appendChild(aX); chip.appendChild(acts); bar.appendChild(chip); }); }
 
 const THREAD_COLORS = ['#e0884a','#5fa9d6','#7bbf6a','#c46ad0','#e0b84a','#5fc1a0','#d8748a','#8a86d8','#c98a5a','#6a9a86'];
 function ensureThreads(){ if (!state.session) return; if (!Array.isArray(state.session.threads)) state.session.threads = []; if (!state.session.threadTags || typeof state.session.threadTags !== 'object') state.session.threadTags = {}; if (!state.session.threadFrom || typeof state.session.threadFrom !== 'object') state.session.threadFrom = {}; if (!state.session.threadUntil || typeof state.session.threadUntil !== 'object') state.session.threadUntil = {}; }
@@ -24218,7 +24258,29 @@ function beingRenderOpts(nd){ if(!nd) return null;
       g.appendChild(t); g.appendChild(ttl);
       return g;
     }
-    window.makeChessPiece = makeChessPiece; window.chessGroup = chessGroup; window.chessGlyphChar = chessGlyphChar; window.capWord = capWord;
+    function makeGroupCluster(group){
+      var NS='http://www.w3.org/2000/svg';
+      var g=document.createElementNS(NS,'g'); g.setAttribute('class','group-cluster');
+      try{
+        var members=(group&&group.members)||[]; if(!members.length) return g;
+        var baseY=-15;
+        var rows=[{n:2,sc:0.80,op:0.37,dy:12},{n:3,sc:0.64,op:0.20,dy:22},{n:4,sc:0.50,op:0.10,dy:30},{n:5,sc:0.40,op:0.07,dy:36}];
+        var place=[], mi=0;
+        for(var ri=0; ri<rows.length && mi<members.length; ri++){ var row=rows[ri]; var count=Math.min(row.n, members.length-mi); for(var i=0;i<count;i++){ place.push({key:members[mi++],row:row,i:i,count:count}); } }
+        for(var p=place.length-1; p>=0; p--){ var pl=place[p];
+          var w=(typeof npFindEl==='function')?npFindEl(pl.key):null; if(!w) continue;
+          var r; try{ r=composeBeing(beingRenderOpts(w)); }catch(e){ continue; } if(!r||!r.box) continue;
+          var b=r.box, rw=pl.row; var base=(42/Math.max(b[2],b[3]))*rw.sc;
+          var figW=26*rw.sc; var x=(pl.i-(pl.count-1)/2)*figW;
+          var tx=(x-(b[0]+b[2]/2)*base).toFixed(2); var ty=(baseY-rw.dy-(b[1]+b[3])*base).toFixed(2);
+          var gc=(typeof chessGroup==='function')?chessGroup(w.group):null;
+          var svg=(gc&&gc.color)?r.svg.split(SB_DK).join(sbBlend(gc.color)):r.svg;
+          var fig=document.createElementNS(NS,'g'); fig.setAttribute('transform','translate('+tx+','+ty+') scale('+base.toFixed(3)+')'); fig.setAttribute('opacity',String(rw.op)); fig.innerHTML=svg; g.appendChild(fig);
+        }
+      }catch(e){}
+      return g;
+    }
+    window.makeChessPiece = makeChessPiece; window.chessGroup = chessGroup; window.chessGlyphChar = chessGlyphChar; window.capWord = capWord; window.makeGroupCluster = makeGroupCluster;
     function ensureGroups(){ if(!state.session) return; state.session.groups = state.session.groups || {}; if(!Array.isArray(state.session.groupOrder)) state.session.groupOrder = GROUP_ORDER.slice(); }
     function groupOrder(){ ensureGroups(); return (state.session && state.session.groupOrder) || GROUP_ORDER; }
     function addGroup(){ ensureGroups(); if(!state.session) return null;
