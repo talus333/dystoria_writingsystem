@@ -2735,6 +2735,9 @@
 .group-chip{ display:inline-flex; align-items:center; gap:5px; padding:3px 9px; border-radius:13px; background:rgba(36,31,26,.06); border:1px solid transparent; cursor:pointer; font-size:12px; }
 .group-chip.on{ border-color:var(--gold,#cda434); background:var(--gold,#cda434); color:#241f1a; }
 .group-cluster{ pointer-events:none; }
+.npc-threadconcepts{ display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin-top:8px; }
+.npc-concepthd{ opacity:.6; font-style:italic; margin-right:2px; }
+.npc-conceptpill .npc-tw{ font-style:italic; }
 .group-state{ font-size:9px; text-transform:uppercase; letter-spacing:.06em; opacity:.55; margin-left:1px; }
 .group-chip.on .group-state{ opacity:.85; }
 .group-chip.on .group-dot{ background:#241f1a; box-shadow:4px 3px 0 -2px #241f1a, -4px 3px 0 -2px #241f1a; }
@@ -15216,29 +15219,6 @@ function renderConstellation(){
       _selCirc.forEach((b, idx) => g.appendChild(makeCircleBtn(Math.round(cX0 + idx * cGap), ctlY, b.ic, b.title, b.on, { r: 10, down: b.down })));
     }
     svg.appendChild(g);
-    if (i === state.selNode){
-      try{
-        const iconEl = g.querySelector('.meeple, .obj-icon, .motif, .burst');
-        if (iconEl){
-          const bb = iconEl.getBBox();
-          const cm = iconEl.transform.baseVal.consolidate(); const M = cm ? cm.matrix : null;
-          const TX = (px,py)=> M ? (M.a*px + M.c*py + M.e) : px;
-          const TY = (px,py)=> M ? (M.b*px + M.d*py + M.f) : py;
-          const xs=[TX(bb.x,bb.y),TX(bb.x+bb.width,bb.y),TX(bb.x,bb.y+bb.height),TX(bb.x+bb.width,bb.y+bb.height)];
-          const ys=[TY(bb.x,bb.y),TY(bb.x+bb.width,bb.y),TY(bb.x,bb.y+bb.height),TY(bb.x+bb.width,bb.y+bb.height)];
-          const minx=Math.min.apply(null,xs),maxx=Math.max.apply(null,xs),miny=Math.min.apply(null,ys),maxy=Math.max.apply(null,ys);
-          const cx=(minx+maxx)/2, cy=(miny+maxy)/2, hw=(maxx-minx)/2, hh=(maxy-miny)/2;
-          if (hw>0 && hh>0){
-            const ring=document.createElementNS(NSx,'ellipse');
-            ring.setAttribute('class', 'grp-ring');
-            ring.setAttribute('cx', cx.toFixed(1)); ring.setAttribute('cy', cy.toFixed(1));
-            ring.setAttribute('rx', (hw + Math.max(7, hw*0.16)).toFixed(1));
-            ring.setAttribute('ry', (hh + Math.max(7, hh*0.16)).toFixed(1));
-            g.insertBefore(ring, g.firstChild);
-          }
-        }
-      }catch(e){}
-    }
     if (w.getComputedTextLength){
       let wlen = 0;
       try { wlen = w.getComputedTextLength(); } catch (err) {}
@@ -15558,6 +15538,9 @@ function addThread(name){ ensureThreads(); if (!state.session) return null; cons
 function removeThread(id){ ensureThreads(); if (!state.session) return; state.session.threads = threadsList().filter(t => t.id !== id); const tt = state.session.threadTags || {}; Object.keys(tt).forEach(k => { tt[k] = (tt[k] || []).filter(x => x !== id); if (!tt[k].length) delete tt[k]; }); [state.session.threadFrom, state.session.threadUntil].forEach(mp => { if (!mp) return; Object.keys(mp).forEach(k => { if (mp[k]) delete mp[k][id]; if (mp[k] && !Object.keys(mp[k]).length) delete mp[k]; }); }); if (state.activeThread === id) state.activeThread = null; if (typeof scheduleAutosave === 'function') scheduleAutosave(); }
 function renameThread(id, name){ const t = threadsList().find(x => x.id === id); if (t){ t.name = (name || '').trim() || t.name; if (typeof scheduleAutosave === 'function') scheduleAutosave(); } }
 function threadById(id){ return threadsList().find(t => t.id === id) || null; }
+function setThreadStake(tid, word){ const t = threadById(tid); if(!t) return; t.stake = (word || '').trim() || null; if(typeof scheduleAutosave==='function') scheduleAutosave(); }
+function addThreadConcept(tid, word){ const t = threadById(tid); if(!t || !word) return; t.concepts = Array.isArray(t.concepts) ? t.concepts : []; const wd = String(word).trim(); if(wd && !t.concepts.some(c => c.toLowerCase() === wd.toLowerCase())) t.concepts.push(wd); if(typeof scheduleAutosave==='function') scheduleAutosave(); }
+function removeThreadConcept(tid, word){ const t = threadById(tid); if(!t || !Array.isArray(t.concepts)) return; t.concepts = t.concepts.filter(c => c !== word); if(typeof scheduleAutosave==='function') scheduleAutosave(); }
 function wordThreadIds(w){ if (!w || !state.session || !state.session.threadTags) return []; return state.session.threadTags[wordKey(w)] || []; }
 function toggleWordThread(w, id){ ensureThreads(); if (!w || !state.session) return; const k = wordKey(w); const cur = state.frameIdx || 0;
   state.session.threadFrom = state.session.threadFrom || {}; state.session.threadUntil = state.session.threadUntil || {};
@@ -15740,6 +15723,8 @@ async function aiThreadRollup(id){
   const th = threadById(id); if (!th) return ''; const SEPx = '||TRAIT||';
   const els = threadElements(id);
   const parts = ['Storyline thread: "' + th.name + '"'];
+  if (th.stake) parts.push('Driving stake (what is at risk): ' + th.stake);
+  if (Array.isArray(th.concepts) && th.concepts.length) parts.push('Threaded concepts / themes: ' + th.concepts.join(', '));
   const strip = h => (h || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
   const gen = (typeof npGetNotes === 'function') ? strip(npGetNotes('thread:' + id)) : '';
   if (gen) parts.push('Overall thread notes: ' + gen);
@@ -23307,6 +23292,7 @@ document.addEventListener('DOMContentLoaded', init);
     /* ---- searchable trait picker (same UX as the element ADD card, + create-your-own) ---- */
     function groupPoolWords(sub){ try{ if(typeof GROUP_CHARS!=='undefined'){ const c=GROUP_CHARS.find(x=>x.sub===sub); if(c && c.words && c.words.length) return c.words.slice(); } }catch(e){} return poolWords(sub, 'being'); }
     function traitSubs(cat){
+      if(cat==='concept'){ const c=getCat('concept'); return c?c.subcategories.filter(sb=>!sb.retired).map(sb=>sb.name):[]; }
       if(cat==='group'){ const gs=(typeof GROUP_CHARS!=='undefined')?GROUP_CHARS.map(c=>c.sub):[]; return gs.concat(['State','Adjective']); }
       if(cat==='being'){ const ns=getCat('being').subcategories.filter(sb=>!sb.retired && sb.name!=='Archetype' && sb.name!=='Motivation' && sb.name!=='Age').map(sb=>sb.name); ns.push('Adjective'); return ns; }   // Type & Occupation can be added as extra traits; Archetype/Motivation/Age handled elsewhere
       if(cat==='setting') return ['Condition','Control','Function','Scale','Atmosphere','Adjective'];
@@ -23452,17 +23438,18 @@ document.addEventListener('DOMContentLoaded', init);
         return;
       }
       if(TP.mode==='stake'){
+        const _commitStake=(word,isNew)=>{ if(TP.thread){ if(typeof setThreadStake==='function') setThreadStake(TP.thread, word); closeTraitPicker(); if(typeof renderNpCard==='function') renderNpCard(); } else { setMotivationStake(TP.i, word, isNew); closeTraitPicker(); } };
         const sc=getCat('stakes'); const pool=[]; const seenW=new Set();
         (sc?sc.subcategories:[]).forEach(sb=> (sb.words||[]).forEach(x=>{ const word=typeof x==='string'?x:x.w; const kk=word.toLowerCase(); if(seenW.has(kk)) return; seenW.add(kk); if(q && kk.indexOf(q)<0) return; pool.push({word, sub:sb.name}); }));
         if(pool.length){ const h=document.createElement('div'); h.className='tp-grouphd'; h.textContent='Stakes'; res.appendChild(h);
           pool.slice(0,40).forEach(o=>{ const b=document.createElement('button'); b.className='ec-opt';
             const d=(typeof descFor==='function')?descFor({word:o.word, cat:'stakes', sub:o.sub}):'';
             b.innerHTML='<span class="ec-w">'+o.word.replace(/</g,'&lt;')+'</span><span class="ec-sub" style="color:'+catColor('stakes')+'">'+o.sub+'</span>'+(d?'<span class="ec-d">'+d.replace(/</g,'&lt;')+'</span>':'');
-            b.addEventListener('click', ()=>{ setMotivationStake(TP.i, o.word, false); closeTraitPicker(); }); res.appendChild(b); }); }
+            b.addEventListener('click', ()=>{ _commitStake(o.word, false); }); res.appendChild(b); }); }
         const exact=pool.some(p=>p.word.toLowerCase()===q);
         if(raw && !exact){ const b=document.createElement('button'); b.className='ec-opt tp-new';
           b.innerHTML='<span class="ec-w">+ Create \u201C'+raw.replace(/</g,'&lt;')+'\u201D</span><span class="ec-sub">stake</span>';
-          b.addEventListener('click', ()=>{ setMotivationStake(TP.i, raw, true); closeTraitPicker(); }); res.appendChild(b); }
+          b.addEventListener('click', ()=>{ _commitStake(raw, true); }); res.appendChild(b); }
         if(!pool.length && !raw){ const e=document.createElement('div'); e.className='tp-empty'; e.textContent='Search a stake or name what\u2019s at risk\u2026'; res.appendChild(e); }
         return;
       }
@@ -23488,7 +23475,8 @@ document.addEventListener('DOMContentLoaded', init);
       const cat = TP.mode==='motivation' ? 'being' : TP.cat;
       const w=state.prompt && state.prompt.words[TP.i];
       const _gattrs = TP.group ? (((typeof beingGroupById==='function' && beingGroupById(TP.group))||{}).attrs||[]) : null;
-      const applied = TP.mode==='trait' ? new Set((_gattrs || ((w&&w.attrs)||[])).map(a=>a.word.toLowerCase())) : new Set();
+      const _tconc = (TP.thread && TP.cat==='concept') ? (((typeof threadById==='function' && threadById(TP.thread))||{}).concepts||[]) : null;
+      const applied = TP.mode==='trait' ? new Set((_gattrs || _tconc || ((w&&w.attrs)||[])).map(a=>(typeof a==='string'?a:a.word).toLowerCase())) : new Set();
       const seen=new Set(), pool=(TP.group ? groupPoolWords(sub) : poolWords(sub, cat));
       const matches=pool.filter(word=>{ const k=word.toLowerCase(); if(seen.has(k)) return false; seen.add(k);
         if(applied.has(k)) return false; return !q || k.includes(q); }).slice(0,40);
@@ -23505,6 +23493,7 @@ document.addEventListener('DOMContentLoaded', init);
     function tpPick(word, isNew){
       if(TP.mode==='motivation'){ setMotivationWant(TP.i, word, isNew); closeTraitPicker(); renderNpCard(); return; }
       if(TP.group){ if(typeof addGroupChar==='function') addGroupChar(TP.group, TP.sub, word); closeTraitPicker(); if(typeof renderNpCard==='function') renderNpCard(); setTrait('@gchar:'+TP.sub+'|'+word); return; }
+      if(TP.thread && TP.cat==='concept'){ if(typeof addThreadConcept==='function') addThreadConcept(TP.thread, word); closeTraitPicker(); if(typeof renderNpCard==='function') renderNpCard(); if(typeof renderConstellation==='function') renderConstellation(); return; }
       if(isNew && typeof saveCustomWord==='function'){ try{ saveCustomWord(TP.cat, { word, sub:TP.sub, desc:'', g:[] }, 'story'); }catch(e){} }
       if(TP.replace){ const old=TP.replace; if(old && old.toLowerCase()!==word.toLowerCase()) removeTraitWord(TP.i, old); if(!addTraitWord(TP.i, word, TP.sub)) return; closeTraitPicker(); renderNpCard(); setTrait(word); return; }
       if(!addTraitWord(TP.i, word, TP.sub)) return;
@@ -23583,6 +23572,8 @@ document.addEventListener('DOMContentLoaded', init);
     function setMotivationStake(i, word, isNew){ const w=state.prompt&&state.prompt.words[i]; if(!w||!word) return; if(isNew && typeof saveCustomWord==='function'){ try{ saveCustomWord('stakes', { word, sub:'Stake', desc:'', g:[] }, 'story'); }catch(e){} } if(typeof pushUndo==='function') pushUndo(); w.motivation=w.motivation||{}; w.motivation.stake=word; if(state.nodes[i]) state.nodes[i].motivation=w.motivation; cascadeForward(i, 'Motivation'); if(state.session){ state.session.words=state.prompt.words; if(typeof scheduleAutosave==='function') scheduleAutosave(); } renderNpCard(); }
     function clearMotivationStake(i){ const w=state.prompt&&state.prompt.words[i]; if(!w||!w.motivation) return; if(typeof pushUndo==='function') pushUndo(); delete w.motivation.stake; if(state.cardTrait==='@stake') state.cardTrait=null; _persistMotivation(i); renderNpCard(); }
     function openStakePicker(i, x, y){ const w=state.prompt && state.prompt.words[i]; if(!w) return; TP={ i, cat:'stakes', sub:'', mode:'stake' }; tpEl().querySelector('.tp-title').textContent='Stake \u2014 what\u2019s at risk'; tpEl().querySelector('.tp-search').placeholder='search stakes or name what\u2019s at risk\u2026'; tpOpen(i, x, y); }
+    function openThreadStakePicker(tid, x, y){ TP={ i:-1, thread:tid, cat:'stakes', sub:'', mode:'stake' }; tpEl().querySelector('.tp-title').textContent='Thread stake \u2014 what\u2019s at risk'; tpEl().querySelector('.tp-search').placeholder='search stakes or name what\u2019s at risk\u2026'; tpOpen(-1, x, y); }
+    function openThreadConceptPicker(tid, x, y){ TP={ i:-1, thread:tid, cat:'concept', sub:traitSubs('concept')[0], mode:'trait' }; tpEl().querySelector('.tp-title').textContent='Thread concept'; tpEl().querySelector('.tp-search').placeholder='search or name a concept\u2026'; tpOpen(-1, x, y); }
     function openMotivatorPicker(i, x, y){
       const w=state.prompt && state.prompt.words[i]; if(!w) return;
       TP={ i, cat:w.cat, sub:'', mode:'motivator' };
@@ -23847,6 +23838,15 @@ document.addEventListener('DOMContentLoaded', init);
           const ps=document.createElement('span'); ps.className='npc-tsub'; ps.textContent='Thread'; pPill.appendChild(ps);
           try{ const raw0=state.session&&state.session.npNotes&&state.session.npNotes[key]; if(raw0 && String(raw0).replace(/<[^>]*>/g,'').trim()){ const d=document.createElement('span'); d.className='npc-tldot'; d.title='Has notes'; pPill.appendChild(d); } }catch(e){}
           pPill.addEventListener('click', ()=>setTrait(null)); tl.appendChild(pPill); }
+        { const _sp=document.createElement('span');
+          if(_th.stake){ _sp.className='npc-trait npc-traitpill npc-threadstake';
+            const _sw=document.createElement('span'); _sw.className='npc-threadsw'; _sw.style.background=(typeof catColor==='function')?catColor('stakes'):'#b8554f'; _sp.appendChild(_sw);
+            const _stw=document.createElement('span'); _stw.className='npc-tw'; _stw.textContent=_th.stake; _sp.appendChild(_stw);
+            const _ss=document.createElement('span'); _ss.className='npc-tsub'; _ss.textContent='Stake'; _sp.appendChild(_ss);
+            const _dv=document.createElement('span'); _dv.className='npc-tx'; _dv.textContent='\u25BE'; _dv.title='Change the stake'; _dv.addEventListener('click', ev=>{ ev.stopPropagation(); if(typeof openThreadStakePicker==='function') openThreadStakePicker(_tid, ev.clientX, ev.clientY); }); _sp.appendChild(_dv);
+            const _xx=document.createElement('span'); _xx.className='npc-tx'; _xx.textContent='\u00D7'; _xx.title='Clear the stake'; _xx.addEventListener('click', ev=>{ ev.stopPropagation(); if(typeof setThreadStake==='function') setThreadStake(_tid, ''); renderNpCard(); }); _sp.appendChild(_xx);
+          } else { _sp.className='npc-trait npc-add'; _sp.textContent='+ stake'; _sp.title='What\u2019s at risk \u2014 the engine of this thread'; _sp.addEventListener('click', ev=>{ ev.stopPropagation(); if(typeof openThreadStakePicker==='function') openThreadStakePicker(_tid, ev.clientX, ev.clientY); }); }
+          tl.appendChild(_sp); }
         tl.appendChild(Object.assign(document.createElement('div'),{className:'npc-plotdiv'}));
         if(!_els.length){ const e=document.createElement('span'); e.className='npc-plotempty'; e.textContent='No elements tagged yet — tag them from the map.'; tl.appendChild(e); }
         _els.forEach(e=>{ const w=e.w; const selOn=state.cardTrait==='@threadel:'+e.key;
@@ -23860,6 +23860,14 @@ document.addEventListener('DOMContentLoaded', init);
         { const addPill=document.createElement('span'); addPill.className='npc-trait npc-add npc-threadadd'; addPill.textContent='+ element'; addPill.title='Add an existing story element to this thread';
           addPill.addEventListener('click', ev=>{ ev.stopPropagation(); if(typeof openThreadAddElement==='function') openThreadAddElement(_tid, ev.clientX||200, ev.clientY||200); }); tl.appendChild(addPill); }
         body.appendChild(tl);
+        { const _cr=document.createElement('div'); _cr.className='npc-threadconcepts';
+          const _chd=document.createElement('span'); _chd.className='npc-tsub npc-concepthd'; _chd.textContent='Concepts'; _cr.appendChild(_chd);
+          ((_th.concepts)||[]).forEach(_cw=>{ const _cp=document.createElement('span'); _cp.className='npc-trait npc-traitpill npc-conceptpill';
+            const _cs=document.createElement('span'); _cs.className='npc-tw'; _cs.textContent='\u27E8 '+_cw+' \u27E9'; _cp.appendChild(_cs);
+            const _cx=document.createElement('span'); _cx.className='npc-tx'; _cx.textContent='\u00D7'; _cx.title='Remove'; _cx.addEventListener('click', ev=>{ ev.stopPropagation(); if(typeof removeThreadConcept==='function') removeThreadConcept(_tid, _cw); renderNpCard(); }); _cp.appendChild(_cx);
+            _cr.appendChild(_cp); });
+          const _addc=document.createElement('span'); _addc.className='npc-trait npc-add'; _addc.textContent='+ concept'; _addc.title='Colour this thread with a concept'; _addc.addEventListener('click', ev=>{ ev.stopPropagation(); if(typeof openThreadConceptPicker==='function') openThreadConceptPicker(_tid, ev.clientX, ev.clientY); }); _cr.appendChild(_addc);
+          body.appendChild(_cr); }
 
         card.appendChild(body);
         return;
