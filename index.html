@@ -12894,6 +12894,55 @@ SETTING_SVG['Ferry Crossing'] = () => { let s='';
   s += svP('M-0.7 -3.9 H0.7 V-4.7 H-0.7 Z','#cabd9c',{s:null})+svP('M1.3 -3.9 H1.9 V-4.9 H1.3 Z','#5a544a',{s:null})+'<g style="fill:#cfc8bc;opacity:0.5"><circle cx="1.6" cy="-5.3" r="0.38"/><circle cx="1.9" cy="-6" r="0.48"/></g>';
   s += '<g style="fill:none;stroke:#cfeaf4;stroke-width:0.14;opacity:0.7"><path d="M-5.8 -1.5 Q-4.8 -1.8 -4.2 -2 M4.2 -2 Q4.8 -1.8 5.8 -1.5"/></g>';
   return s; };
+
+// ── Auto-generate an INKED scratchboard variant for every setting ──────────────
+// Derives each from its existing engraved SVG: warm/neutral mass → dark silhouette,
+// cool/blue + bright elements (glass, water, snow, domes) → cream "lit", every
+// engraved line → a cream carved stroke. Hand-authored entries (Cathedral, Forest)
+// are left untouched. New entries auto-appear in the Engraved | Inked picker toggle.
+function inkifySetting(body){
+  const DK='#241f1a', CR='#efe8d6';
+  function hx(s){ s=s.replace('#',''); if(s.length===3) s=s.replace(/(.)/g,'$1$1'); return [parseInt(s.slice(0,2),16),parseInt(s.slice(2,4),16),parseInt(s.slice(4,6),16)]; }
+  function mf(s){ if(/^none$/i.test(s)) return s; const c=hx(s), r=c[0], g=c[1], b=c[2], L=(0.2126*r+0.7152*g+0.0722*b)/255;
+    if (L < 0.26) return CR;                     // deep recess / opening → carved light
+    const cool = (b > r+8 && b >= g-6);          // glass, water, sky, ice → lit
+    const brightCool = (L > 0.80 && b >= r-4);   // snow, pale glass, dome → lit
+    return (cool || brightCool) ? CR : DK; }
+  // Pass 1: inline style="..." — filled shapes lose their outline so they FUSE into one
+  // solid silhouette; line-only elements (fill:none) become cream carved strokes.
+  body = body.replace(/style="([^"]*)"/g, function(m, st){
+    const fm = st.match(/fill:\s*([^;"]+)/), fill = fm ? fm[1].trim() : null;
+    if (fill && fill.toLowerCase() !== 'none'){
+      st = st.replace(/fill:\s*[^;"]+/, 'fill:'+mf(fill));
+      st = st.replace(/stroke:\s*#[0-9a-fA-F]{3,6}/, 'stroke:none');
+    } else {
+      st = st.replace(/stroke:\s*#[0-9a-fA-F]{3,6}/, 'stroke:'+CR);
+    }
+    return 'style="'+st+'"';
+  });
+  // Pass 2: attribute-form fill/stroke on bare elements (no style=)
+  body = body.replace(/<(rect|circle|ellipse|path|polygon|line)\b([^>]*?)>/g, function(m, tag, attrs){
+    if (/style=/.test(attrs)) return m;
+    const fm = attrs.match(/fill="([^"]+)"/);
+    if (fm && fm[1].toLowerCase() !== 'none'){
+      attrs = attrs.replace(/fill="[^"]+"/, 'fill="'+mf(fm[1])+'"');
+      attrs = attrs.replace(/stroke="[^"]+"/, 'stroke="none"');
+    } else {
+      attrs = attrs.replace(/stroke="#[0-9a-fA-F]{3,6}"/, 'stroke="'+CR+'"');
+    }
+    return '<'+tag+attrs+'>';
+  });
+  return body;
+}
+try {
+  Object.keys(SETTING_SVG).forEach(function(k){
+    if (SETTING_SVG_SB[k]) return;            // keep hand-authored variants
+    const eng = SETTING_SVG[k];
+    if (typeof eng !== 'function') return;
+    SETTING_SVG_SB[k] = function(){ return inkifySetting(eng()); };
+  });
+} catch(e){ console.warn('inked settings init failed', e); }
+
 function makeSettingMotif(nd, keyOverride){
   const _nm = keyOverride || nd.word;
   const build = (nd.iconStyle==='sb' && typeof SETTING_SVG_SB!=='undefined' && SETTING_SVG_SB[_nm]) ? SETTING_SVG_SB[_nm] : SETTING_SVG[_nm]; if (!build) return null;
