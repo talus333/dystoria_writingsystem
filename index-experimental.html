@@ -3782,7 +3782,10 @@ function catCount(id){ return Math.max(1, Math.min(4, state.counts[id] || 1)); }
 
 /* ---------------- rail ---------------- */
 const GROUPS = [
-  { name: 'Story Elements', ids: ['genre','theme','period','stakes','being','setting','object','event','plot'], collapsed: false },   // Obstacle removed from the rail — it now lives on the character's motivation line in the notepad
+  // Experimental: the old single 'Story Elements' group split into three minimizable sets
+  { name: 'Narrative Layers', ids: ['genre','period','theme','stakes'], collapsed: false, collapsible: true },   // Genre · Context · Concepts · Stakes — steer what gets generated
+  { name: 'World Elements', ids: ['being','setting','object','event'], collapsed: false, collapsible: true },     // Being · Setting · Object · Event
+  { name: 'Timeline', ids: ['plot'], collapsed: false, collapsible: true },                                       // Plot
   { name: 'Narrative Frame', ids: ['genre','period','plot','theme','stakes'], collapsed: true, hidden: true },
   { name: 'Writing Guides', ids: ['narration','mode'], collapsed: true, hidden: true },
   { name: 'Writing Exercises', ids: ['exercise'], collapsed: true, hidden: true },
@@ -3796,19 +3799,31 @@ const FOCUS_BLOCKS = [
   { id: 'guides', name: 'Guides', dot: '#7ea69f', cats: ['narration', 'mode'] },
   { id: 'exercises', name: 'Exercises', dot: '#b59a6a', cats: ['exercise'] }
 ];
+function railGroupCollapsed(name){ try { const v = localStorage.getItem('dystoria.rail.' + name); return v == null ? null : v === '1'; } catch (e){ return null; } }
+function setRailGroupCollapsed(name, on){ try { localStorage.setItem('dystoria.rail.' + name, on ? '1' : '0'); } catch (e){} }
 function buildRail(){
   const root = $('catGroups'); root.innerHTML = '';
   const assignedIds = new Set([].concat.apply([], GROUPS.map(grp => grp.ids || [])));
+  let notePlaced = false;
   GROUPS.forEach(grp => {
     if (grp.hidden) return;
     const sec = document.createElement('div');
     sec.className = 'group';
     const h = document.createElement('h2');
-    h.className = 'group-head fixed';
-    h.textContent = grp.name;
+    if (grp.collapsible){
+      h.className = 'group-head';
+      const persisted = railGroupCollapsed(grp.name);
+      const isCol = (persisted != null) ? persisted : !!grp.collapsed;
+      if (isCol) sec.classList.add('collapsed');
+      h.innerHTML = '<span class="arr">▾</span><span>' + grp.name + '</span>';
+      h.addEventListener('click', () => { sec.classList.toggle('collapsed'); setRailGroupCollapsed(grp.name, sec.classList.contains('collapsed')); });
+    } else {
+      h.className = 'group-head fixed';
+      h.textContent = grp.name;
+    }
     sec.appendChild(h);
     const rn = $('railNote');
-    if (rn) sec.appendChild(rn);
+    if (rn && !notePlaced){ sec.appendChild(rn); notePlaced = true; }   // the rail note sits under the first group only
     const wrap = document.createElement('div');
     wrap.className = 'group-body';
     sec.appendChild(wrap);
@@ -4042,7 +4057,18 @@ function pickWeighted(pool, genres, used, themes){
       if (!hit && tTags) hit = tTags.some(t => gt.has(String(t).toLowerCase()));
       if (hit) goalMul = 3;
     }
-    expand.push([word, base * gMul * tMul * goalMul]);
+    // experimental: narrative-layer keyword nudge — words sharing a keyword with the writer's
+    // Context / Stakes / Genre / Concepts choices surface a little more often (never guaranteed)
+    let narrMul = 1;
+    const nt = state._narrativeTokens;
+    if (nt && nt.size){
+      const wl2 = word.toLowerCase();
+      let nhit = nt.has(wl2) || wl2.split(/[^a-z]+/).some(p => p.length >= 4 && nt.has(p));
+      if (!nhit && gTags) nhit = gTags.some(t => nt.has(String(t).toLowerCase()));
+      if (!nhit && tTags) nhit = tTags.some(t => nt.has(String(t).toLowerCase()));
+      if (nhit) narrMul = 2.5;
+    }
+    expand.push([word, base * gMul * tMul * goalMul * narrMul]);
   });
   if (!expand.length){ const it = pick(pool); return typeof it === 'string' ? it : it.w; }
   const total = expand.reduce((acc, e) => acc + e[1], 0);
@@ -4053,6 +4079,33 @@ function pickWeighted(pool, genres, used, themes){
   }
   used.add(expand[expand.length - 1][0]);
   return expand[expand.length - 1][0];
+}
+
+/* ── Experimental: narrative layers steer generation ──────────────────────────
+   The Context (period) layer has no genre tags of its own, so map its words to the
+   genres they imply; those join the Genre layer when weighting world elements. */
+const CONTEXT_GENRE_HINTS = {
+  'Far Future':['Sci Fi'], 'Near Future':['Sci Fi'], 'Present':[], 'Near Past':['Historical'], 'Distant Past':['Historical','Fantasy','Mythological'], 'Ambiguous':[],
+  'Dawn of History':['Mythological','Fantasy'], 'Bronze Age':['Historical','Mythological'], 'Age of Empires':['Historical'], 'Age of Sail':['Historical','Adventure'], 'Industrial Age':['Historical'], 'Atomic Age':['Historical','Paranoid'], 'Information Age':['Sci Fi','Paranoid'],
+  'After the Collapse':['Sci Fi','Horror'], 'The Occupation':['Political','Historical'], 'The Long Peace':['Drama'], 'The Plague Years':['Horror','Historical'], 'The Reconstruction':['Drama','Historical'], 'The Last Summer Before the War':['Drama','Romance'], 'A Single Night':['Drama','Horror']
+};
+/* Genre layer + the genres implied by the Context layer, for the active set. */
+function narrativeGenresFor(set){
+  const words = (state.prompt && state.prompt.words) || [];
+  const out = words.filter(w => w.set === set && w.cat === 'genre').map(w => w.word);
+  words.filter(w => w.set === set && w.cat === 'period').forEach(w => {
+    (CONTEXT_GENRE_HINTS[w.word] || []).forEach(g => { if (out.indexOf(g) < 0) out.push(g); });
+  });
+  return out;
+}
+/* Keyword tokens from every narrative layer in the active set, for the soft nudge. */
+function refreshNarrativeTokens(set){
+  const words = (state.prompt && state.prompt.words) || [];
+  const toks = new Set();
+  words.filter(w => w.set === set && ['genre','period','theme','stakes'].indexOf(w.cat) >= 0).forEach(w => {
+    String(w.word || '').toLowerCase().split(/[^a-z]+/).forEach(p => { if (p.length >= 4) toks.add(p); });
+  });
+  state._narrativeTokens = toks;
 }
 
 /* one composite Being: one word per checked subcategory; the dominant
@@ -6133,7 +6186,7 @@ function generatePrompt(){
         }
       }
     });
-    const setGenres = words.filter(w => w.set === s && w.cat === 'genre').map(w => w.word);
+    const setGenres = narrativeGenresFor(s); refreshNarrativeTokens(s);   // experimental: narrative layers steer the bulk roll too
 
     if (active.some(c => c.id === 'being')){
       for (let k = 0; k < catCount('being'); k++){
@@ -6439,14 +6492,84 @@ function renderStartCard(){
     blank.addEventListener('click', () => commitStart('blank'));
     maps.appendChild(seed); maps.appendChild(blank); acts.appendChild(maps);
   }
+  renderStartLayers();
+}
+/* ── Experimental: optional narrative-layers step in the new-story card ──────── */
+const START_LAYERS = [['genre','Genre'],['period','Context'],['theme','Concepts'],['stakes','Stakes']];
+function renderStartLayers(){
+  const wrap = $('sgLayers'); if (!wrap) return;
+  wrap.innerHTML = '';
+  const head = document.createElement('div');
+  head.style.cssText = 'font-size:10px; letter-spacing:.18em; text-transform:uppercase; opacity:.55; margin:16px 0 4px';
+  head.textContent = 'Narrative layers — optional';
+  wrap.appendChild(head);
+  const ld = state._layerDraft || (state._layerDraft = {});
+  START_LAYERS.forEach(([id, label]) => {
+    const cat = getCat(id);
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex; align-items:center; gap:8px; padding:6px 0; border-top:1px solid rgba(0,0,0,.06)';
+    const dot = document.createElement('span'); dot.style.cssText = 'display:inline-block; width:7px; height:7px; border-radius:50%; flex:0 0 auto; background:' + (cat ? cat.color : '#999');
+    const nm = document.createElement('span'); nm.textContent = label; nm.style.cssText = 'width:74px; font-size:12px; opacity:.75; flex:0 0 auto';
+    const val = document.createElement('span'); val.style.cssText = 'flex:1 1 auto; font-size:13px;' + (ld[id] ? '' : ' opacity:.4; font-style:italic');
+    val.textContent = ld[id] ? ld[id].word : 'leave blank, or roll →';
+    const roll = document.createElement('button'); roll.textContent = ld[id] ? 'reroll' : 'roll';
+    roll.style.cssText = 'font-size:11px; padding:3px 10px; border-radius:11px; border:1px solid rgba(0,0,0,.22); background:transparent; cursor:pointer; flex:0 0 auto';
+    roll.addEventListener('click', () => rollStartLayer(id));
+    row.appendChild(dot); row.appendChild(nm); row.appendChild(val); row.appendChild(roll);
+    if (ld[id]){
+      const x = document.createElement('button'); x.textContent = '×';
+      x.style.cssText = 'font-size:14px; border:none; background:none; cursor:pointer; opacity:.5; padding:0 2px; flex:0 0 auto';
+      x.addEventListener('click', () => { delete ld[id]; renderStartLayers(); });
+      row.appendChild(x);
+    }
+    wrap.appendChild(row);
+  });
+}
+function rollStartLayer(id){
+  const ld = state._layerDraft || (state._layerDraft = {});
+  const used = new Set(Object.keys(ld).map(k => ld[k] && ld[k].word).filter(Boolean));
+  const biasGenres = [];
+  if (ld.genre) biasGenres.push(ld.genre.word);
+  if (ld.period) (CONTEXT_GENRE_HINTS[ld.period.word] || []).forEach(x => biasGenres.push(x));
+  const it = drawItem(getCat(id), 0, used, biasGenres);
+  if (it){ ld[id] = it; renderStartLayers(); }
+}
+/* Seed the chosen narrative layers as frame words on the active set. */
+function seedNarrativeLayers(items){
+  if (!items || !items.length) return false;
+  if (!state.prompt){ state.prompt = { words: [], sets: 1, links: [], removedLinks: [] }; state.activeSet = 0; state.frames = [{ gap: null, prompt: state.prompt }]; state.frameIdx = 0; }
+  const words = state.prompt.words;
+  items.forEach(it => {
+    const w = Object.assign({}, it, { set: state.activeSet || 0, role: 'word' });
+    if (FRAME_IDS.has(w.cat)) w.role = 'frame';
+    if (w.cat === 'theme' || w.cat === 'stakes') w.scope = 'story';
+    words.push(w);
+  });
+  ensureSession();
+  state.session.words = words; state.session.sets = state.prompt.sets || 1;
+  state.session.links = state.prompt.links || []; state.session.removedLinks = state.prompt.removedLinks || [];
+  state.session.frames = state.frames; state.session.frameIdx = state.frameIdx || 0;
+  state.session.categories = state.session.categories || [];
+  items.forEach(it => { if (state.session.categories.indexOf(it.cat) < 0) state.session.categories.push(it.cat); });
+  layoutConstellation();
+  const se = $('skyEmpty'); if (se) se.style.display = 'none';
+  renderConstellation(); renderTimeline(); scheduleAutosave();
+  return true;
 }
 function commitStart(mode){
   syncGoalNotes();
   const g = { items: (state._goalDraft || []).slice() };
   applyStartGoal(g);
   state._goalDraft = null;
+  const layers = state._layerDraft ? START_LAYERS.map(([id]) => state._layerDraft[id]).filter(Boolean) : [];
+  state._layerDraft = null;
   closeStartCard();
-  if (mode === 'seed'){ seedFromGoal(); }
+  if (mode === 'seed'){
+    const p = seedFromGoal();
+    if (layers.length && p && p.then) p.then(() => seedNarrativeLayers(layers));
+    return;
+  }
+  if (seedNarrativeLayers(layers)){ flashStatus('Narrative layers set — now add your world elements.'); }
   else { flashStatus(goalIsEmpty(state.session && state.session.goal) ? 'Empty map ready.' : 'Empty map — your goal is set.'); }
 }
 /* the +Goal picker reuses the Add-element card in a special "goal" mode.
@@ -6474,12 +6597,14 @@ function openStartCard(){
   if (!m){ m = document.createElement('div'); m.id = 'startModal'; document.body.appendChild(m); }
   const prevItems = goalItems(state.session && state.session.goal);
   state._goalDraft = prevItems.map(it => ({ word: it.word, cat: it.cat || null, sub: it.sub || '', note: goalNoteText(it) }));
+  state._layerDraft = {};   // experimental: optional Genre/Context/Concepts/Stakes picked at start
   m.innerHTML =
     '<div class="sm-panel sm-min">' +
     '<button class="sm-x" id="smClose" title="Skip — explore freely">×</button>' +
     '<h2>Start a new story</h2>' +
-    '<p class="sm-sub">Set a goal to steer the AI — what this story is, how it should feel, who it’s for. Or just dive in. Optional, and you can keep it light.</p>' +
+    '<p class="sm-sub">First, set a goal to steer the AI — what this story is, how it should feel, who it’s for. Then sketch the narrative layers. Both are optional, and you can add or change them anytime.</p>' +
     '<div id="sgGoals"></div>' +
+    '<div id="sgLayers"></div>' +
     '<div id="sgActions"></div>' +
     '</div>';
   m.querySelector('#smClose').addEventListener('click', () => { commitStart('blank'); });
@@ -8360,7 +8485,7 @@ function addFromCategory(catId, subName){
   const nSets = state.prompt.sets || 1;
   const s = Math.min(state.activeSet || 0, nSets - 1);
   const used = new Set(words.filter(w => w.set === s).map(w => w.word));
-  const setGenres = words.filter(w => w.set === s && w.cat === 'genre').map(w => w.word);
+  const setGenres = narrativeGenresFor(s); refreshNarrativeTokens(s);   // experimental: Genre + Context drive genre weighting; all four layers feed the keyword nudge
   if (catId === 'being'){
     words.push(drawBeing(s, used, setGenres));
   } else if (catId === 'relationship'){
@@ -18219,6 +18344,7 @@ function newSession(){
   state.plotGaps = {};
   state.focusKeys = [];
   state._goalTokens = new Set();   // no story open → no goal bias on rolls
+  state._narrativeTokens = new Set();   // experimental: clear narrative-layer bias between stories
   state._goalDraft = null;
   renderFocus();
   state.game = null;
