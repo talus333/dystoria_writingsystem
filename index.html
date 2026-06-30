@@ -1389,6 +1389,7 @@
   #rail .group-head .arr{display:inline-block; font-size:14px; line-height:1; transition:transform .15s}
   #rail .group:not(.collapsed) .group-head .arr{transform:rotate(180deg)}
   #rail .group.collapsed .group-body{display:none}
+  #rail #catGroups{padding-top:19px}   /* drop the first group (Narrative Layers) down to line up with the Narrative Layers title in the frame bar above the map */
   .cat{margin-bottom:2px; border-radius:8px}
   .cat-head{display:flex; align-items:center; gap:8px; padding:6px 7px 6px 13px; border-radius:8px; cursor:pointer; user-select:none}
   .cat-head:hover{background:rgba(255,255,255,.55)}
@@ -6515,7 +6516,11 @@ function renderStartLayers(){
     const roll = document.createElement('button'); roll.textContent = ld[id] ? 'reroll' : 'roll';
     roll.style.cssText = 'font-size:11px; padding:3px 10px; border-radius:11px; border:1px solid rgba(0,0,0,.22); background:transparent; cursor:pointer; flex:0 0 auto';
     roll.addEventListener('click', () => rollStartLayer(id));
-    row.appendChild(dot); row.appendChild(nm); row.appendChild(val); row.appendChild(roll);
+    const choose = document.createElement('button'); choose.textContent = ld[id] ? 'change' : 'choose';
+    choose.style.cssText = 'font-size:11px; padding:3px 10px; border-radius:11px; border:1px solid rgba(0,0,0,.22); background:transparent; cursor:pointer; flex:0 0 auto';
+    choose.title = 'Search and pick a specific ' + label;
+    choose.addEventListener('click', (e) => openLayerPicker(id, e));
+    row.appendChild(dot); row.appendChild(nm); row.appendChild(val); row.appendChild(choose); row.appendChild(roll);
     if (ld[id]){
       const x = document.createElement('button'); x.textContent = '×';
       x.style.cssText = 'font-size:14px; border:none; background:none; cursor:pointer; opacity:.5; padding:0 2px; flex:0 0 auto';
@@ -6533,6 +6538,14 @@ function rollStartLayer(id){
   if (ld.period) (CONTEXT_GENRE_HINTS[ld.period.word] || []).forEach(x => biasGenres.push(x));
   const it = drawItem(getCat(id), 0, used, biasGenres);
   if (it){ ld[id] = it; renderStartLayers(); }
+}
+/* open the Add card to search & pick a specific narrative layer for the start-card draft */
+function openLayerPicker(id, ev){
+  if (typeof EC === 'undefined' || typeof openElemCard !== 'function') return;
+  EC.layerId = id;
+  if (ev){ EC.x = (ev.clientX || 200) + 8; EC.y = (ev.clientY || 140); }
+  openElemCard(id, 'layer');
+  const c = $('elemCard'); if (c) c.style.zIndex = '240';   // float above the start modal (z 200)
 }
 /* Seed the chosen narrative layers as frame words on the active set. */
 function seedNarrativeLayers(items){
@@ -7295,6 +7308,7 @@ async function autoAssignIcon(idx, w){
 function commitWord(word, sub, catId){
   catId = catId || EC.cat;
   if (EC.mode === 'goal'){ const c = (catId === 'custom' ? null : catId); if (EC.goalTarget === 'session') addSessionGoal(word, sub, c); else addGoalDraftItem(word, sub, c); closeElemCard(); return; }   // capture a story goal, don't place on the map
+  if (EC.mode === 'layer'){ const lid = EC.layerId; state._layerDraft = state._layerDraft || {}; const it = ecBuildItem(word, sub, 0, catId); it.cat = it.cat || catId; if (lid) state._layerDraft[lid] = it; EC.layerId = null; closeElemCard(); if (typeof renderStartLayers === 'function') renderStartLayers(); return; }   // chosen narrative layer for the new-story card
   if (EC.mode === 'container'){ setMapContainer(word); closeElemCard(); return; }   // sets what the whole map IS
   if (EC.mode === 'replace' && state.prompt && state.prompt.words[EC.node]){
     pushUndo();
@@ -14544,7 +14558,11 @@ function buildDrawSection(root){
   if (!root) return;
   wireDrawGlobals();
   const sec = document.createElement('div'); sec.className = 'group draw-group';
-  const h = document.createElement('h2'); h.className = 'group-head fixed'; h.textContent = 'Draw'; sec.appendChild(h);
+  const h = document.createElement('h2'); h.className = 'group-head';
+  { const _c = railGroupCollapsed('Draw'); if (_c !== false) sec.classList.add('collapsed'); }   // default collapsed — tuck the draw tools away
+  h.innerHTML = '<span class="arr">▾</span><span>Draw</span>';
+  h.addEventListener('click', () => { sec.classList.toggle('collapsed'); setRailGroupCollapsed('Draw', sec.classList.contains('collapsed')); });
+  sec.appendChild(h);
   const body = document.createElement('div'); body.className = 'group-body draw-body'; sec.appendChild(body);
 
   const closeOtherPanels = keep => { document.querySelectorAll('.draw-panel').forEach(p => { if (p !== keep && p.id !== 'drawGridPanel'){ p.hidden = true; const b = p.previousElementSibling; if (b && b.classList) b.classList.remove('open'); } }); };
@@ -14659,9 +14677,16 @@ function buildDrawSection(root){
   eBtn.addEventListener('click', e => { e.stopPropagation(); setEraseDraw(!state.eraseDraw); });   // toggle on/off
   body.appendChild(eBtn);
 
-  const gDiv = document.createElement('div'); gDiv.className = 'draw-divider'; body.appendChild(gDiv); body.appendChild(gWrap);   // Grid lives in its own section at the bottom, below a divider
-
   root.appendChild(sec);
+  // ---- Constraints: snapping/grid tools in their own collapsible section (Grid moved out of Draw) ----
+  const cSec = document.createElement('div'); cSec.className = 'group constraints-group';
+  const cH = document.createElement('h2'); cH.className = 'group-head';
+  { const _cc = railGroupCollapsed('Constraints'); if (_cc !== false) cSec.classList.add('collapsed'); }   // default collapsed
+  cH.innerHTML = '<span class="arr">▾</span><span>Constraints</span>';
+  cH.addEventListener('click', () => { cSec.classList.toggle('collapsed'); setRailGroupCollapsed('Constraints', cSec.classList.contains('collapsed')); });
+  cSec.appendChild(cH);
+  const cBody = document.createElement('div'); cBody.className = 'group-body draw-body'; cBody.appendChild(gWrap); cSec.appendChild(cBody);   // Grid lives here now
+  root.appendChild(cSec);
   updateDrawUI();
 }
 
@@ -22646,6 +22671,7 @@ function init(){
     const word = $('ecSearch').value.trim();
     if (!word) return;
     if (EC.mode === 'goal'){ commitWord(word, '', 'custom'); return; }   // a freely-typed goal — don't save it to the word archive
+    if (EC.mode === 'layer'){ commitWord(word, $('ecSub').value, EC.cat); return; }   // a freely-typed narrative layer → start-card draft
     let cat = EC.cat, sub = $('ecSub').value;
     if (EC.cats && sub.indexOf('|') >= 0){ const p = sub.split('|'); cat = p[0]; sub = p[1]; }   // multi-cat (guides/exercises)
     const desc = $('ecDesc').value.trim();
