@@ -236,7 +236,7 @@ async function runWorkersChat(env, system, prompt, maxTokens, temperature, jsonM
 function modelChain(env) {
   const c = [];
   if (env.ANTHROPIC_API_KEY)  c.push({ name: 'claude', paid: true, run: (s, p, mt, t, j) => runClaude(env, s, p, mt, t) });
-  if (env.GEMINI_API_KEY)     c.push({ name: 'gemini-2.5-pro',   run: (s, p, mt, t, j) => runGemini(env, s, p, mt, t, 'gemini-2.5-pro', j) });
+  if (env.GEMINI_API_KEY)     c.push({ name: 'gemini-2.5-pro',   heavy: true, run: (s, p, mt, t, j) => runGemini(env, s, p, mt, t, 'gemini-2.5-pro', j) });   // heavy = reserved for the big, rare Import extraction; kept OUT of the frequent low-token paths
   if (env.GEMINI_API_KEY)     c.push({ name: 'gemini-2.5-flash', run: (s, p, mt, t, j) => runGemini(env, s, p, mt, t, 'gemini-2.5-flash', j) });
   // Cerebras (gpt-oss-120b) — high-capacity free fallback, ranked above Groq. ctxCap skips it on calls too
   // big for its ~8K free-tier window (they fall through to a large-context model). Used for text + icons.
@@ -260,7 +260,13 @@ async function runFrontier(env, system, prompt, maxTokens, temperature, opts) {
   const testing = Array.isArray(only) && only.length;
   if (testing){
     chain = chain.filter(p => only.includes(p.name));   // testing override: only the explicitly enabled models, in chain order
+  } else if (opts.importOnly){
+    // Import = a rare, very large-context extraction. Dedicate the heavy model (Gemini 2.5 Pro) to it, with large-context
+    // fallbacks only. Small-window models (Cerebras 8K, OpenRouter, Workers-AI) are excluded so a whole document never truncates.
+    const IMPORT_MODELS = ['gemini-2.5-pro', 'gemini-2.5-flash', 'mistral-large', 'groq-llama-70b'];
+    chain = chain.filter(p => IMPORT_MODELS.includes(p.name));
   } else {
+    chain = chain.filter(p => !p.heavy);   // reserve the heavy import model — keep it out of the frequent, low-token paths (prompts, refine, wiki, icons)
     if (!opts.allowPaid) chain = chain.filter(p => !p.paid);   // the paid model (Claude) is included ONLY when the caller is entitled (admin or Pro); allowPaid is set server-side from the verified plan, never from the request body
     if (opts.allowLast === false) chain = chain.filter(p => !p.last);
   }
@@ -305,7 +311,8 @@ async function handleAI(request, env) {
   catch (e) { return new Response(JSON.stringify({ error: 'bad request' }), { status: 400, headers }); }
 
   const system = String(body.system || '').slice(0, 4000);
-  const prompt = String(body.prompt || '').slice(0, 24000);
+  // Import is the one deliberately-large task (whole worldbuilding docs / manuscripts) → allow a much bigger prompt; everything else stays lean.
+  const prompt = String(body.prompt || '').slice(0, body.kind === 'import' ? 300000 : 24000);
   const image = typeof body.image === 'string' ? body.image : '';   // data URL (e.g. data:image/png;base64,...)
   if (!prompt && !image) return new Response(JSON.stringify({ error: 'no prompt' }), { status: 400, headers });
 
@@ -319,7 +326,7 @@ async function handleAI(request, env) {
   if (!rateOk(user.id, image ? (paid ? 30 : 12) : (paid ? 120 : 45))) return new Response(JSON.stringify({ error: 'Too many AI requests — give it a moment' }), { status: 429, headers });
   if (!dailyOk(user.id, image ? (paid ? 1500 : 400) : (paid ? 6000 : 1200))) return new Response(JSON.stringify({ error: 'You’ve hit today’s AI limit — it resets tomorrow. Reach out if you need more.' }), { status: 429, headers });
 
-  const maxTokens = Math.min(Math.max(parseInt(body.max_tokens, 10) || 600, 64), 4096);
+  const maxTokens = Math.min(Math.max(parseInt(body.max_tokens, 10) || 600, 64), body.kind === 'import' ? 8192 : 4096);   // import returns a big element list → allow a larger JSON reply
   const model = body.model || (image ? VISION_MODEL : MODEL);
 
   // ---- image (vision / OCR / handwriting) ----
@@ -348,7 +355,16 @@ async function handleAI(request, env) {
     return new Response(JSON.stringify({ error: 'Image model error — ' + (err || 'try again') }), { status: 502, headers });
   }
 
-  // ---- general text tasks (writing prompts, Wiki rollups, Import extraction, Refine, etc.) ----
+  // ---- Import extraction: dedicated large-context model (Gemini 2.5 Pro), reserved so its free quota isn't spent on frequent small calls ----
+  if (body.kind === 'import'){
+    const fr = await runFrontier(env, system, prompt, maxTokens, temperature, { admin, importOnly: true, json: !!body.json, only: body.models });
+    if (fr.text) return new Response(JSON.stringify({ text: fr.text, via: fr.via }), { headers });
+    const err = fr.error || '';
+    if (fr.exhausted) return new Response(JSON.stringify({ error: 'The import model is at today’s limit — it resets tomorrow.', limit: 'day' }), { status: 429, headers });
+    return new Response(JSON.stringify({ error: 'Import model error — ' + (err || 'try again') }), { status: 502, headers });
+  }
+
+  // ---- general text tasks (writing prompts, Wiki rollups, Refine, etc.) — the frequent, low-token path; the heavy import model is excluded here ----
   // Route through the FREE model chain (Gemini → Groq → Mistral → … → Workers AI) for quality + resilience — for
   // EVERYONE, including Pro. Gemini 2.5 Pro leads and is already frontier-grade, and text is high-volume, so Claude
   // stays reserved for the premium ICON path to bound cost. (Only admins get Claude here, for testing.) To also give
