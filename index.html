@@ -1316,9 +1316,10 @@
   /* ---- Dark mode for the story-elements rail, Narrative bar, and timeline (match Writing Focus; skip e-ink) ---- */
   body:not(.eink) #rail{background:#2b2926; border-color:rgba(255,255,255,.12)}
   body:not(.eink) #railHead{background:#2b2926; border-bottom-color:rgba(255,255,255,.12)}
-  body:not(.eink) #railHead .rail-title{color:#cdc6b8}
-  body:not(.eink) #railMin{color:#9a948a}
-  body:not(.eink) #railMin:hover{color:#f0ece3; background:rgba(255,255,255,.06)}
+  body:not(.eink) #railHead .rail-title{color:#fbcf83}
+  body:not(.eink) #railMin, body:not(.eink) #railPin{color:#9a948a}
+  body:not(.eink) #railMin:hover, body:not(.eink) #railPin:hover{color:#f0ece3; background:rgba(255,255,255,.06)}
+  body:not(.eink) #railPin.pinned{color:#fbcf83}
   body:not(.eink) #rail h2{color:#cdc6b8}
   body:not(.eink) #rail h2.group-head:hover{color:#f0ece3}
   body:not(.eink) #rail #railNote{color:#9a948a}
@@ -1379,17 +1380,21 @@
 
   /* ---------- control rail ---------- */
   #rail{
-    position:absolute; top:16px; left:16px; z-index:30;
+    position:absolute; left:16px; bottom:16px; top:auto; z-index:30;
     width:272px; max-height:calc(100% - 32px); overflow-y:auto; padding:0 14px 14px;
     border:1px solid var(--line); border-radius:18px; background:var(--bg2);
     box-shadow:0 14px 44px rgba(0,0,0,.28); scrollbar-width:thin;
   }
   #railHead{position:sticky; top:0; z-index:3; display:flex; align-items:center; justify-content:space-between; gap:8px;
-    margin:0 -14px 0; padding:11px 14px 9px; cursor:move; user-select:none; background:var(--bg2);
+    margin:0 -14px 0; padding:11px 14px 9px; cursor:default; user-select:none; background:var(--bg2);
     border-radius:18px 18px 0 0; border-bottom:1px solid var(--line)}
-  #railHead .rail-title{font-family:var(--serif); font-size:15px; letter-spacing:.03em; color:var(--ink-soft)}
-  #railMin{border:none; background:none; cursor:pointer; font-size:18px; line-height:1; color:var(--ink-faint); width:26px; height:24px; border-radius:7px; padding:0}
-  #railMin:hover{color:var(--ink); background:rgba(0,0,0,.06)}
+  #rail.unpinned #railHead{cursor:move}
+  #railHead .rail-title{font-family:var(--serif); font-size:15px; letter-spacing:.03em; color:var(--gold)}
+  #railHead .rail-ctrls{display:flex; align-items:center; gap:1px; flex:none}
+  #railMin, #railPin{border:none; background:none; cursor:pointer; color:var(--ink-faint); width:25px; height:24px; border-radius:7px; padding:0; display:flex; align-items:center; justify-content:center}
+  #railMin{font-size:18px; line-height:1}
+  #railMin:hover, #railPin:hover{color:var(--ink); background:rgba(0,0,0,.06)}
+  #railPin.pinned{color:var(--gold)}
   #rail.rail-min{max-height:none}
   #rail.rail-min #catGroups{display:none}
   #rail.rail-min #railHead{border-bottom:none; border-radius:18px}
@@ -3160,7 +3165,7 @@
     </div>
   <section id="upper">
     <aside id="rail">
-      <div id="railHead"><span class="rail-title">Story Elements</span><button id="railMin" title="Minimize / expand">–</button></div>
+      <div id="railHead"><span class="rail-title">Add Story Elements</span><span class="rail-ctrls"><button id="railPin" class="pinned" title="Unpin to move"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg></button><button id="railMin" title="Minimize / expand">–</button></span></div>
       <div id="catGroups"></div>
       <input type="hidden" id="setCount" value="1">
     </aside>
@@ -3850,6 +3855,14 @@ const FOCUS_BLOCKS = [
 ];
 function railGroupCollapsed(name){ try { const v = localStorage.getItem('dystoria.rail.' + name); return v == null ? null : v === '1'; } catch (e){ return null; } }
 function setRailGroupCollapsed(name, on){ try { localStorage.setItem('dystoria.rail.' + name, on ? '1' : '0'); } catch (e){} }
+// Default rail open/closed state depending on how a new story began:
+//   'with-narrative' → only World Elements open · 'blank' → Narrative + World open · 'rolled' → all closed
+function setRailDefaults(scenario){
+  var open = scenario === 'blank' ? ['Narrative Elements','World Elements']
+           : scenario === 'with-narrative' ? ['World Elements'] : [];
+  ['Narrative Elements','World Elements','Draw','Constraints'].forEach(function(n){ setRailGroupCollapsed(n, open.indexOf(n) < 0); });
+  if (typeof buildRail === 'function') buildRail();
+}
 function buildRail(){
   const root = $('catGroups'); root.innerHTML = '';
   const assignedIds = new Set([].concat.apply([], GROUPS.map(grp => grp.ids || [])));
@@ -6630,10 +6643,12 @@ function commitStart(mode){
   state._layerDraft = null;
   closeStartCard();
   if (mode === 'seed'){
+    setRailDefaults('rolled');                       // AI-generated starting set → everything closed
     const p = seedFromGoal();
     if (layers.length && p && p.then) p.then(() => seedNarrativeLayers(layers));
     return;
   }
+  setRailDefaults(layers.length ? 'with-narrative' : 'blank');   // added narrative elements → only World open; blank → both open
   if (seedNarrativeLayers(layers)){ flashStatus('Narrative layers set — now add your world elements.'); }
   else { flashStatus(goalIsEmpty(state.session && state.session.goal) ? 'Empty map ready.' : 'Empty map — your goal is set.'); }
 }
@@ -6707,6 +6722,7 @@ function finalizeSeed(opts){
   state.session.links = state.prompt.links; state.session.removedLinks = [];
   state.session.frames = state.frames; state.session.frameIdx = 0;
   renderTimeline(); scheduleAutosave();
+  if (typeof setRailDefaults === 'function') setRailDefaults('rolled');   // a rolled/seeded starting set → collapse all rail sections
 }
 function seedAroundElement(catId, sub, word){
   const used = new Set();
@@ -26585,18 +26601,35 @@ body.ember:not(.eink) #timeline .tl-head{ font-family:'Cinzel','Cormorant SC',se
 /* Floating Story-Elements rail: drag by its header, minimize, remember position */
 (function(){
   function init(){
-    var rail=document.getElementById('rail'), head=document.getElementById('railHead'), minBtn=document.getElementById('railMin');
+    var rail=document.getElementById('rail'), head=document.getElementById('railHead'),
+        minBtn=document.getElementById('railMin'), pinBtn=document.getElementById('railPin');
     if(!rail||!head) return;
     var isPhone=function(){ return window.matchMedia('(max-width:768px)').matches; };
+    function setPinned(on, save){
+      if(on){
+        rail.classList.remove('unpinned');
+        rail.style.left=''; rail.style.top=''; rail.style.right=''; rail.style.bottom='';   // snap back to bottom-left corner
+        if(pinBtn){ pinBtn.classList.add('pinned'); pinBtn.title='Unpin to move'; }
+        try{ localStorage.removeItem('dystoria.railPos'); }catch(_){}
+      } else {
+        rail.classList.add('unpinned');
+        if(pinBtn){ pinBtn.classList.remove('pinned'); pinBtn.title='Pin to corner'; }
+      }
+      if(save!==false){ try{ localStorage.setItem('dystoria.railPinned', on?'1':'0'); }catch(_){} }
+    }
     try{
       if(localStorage.getItem('dystoria.railMin')==='1'){ rail.classList.add('rail-min'); if(minBtn) minBtn.textContent='+'; }
-      var p=JSON.parse(localStorage.getItem('dystoria.railPos')||'null');
-      if(p && !isPhone()){ if(typeof p.left==='number') rail.style.left=p.left+'px'; if(typeof p.top==='number') rail.style.top=p.top+'px'; }
-    }catch(e){}
+      if(localStorage.getItem('dystoria.railPinned')==='0' && !isPhone()){
+        setPinned(false,false);
+        var p=JSON.parse(localStorage.getItem('dystoria.railPos')||'null');
+        if(p){ if(typeof p.left==='number'){ rail.style.left=p.left+'px'; rail.style.right='auto'; } if(typeof p.top==='number'){ rail.style.top=p.top+'px'; rail.style.bottom='auto'; } }
+      } else { setPinned(true,false); }
+    }catch(e){ setPinned(true,false); }
+    if(pinBtn) pinBtn.addEventListener('click', function(e){ e.stopPropagation(); setPinned(rail.classList.contains('unpinned')); });
     var drag=null;
     head.addEventListener('pointerdown', function(e){
-      if(isPhone()) return;
-      if(e.target.closest && e.target.closest('#railMin')) return;
+      if(isPhone() || !rail.classList.contains('unpinned')) return;
+      if(e.target.closest && (e.target.closest('#railMin') || e.target.closest('#railPin'))) return;
       var r=rail.getBoundingClientRect();
       var par=rail.offsetParent, pr=par?par.getBoundingClientRect():{left:0,top:0};
       drag={ dx:e.clientX-r.left, dy:e.clientY-r.top, pl:pr.left, pt:pr.top };
@@ -26605,21 +26638,19 @@ body.ember:not(.eink) #timeline .tl-head{ font-family:'Cinzel','Cormorant SC',se
     });
     head.addEventListener('pointermove', function(e){
       if(!drag) return;
-      var par=rail.offsetParent;
-      var pw=par?par.clientWidth:window.innerWidth, ph=par?par.clientHeight:window.innerHeight;
+      var par=rail.offsetParent, pw=par?par.clientWidth:window.innerWidth, ph=par?par.clientHeight:window.innerHeight;
       var left=e.clientX-drag.dx-drag.pl, top=e.clientY-drag.dy-drag.pt;
       left=Math.max(4, Math.min(left, Math.max(4, pw-rail.offsetWidth-4)));
       top=Math.max(4, Math.min(top, Math.max(4, ph-44)));
-      rail.style.left=left+'px'; rail.style.right='auto'; rail.style.top=top+'px';
+      rail.style.left=left+'px'; rail.style.right='auto'; rail.style.top=top+'px'; rail.style.bottom='auto';
     });
     function endDrag(){ if(!drag) return; drag=null;
       try{ localStorage.setItem('dystoria.railPos', JSON.stringify({ left:parseInt(rail.style.left,10)||16, top:parseInt(rail.style.top,10)||16 })); }catch(_){}
     }
     head.addEventListener('pointerup', endDrag);
     head.addEventListener('pointercancel', endDrag);
-    if(minBtn) minBtn.addEventListener('click', function(){
-      var on=rail.classList.toggle('rail-min');
-      minBtn.textContent=on?'+':'–';
+    if(minBtn) minBtn.addEventListener('click', function(e){ e.stopPropagation();
+      var on=rail.classList.toggle('rail-min'); minBtn.textContent=on?'+':'–';
       try{ localStorage.setItem('dystoria.railMin', on?'1':'0'); }catch(_){}
     });
   }
