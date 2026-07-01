@@ -8378,13 +8378,49 @@ function addPlotToTimeline(word, mode){
 }
 function plotNamesInStory(){ const out = [], seen = new Set(); const push = n => { if (n && typeof PLOT_STAGES !== 'undefined' && PLOT_STAGES[n] && !seen.has(n)){ seen.add(n); out.push(n); } }; (state.frames || []).forEach(fr => push(framePlotName(fr))); if (state.prompt) (state.prompt.words || []).forEach(w => { if (w.cat === 'plot') push(w.word); }); return out; }
 function plotCount(){ return plotNamesInStory().length; }
-function removePlotByName(name){
-  if (typeof pushUndo === 'function') pushUndo();
+function removePlotByName(name, skipUndo){
+  if (!skipUndo && typeof pushUndo === 'function') pushUndo();
   (state.frames || []).forEach(fr => { const ws = (fr.prompt && fr.prompt.words) || []; for (let i = ws.length - 1; i >= 0; i--){ if (ws[i].cat === 'plot' && ws[i].word === name) ws.splice(i, 1); } if (fr.plotWord === name) delete fr.plotWord; });
   if (state.prompt){ const ws = state.prompt.words || []; for (let i = ws.length - 1; i >= 0; i--){ if (ws[i].cat === 'plot' && ws[i].word === name) ws.splice(i, 1); } }
   if (state.selPlot === name) state.selPlot = null;
   if (state.session){ state.session.words = state.prompt ? state.prompt.words : []; state.session.frames = state.frames; scheduleAutosave(); }
   renderConstellation();
+}
+// which sections belong to a given plot (multi-plot: explicit plotWord; legacy single-plot: all sections)
+function plotLinkedFrameIdx(name){
+  const explicit = (state.frames || []).some(fr => fr.plotWord);
+  const idx = [];
+  (state.frames || []).forEach((fr, k) => { if (explicit ? (fr.plotWord === name) : true) idx.push(k); });
+  return idx;
+}
+// remove a plot AND the sections linked to it (writing lost); never deletes the very last section
+function removePlotSections(name){
+  if (typeof pushUndo === 'function') pushUndo();
+  let idx = plotLinkedFrameIdx(name);
+  if (idx.length >= (state.frames || []).length) idx = idx.slice(1);   // keep at least one section
+  idx.sort((a, b) => b - a).forEach(k => { if (state.frames.length > 1){ removeSectionProse(k); state.frames.splice(k, 1); } });
+  if (state.frames.length) state.frames[0].gap = null;
+  reconcileSections();
+  switchFrame(Math.min(state.frameIdx, state.frames.length - 1));
+  if (state.session){ state.session.html = editorHTML(); state.session.text = editorText(); }
+  removePlotByName(name, true);   // strips the plot words/refs, renders + autosaves
+}
+// deleting a plot from the timeline: if sections are linked, ask whether to keep or delete them
+function promptRemovePlot(name){
+  const linked = plotLinkedFrameIdx(name).length;
+  if (!linked){ removePlotByName(name); return; }
+  let m = document.getElementById('plotRemoveChoice');
+  if (!m){ m = document.createElement('div'); m.id = 'plotRemoveChoice'; m.className = 'plotchoice-bd'; document.body.appendChild(m); m.addEventListener('click', e => { if (e.target === m) m.classList.remove('show'); }); }
+  const close = () => m.classList.remove('show');
+  m.innerHTML = '';
+  const card = document.createElement('div'); card.className = 'plotchoice-card';
+  const h = document.createElement('div'); h.className = 'pc-h'; h.textContent = 'Remove the plot “' + name + '”'; card.appendChild(h);
+  const sub = document.createElement('div'); sub.className = 'pc-sub'; sub.textContent = linked + (linked > 1 ? ' sections are' : ' section is') + ' linked to this plot. Keep them in your timeline, or delete them along with the plot?'; card.appendChild(sub);
+  const mk = (label, desc, fn) => { const b = document.createElement('button'); b.className = 'pc-opt'; const bb = document.createElement('b'); bb.textContent = label; const sp = document.createElement('span'); sp.textContent = desc; b.appendChild(bb); b.appendChild(sp); b.addEventListener('click', () => { close(); fn(); }); card.appendChild(b); };
+  mk('Keep sections', 'Unlink the plot but keep the sections and their writing', () => removePlotByName(name));
+  mk('Delete sections', 'Remove the plot and its sections — their writing is lost', () => removePlotSections(name));
+  const cancel = document.createElement('button'); cancel.className = 'pc-cancel'; cancel.textContent = 'Cancel'; cancel.addEventListener('click', close); card.appendChild(cancel);
+  m.appendChild(card); m.classList.add('show');
 }
 function plotLimitNotice(){
   let m = document.getElementById('plotLimitBd');
@@ -8469,7 +8505,7 @@ function renderTimeline(){
       note.addEventListener('click', ev => { ev.stopPropagation(); if (pw && typeof openElementNotes === 'function') openElementNotes(wordKey(pw)); });
       pl.appendChild(note);
       const x = document.createElement('span'); x.className = 'tl-plot-x'; x.textContent = '\u00D7'; x.title = 'Remove this plot';
-      x.addEventListener('click', ev => { ev.stopPropagation(); removePlotByName(name); });
+      x.addEventListener('click', ev => { ev.stopPropagation(); promptRemovePlot(name); });
       pl.appendChild(x);
       pl.style.cursor = 'pointer';
       pl.addEventListener('click', () => { state.selPlot = (state.selPlot === name) ? null : name; renderTimeline(); });
