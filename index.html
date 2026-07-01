@@ -867,6 +867,12 @@
   #iconPicker .ip-x{font-size:18px; color:var(--ink-faint); line-height:1; background:none}
   #iconPicker .ip-x:hover{color:var(--ink)}
   #iconPicker .ip-figwrap{padding:12px 14px 6px; border-bottom:1px solid var(--line)}
+  /* being picker: two columns — builder on the left, the full icon grid on the right */
+  #iconPicker.ip-being{width:660px}
+  #iconPicker.ip-being .ip-cols{display:flex; align-items:stretch; flex:1 1 auto; min-height:0; overflow:hidden}
+  #iconPicker.ip-being .ip-figwrap{flex:0 0 302px; border-bottom:none; border-right:1px solid var(--line); overflow-y:auto; max-height:100%}
+  #iconPicker.ip-being .ip-grid{flex:1 1 auto; max-height:100%; overflow-y:auto; align-content:start}
+  @media (max-width:700px){ #iconPicker.ip-being{width:360px} #iconPicker.ip-being .ip-cols{flex-direction:column; overflow:visible} #iconPicker.ip-being .ip-figwrap{flex:none; border-right:none; border-bottom:1px solid var(--line)} }
   #iconPicker .ipf-preview{display:flex; justify-content:center; margin-bottom:8px}
   #iconPicker .ipf-preview svg{width:82px; height:104px}
   #iconPicker .ip-scope{display:flex; align-items:center; gap:5px; padding:8px 14px; border-bottom:1px solid var(--line); flex-wrap:wrap}
@@ -13359,6 +13365,17 @@ function openIconPicker(i){
       grid.appendChild(b);
     });
   }
+  // For beings, sit the figure builder and the icon grid side by side so the whole icon library is visible at once (not just the top row under the builder).
+  if (w.role === 'being'){
+    const figw = panel.querySelector('.ip-figwrap');
+    if (figw){
+      panel.classList.add('ip-being');
+      const cols = document.createElement('div'); cols.className = 'ip-cols';
+      panel.insertBefore(cols, figw);
+      cols.appendChild(figw);   // left column: builder
+      cols.appendChild(grid);   // right column: the icon grid, now with room to scroll
+    }
+  }
   panel.querySelector('.ip-x').addEventListener('click', closeIconPicker);
   bd.classList.add('show'); panel.classList.add('show');
 }
@@ -17567,9 +17584,9 @@ async function cloudPull(){
     flashStatus('Cloud stories synced');
     await maybeSeedExamplesToCloud();   // give every account the worked examples once, as real cloud stories
     try{ if(window.patchHanselIcons) window.patchHanselIcons(); }catch(e){}
-    // if nothing is open yet, surface the most recent story so sign-in shows your work
+    // if nothing is open yet, surface the story the writer last had open (survives a cloud-only refresh) — else the most recent
     const blank = !state.session && !state.prompt && !editorText().trim() && !inkHasContent();
-    if (blank && merged.length) openSession(merged[0].id);
+    if (blank && merged.length){ const want = intendedStoryId(); const target = (want && merged.find(x => x.id === want)) || merged[0]; openSession(target.id); }
     else if (state.session && state.session.cloudId && cloud.user){ if (!live.on) liveJoin(state.session); loadStoryPeople(state.session); }
   } catch (e) {}
 }
@@ -17834,6 +17851,7 @@ function saveSession(){
     ensureSession();
   }
   const s = state.session;
+  rememberOpenStory(s.id);   // keep the "active story" pointer current on every save
   s.name = $('storyName').value.trim() || 'Untitled story';
   s.section = $('sectionTitle').value.trim();
   s.text = editorText();
@@ -18292,6 +18310,7 @@ function openSession(id){
   if (!s) return;
   saveSession();
   state.session = JSON.parse(JSON.stringify(s));
+  rememberOpenStory(s.id);   // this is now the active story — survive refresh / cloud-sync / mode-switch
   rebuildPools();
   state.plotGaps = s.plotGaps || {};
   state.focusKeys = s.focusKeys || [];
@@ -18469,6 +18488,7 @@ function deleteStory(id){
   [id, cloudId].forEach(k => { if (k && dead.indexOf(k) < 0) dead.push(k); });
   saveDeleted(dead);
   forgetMapView(id);   // drop this story's saved map pan/zoom too
+  forgetOpenStory(id);   // don't let the deleted story remain the "reopen on refresh" target
   persistSessions(list.filter(x => x.id !== id));
   if (state.session && state.session.id === id){
     state.session = null;
@@ -18591,6 +18611,14 @@ function renderLibrary(){
 function esc(s){ return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 /* ---- hash routing: dystoria.net/#/library and /#/s/<storyId> ---- */
 function storyHash(){ return (state.session && state.session.id) ? ('#/s/' + encodeURIComponent(state.session.id)) : '#/'; }
+// Remember which story the writer has open so a refresh / cloud-sync / mode-switch never drops them somewhere else.
+function rememberOpenStory(id){ try { if (id) localStorage.setItem('dystoria.lastStory', id); } catch (e){} }
+function forgetOpenStory(id){ try { if (!id || localStorage.getItem('dystoria.lastStory') === id) localStorage.removeItem('dystoria.lastStory'); } catch (e){} }
+// The story the user most recently had open — from the URL first (#/s/<id>), then the saved pointer.
+function intendedStoryId(){
+  try { const m = (location.hash || '').match(/^#\/s\/(.+)$/); if (m) return decodeURIComponent(m[1]); } catch (e){}
+  try { return localStorage.getItem('dystoria.lastStory') || ''; } catch (e){ return ''; }
+}
 function setHash(h){ try { if (location.hash !== h) location.hash = h; } catch (e){} }
 function applyHash(){
   const h = location.hash || '';
@@ -26129,6 +26157,15 @@ function beingRenderOpts(nd){ if(!nd) return null;
       if(typeof state==='undefined' || typeof openSession!=='function') return;
       if(state.session) return;   // never replace work in progress
       const list=loadSessions();
+      // If the writer had a story open, reopen THAT — never drop them onto the example.
+      let want=''; try{ want=(typeof intendedStoryId==='function')?intendedStoryId():''; }catch(e){}
+      if(want){
+        const wl=list.find(x=>x.id===want);
+        if(wl){ openSession(want); return; }   // their story is here locally → open it
+        // their story isn't loaded yet — if signed in, cloudPull will bring it; don't fall back to the example
+        const cloudPending = (typeof cloudReady==='function' && cloudReady()) || (typeof cloud!=='undefined' && cloud && cloud.user);
+        if(cloudPending && want!==HANSEL.id && want!==ALICE.id) return;
+      }
       const h=list.find(x=>x.id===HANSEL.id) || list.find(x=>x.id===ALICE.id);
       if(h) openSession(h.id);
     }catch(e){ console.warn('starter story open failed:', e); }
