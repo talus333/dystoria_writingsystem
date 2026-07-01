@@ -13272,6 +13272,32 @@ function iconSearchText(keys){
   keys.forEach(k => { parts.push(k); const a = ICON_ALIASES[k]; if (a) parts.push(a.join(' ')); });
   return parts.join(' ').toLowerCase().replace(/-/g, ' ');
 }
+// Pick the best hand-drawn design for an element by name (+ subtype), using the same names/aliases the search uses.
+// Conservative: only returns a match on an exact name, a contained phrase, or ≥2 shared words — else null (auto icon).
+function bestIconMatch(cat, word, sub){
+  const map = (cat === 'setting') ? SETTING_SVG : (cat === 'object') ? (typeof OBJECT_SVG !== 'undefined' ? OBJECT_SVG : null) : null;
+  if (!map) return null;
+  const hay = ((String(word || '') + ' ' + String(sub || '')).toLowerCase()).trim();
+  if (!hay) return null;
+  const hayToks = new Set(hay.split(/[^a-z]+/).filter(Boolean));
+  if (!hayToks.size) return null;
+  let best = null, bestScore = 0; const seen = new Set();
+  Object.keys(map).forEach(k => {
+    const fn = map[k]; if (typeof fn !== 'function' || seen.has(fn)) return; seen.add(fn);
+    const aliasKeys = Object.keys(map).filter(kk => map[kk] === fn);
+    let phrases = [];
+    aliasKeys.forEach(ak => { phrases.push(ak.toLowerCase()); const a = ICON_ALIASES[ak]; if (a) phrases = phrases.concat(a.map(s => s.toLowerCase())); });
+    let score = 0;
+    phrases.forEach(p => {
+      if (!p) return;
+      if (hay === p) score = Math.max(score, 100);
+      else if (hayToks.has(p) || (' ' + hay + ' ').indexOf(' ' + p + ' ') >= 0) score = Math.max(score, 40);   // whole word / phrase present
+      p.split(/[^a-z]+/).filter(Boolean).forEach(t => { if (hayToks.has(t)) score += 8; });
+    });
+    if (score > bestScore){ bestScore = score; best = aliasKeys[0]; }
+  });
+  return bestScore >= 16 ? best : null;
+}
 function buildFigureSection(panel, grid, w, i, persist, getScope){
   const FIG=window.FIG; if(!FIG) return;
   const wrap=document.createElement('div'); wrap.className='ip-figwrap'; panel.insertBefore(wrap, grid);
@@ -18799,7 +18825,9 @@ const IMP = { mode: 'new', kind: 'prose', title: '', prose: '', overview: '', el
 function placeImportElement(el){
   const word = (el.name || '').trim().slice(0, 60); if (!word) return false;
   const sub = validImportSub(el.cat, el.sub);
-  state.prompt.words.push(makeElementItem(el.cat, word, 0, sub));
+  const item = makeElementItem(el.cat, word, 0, sub);
+  if (item && !item.icon){ const ic = bestIconMatch(el.cat, word, sub); if (ic) item.icon = ic; }   // auto-link the closest hand-drawn icon
+  state.prompt.words.push(item);
   const entry = { word, sub, desc: el.summary, g: [] };
   if (el.sys){ const cw = loadCustomWords(); cw[el.cat] = cw[el.cat] || []; if (!cw[el.cat].some(e => e.word === word)) cw[el.cat].push(entry); localStorage.setItem(LS_CUSTOM, JSON.stringify(cw)); }
   else { state.session.customWords[el.cat] = state.session.customWords[el.cat] || []; if (!state.session.customWords[el.cat].some(e => e.word === word)) state.session.customWords[el.cat].push(entry); }
