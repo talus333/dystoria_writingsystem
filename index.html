@@ -8709,6 +8709,9 @@ function removeNode(idx){
   dropTimerForGuideWord(words[idx]);     // give back the time a removed guide/exercise had added
   const toRemove = new Set([idx]);
   words.forEach((w, j) => { if (w.role === 'rel' && (w.fromIdx === idx || w.toIdx === idx)) toRemove.add(j); });
+  // pull each removed story element out of the notepad; keep any notes it had so we can offer to archive them
+  const orphanNotes = [];
+  toRemove.forEach(j => { const w = words[j]; if (!w || typeof npIsElement !== 'function' || !npIsElement(w)) return; const block = (typeof npStripElement === 'function') ? npStripElement(w) : ''; if (block) orphanNotes.push({ name: (typeof elDisplayName === 'function' ? elDisplayName(w) : '') || w.word || 'Element', block }); });
   const map = {};
   const next = [];
   words.forEach((w, j) => { if (!toRemove.has(j)){ map[j] = next.length; next.push(w); } });
@@ -8731,6 +8734,8 @@ function removeNode(idx){
     state.session.removedLinks = state.prompt ? (state.prompt.removedLinks || []) : [];
     scheduleAutosave();
   }
+  if (typeof renderNpElements === 'function') renderNpElements();   // refresh notepad pills now the element is gone
+  if (orphanNotes.length && typeof npOfferArchive === 'function') npOfferArchive(orphanNotes);   // had notes → ask to keep them
 }
 
 function toggleLink(i, j){
@@ -22217,6 +22222,7 @@ function npFindEl(key){
 function elDisplayName(w){ return w ? (w.name ? (w.name + ', the ' + (w.word || '')).trim() : (w.word || '')) : ''; }   // named → "Eloise, the Follower"
 function npLabelFor(key){
   if (key === 'general') return { word: 'General Notes', cat: '', catId: null };
+  if (key === NP_ARCHIVE_KEY) return { word: 'Archived Notes', cat: '', catId: null };
   if (key.indexOf('goal:') === 0){ const it = (typeof goalById === 'function') ? goalById(key.slice(5)) : null; return { word: it ? it.word : 'Goal', cat: 'Goal', catId: null }; }
   if (key.indexOf('thread:') === 0){ const t = (typeof threadById === 'function') ? threadById(key.slice(7)) : null; return { word: t ? t.name : 'Thread', cat: 'Thread', catId: null }; }
   if (key.indexOf('group:') === 0){ const g = (typeof beingGroupById === 'function') ? beingGroupById(key.slice(6)) : null; let nm = 'Group'; if (g){ if (g.name) nm = g.name; else { const lw = (typeof npFindEl === 'function') ? npFindEl(g.leader) : null; nm = (lw ? (lw.name || lw.word) : '') + '\u2019s group'; } } return { word: nm, cat: 'Group', catId: null }; }
@@ -22341,6 +22347,18 @@ function renderNpElements(){
     return;
   }
   mk('general', false);
+  // Archived Notes: notes kept from elements removed off the map (only shown once something's been archived)
+  { const arch = state.session && state.session.npNotes && state.session.npNotes[NP_ARCHIVE_KEY];
+    if (arch && npPlain(arch).trim()){
+      const chip = document.createElement('span'); chip.className = 'np-chip np-archive' + (NP_ARCHIVE_KEY === active ? ' on' : ''); chip.title = 'Notes kept from elements removed off the map';
+      const l = document.createElement('span'); l.className = 'np-label'; l.textContent = 'Archived Notes'; chip.appendChild(l);
+      const ar = document.createElement('span'); ar.className = 'np-arrow'; ar.textContent = '▸'; chip.appendChild(ar);
+      const x = document.createElement('span'); x.className = 'np-rm'; x.textContent = '×'; x.title = 'Clear archived notes';
+      x.addEventListener('click', async ev => { ev.stopPropagation(); if (!(await siteConfirm('Clear all archived notes? This can’t be undone.', 'Clear'))) return; if (state.session && state.session.npNotes) delete state.session.npNotes[NP_ARCHIVE_KEY]; if (npActiveKey() === NP_ARCHIVE_KEY) state.npActive = 'general'; renderNotepad(); renderNpElements(); scheduleAutosave(); });
+      chip.appendChild(x);
+      chip.addEventListener('click', () => npSelect(NP_ARCHIVE_KEY));
+      host.appendChild(chip);
+    } }
   if (filter === 'all') goals.forEach(mkGoal);   // goals are included in the All view
   // every story element automatically gets a pill (filtered by the active category tab; the open element always shows)
   els.forEach(e => { if (filter !== 'all' && e.w.cat !== filter && e.key !== state.npActive) return; mk(e.key, false); });
@@ -22383,6 +22401,45 @@ function npRemove(key){
   if (state.session && state.session.npNotes) delete state.session.npNotes[key];
   if (npActiveKey() === key) state.npActive = 'general';
   renderNotepad(); renderNpElements(); scheduleAutosave();
+}
+const NP_ARCHIVE_KEY = '__archive__';
+// Build a formatted HTML block of everything a soon-to-be-removed element had in the notepad (main note + trait/section notes).
+function npBuildArchiveBlock(w){
+  const NN = (state.session && state.session.npNotes) || {};
+  const SEP = '||TRAIT||';
+  const key = wordKey(w);
+  const parts = [];
+  const main = NN[key]; if (main && npPlain(main).trim()) parts.push(main);
+  Object.keys(NN).forEach(k => { if (k !== key && k.indexOf(key + SEP) === 0){ const h = NN[k]; if (h && npPlain(h).trim()){ const tab = k.slice((key + SEP).length); parts.push('<p><em>' + esc(tab) + '</em></p>' + h); } } });
+  if (!parts.length) return '';
+  const name = elDisplayName(w) || w.word || 'Element';
+  let when = ''; try { when = new Date().toLocaleDateString(); } catch (e){}
+  return '<div class="np-arch-block"><p><strong>' + esc(name) + '</strong>' + (when ? (' <em>· archived ' + esc(when) + '</em>') : '') + '</p>' + parts.join('') + '<hr></div>';
+}
+// Strip an element's notepad presence (pill + all its notes). Returns its archive block (or '' if it had none).
+function npStripElement(w){
+  if (!w) return '';
+  const block = npBuildArchiveBlock(w);
+  const key = wordKey(w), SEP = '||TRAIT||';
+  if (state.session && state.session.npEls) state.session.npEls = state.session.npEls.filter(k => k !== key);
+  const NN = state.session && state.session.npNotes;
+  if (NN){ Object.keys(NN).forEach(k => { if (k === key || k.indexOf(key + SEP) === 0) delete NN[k]; }); }
+  if (npActiveKey() === key) state.npActive = 'general';
+  return block;
+}
+// After removing elements from the map: if any had notes, ask whether to keep them in an Archived Notes pill.
+async function npOfferArchive(orphans){
+  if (!orphans || !orphans.length) return;
+  const names = orphans.map(o => '“' + o.name + '”').join(', ');
+  const many = orphans.length > 1;
+  const ok = await siteConfirm(names + (many ? ' had notes' : ' had notes') + ' in your notepad. Save ' + (many ? 'them' : 'them') + ' to an Archived Notes pill? (Otherwise they’re discarded.)', 'Archive notes');
+  if (!ok){ if (typeof renderNpElements === 'function') renderNpElements(); return; }
+  if (!state.session.npNotes) state.session.npNotes = {};
+  const cur = state.session.npNotes[NP_ARCHIVE_KEY] || '';
+  state.session.npNotes[NP_ARCHIVE_KEY] = cur + orphans.map(o => o.block).join('');
+  if (typeof scheduleAutosave === 'function') scheduleAutosave();
+  if (typeof renderNpElements === 'function') renderNpElements();
+  if (typeof flashStatus === 'function') flashStatus('Notes archived');
 }
 function npAddOpen(anchor){
   const menu = $('npAddMenu'); if (!menu) return;
