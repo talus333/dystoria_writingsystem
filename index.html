@@ -7659,7 +7659,7 @@ function openDeleteMenu(i, x, y){
   }
   // roster elements can step off this section without leaving the story — the Library keeps them
   const rosterCat = nd && { being: 1, setting: 1, object: 1, event: 1 }[nd.cat] && (nd.role === 'being' || nd.role === 'word') && !nd.poly && !nd.line;
-  if (rosterCat) add('↩ Remove from section — keep in Library', () => { closeAspectMenu(); removeNode(i, { keepInLibrary: true }); });
+  if (rosterCat) add('↩ Remove from section — keep in Legend', () => { closeAspectMenu(); removeNode(i, { keepInLibrary: true }); });
   add('✕ Delete from story', () => { closeAspectMenu(); removeNode(i); });
   menu.style.left = Math.max(8, Math.min(x, window.innerWidth - 200)) + 'px';
   menu.style.top = Math.max(8, Math.min(y, window.innerHeight - 160)) + 'px';
@@ -8893,7 +8893,7 @@ function removeNode(idx, opts){
   }
   if (typeof renderNpElements === 'function') renderNpElements();   // refresh notepad pills now the element is gone
   if (orphanNotes.length && typeof npOfferArchive === 'function') npOfferArchive(orphanNotes);   // had notes → ask to keep them
-  if (keep && typeof flashStatus === 'function') flashStatus('Removed from this section — still in your Story Library');
+  if (keep && typeof flashStatus === 'function') flashStatus('Removed from this section — still in your Story Legend');
 }
 
 function toggleLink(i, j){
@@ -19797,7 +19797,7 @@ function confirmNotesImport(){
     if (libbed && typeof openStoryLibrary === 'function') openStoryLibrary();   // surface the library so the user can start adding elements to the map
     saveSession();
     closeImport();
-    flashStatus('Imported — ' + libbed + ' element' + (libbed === 1 ? '' : 's') + ' in your library' + (added ? (' · ' + added + ' on the map') : '') + (_props ? (' · +' + _props + ' pool word' + (_props === 1 ? '' : 's')) : '') + (_goals ? (' · ' + _goals + ' goal' + (_goals === 1 ? '' : 's')) : ''));
+    flashStatus('Imported — ' + libbed + ' element' + (libbed === 1 ? '' : 's') + ' in your Story Legend' + (added ? (' · ' + added + ' on the map') : '') + (_props ? (' · +' + _props + ' pool word' + (_props === 1 ? '' : 's')) : '') + (_goals ? (' · ' + _goals + ' goal' + (_goals === 1 ? '' : 's')) : ''));
   } catch (e){ console.warn('notes import error:', e); $('importConfirm').disabled = false; flashStatus('Couldn\u2019t add notes: ' + e.message); }
 }
 
@@ -19876,25 +19876,32 @@ function libFmtSections(arr){
   for (let i = 1; i <= a.length; i++){ const v = a[i]; if (v === p + 1){ p = v; continue; } out.push(s === p ? String(s) : (s + '-' + p)); s = p = v; }
   return out.join(', ');
 }
-// Build the rail group: collapsible "Story Library" header + one collapsible block per category.
-function railLibrarySection(){
+// Render the roster into the Story Legend — its own floating, pinnable window that sits above the Add rail.
+function renderStoryLibrary(){
+  const win = $('storyLibWin'); if (!win) return;
   libSyncFromMap();
-  const lib = storyLibrary(); if (!lib.length) return null;
+  const lib = storyLibrary();
+  win.classList.toggle('has-elements', !!lib.length);
+  // the waiting-elements count rides in the window header
+  const head = $('storyLibHead');
+  if (head){
+    let badge = head.querySelector('.rl-n');
+    const nWait = libUnplacedCount();
+    if (nWait){
+      if (!badge){ badge = document.createElement('span'); badge.className = 'rl-n'; head.insertBefore(badge, head.querySelector('.rail-ctrls')); }
+      badge.textContent = nWait; badge.title = nWait + ' not yet on the map';
+    } else if (badge) badge.remove();
+  }
+  const bodyEl = $('storyLibBody'); if (!bodyEl) return;
+  bodyEl.innerHTML = '';
+  if (!lib.length){ positionStoryLibWin(); return; }
   // which roster elements are in this section's Writing Focus (focusKeys hold live wordKeys)
   const fkeys = new Set(state.focusKeys || []);
   const focusedLibKeys = new Set();
   (state.frames || (state.prompt ? [{ prompt: state.prompt }] : [])).forEach(fr => {
     ((fr.prompt && fr.prompt.words) || []).forEach(w => { if (fkeys.has(wordKey(w))) focusedLibKeys.add(libKeyOf(w.cat, w.name || w.word)); });
   });
-  const sec = document.createElement('div'); sec.className = 'group lib-group';
-  const persisted = railGroupCollapsed('Story Library');
-  if (persisted != null ? persisted : true) sec.classList.add('collapsed');   // default closed — a mature story's roster is long
-  const n = libUnplacedCount();
-  const h = document.createElement('h2'); h.className = 'group-head';
-  h.innerHTML = '<span class="arr">\u25be</span><span>Story Library</span>' + (n ? '<span class="rl-n" title="' + n + ' not yet on the map">' + n + '</span>' : '');
-  h.addEventListener('click', () => { sec.classList.toggle('collapsed'); setRailGroupCollapsed('Story Library', sec.classList.contains('collapsed')); });
-  sec.appendChild(h);
-  const wrap = document.createElement('div'); wrap.className = 'group-body';
+  const wrap = bodyEl;
   LIB_GROUPS.forEach(g => {
     const rows = lib.filter(r => r.cat === g[0]); if (!rows.length) return;
     const unplaced = rows.filter(r => !r.placed).length;
@@ -19936,30 +19943,31 @@ function railLibrarySection(){
     });
     cat.appendChild(body); wrap.appendChild(cat);
   });
-  sec.appendChild(wrap);
-  return sec;
+  positionStoryLibWin();
 }
-// Re-render (or remove) the library group in place at the top of the rail.
-function renderStoryLibrary(){
-  const root = $('catGroups'); if (!root) return;
-  const old = root.querySelector('.lib-group');
-  const fresh = railLibrarySection();
-  if (old && fresh) root.replaceChild(fresh, old);
-  else if (old && !fresh) old.remove();
-  else if (fresh) root.insertBefore(fresh, root.firstChild);
+// Keep the pinned Legend stacked just above the Add rail (skips when the user dragged it elsewhere).
+function positionStoryLibWin(){
+  const win = $('storyLibWin'); if (!win) return;
+  if (win.classList.contains('unpinned')) return;
+  if (window.matchMedia && window.matchMedia('(max-width:768px)').matches) return;   // phone: CSS places it
+  const rail = $('rail');
+  let b = 72;
+  if (rail && rail.offsetParent) b = rail.offsetParent.clientHeight - rail.offsetTop + 10;
+  const par = win.offsetParent;
+  if (par) b = Math.min(b, par.clientHeight - 70);
+  win.style.left = ''; win.style.right = ''; win.style.top = 'auto';
+  win.style.bottom = Math.max(16, Math.round(b)) + 'px';
 }
-function updateStoryLibraryButton(){ renderStoryLibrary(); }   // kept for existing callers \u2014 count + visibility now live on the rail group
-// "Open" = make the roster visible: un-minimize the rail, expand the group, scroll it into view.
+function updateStoryLibraryButton(){ renderStoryLibrary(); }   // kept for existing callers
+// "Open" = surface the Legend: un-minimize it and reveal whatever is waiting to be placed.
 function openStoryLibrary(){
   renderStoryLibrary();
-  const rail = $('rail'); const root = $('catGroups');
-  const sec = root && root.querySelector('.lib-group'); if (!sec) return;
-  if (rail && rail.classList.contains('rail-min')){ rail.classList.remove('rail-min'); const m = $('railMin'); if (m) m.textContent = '\u2013'; try { localStorage.setItem('dystoria.railMin', '0'); } catch (e){} }
-  sec.classList.remove('collapsed'); setRailGroupCollapsed('Story Library', false);
-  sec.querySelectorAll('.rl-cat').forEach(c => { if (c.querySelector('.rl-row:not(.placed)')) c.classList.remove('collapsed'); });   // show what's waiting to be placed (transient \u2014 not persisted)
-  try { sec.scrollIntoView({ block: 'nearest' }); } catch (e){}
+  const win = $('storyLibWin'); if (!win || !win.classList.contains('has-elements')) return;
+  if (win.classList.contains('lib-min')){ win.classList.remove('lib-min'); const m = $('storyLibMin'); if (m) m.textContent = '\u2013'; try { localStorage.setItem('dystoria.libMin', '0'); } catch (e){} }
+  win.querySelectorAll('.rl-cat').forEach(c => { if (c.querySelector('.rl-row:not(.placed)')) c.classList.remove('collapsed'); });
+  positionStoryLibWin();
 }
-function closeStoryLibrary(){ renderStoryLibrary(); }   // story switch / fresh story \u2192 just re-render for the new story's roster
+function closeStoryLibrary(){ renderStoryLibrary(); }   // story switch / fresh story: re-render for the new story's roster
 function libEnsureFrame(){
   if (state.prompt) return;
   if (state.frames && state.frames[state.frameIdx || 0]){ state.prompt = state.frames[state.frameIdx || 0].prompt; return; }
@@ -19987,7 +19995,7 @@ async function libDeleteFromLibrary(id){
   const key = libKeyOf(rec.cat, rec.name || rec.word);
   const onMap = (rec.frames || []).length;
   if (onMap){
-    const ok = await siteConfirm('Delete “' + nm + '” from the story? It will be removed from section ' + libFmtSections(rec.frames) + ' and from the Library.', 'Delete');
+    const ok = await siteConfirm('Delete “' + nm + '” from the story? It will be removed from section ' + libFmtSections(rec.frames) + ' and from the Legend.', 'Delete');
     if (!ok) return;
     if (typeof pushUndo === 'function') pushUndo();
   }
@@ -27516,6 +27524,7 @@ body.ember:not(.eink) .mode-switch button:hover{ color:#f0bf6c !important; backg
 body.ember:not(.eink) .mode-switch button.active{ background:rgba(250,154,49,.22) !important; color:#fbcf83 !important; border-radius:14px !important; box-shadow:0 0 0 1px rgba(250,154,49,.5), 0 0 14px -3px rgba(250,154,49,.5) !important; }
 /* ===== ALL dark surfaces → ember ===== */
 body.ember:not(.eink) #focusPanel, body.ember:not(.eink) #rail, body.ember:not(.eink) #frameBar, body.ember:not(.eink) #timeline,
+body.ember:not(.eink) #storyLibWin, body.ember:not(.eink) #storyLibHead,
 body.ember:not(.eink) #focusFooter, body.ember:not(.eink) #edColorPanel, body.ember:not(.eink) #edImgWarn, body.ember:not(.eink) #tip{
   background:linear-gradient(180deg,#2a2117,#1b150e) !important; border-color:rgba(250,154,49,.16) !important;
 }
@@ -27663,7 +27672,7 @@ body.ember:not(.eink) #timeline .tl-head{ font-family:'Cinzel','Cormorant SC',se
     }catch(e){ setPinned(true,false); }
     if(pinBtn) pinBtn.addEventListener('click', function(e){ e.stopPropagation(); setPinned(rail.classList.contains('unpinned')); });
     var drag=null, downPt=null, moved=false;
-    function toggleMin(){ var on=rail.classList.toggle('rail-min'); if(minBtn) minBtn.textContent=on?'+':'–'; try{ localStorage.setItem('dystoria.railMin', on?'1':'0'); }catch(_){} }
+    function toggleMin(){ var on=rail.classList.toggle('rail-min'); if(minBtn) minBtn.textContent=on?'+':'–'; try{ localStorage.setItem('dystoria.railMin', on?'1':'0'); }catch(_){} if(window.positionStoryLibWin) window.positionStoryLibWin(); }
     head.addEventListener('pointerdown', function(e){
       if(isPhone()) return;
       if(e.target.closest && (e.target.closest('#railMin') || e.target.closest('#railPin'))) return;
@@ -27691,10 +27700,79 @@ body.ember:not(.eink) #timeline .tl-head{ font-family:'Cinzel','Cormorant SC',se
       var wasClick = !moved;
       drag=null; downPt=null; moved=false;
       if(wasClick) toggleMin();   // a plain click anywhere on the header opens/closes the rail (a drag does not)
+      else if(window.positionStoryLibWin) window.positionStoryLibWin();   // rail moved → restack the Legend above it
     }
     head.addEventListener('pointerup', endHead);
     head.addEventListener('pointercancel', endHead);
     if(minBtn) minBtn.addEventListener('click', function(e){ e.stopPropagation(); toggleMin(); });
+  }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', init); else init();
+})();
+</script>
+<script id="storyLegendFloatJS">
+/* Floating Story Legend: drag by its header, minimize, pin to its slot above the Add rail */
+(function(){
+  function init(){
+    var win=document.getElementById('storyLibWin'), head=document.getElementById('storyLibHead'),
+        minBtn=document.getElementById('storyLibMin'), pinBtn=document.getElementById('storyLibPin');
+    if(!win||!head) return;
+    var isPhone=function(){ return window.matchMedia('(max-width:768px)').matches; };
+    function setPinned(on, save){
+      if(on){
+        win.classList.remove('unpinned');
+        win.style.left=''; win.style.top=''; win.style.right=''; win.style.bottom='';   // snap back above the rail
+        if(pinBtn){ pinBtn.classList.add('pinned'); pinBtn.title='Unpin to move'; }
+        try{ localStorage.removeItem('dystoria.libPos'); }catch(_){}
+        if(window.positionStoryLibWin) window.positionStoryLibWin();
+      } else {
+        win.classList.add('unpinned');
+        if(pinBtn){ pinBtn.classList.remove('pinned'); pinBtn.title='Pin above the Add panel'; }
+      }
+      if(save!==false){ try{ localStorage.setItem('dystoria.libPinned', on?'1':'0'); }catch(_){} }
+    }
+    try{
+      if(localStorage.getItem('dystoria.libMin')==='1'){ win.classList.add('lib-min'); if(minBtn) minBtn.textContent='+'; }
+      if(localStorage.getItem('dystoria.libPinned')==='0' && !isPhone()){
+        setPinned(false,false);
+        var p=JSON.parse(localStorage.getItem('dystoria.libPos')||'null');
+        if(p){ if(typeof p.left==='number'){ win.style.left=p.left+'px'; win.style.right='auto'; } if(typeof p.top==='number'){ win.style.top=p.top+'px'; win.style.bottom='auto'; } }
+      } else { setPinned(true,false); }
+    }catch(e){ setPinned(true,false); }
+    if(pinBtn) pinBtn.addEventListener('click', function(e){ e.stopPropagation(); setPinned(win.classList.contains('unpinned')); });
+    var drag=null, downPt=null, moved=false;
+    function toggleMin(){ var on=win.classList.toggle('lib-min'); if(minBtn) minBtn.textContent=on?'+':'–'; try{ localStorage.setItem('dystoria.libMin', on?'1':'0'); }catch(_){} if(window.positionStoryLibWin) window.positionStoryLibWin(); }
+    head.addEventListener('pointerdown', function(e){
+      if(isPhone()) return;
+      if(e.target.closest && (e.target.closest('#storyLibMin') || e.target.closest('#storyLibPin'))) return;
+      downPt={x:e.clientX,y:e.clientY}; moved=false; drag=null;
+      if(win.classList.contains('unpinned')){
+        var r=win.getBoundingClientRect();
+        var par=win.offsetParent, pr=par?par.getBoundingClientRect():{left:0,top:0};
+        drag={ dx:e.clientX-r.left, dy:e.clientY-r.top, pl:pr.left, pt:pr.top };
+      }
+      try{ head.setPointerCapture(e.pointerId); }catch(_){}
+    });
+    head.addEventListener('pointermove', function(e){
+      if(!downPt) return;
+      if(Math.abs(e.clientX-downPt.x)>3 || Math.abs(e.clientY-downPt.y)>3) moved=true;
+      if(!drag) return;
+      var par=win.offsetParent, pw=par?par.clientWidth:window.innerWidth, ph=par?par.clientHeight:window.innerHeight;
+      var left=e.clientX-drag.dx-drag.pl, top=e.clientY-drag.dy-drag.pt;
+      left=Math.max(4, Math.min(left, Math.max(4, pw-win.offsetWidth-4)));
+      top=Math.max(4, Math.min(top, Math.max(4, ph-win.offsetHeight-4)));
+      win.style.left=left+'px'; win.style.right='auto'; win.style.top=top+'px'; win.style.bottom='auto';
+    });
+    function endHead(){
+      if(!downPt) return;
+      if(drag && moved){ try{ localStorage.setItem('dystoria.libPos', JSON.stringify({ left:parseInt(win.style.left,10)||16, top:parseInt(win.style.top,10)||16 })); }catch(_){} }
+      var wasClick = !moved;
+      drag=null; downPt=null; moved=false;
+      if(wasClick) toggleMin();   // plain click on the header collapses/expands the Legend
+    }
+    head.addEventListener('pointerup', endHead);
+    head.addEventListener('pointercancel', endHead);
+    if(minBtn) minBtn.addEventListener('click', function(e){ e.stopPropagation(); toggleMin(); });
+    window.addEventListener('resize', function(){ if(window.positionStoryLibWin) window.positionStoryLibWin(); });
   }
   if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', init); else init();
 })();
