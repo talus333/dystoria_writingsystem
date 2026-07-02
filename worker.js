@@ -619,7 +619,14 @@ async function handleStripeWebhook(request, env) {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-    if (url.pathname === '/ai') return handleAI(request, env);
+    if (url.pathname === '/ai'){
+      // Never let an unhandled exception become an opaque 500 — return the real reason so the client can show it.
+      try { return await handleAI(request, env); }
+      catch (e){
+        const h = Object.assign({ 'Content-Type': 'application/json' }, cors(request.headers.get('Origin')));
+        return new Response(JSON.stringify({ error: 'AI worker error: ' + String((e && e.message) || e) }), { status: 502, headers: h });
+      }
+    }
     if (url.pathname === '/billing/checkout') return handleBilling(request, env, 'checkout');
     if (url.pathname === '/billing/portal') return handleBilling(request, env, 'portal');
     if (url.pathname === '/billing/tip') return handleTip(request, env);

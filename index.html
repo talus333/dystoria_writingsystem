@@ -18894,6 +18894,31 @@ function importNoteHtml(txt){
   return String(txt || '').split(/\n{2,}/).map(p => p.trim()).filter(Boolean)
     .map(p => '<p>' + esc(p).replace(/\n/g, '<br>') + '</p>').join('');
 }
+// Everything in the source that DIDN'T become a story element → returned verbatim so it can go into General Notes (nothing is lost).
+function importGeneralNotes(prose, elements){
+  if (!prose) return '';
+  const names = (elements || []).filter(e => e && e.include !== false && e.name).map(e => e.name);
+  const headRe = /^(#{1,6})\s+(.*)$/;
+  const entryRe = /^\s*\*\*(.+?)\*\*\s*(?:\*\([^)]*\)\*|\([^)]*\))?\s*$/;
+  const norm = s => String(s).replace(/\*/g, '').replace(/\s*[—–-]\s.*$/, '').replace(/\s*[\(\*].*$/, '').trim().toLowerCase();
+  const nameSet = new Set();
+  names.forEach(n => norm(n).split(/\s*[\/,]\s*/).forEach(p => { p = p.trim(); if (p) nameSet.add(p); }));
+  const titleMatches = title => { const l = norm(title); if (!l) return false; return l.split(/\s*[\/,]\s*/).some(p => nameSet.has(p.trim())); };
+  const boundary = ln => { const h = ln.match(headRe); if (h) return h[2]; const e = ln.match(entryRe); if (e) return e[1]; return null; };
+  const lines = String(prose).split(/\r?\n/);
+  const blocks = []; let cur = { title: '', lines: [] };
+  lines.forEach(ln => { const t = boundary(ln); if (t !== null){ blocks.push(cur); cur = { title: t, lines: [ln] }; } else cur.lines.push(ln); });
+  blocks.push(cur);
+  const kept = [];
+  blocks.forEach(bl => {
+    const body = bl.lines.join('\n').trim(); if (!body) return;
+    if (bl.title && titleMatches(bl.title)) return;                                   // this block became an element already
+    const bodyText = bl.lines.filter(l => !l.match(headRe) && !l.match(entryRe)).join('\n').trim();
+    if (bodyText.length < 40) return;                                                 // skip lone headings / trivial fragments
+    kept.push(body);
+  });
+  return kept.join('\n\n').trim();
+}
 // push one reviewed element onto the current map + archive (story or system) + cache its summary
 function placeImportElement(el){
   const word = (el.name || '').trim().slice(0, 60); if (!word) return false;
@@ -19363,6 +19388,9 @@ function confirmNotesImport(){
     });
     seedImportBonds(IMP.relationships);
     if (IMP.overview){ state.session.wikiOverview = (state.session.wikiOverview ? (state.session.wikiOverview + ' ') : '') + IMP.overview; }
+    // Anything in the source that wasn't turned into an element goes into General Notes so nothing is lost.
+    const leftover = importGeneralNotes(IMP.prose, IMP.elements);
+    if (leftover){ const cur = state.session.notepad || ''; const keep = npPlain(cur).trim() ? (cur + '<p><br></p>') : ''; state.session.notepad = keep + importNoteHtml(leftover); }
     rebuildPools();
     if (added){ $('skyEmpty').style.display = 'none'; layoutConstellation(); }
     renderConstellation(); renderTimeline(); if (typeof renderNpElements === 'function') renderNpElements(); saveSession();
