@@ -1479,6 +1479,10 @@
   #rail .rl-add{font-size:9px; letter-spacing:.06em; text-transform:uppercase; border:1px solid var(--line); border-radius:10px; background:var(--paper); color:var(--ink-soft); padding:1px 8px; flex:none; cursor:pointer}
   #rail .rl-add:hover{border-color:var(--gold); color:var(--ink)}
   #rail .rl-row.placed .rl-add{border:none; color:var(--ink-faint); cursor:default}
+  #rail .rl-x{flex:none; border:none; background:none; color:var(--ink-faint); font-size:13px; line-height:1; padding:1px 2px; cursor:pointer}
+  #rail .rl-x:hover{color:#a05c4d}
+  body:not(.eink) #rail .rl-x{color:#9a948a}
+  body:not(.eink) #rail .rl-x:hover{color:#d98a75}
   body:not(.eink) #rail .rl-cat-head:hover{background:rgba(255,255,255,.05)}
   body:not(.eink) #rail .rl-cat-name{color:#f4efe6}
   body:not(.eink) #rail .rl-cat-name b{color:#9a948a}
@@ -1644,11 +1648,22 @@
   .fb-item.fb-group .fb-gcaret{font-size:9px; margin-left:4px; color:var(--ink-faint)}
   body:not(.eink) #frameBar .fb-item.fb-group .fb-gcount{background:rgba(251,207,131,.28); color:#fbcf83}
   body:not(.eink) #frameBar .fb-item.fb-group .fb-gcaret{color:#cdc6b8}
-  .fb-dd{position:fixed; z-index:200; min-width:180px; max-width:240px; background:var(--bg2); border:1px solid var(--line); border-radius:11px; box-shadow:0 10px 30px rgba(0,0,0,.24); padding:5px}
+  .fb-dd{position:fixed; z-index:200; min-width:210px; max-width:280px; background:var(--bg2); border:1px solid var(--line); border-radius:14px; box-shadow:0 14px 44px rgba(0,0,0,.28); padding:6px;
+    opacity:0; transform:translateY(-7px); transition:opacity .18s ease, transform .18s ease}
+  .fb-dd.show{opacity:1; transform:none}
   .fb-dd-row{display:flex; align-items:center; gap:6px; padding:4px 5px; border-radius:7px}
   .fb-dd-row:hover{background:rgba(0,0,0,.05)}
-  .fb-dd-mv{display:inline-flex; flex-direction:column; line-height:.7}
-  .fb-dd-mv button{border:none; background:none; color:var(--ink-faint); cursor:pointer; font-size:9px; padding:0; height:9px} .fb-dd-mv button:hover:not(:disabled){color:var(--gold)} .fb-dd-mv button:disabled{opacity:.25; cursor:default}
+  .fb-dd-row.dragging{opacity:.45}
+  .fb-dd-grip{flex:none; color:var(--ink-faint); font-size:11px; line-height:1; cursor:grab; padding:1px 2px; user-select:none}
+  .fb-dd-grip:hover{color:var(--ink)}
+  .fb-dd-ico{flex:none; display:inline-flex; align-items:center; border:none; background:none; color:var(--ink-faint); font-size:12px; line-height:1; padding:1px 2px; border-radius:6px; cursor:pointer}
+  .fb-dd-ico:hover, .fb-dd-ico.on{color:var(--gold)}
+  body:not(.eink) .fb-dd{background:#2b2926; border-color:rgba(255,255,255,.12)}   /* the dark frame the Add Story Elements panel wears */
+  body:not(.eink) .fb-dd-row:hover{background:rgba(255,255,255,.05)}
+  body:not(.eink) .fb-dd-w{color:#ece7de}
+  body:not(.eink) .fb-dd-grip, body:not(.eink) .fb-dd-ico{color:#9a948a}
+  body:not(.eink) .fb-dd-grip:hover{color:#f0ece3}
+  body:not(.eink) .fb-dd-ico:hover, body:not(.eink) .fb-dd-ico.on{color:var(--gold)}
   .fb-dd-w{flex:1; font-family:var(--serif); font-size:13.5px; color:var(--ink); cursor:pointer; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
   .fb-dd-w:hover{color:var(--gold)}
   .fb-dd-x{flex:none; border:none; background:none; color:#a05c4d; font-family:var(--sans); font-size:13px; cursor:pointer}
@@ -8810,6 +8825,7 @@ function promptRemoveIdx(p, idx){
     .filter(l => map[l.a] != null && map[l.b] != null)
     .map(l => Object.assign({}, l, { a: Math.min(map[l.a], map[l.b]), b: Math.max(map[l.a], map[l.b]) }));
   p.removedLinks = [];
+  p.words = next;
 }
 // opts.keepInLibrary: pull the element off THIS section only — notepad notes and its Story Library record stay.
 // Without it (a deliberate delete) the notepad entry is stripped (archive offered) and the roster record dropped
@@ -19882,7 +19898,11 @@ function railLibrarySection(){
       const add = document.createElement('button'); add.className = 'rl-add'; add.textContent = inCur ? '\u2713 on map' : '+ map';
       add.title = inCur ? 'Already in this section' : ((r.frames || []).length ? 'Add to the current section too' : 'Place on the map');
       if (!inCur) add.addEventListener('click', () => libAddToMap(r.id));
-      row.appendChild(add); body.appendChild(row);
+      row.appendChild(add);
+      const del = document.createElement('button'); del.className = 'rl-x'; del.textContent = '\u00d7';
+      del.title = (r.frames || []).length ? 'Delete from the story (map + library)\u2026' : 'Delete from the library';
+      del.addEventListener('click', e => { e.stopPropagation(); libDeleteFromLibrary(r.id); });
+      row.appendChild(del); body.appendChild(row);
     });
     cat.appendChild(body); wrap.appendChild(cat);
   });
@@ -19930,6 +19950,40 @@ function libAddToMap(id){
   renderStoryLibrary();
 }
 function libAddAll(cat){ storyLibrary().filter(r => r.cat === cat && !r.placed).forEach(r => libAddToMap(r.id)); }   // "+ all" = everything not yet on the map anywhere
+// Delete an element from the story via its roster row — off every section (notes archived) and out of the Library.
+async function libDeleteFromLibrary(id){
+  const rec = storyLibrary().find(r => r.id === id); if (!rec) return;
+  const nm = rec.name || rec.word;
+  const key = libKeyOf(rec.cat, rec.name || rec.word);
+  const onMap = (rec.frames || []).length;
+  if (onMap){
+    const ok = await siteConfirm('Delete “' + nm + '” from the story? It will be removed from section ' + libFmtSections(rec.frames) + ' and from the Library.', 'Delete');
+    if (!ok) return;
+    if (typeof pushUndo === 'function') pushUndo();
+  }
+  const frames = state.frames || (state.prompt ? [{ prompt: state.prompt }] : []);
+  const orphanNotes = []; let stripped = false;
+  frames.forEach(fr => {
+    const p = fr.prompt; if (!p || !p.words) return;
+    let i;
+    while ((i = p.words.findIndex(w => (w.role === 'being' || w.role === 'word') && libKeyOf(w.cat, w.name || w.word) === key)) >= 0){
+      const w = p.words[i];
+      if (!stripped && typeof npIsElement === 'function' && npIsElement(w) && typeof npStripElement === 'function'){
+        stripped = true;
+        const block = npStripElement(w);
+        if (block) orphanNotes.push({ name: (typeof elDisplayName === 'function' ? elDisplayName(w) : '') || w.word || 'Element', block });
+      }
+      promptRemoveIdx(p, i);
+    }
+  });
+  state.session.elemLibrary = storyLibrary().filter(r => r.id !== id);
+  state.selNode = null; state.linkFrom = null;
+  if (state.prompt && state.session) state.session.words = state.prompt.words;
+  layoutConstellation(); renderConstellation(); saveSession();
+  renderStoryLibrary();
+  if (typeof renderNpElements === 'function') renderNpElements();
+  if (orphanNotes.length && typeof npOfferArchive === 'function') npOfferArchive(orphanNotes);
+}
 
 /* ---------------- story wiki (deterministic; AI rollups layer later) ---------------- */
 const wikiState = { open: new Set() };
