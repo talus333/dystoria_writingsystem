@@ -177,7 +177,7 @@ async function runClaude(env, system, prompt, maxTokens, temperature) {
   if (!key) return { text: '', error: 'no ANTHROPIC_API_KEY' };
   const payload = {
     model: CLAUDE_MODEL,
-    max_tokens: Math.min(Math.max(maxTokens, 1024), 4096),
+    max_tokens: Math.min(Math.max(maxTokens, 1024), 8192),   // allow the larger import reply (element list); other paths pass ≤4096
     temperature: isFinite(temperature) ? Math.min(Math.max(temperature, 0), 1) : 0.7,
     messages: [{ role: 'user', content: prompt }],
   };
@@ -261,10 +261,12 @@ async function runFrontier(env, system, prompt, maxTokens, temperature, opts) {
   if (testing){
     chain = chain.filter(p => only.includes(p.name));   // testing override: only the explicitly enabled models, in chain order
   } else if (opts.importOnly){
-    // Import = a rare, very large-context extraction. Dedicate the heavy model (Gemini 2.5 Pro) to it, with large-context
-    // fallbacks only. Small-window models (Cerebras 8K, OpenRouter, Workers-AI) are excluded so a whole document never truncates.
-    const IMPORT_MODELS = ['gemini-2.5-pro', 'gemini-2.5-flash', 'mistral-large', 'groq-llama-70b'];
+    // Import = a rare, very large-context extraction. Lead with Claude (when a key is set + the caller is entitled) for the
+    // richest reading of a whole worldbuilding doc, then the large-context free fallbacks. Small-window models (Cerebras 8K,
+    // OpenRouter, Workers-AI) are excluded so a whole document never truncates.
+    const IMPORT_MODELS = ['claude', 'gemini-2.5-pro', 'gemini-2.5-flash', 'mistral-large', 'groq-llama-70b'];
     chain = chain.filter(p => IMPORT_MODELS.includes(p.name));
+    if (!opts.allowPaid) chain = chain.filter(p => !p.paid);   // Claude (paid) only for admin/Pro; free users lead with Gemini 2.5 Pro
   } else {
     chain = chain.filter(p => !p.heavy);   // reserve the heavy import model — keep it out of the frequent, low-token paths (prompts, refine, wiki, icons)
     if (!opts.allowPaid) chain = chain.filter(p => !p.paid);   // the paid model (Claude) is included ONLY when the caller is entitled (admin or Pro); allowPaid is set server-side from the verified plan, never from the request body
@@ -357,7 +359,7 @@ async function handleAI(request, env) {
 
   // ---- Import extraction: dedicated large-context model (Gemini 2.5 Pro), reserved so its free quota isn't spent on frequent small calls ----
   if (body.kind === 'import'){
-    const fr = await runFrontier(env, system, prompt, maxTokens, temperature, { admin, importOnly: true, json: !!body.json, only: body.models });
+    const fr = await runFrontier(env, system, prompt, maxTokens, temperature, { admin, allowPaid: paid, importOnly: true, json: !!body.json, only: body.models });
     if (fr.text) return new Response(JSON.stringify({ text: fr.text, via: fr.via }), { headers });
     const err = fr.error || '';
     if (fr.exhausted) return new Response(JSON.stringify({ error: 'The import model is at today’s limit — it resets tomorrow.', limit: 'day' }), { status: 429, headers });
