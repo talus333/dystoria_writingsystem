@@ -13486,7 +13486,7 @@ function openIconGenerator(i){
   if (typeof aiAuthed === 'function' && !aiAuthed()){ if (typeof promptAiSignup === 'function') promptAiSignup(); return; }
   let ov = document.getElementById('iconGen');
   if (!ov){ ov = document.createElement('div'); ov.id = 'iconGen'; document.body.appendChild(ov); }
-  const name = w.name ? (w.name + ' (' + w.word + ')') : w.word;
+  const name = (w.name && w.name !== w.word) ? (w.name + ' (' + w.word + ')') : (w.name || w.word);
   const hasIcon = !!w.iconCustom;
   const isObjCat = (w.cat === 'object');
   const phNew = isObjCat ? 'e.g. an ornate brass pocket-watch — cracked glass, filigree case, a snapped chain' : 'e.g. a tall crooked cottage of mossy stone — steep thatch roof, round windows, a tilting chimney with smoke';
@@ -18945,17 +18945,26 @@ function importChunks(prose, maxLen){
 }
 // push one reviewed element onto the current map + archive (story or system) + cache its summary
 function placeImportElement(el){
-  const word = (el.name || '').trim().slice(0, 60); if (!word) return false;
+  const nm = (el.name || '').trim().slice(0, 60); if (!nm) return false;   // the PROPER name from the source
   const sub = validImportSub(el.cat, el.sub);
-  let item;
-  if (el.cat === 'being' && el.traits && el.traits.length){
-    const seed = hashStr(word);
-    const idTraits = el.traits.filter(t => IDENTITY_SUBS.includes(t.sub));
-    const primarySub = idTraits.length ? idTraits[0].sub : 'Archetype';
-    const attrs = el.traits.map(t => ({ word: t.value, sub: t.sub }));
-    item = { word, cat: 'being', sub: primarySub, set: 0, role: 'being', attrs, identity: [{ word, sub: primarySub }], sexSeed: seed, gender: (seed % 2) ? 'female' : 'male' };
+  let item, word;
+  if (el.cat === 'being'){
+    const seed = hashStr(nm);
+    const traits = (el.traits || []).filter(t => t && t.sub && String(t.value || '').trim());
+    // an explicit identity trait (Archetype > Type > Occupation) becomes the being's archetype WORD → "Name, the Archetype";
+    // the proper name goes in .name, NOT into Archetype. Fall back to the name as the key word if there's no archetype (or it collides).
+    const idTrait = traits.find(t => t.sub === 'Archetype') || traits.find(t => IDENTITY_SUBS.includes(t.sub)) || null;
+    let archWord = idTrait ? String(idTrait.value).trim().slice(0, 60) : '';
+    const clash = archWord && (state.prompt.words || []).some(w => w.cat === 'being' && (w.word || '').toLowerCase() === archWord.toLowerCase());
+    const useArch = archWord && !clash;
+    word = useArch ? archWord : nm;                       // key word: archetype when available+unique, else the unique proper name
+    const primarySub = useArch ? idTrait.sub : 'Archetype';
+    const attrs = traits.filter(t => !(useArch && t === idTrait)).map(t => ({ word: t.value, sub: t.sub }));   // don't duplicate the promoted archetype
+    item = { word, cat: 'being', sub: primarySub, set: 0, role: 'being', attrs, identity: useArch ? [{ word, sub: primarySub }] : [], sexSeed: seed, gender: (seed % 2) ? 'female' : 'male', name: nm };
   } else {
+    word = nm;
     item = makeElementItem(el.cat, word, 0, sub);
+    item.name = nm;   // proper name in the Name field for settings/objects/events too (label shows name || word)
   }
   // narrative-frame categories (genre/context/concepts/stakes/plot) live in the frame, not as free map nodes
   if (typeof FRAME_IDS !== 'undefined' && FRAME_IDS.has(el.cat)){ item.role = 'frame'; if (el.cat === 'theme' || el.cat === 'stakes') item.scope = 'story'; }
@@ -19212,37 +19221,11 @@ function buildTraitArea(d, el){
     '</span>'
   ).join('');
   const none = !el.traits.length ? '<span class="ir-no-traits">No traits found in text</span>' : '';
-  const subOpts = BEING_IMPORT_TRAIT_SUBS.map(s => '<option value="' + esc(s) + '">' + esc(s) + '</option>').join('');
-  wrap.innerHTML =
-    '<div class="ir-traits">' + none + pills +
-    '<button type="button" class="ir-trait-add-btn">+ trait</button>' +
-    '</div>' +
-    '<div class="ir-trait-form" hidden>' +
-    '<select class="ir-ta-sub">' + subOpts + '</select>' +
-    '<input type="text" class="ir-ta-val" placeholder="value…" maxlength="60">' +
-    '<button type="button" class="ir-ta-ok">Add</button>' +
-    '<button type="button" class="ir-ta-cancel">Cancel</button>' +
-    '</div>';
+  // Only the traits found in the source are shown (removable). Adding more is done later in the being card, not here.
+  wrap.innerHTML = '<div class="ir-traits">' + none + pills + '</div>';
   wrap.querySelectorAll('.ir-trait-rm').forEach(btn => {
     btn.addEventListener('click', () => { el.traits.splice(+btn.dataset.i, 1); buildTraitArea(d, el); });
   });
-  const addBtn = wrap.querySelector('.ir-trait-add-btn');
-  const form = wrap.querySelector('.ir-trait-form');
-  const taOk = wrap.querySelector('.ir-ta-ok');
-  const taCancel = wrap.querySelector('.ir-ta-cancel');
-  const taVal = wrap.querySelector('.ir-ta-val');
-  const taSub = wrap.querySelector('.ir-ta-sub');
-  addBtn.addEventListener('click', () => { form.hidden = false; addBtn.hidden = true; taVal.focus(); });
-  taCancel.addEventListener('click', () => { form.hidden = true; addBtn.hidden = false; taVal.value = ''; });
-  taOk.addEventListener('click', () => {
-    const sub = taSub.value.trim(); const val = taVal.value.trim().slice(0, 60);
-    if (!val){ taVal.focus(); return; }
-    const idx = el.traits.findIndex(t => t.sub === sub);
-    if (idx >= 0) el.traits[idx].value = val; else el.traits.push({sub, value: val});
-    form.hidden = true; addBtn.hidden = false; taVal.value = '';
-    buildTraitArea(d, el);
-  });
-  taVal.addEventListener('keydown', e => { if (e.key === 'Enter') taOk.click(); if (e.key === 'Escape') taCancel.click(); });
 }
 function renderImportReview(){
   const wrap = $('importElements'); wrap.innerHTML = '';
@@ -22610,7 +22593,7 @@ function npFindEl(key){
   if (!w) (state.frames || []).forEach(fr => { if (w) return; ((fr.prompt && fr.prompt.words) || []).forEach(x => { if (!w && wordKey(x) === key) w = x; }); });
   return w || null;
 }
-function elDisplayName(w){ return w ? (w.name ? (w.name + ', the ' + (w.word || '')).trim() : (w.word || '')) : ''; }   // named → "Eloise, the Follower"
+function elDisplayName(w){ if (!w) return ''; const nm = (w.name || '').trim(), wd = (w.word || '').trim(); return (nm && wd && nm.toLowerCase() !== wd.toLowerCase()) ? (nm + ', the ' + wd) : (nm || wd); }   // named → "Eloise, the Follower"; name-only or name==type → just the name
 function npLabelFor(key){
   if (key === 'general') return { word: 'General Notes', cat: '', catId: null };
   if (key === NP_ARCHIVE_KEY) return { word: 'Archived Notes', cat: '', catId: null };
