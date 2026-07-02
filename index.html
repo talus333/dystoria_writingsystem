@@ -18490,6 +18490,8 @@ function openSession(id){
   setupTimer();
   updateWordCount(); updateMeta();
   closeLibrary();
+  if (typeof closeStoryLibrary === 'function') closeStoryLibrary();
+  if (typeof updateStoryLibraryButton === 'function') updateStoryLibraryButton();   // reflect this story's element library
   flashStatus('Opened · ' + s.name);
   if (cloud.user && state.session && state.session.cloudId){ liveJoin(state.session); loadStoryPeople(state.session); } else { liveLeave(); renderShareNote(null); }
 }
@@ -18565,6 +18567,8 @@ function newSession(){
   buildRail();
   if (typeof renderThreadsBar === 'function') renderThreadsBar();   // clear the previous story's thread chips
   if (typeof renderGroupsBar === 'function') renderGroupsBar();     // clear the previous story's group chips
+  if (typeof closeStoryLibrary === 'function') closeStoryLibrary();
+  if (typeof updateStoryLibraryButton === 'function') updateStoryLibraryButton();   // fresh story → empty library, hide the button
   $('storyName').value = ''; $('sectionTitle').value = ''; $('editor').innerHTML = '';
   ['readBody','editBody','editChrome','sessionHistory','wmTitleBar','notesList','gcList'].forEach(id => { const e = $(id); if (e) e.innerHTML = ''; });
   state._lastSnapId = null; state._readSug = 'suggested'; document.body.classList.remove('recap','show-notes','show-comments');
@@ -18957,42 +18961,58 @@ function importChunks(prose, maxLen){
   flush();
   return chunks.length ? chunks : [text];
 }
-// push one reviewed element onto the current map + archive (story or system) + cache its summary
-function placeImportElement(el){
-  const nm = (el.name || '').trim().slice(0, 60); if (!nm) return false;   // the PROPER name from the source
+// Build the map item (being/word) from a reviewed import element — no side effects. Returns {item, word} or null.
+function buildImportItem(el){
+  const nm = (el.name || '').trim().slice(0, 60); if (!nm) return null;   // the PROPER name from the source
   const sub = validImportSub(el.cat, el.sub);
   let item, word;
   if (el.cat === 'being'){
     const seed = hashStr(nm);
     const traits = (el.traits || []).filter(t => t && t.sub && String(t.value || '').trim());
-    // an explicit identity trait (Archetype > Type > Occupation) becomes the being's archetype WORD → "Name, the Archetype";
+    // an explicit identity trait (Archetype > Type > Occupation) becomes the archetype WORD → "Name, the Archetype";
     // the proper name goes in .name, NOT into Archetype. Fall back to the name as the key word if there's no archetype (or it collides).
     const idTrait = traits.find(t => t.sub === 'Archetype') || traits.find(t => IDENTITY_SUBS.includes(t.sub)) || null;
     let archWord = idTrait ? String(idTrait.value).trim().slice(0, 60) : '';
-    const clash = archWord && (state.prompt.words || []).some(w => w.cat === 'being' && (w.word || '').toLowerCase() === archWord.toLowerCase());
+    const clash = archWord && ((state.prompt && state.prompt.words) || []).some(w => w.cat === 'being' && (w.word || '').toLowerCase() === archWord.toLowerCase());
     const useArch = archWord && !clash;
-    word = useArch ? archWord : nm;                       // key word: archetype when available+unique, else the unique proper name
+    word = useArch ? archWord : nm;
     const primarySub = useArch ? idTrait.sub : 'Archetype';
-    const attrs = traits.filter(t => !(useArch && t === idTrait)).map(t => ({ word: t.value, sub: t.sub }));   // don't duplicate the promoted archetype
+    const attrs = traits.filter(t => !(useArch && t === idTrait)).map(t => ({ word: t.value, sub: t.sub }));
     item = { word, cat: 'being', sub: primarySub, set: 0, role: 'being', attrs, identity: useArch ? [{ word, sub: primarySub }] : [], sexSeed: seed, gender: (seed % 2) ? 'female' : 'male', name: nm };
   } else {
     word = nm;
     item = makeElementItem(el.cat, word, 0, sub);
-    item.name = nm;   // proper name in the Name field for settings/objects/events too (label shows name || word)
+    item.name = nm;
     if (el.traits && el.traits.length) item.attrs = el.traits.map(t => ({ word: t.value, sub: t.sub }));   // object/setting characteristics
   }
-  // narrative-frame categories (genre/context/concepts/stakes/plot) live in the frame, not as free map nodes
   if (typeof FRAME_IDS !== 'undefined' && FRAME_IDS.has(el.cat)){ item.role = 'frame'; if (el.cat === 'theme' || el.cat === 'stakes') item.scope = 'story'; }
-  if (item && !item.icon){ const ic = bestIconMatch(el.cat, word, sub); if (ic) item.icon = ic; }   // auto-link the closest hand-drawn icon
-  state.prompt.words.push(item);
-  // tag imported words with the story's genre(s) so future rolls are biased toward them
-  const gTags = (typeof IMP !== 'undefined' && Array.isArray(IMP.genres)) ? IMP.genres.filter(g => g && g.toLowerCase() !== word.toLowerCase()).slice(0, 4) : [];
-  const entry = { word, sub, desc: el.summary, g: gTags };
+  if (item && !item.icon){ const ic = bestIconMatch(el.cat, word, sub); if (ic) item.icon = ic; }
+  return { item, word };
+}
+// register the imported word into the pools + wiki (independent of whether it's on the map)
+function registerImportWord(el, word){
+  const gTags = (typeof IMP !== 'undefined' && Array.isArray(IMP.genres)) ? IMP.genres.filter(g => g && g.toLowerCase() !== String(word).toLowerCase()).slice(0, 4) : [];
+  const entry = { word, sub: validImportSub(el.cat, el.sub), desc: el.summary, g: gTags };
   if (el.sys){ const cw = loadCustomWords(); cw[el.cat] = cw[el.cat] || []; if (!cw[el.cat].some(e => e.word === word)) cw[el.cat].push(entry); localStorage.setItem(LS_CUSTOM, JSON.stringify(cw)); }
-  else { state.session.customWords[el.cat] = state.session.customWords[el.cat] || []; if (!state.session.customWords[el.cat].some(e => e.word === word)) state.session.customWords[el.cat].push(entry); }
+  else { state.session.customWords = state.session.customWords || {}; state.session.customWords[el.cat] = state.session.customWords[el.cat] || []; if (!state.session.customWords[el.cat].some(e => e.word === word)) state.session.customWords[el.cat].push(entry); }
   if (el.summary){ state.session.wikiAI = state.session.wikiAI || {}; state.session.wikiAI[el.cat + '|' + word] = { text: el.summary, sig: 0 }; }
-  // Notes/worldbuilding imports carry the verbatim source text → drop it straight into the element's notepad note.
-  if (el.note && el.note.trim()){ const k = wordKey(item); state.session.npNotes = state.session.npNotes || {}; if (!state.session.npNotes[k] || !npPlain(state.session.npNotes[k]).trim()) state.session.npNotes[k] = importNoteHtml(el.note); }
+}
+function importNoteToNotes(el, item){ if (el.note && el.note.trim()){ const k = wordKey(item); state.session.npNotes = state.session.npNotes || {}; if (!state.session.npNotes[k] || !npPlain(state.session.npNotes[k]).trim()) state.session.npNotes[k] = importNoteHtml(el.note); } }
+// push one reviewed element straight onto the current map + register it
+function placeImportElement(el){
+  const b = buildImportItem(el); if (!b) return false;
+  state.prompt.words.push(b.item);
+  registerImportWord(el, b.word);
+  importNoteToNotes(el, b.item);
+  return true;
+}
+// Add a reviewed element to the story LIBRARY (registered + notable, but NOT auto-placed on the map — the user adds it on demand)
+function libraryAddFromImport(el){
+  const b = buildImportItem(el); if (!b) return false;
+  registerImportWord(el, b.word);
+  importNoteToNotes(el, b.item);
+  state.session.elemLibrary = state.session.elemLibrary || [];
+  state.session.elemLibrary.push({ id: 'lib' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), cat: el.cat, name: el.name, sub: b.item.sub, word: b.word, item: b.item, placed: false });
   return true;
 }
 const IMP_TMAP = { being: 'being', character: 'being', creature: 'being', person: 'being', monster: 'being', animal: 'being', setting: 'setting', place: 'setting', location: 'setting', object: 'object', item: 'object', thing: 'object', artifact: 'object', event: 'event', happening: 'event', moment: 'event', scene: 'event',
@@ -19530,29 +19550,18 @@ function confirmNotesImport(){
     state.session.wikiAI = state.session.wikiAI || {};
     state.session.npNotes = state.session.npNotes || {};
     const incl = IMP.elements.filter(el => el.include);
-    // Notes get a section timeline ONLY if the source actually describes chapters/parts. Otherwise everything lives on
-    // one world-map (no fabricated scenes), and the notepad note for each element is written by placeImportElement itself.
-    const secTitles = (IMP.sections || []).map(s => String(s.title || '').trim()).filter(Boolean);
-    const multi = secTitles.length >= 2;
-    let added = 0;
-    if (!multi){
-      const fi = state.frameIdx || 0; if (state.frames && state.frames[fi]) state.prompt = state.frames[fi].prompt;
-      incl.forEach(el => { if (placeImportElement(el)) added++; });
-      seedRelBonds(IMP.relationships);   // ONLY the bonds the notes actually state — no heuristic all-to-all web
-    } else {
-      // chaptered notes → a frame per chapter; each element loads only into the chapter it belongs to
-      const baseIdx = state.frameIdx || 0;
-      const titleIdx = {}; secTitles.forEach((t, i) => { const k = t.toLowerCase(); if (!(k in titleIdx)) titleIdx[k] = i; });
-      const secOf = el => { const s = String(el.section || '').trim().toLowerCase(); return (s && (s in titleIdx)) ? titleIdx[s] : 0; };
-      state.frames[baseIdx].stageName = state.frames[baseIdx].stageName || secTitles[0];
-      for (let i = 1; i < secTitles.length; i++) state.frames.push({ gap: 'later', prompt: { words: [], sets: 1, links: [], removedLinks: [] }, stage: baseIdx + i, stageName: secTitles[i] });
-      for (let i = 0; i < secTitles.length; i++){
-        const absIdx = baseIdx + i; state.frameIdx = absIdx; state.prompt = state.frames[absIdx].prompt; state.activeSet = 0;
-        incl.forEach(el => { if (secOf(el) === i && placeImportElement(el)) added++; });
-        seedRelBonds(IMP.relationships);
-      }
-      state.frameIdx = baseIdx; state.prompt = state.frames[baseIdx].prompt;
-    }
+    // Map-elements go into the story LIBRARY (added to the map on demand, so the canvas stays clean); the narrative
+    // frame (genre/context/concepts/stakes/plot) still lands in the bar. Each element's notepad note is written on register.
+    const MAPCAT = { being: 1, setting: 1, object: 1, event: 1, concept: 1 };
+    const fi = state.frameIdx || 0; if (state.frames && state.frames[fi]) state.prompt = state.frames[fi].prompt;
+    let added = 0, libbed = 0;
+    incl.forEach(el => {
+      if (typeof FRAME_IDS !== 'undefined' && FRAME_IDS.has(el.cat)){ if (placeImportElement(el)) added++; }   // narrative frame → the bar
+      else if (MAPCAT[el.cat]){ if (libraryAddFromImport(el)) libbed++; }                                      // beings/settings/objects/events/concepts → library
+      else { if (placeImportElement(el)) added++; }                                                            // anything else → placed
+    });
+    // keep the stated relationships so they can be drawn as their elements get added to the map
+    if (IMP.relationships && IMP.relationships.length) state.session.importRels = (state.session.importRels || []).concat(IMP.relationships.map(r => ({ from: r.from, to: r.to, type: r.type })));
     if (IMP.overview){ state.session.wikiOverview = (state.session.wikiOverview ? (state.session.wikiOverview + ' ') : '') + IMP.overview; }
     // Anything in the source that wasn't turned into an element goes into General Notes so nothing is lost.
     const leftover = importGeneralNotes(IMP.prose, IMP.elements);
@@ -19561,11 +19570,96 @@ function confirmNotesImport(){
     const _props = applyImportProposals();   // Phase 2: add approved net-new words to the pools
     rebuildPools();
     if (added){ $('skyEmpty').style.display = 'none'; layoutConstellation(); }
-    renderConstellation(); renderTimeline(); if (typeof renderNpElements === 'function') renderNpElements(); saveSession();
+    renderConstellation(); renderTimeline(); if (typeof renderNpElements === 'function') renderNpElements();
+    if (typeof updateStoryLibraryButton === 'function') updateStoryLibraryButton();
+    if (libbed && typeof openStoryLibrary === 'function') openStoryLibrary();   // surface the library so the user can start adding elements to the map
+    saveSession();
     closeImport();
-    flashStatus('Added ' + added + ' element' + (added === 1 ? '' : 's') + (multi ? (' across ' + secTitles.length + ' sections') : ' with notes') + (_props ? (' · +' + _props + ' pool word' + (_props === 1 ? '' : 's')) : ''));
+    flashStatus('Imported — ' + libbed + ' element' + (libbed === 1 ? '' : 's') + ' in your library' + (added ? (' · ' + added + ' on the map') : '') + (_props ? (' · +' + _props + ' pool word' + (_props === 1 ? '' : 's')) : ''));
   } catch (e){ console.warn('notes import error:', e); $('importConfirm').disabled = false; flashStatus('Couldn\u2019t add notes: ' + e.message); }
 }
+
+/* ---------------- Story Library: imported map-elements, added to the map on demand ---------------- */
+const LIB_GROUPS = [['being', 'Beings'], ['setting', 'Settings'], ['object', 'Objects'], ['event', 'Events'], ['concept', 'Concepts']];
+function storyLibrary(){ return (state.session && Array.isArray(state.session.elemLibrary)) ? state.session.elemLibrary : []; }
+function libUnplacedCount(){ return storyLibrary().filter(r => !r.placed).length; }
+function buildStoryLibrary(){
+  if ($('storyLib')) return;
+  if (!$('storyLibCss')){
+    const st = document.createElement('style'); st.id = 'storyLibCss';
+    st.textContent =
+      '#storyLibBtn{position:fixed; right:16px; bottom:16px; z-index:60; display:none; align-items:center; gap:7px; font-family:var(--serif); font-size:13px; color:var(--ink); background:var(--bg2); border:1px solid var(--line); border-radius:18px; padding:9px 15px; cursor:pointer; box-shadow:0 6px 22px rgba(0,0,0,.14)}' +
+      '#storyLibBtn:hover{border-color:var(--gold)} #storyLibBtn .slb-n{font-family:var(--sans); font-size:11px; color:var(--paper); background:var(--gold); border-radius:10px; padding:1px 7px}' +
+      '#storyLib{position:fixed; right:16px; bottom:16px; z-index:61; width:288px; max-height:calc(100% - 90px); display:none; flex-direction:column; background:var(--bg2); border:1px solid var(--line); border-radius:16px; box-shadow:0 12px 34px rgba(0,0,0,.32); overflow:hidden}' +
+      '#storyLib.show{display:flex} #storyLibHead{display:flex; align-items:center; justify-content:space-between; gap:8px; padding:11px 14px; border-bottom:1px solid var(--line); cursor:default}' +
+      '#storyLibHead .slh-t{font-family:var(--serif); font-size:12px; letter-spacing:.14em; text-transform:uppercase; color:var(--gold)} #storyLibHead button{border:none; background:none; color:var(--ink-faint); cursor:pointer; font-size:16px; line-height:1} #storyLibHead button:hover{color:var(--ink)}' +
+      '#storyLibBody{overflow-y:auto; padding:8px 10px 12px}' +
+      '#storyLibBody .slg-head{display:flex; align-items:center; justify-content:space-between; font-family:var(--sans); font-size:9px; letter-spacing:.14em; text-transform:uppercase; color:var(--ink-faint); margin:10px 2px 4px}' +
+      '#storyLibBody .slg-all{border:none; background:none; color:var(--ink-faint); font-size:9px; letter-spacing:.08em; text-transform:uppercase; cursor:pointer} #storyLibBody .slg-all:hover{color:var(--gold)}' +
+      '#storyLibBody .sl-row{display:flex; align-items:center; gap:8px; padding:4px 2px} #storyLibBody .sl-row.placed{opacity:.5}' +
+      '#storyLibBody .sl-nm{flex:1; font-family:var(--serif); font-size:13.5px; color:var(--ink); overflow:hidden; text-overflow:ellipsis; white-space:nowrap}' +
+      '#storyLibBody .sl-add{flex:none; font-family:var(--sans); font-size:9px; letter-spacing:.06em; text-transform:uppercase; border:1px solid var(--line); border-radius:11px; background:var(--paper); color:var(--ink-soft); padding:3px 9px; cursor:pointer} #storyLibBody .sl-add:hover{border-color:var(--gold); color:var(--ink)}' +
+      '#storyLibBody .sl-row.placed .sl-add{border:none; color:var(--ink-faint); cursor:default} #storyLibBody .sl-empty{font-family:var(--serif); font-style:italic; font-size:12.5px; color:var(--ink-faint); padding:14px 4px}';
+    document.head.appendChild(st);
+  }
+  const btn = document.createElement('button'); btn.id = 'storyLibBtn'; btn.innerHTML = '\u2630 Library <span class="slb-n">0</span>';
+  btn.addEventListener('click', openStoryLibrary); document.body.appendChild(btn);
+  const p = document.createElement('div'); p.id = 'storyLib';
+  p.innerHTML = '<div id="storyLibHead"><span class="slh-t">Story Library</span><span><button id="storyLibMin" title="Hide">\u2013</button></span></div><div id="storyLibBody"></div>';
+  document.body.appendChild(p);
+  $('storyLibMin').addEventListener('click', closeStoryLibrary);
+}
+function updateStoryLibraryButton(){
+  buildStoryLibrary();
+  const btn = $('storyLibBtn'); if (!btn) return;
+  const n = libUnplacedCount();
+  const open = $('storyLib') && $('storyLib').classList.contains('show');
+  btn.style.display = (n > 0 && !open) ? 'flex' : 'none';
+  const b = btn.querySelector('.slb-n'); if (b) b.textContent = n;
+}
+function renderStoryLibrary(){
+  buildStoryLibrary();
+  const body = $('storyLibBody'); if (!body) return;
+  body.innerHTML = '';
+  const lib = storyLibrary();
+  if (!lib.length){ body.innerHTML = '<div class="sl-empty">Nothing here yet. Imported elements collect here, ready to add to the map.</div>'; return; }
+  LIB_GROUPS.forEach(g => {
+    const rows = lib.filter(r => r.cat === g[0]);
+    if (!rows.length) return;
+    const unplaced = rows.filter(r => !r.placed).length;
+    const gh = document.createElement('div'); gh.className = 'slg-head';
+    gh.innerHTML = '<span>' + esc(g[1]) + ' \u00b7 ' + rows.length + '</span>' + (unplaced ? '<button class="slg-all" data-cat="' + g[0] + '">+ add all</button>' : '');
+    body.appendChild(gh);
+    const allBtn = gh.querySelector('.slg-all'); if (allBtn) allBtn.addEventListener('click', () => libAddAll(g[0]));
+    rows.forEach(r => {
+      const row = document.createElement('div'); row.className = 'sl-row' + (r.placed ? ' placed' : '');
+      const nm = document.createElement('span'); nm.className = 'sl-nm'; nm.textContent = r.name || r.word; nm.title = r.name || r.word;
+      const add = document.createElement('button'); add.className = 'sl-add'; add.textContent = r.placed ? '\u2713 on map' : '+ map';
+      if (!r.placed) add.addEventListener('click', () => libAddToMap(r.id));
+      row.appendChild(nm); row.appendChild(add); body.appendChild(row);
+    });
+  });
+}
+function openStoryLibrary(){ buildStoryLibrary(); renderStoryLibrary(); $('storyLib').classList.add('show'); updateStoryLibraryButton(); }
+function closeStoryLibrary(){ const p = $('storyLib'); if (p) p.classList.remove('show'); updateStoryLibraryButton(); }
+function libEnsureFrame(){
+  if (state.prompt) return;
+  if (state.frames && state.frames[state.frameIdx || 0]){ state.prompt = state.frames[state.frameIdx || 0].prompt; return; }
+  state.prompt = { words: [], sets: 1, links: [], removedLinks: [] }; state.frames = [{ gap: null, prompt: state.prompt }]; state.frameIdx = 0; state.activeSet = 0;
+}
+function libAddToMap(id){
+  const rec = storyLibrary().find(r => r.id === id); if (!rec || rec.placed) return;
+  libEnsureFrame();
+  if (typeof pushUndo === 'function') pushUndo();
+  const clone = JSON.parse(JSON.stringify(rec.item)); clone.set = state.activeSet || 0;
+  state.prompt.words.push(clone);
+  rec.placed = true;
+  const se = $('skyEmpty'); if (se) se.style.display = 'none';
+  if (state.session && state.session.importRels && state.session.importRels.length){ try { seedRelBonds(state.session.importRels); } catch (e){} }   // draw any stated bonds now both ends may be present
+  layoutConstellation(); renderConstellation(); saveSession();
+  renderStoryLibrary(); updateStoryLibraryButton();
+}
+function libAddAll(cat){ storyLibrary().filter(r => r.cat === cat && !r.placed).forEach(r => libAddToMap(r.id)); }
 
 /* ---------------- story wiki (deterministic; AI rollups layer later) ---------------- */
 const wikiState = { open: new Set() };
