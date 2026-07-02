@@ -18919,6 +18919,29 @@ function importGeneralNotes(prose, elements){
   });
   return kept.join('\n\n').trim();
 }
+// Split a large source into coherent chunks (≤ maxLen chars) on heading / paragraph boundaries, so each AI reply stays small.
+function importChunks(prose, maxLen){
+  maxLen = maxLen || 45000;
+  const text = String(prose || '');
+  if (text.length <= maxLen) return [text];
+  const lines = text.split(/\r?\n/);
+  const blocks = []; let cur = [];
+  lines.forEach(ln => { if (/^#{1,2}\s/.test(ln) && cur.length){ blocks.push(cur.join('\n')); cur = [ln]; } else cur.push(ln); });
+  if (cur.length) blocks.push(cur.join('\n'));
+  const chunks = []; let buf = '';
+  const flush = () => { if (buf.trim()) chunks.push(buf); buf = ''; };
+  blocks.forEach(b => {
+    if (b.length > maxLen){                       // a single section bigger than a chunk → split it by paragraph
+      flush();
+      let pb = '';
+      b.split(/\n{2,}/).forEach(p => { if (pb && (pb + '\n\n' + p).length > maxLen){ chunks.push(pb); pb = p; } else pb = pb ? (pb + '\n\n' + p) : p; });
+      if (pb.trim()) chunks.push(pb);
+    } else if (buf && (buf + '\n\n' + b).length > maxLen){ chunks.push(buf); buf = b; }
+    else buf = buf ? (buf + '\n\n' + b) : b;
+  });
+  flush();
+  return chunks.length ? chunks : [text];
+}
 // push one reviewed element onto the current map + archive (story or system) + cache its summary
 function placeImportElement(el){
   const word = (el.name || '').trim().slice(0, 60); if (!word) return false;
@@ -18933,9 +18956,13 @@ function placeImportElement(el){
   } else {
     item = makeElementItem(el.cat, word, 0, sub);
   }
+  // narrative-frame categories (genre/context/concepts/stakes/plot) live in the frame, not as free map nodes
+  if (typeof FRAME_IDS !== 'undefined' && FRAME_IDS.has(el.cat)){ item.role = 'frame'; if (el.cat === 'theme' || el.cat === 'stakes') item.scope = 'story'; }
   if (item && !item.icon){ const ic = bestIconMatch(el.cat, word, sub); if (ic) item.icon = ic; }   // auto-link the closest hand-drawn icon
   state.prompt.words.push(item);
-  const entry = { word, sub, desc: el.summary, g: [] };
+  // tag imported words with the story's genre(s) so future rolls are biased toward them
+  const gTags = (typeof IMP !== 'undefined' && Array.isArray(IMP.genres)) ? IMP.genres.filter(g => g && g.toLowerCase() !== word.toLowerCase()).slice(0, 4) : [];
+  const entry = { word, sub, desc: el.summary, g: gTags };
   if (el.sys){ const cw = loadCustomWords(); cw[el.cat] = cw[el.cat] || []; if (!cw[el.cat].some(e => e.word === word)) cw[el.cat].push(entry); localStorage.setItem(LS_CUSTOM, JSON.stringify(cw)); }
   else { state.session.customWords[el.cat] = state.session.customWords[el.cat] || []; if (!state.session.customWords[el.cat].some(e => e.word === word)) state.session.customWords[el.cat].push(entry); }
   if (el.summary){ state.session.wikiAI = state.session.wikiAI || {}; state.session.wikiAI[el.cat + '|' + word] = { text: el.summary, sig: 0 }; }
@@ -18943,7 +18970,12 @@ function placeImportElement(el){
   if (el.note && el.note.trim()){ const k = wordKey(item); state.session.npNotes = state.session.npNotes || {}; if (!state.session.npNotes[k] || !npPlain(state.session.npNotes[k]).trim()) state.session.npNotes[k] = importNoteHtml(el.note); }
   return true;
 }
-const IMP_TMAP = { being: 'being', character: 'being', creature: 'being', person: 'being', monster: 'being', animal: 'being', setting: 'setting', place: 'setting', location: 'setting', object: 'object', item: 'object', thing: 'object', artifact: 'object', event: 'event', happening: 'event', moment: 'event', scene: 'event' };
+const IMP_TMAP = { being: 'being', character: 'being', creature: 'being', person: 'being', monster: 'being', animal: 'being', setting: 'setting', place: 'setting', location: 'setting', object: 'object', item: 'object', thing: 'object', artifact: 'object', event: 'event', happening: 'event', moment: 'event', scene: 'event',
+  genre: 'genre', context: 'period', period: 'period', era: 'period', setting_era: 'period',
+  concepts: 'theme', theme: 'theme',
+  stakes: 'stakes', stake: 'stakes',
+  plot: 'plot', plotline: 'plot', 'plot archetype': 'plot',
+  concept: 'concept', term: 'concept', terminology: 'concept', idea: 'concept', technology: 'concept', faction: 'concept' };
 /* subcategory names for a category (for the AI prompt + the review dropdown) */
 function importSubNames(cat){ const c = getCat(cat); return c ? c.subcategories.filter(s => !s.retired).map(s => s.name) : []; }
 /* validate the AI's sub against the category; fall back to a sensible default */
@@ -19074,65 +19106,101 @@ async function extractImport(){
   IMP.mode = 'new'; IMP.prose = prose; IMP.title = $('importTitle').value.trim();
   $('importGo').disabled = true; $('importStatus').innerHTML = '<span class="spin"></span>Reading &amp; ingesting…';
   const nonBeingSubInfo = 'setting ∈ [' + importSubNames('setting').join(', ') + ']; object ∈ [' + importSubNames('object').join(', ') + ']; event ∈ [' + importSubNames('event').join(', ') + ']';
+  const narrSubInfo = ['genre', 'period', 'theme', 'stakes', 'plot', 'concept'].map(c => { const s = importSubNames(c); return s.length ? (c + ' ∈ [' + s.join(', ') + ']') : null; }).filter(Boolean).join('; ');
+  const typeUnion = '"being"|"setting"|"object"|"event"|"genre"|"context"|"concepts"|"stakes"|"plot"|"concept"';
+  const typeGuide = 'being = a named character or creature; setting = a place; object = a notable physical thing; event = a key happening; genre = the story’s genre(s); context = the time period or setting era; concepts = the central themes / big ideas the work explores; stakes = what is at risk; plot = a plot archetype or through-line; concept = an in-world term, technology, faction, or coined idea (worldbuilding vocabulary). ';
   const beingTraitInfo = 'traits=[{sub,value}] where sub∈[' + BEING_IMPORT_TRAIT_SUBS.join(',') + '] and value is the exact word or phrase from the text — include ONLY traits explicitly stated, never invent';
   const notesMode = IMP.kind === 'notes';
   let sys, user;
   if (notesMode){
-    sys = 'You analyze an author\u2019s NOTES / worldbuilding / character sheets (NOT a finished manuscript) for a worldbuilding app and return ONLY valid minified JSON \u2014 no prose, no code fences. Schema: {"title":string,"overview":string,"elements":[{"type":"being"|"setting"|"object"|"event","name":string,"note":string,"summary":string,"sub":string,"traits":[{"sub":string,"value":string}]}],"relationships":[{"from":string,"to":string,"type":string}]}. ' +
-      'Extract EVERY distinct element the notes describe. being = a character or creature; setting = a place; object = a notable physical thing; event = a key happening. ' +
+    sys = 'You analyze an author\u2019s NOTES / worldbuilding / character sheets (NOT a finished manuscript) for a worldbuilding app and return ONLY valid minified JSON \u2014 no prose, no code fences. Schema: {"title":string,"overview":string,"elements":[{"type":' + typeUnion + ',"name":string,"note":string,"summary":string,"sub":string,"traits":[{"sub":string,"value":string}]}],"relationships":[{"from":string,"to":string,"type":string}]}. ' +
+      'Extract EVERY distinct element the notes establish — not only characters, places, objects and events, but also the narrative frame: genre, context, concepts (themes), stakes, plot, and any in-world concepts/terms. ' + typeGuide +
       'note = that element\u2019s details taken from the notes, cleaned up and consolidated into 1\u20134 sentences, preserving the author\u2019s specifics. summary = ONE short sentence. ' +
       'For beings: ' + beingTraitInfo + '. Do NOT fill sub for beings. ' +
-      'For settings/objects/events: sub = single best subcategory from: ' + nonBeingSubInfo + '. ' +
+      'For any non-being type that has one: sub = single best subcategory from: ' + nonBeingSubInfo + (narrSubInfo ? ('; ' + narrSubInfo) : '') + '. ' +
       'relationships = up to 8 of the clearest bonds between the named elements; from/to are exact element names; type = a short phrase. ' +
       'overview = 1\u20132 sentences. Use names exactly as written. Invent nothing \u2014 keep only what the notes say.';
     user = 'Notes:\n\n' + prose.slice(0, 300000) + '\n\nReturn the JSON.';
   } else {
-    sys = 'You analyze a story for a worldbuilding app and return ONLY valid minified JSON — no prose, no code fences. Schema: {"title":string,"overview":string,"sections":[{"title":string,"opening":string}],"elements":[{"type":"being"|"setting"|"object"|"event","name":string,"summary":string,"sub":string,"traits":[{"sub":string,"value":string}]}],"relationships":[{"from":string,"to":string,"type":string}]}. ' +
+    sys = 'You analyze a story for a worldbuilding app and return ONLY valid minified JSON — no prose, no code fences. Schema: {"title":string,"overview":string,"sections":[{"title":string,"opening":string}],"elements":[{"type":' + typeUnion + ',"name":string,"summary":string,"sub":string,"traits":[{"sub":string,"value":string}]}],"relationships":[{"from":string,"to":string,"type":string}]}. ' +
     'sections = split the story into its parts by chapter/section titles, headers, or clear scene breaks; title = a short section title; opening = the first ~8 words of that section copied EXACTLY/verbatim from the text. If the story is one continuous piece, return a single section. ' +
-    'being = a named character or creature; setting = a place; object = a notable physical thing; event = a key happening. summary = ONE short sentence grounded only in the text. ' +
+    'Extract the story elements — characters, places, objects, events — and also the narrative frame the text implies: genre, context, concepts (themes), stakes, plot, and in-world concepts/terms. ' + typeGuide + 'summary = ONE short sentence grounded only in the text. ' +
     'For beings: ' + beingTraitInfo + '. Do NOT fill sub for beings. ' +
-    'For settings/objects/events: sub = single best subcategory from: ' + nonBeingSubInfo + '. ' +
+    'For any non-being type that has one: sub = single best subcategory from: ' + nonBeingSubInfo + (narrSubInfo ? ('; ' + narrSubInfo) : '') + '. ' +
     'relationships = up to 8 of the clearest bonds between the named elements; from/to are exact element names; type = a short relationship phrase such as "Guardian of","Rivalry","Keeper of","Born of","Betrayal". ' +
     'overview = 2 short sentences. Use names exactly as written. Up to 6 elements of each type. Invent nothing.';
     user = 'Story:\n\n' + prose.slice(0, 300000) + '\n\nReturn the JSON.';
   }
-  let norm = null;
-  for (let attempt = 0; attempt < 3 && !norm; attempt++){
-    if (attempt) $('importStatus').innerHTML = '<span class="spin"></span>Reading again…';
-    try {
-      const out = await aiCall(sys, user, { maxTokens: 8000, json: true, kind: 'import' });   // dedicated large-context import model + room for a big element list
-      norm = normalizeExtract(parseJsonLoose(out));
-    } catch (e){ $('importGo').disabled = false; $('importStatus').textContent = aiErrMsg(e); return; }
+  // Big documents overflow a single JSON reply → read in chunks, and surface each chunk's elements to the review
+  // AS they arrive so the user reviews/approves in parallel with the remaining chunks still ingesting.
+  const chunks = importChunks(prose, 45000);
+  const total = chunks.length;
+  IMP.elements = []; IMP.relationships = []; IMP.sections = []; IMP.genres = [];
+  const seenEl = {}, seenR = {};
+  let secsRaw = [], overview = '', gotTitle = '', reviewShown = false;
+  const confirmBtn = $('importConfirm');
+  const confirmLabel = confirmBtn ? (confirmBtn.textContent || 'Build these in') : 'Build these in';
+  const setConfirmProgress = done => { if (!confirmBtn) return; if (done < total){ confirmBtn.disabled = true; confirmBtn.textContent = 'Reading ' + done + '/' + total + '… (you can review now)'; } else { confirmBtn.disabled = false; confirmBtn.textContent = confirmLabel; } };
+  for (let ci = 0; ci < total; ci++){
+    if (!reviewShown) $('importStatus').innerHTML = '<span class="spin"></span>Reading' + (total > 1 ? (' part ' + (ci + 1) + ' of ' + total) : ' &amp; ingesting') + '…';
+    const uc = (notesMode ? 'Notes' : 'Story') + (total > 1 ? (' (part ' + (ci + 1) + ' of ' + total + ' — extract only what THIS part establishes)') : '') + ':\n\n' + chunks[ci] + '\n\nReturn the JSON.';
+    let normC = null;
+    for (let attempt = 0; attempt < 2 && !normC; attempt++){
+      try {
+        const out = await aiCall(sys, uc, { maxTokens: 8000, json: true, kind: 'import' });   // dedicated large-context import model
+        normC = normalizeExtract(parseJsonLoose(out));
+      } catch (e){ if (!reviewShown){ $('importGo').disabled = false; $('importStatus').textContent = aiErrMsg(e); return; } flashStatus(aiErrMsg(e)); break; }   // once reviewing, a failed part is skipped, not fatal
+    }
+    if (!normC) { setConfirmProgress(ci + 1); continue; }   // a part failed to parse — keep what the other parts gave
+    (normC.relationships || []).forEach(r => { if (!r || !r.from || !r.to) return; const k = (String(r.from) + '|' + String(r.to)).toLowerCase(); if (seenR[k]) return; seenR[k] = 1; IMP.relationships.push(r); });
+    if (Array.isArray(normC.sections)) secsRaw = secsRaw.concat(normC.sections);
+    if (!overview && normC.overview) overview = normC.overview;
+    if (!gotTitle && normC.title) gotTitle = normC.title;
+    // merge this chunk's elements → collect only the NEW ones so we can append their cards
+    const newEls = [];
+    (normC.elements || []).forEach(el => {
+      if (!el || !el.name) return;
+      const cat = IMP_TMAP[String(el.type || '').toLowerCase()]; if (!cat) return;
+      const name = String(el.name).trim().slice(0, 60); if (!name) return;
+      const aiSum = String(el.summary || '').trim(), aiNote = String(el.note || '').trim();
+      const summary = notesMode ? (aiSum || aiNote) : aiSum;
+      const elTraits = cat === 'being'
+        ? (Array.isArray(el.traits) ? el.traits : []).filter(t => t && BEING_IMPORT_TRAIT_SUBS.includes(t.sub) && String(t.value || '').trim()).map(t => ({ sub: t.sub, value: String(t.value).trim().slice(0, 60) }))
+        : [];
+      const key = cat + '|' + name.toLowerCase();
+      if (seenEl[key]){
+        const ex = seenEl[key];
+        if (!ex.summary && summary) ex.summary = summary;
+        if (elTraits.length){ const have = new Set(ex.traits.map(t => t.sub + '|' + t.value.toLowerCase())); elTraits.forEach(t => { const k = t.sub + '|' + t.value.toLowerCase(); if (!have.has(k)){ ex.traits.push(t); have.add(k); } }); }
+        return;
+      }
+      const note = notesMode ? (importSourceNote(name, IMP.prose) || aiNote) : '';   // NOTES → verbatim from FULL doc; PROSE → summarise
+      const rec = { cat, name, sub: validImportSub(cat, el.sub), traits: elTraits, summary, note, exists: wordExistsSystem(cat, name), include: true, sys: false };
+      seenEl[key] = rec; IMP.elements.push(rec); newEls.push(rec);
+    });
+    IMP.genres = IMP.elements.filter(e => e.cat === 'genre').map(e => e.name);   // tag imported words for future generation bias
+    if (newEls.length){
+      if (!reviewShown){
+        reviewShown = true;
+        if (gotTitle && !IMP.title) IMP.title = String(gotTitle).slice(0, 80);
+        IMP.overview = overview || '';
+        $('importTitle').value = IMP.title; $('importOverview').value = IMP.overview;
+        $('importGo').disabled = false;
+        renderImportReview(); importShow('review');
+      } else {
+        irAppendCards(newEls);
+        if (overview && !$('importOverview').value.trim()) $('importOverview').value = overview;
+      }
+    }
+    setConfirmProgress(ci + 1);
   }
-  if (!norm){ $('importGo').disabled = false; $('importStatus').textContent = 'Couldn’t read the structure — try again, or shorten the text.'; return; }
-  IMP.overview = norm.overview || '';
-  if (norm.title && !IMP.title) IMP.title = String(norm.title).slice(0, 80);
-  IMP.elements = [];
-  norm.elements.forEach(el => {
-    if (!el || !el.name) return;
-    const cat = IMP_TMAP[String(el.type || '').toLowerCase()];
-    if (!cat) return;
-    const name = String(el.name).trim().slice(0, 60); if (!name) return;
-    const aiSum = String(el.summary || '').trim(), aiNote = String(el.note || '').trim();
-    // NOTES/worldbuilding → keep a short summary for display but attach the VERBATIM source text as the note;
-    // PROSE → summarise (no verbatim block).
-    const summary = notesMode ? (aiSum || aiNote) : aiSum;
-    const note = notesMode ? (importSourceNote(name, IMP.prose) || aiNote) : '';
-    const elTraits = cat === 'being'
-      ? (Array.isArray(el.traits) ? el.traits : []).filter(t => t && BEING_IMPORT_TRAIT_SUBS.includes(t.sub) && String(t.value||'').trim()).map(t => ({sub:t.sub, value:String(t.value).trim().slice(0,60)}))
-      : [];
-    IMP.elements.push({ cat, name, sub: validImportSub(cat, el.sub), traits: elTraits, summary, note, exists: wordExistsSystem(cat, name), include: true, sys: false });
-  });
-  IMP.sections = notesMode ? [] : splitProseBySections(IMP.prose, norm.sections);            // notes have no manuscript to split
-  IMP.relationships = Array.isArray(norm.relationships) ? norm.relationships : [];
+  IMP.overview = $('importOverview') ? ($('importOverview').value.trim() || overview || '') : (overview || '');
+  IMP.sections = notesMode ? [] : splitProseBySections(IMP.prose, secsRaw);
   $('importGo').disabled = false;
-  $('importConfirm').disabled = false;
-  $('importTitle').value = IMP.title;
-  $('importOverview').value = IMP.overview;
-  renderImportReview();
-  importShow('review');
+  if (!IMP.elements.length){ $('importStatus').textContent = 'Couldn’t read the structure — try again, or shorten the text.'; return; }
+  setConfirmProgress(total);   // all parts in → enable Build
 }
-const IMP_CATS = [['being', 'Being'], ['setting', 'Setting'], ['object', 'Object'], ['event', 'Event'], ['theme', 'Concepts']];
+const IMP_CATS = [['being', 'Being'], ['setting', 'Setting'], ['object', 'Object'], ['event', 'Event'], ['genre', 'Genre'], ['period', 'Context'], ['theme', 'Concepts'], ['stakes', 'Stakes'], ['plot', 'Plot'], ['concept', 'Concept']];
 function buildTraitArea(d, el){
   const wrap = d.querySelector('.ir-traits-wrap'); if (!wrap) return;
   el.traits = el.traits || [];
@@ -19177,8 +19245,17 @@ function buildTraitArea(d, el){
 }
 function renderImportReview(){
   const wrap = $('importElements'); wrap.innerHTML = '';
-  if (!IMP.elements.length){ wrap.innerHTML = '<div class="ir-lbl" style="color:var(--ink-faint)">No elements found — add some below, or build the story from the prose alone.</div>'; }
-  IMP.elements.forEach(el => {
+  if (!IMP.elements.length){ wrap.innerHTML = '<div class="ir-lbl" style="color:var(--ink-faint)">No elements found — add some below, or build the story from the prose alone.</div>'; return; }
+  IMP.elements.forEach(el => wrap.appendChild(irBuildCard(el)));
+}
+// Append cards for newly-arrived elements without rebuilding existing ones (so edits/toggles-in-progress survive live ingestion).
+function irAppendCards(newEls){
+  const wrap = $('importElements'); if (!wrap) return;
+  const ph = wrap.querySelector('.ir-lbl'); if (ph) ph.remove();
+  (newEls || []).forEach(el => wrap.appendChild(irBuildCard(el)));
+}
+function irBuildCard(el){
+  {
     if (el.cat === 'being') el.traits = el.traits || [];
     const d = document.createElement('div'); d.className = 'ir-el' + (el.include ? '' : ' off') + (el.sys ? ' sys' : '');
     const opts = IMP_CATS.map(c => '<option value="' + c[0] + '"' + (c[0] === el.cat ? ' selected' : '') + '>' + c[1] + '</option>').join('');
@@ -19208,8 +19285,8 @@ function renderImportReview(){
     d.querySelector('.ir-sys').addEventListener('change', e => { el.sys = e.target.checked; d.classList.toggle('sys', el.sys); });
     d.querySelector('.ir-gen').addEventListener('click', () => generalizeDesc(el, ta));
     if (el.cat === 'being') buildTraitArea(d, el);
-    wrap.appendChild(d);
-  });
+    return d;
+  }
 }
 function addImportEl(){
   IMP.elements.push({ cat: 'being', name: '', summary: '', note: '', traits: [], exists: false, include: true, sys: false });
@@ -19252,7 +19329,7 @@ async function scanMissedElements(){
   const prose = editorText().trim(); if (prose.length < 60) return;
   const existing = (state.prompt.words || []).filter(w => w.role === 'being' || w.role === 'word').map(w => (w.name ? w.name + ' ' : '') + w.word);
   try {
-    const sys = 'You find story elements that appear in the prose but are MISSING from the provided list. Return ONLY valid minified JSON: {"elements":[{"type":"being"|"setting"|"object"|"event","name":string,"summary":string}]}. being=named character or creature; setting=place; object=notable physical thing; event=key happening. Include ONLY elements clearly present in the prose AND not already in the list (compare by name, case-insensitive). summary=ONE short sentence grounded in the text. Up to 8. If none, return {"elements":[]}.';
+    const sys = 'You find story elements that appear in the prose but are MISSING from the provided list. Return ONLY valid minified JSON: {"elements":[{"type":' + typeUnion + ',"name":string,"summary":string}]}. being=named character or creature; setting=place; object=notable physical thing; event=key happening. Include ONLY elements clearly present in the prose AND not already in the list (compare by name, case-insensitive). summary=ONE short sentence grounded in the text. Up to 8. If none, return {"elements":[]}.';
     const user = 'Already-listed elements (do NOT repeat these):\n' + (existing.length ? existing.join(', ') : '(none)') + '\n\nProse:\n\n' + prose.slice(0, 14000) + '\n\nReturn JSON of the MISSING elements:';
     const norm = normalizeExtract(parseJsonLoose(await aiCall(sys, user, { maxTokens: 1400, json: true })));
     if (!norm) return;
