@@ -1020,6 +1020,20 @@
   .ir-el.sys .ir-gen:hover{border-color:var(--ink-faint); color:var(--ink)}
   .ir-addel{font-family:var(--sans); font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--ink-soft); border:1px dashed var(--line); border-radius:8px; padding:8px 12px; background:transparent; cursor:pointer; width:100%; margin:2px 0 12px}
   .ir-addel:hover{border-color:var(--ink-faint); color:var(--ink)}
+  .ir-traits-wrap{margin-top:6px; padding:0 1px}
+  .ir-traits{display:flex; flex-wrap:wrap; align-items:center; gap:5px}
+  .ir-trait-pill{display:inline-flex; align-items:center; gap:3px; font-family:var(--sans); font-size:9.5px; background:var(--bg2); border:1px solid var(--line); border-radius:12px; padding:3px 5px 3px 8px; color:var(--ink-soft)}
+  .ir-trait-sub{font-size:8px; font-weight:700; letter-spacing:.06em; color:var(--ink-faint); text-transform:uppercase; margin-right:1px}
+  .ir-trait-rm{background:none; border:none; cursor:pointer; color:var(--ink-faint); padding:0 1px; font-size:12px; line-height:1; flex:none}
+  .ir-trait-rm:hover{color:var(--ink)}
+  .ir-no-traits{font-family:var(--sans); font-size:9.5px; color:var(--ink-faint); font-style:italic}
+  .ir-trait-add-btn{font-family:var(--sans); font-size:9px; letter-spacing:.08em; text-transform:uppercase; color:var(--ink-faint); border:1px dashed var(--line); border-radius:10px; background:transparent; padding:3px 8px; cursor:pointer; flex:none}
+  .ir-trait-add-btn:hover{border-color:var(--ink-faint); color:var(--ink)}
+  .ir-trait-form{display:flex; align-items:center; gap:5px; flex-wrap:wrap; margin-top:5px; padding-top:5px; border-top:1px solid var(--line); width:100%}
+  .ir-ta-sub{font-family:var(--sans); font-size:9.5px; color:var(--ink-soft); border:1px solid var(--line); border-radius:6px; background:var(--paper); padding:4px 5px}
+  .ir-ta-val{font-family:var(--sans); font-size:11px; color:var(--ink); border:1px solid var(--line); border-radius:6px; background:var(--bg2); padding:4px 7px; flex:1; min-width:80px; outline:none}
+  .ir-ta-ok{font-family:var(--sans); font-size:9px; letter-spacing:.08em; text-transform:uppercase; background:var(--ink); color:var(--paper); border:none; border-radius:10px; padding:4px 9px; cursor:pointer}
+  .ir-ta-cancel{font-family:var(--sans); font-size:9px; letter-spacing:.08em; text-transform:uppercase; background:transparent; border:1px solid var(--line); color:var(--ink-soft); border-radius:10px; padding:4px 8px; cursor:pointer}
   #importDestRow{display:flex; flex-direction:column; gap:5px; margin-top:10px; font-family:var(--serif); font-size:13px; color:var(--ink-soft)}
   #importDestRow label{display:flex; align-items:center; gap:7px; cursor:pointer}
   #importDestRow b{color:var(--ink)}
@@ -6187,6 +6201,7 @@ function hybridizeType(word){
   return word + ' (' + a + ' + ' + b + ')';
 }
 const IDENTITY_SUBS = ['Type', 'Archetype', 'Occupation'];
+const BEING_IMPORT_TRAIT_SUBS = ['Type','Archetype','Occupation','Motivation','Psychological Trait','Physical Trait','Social Trait','Moral Trait','Age','Physical State','Mental State','Mood','Altered State'];
 // The connector that links a being's name to its identity word: "Jessy the Anarchist", "Mara a Smuggler".
 // Archetypes read as epithets ("the"); occupations and types read as descriptors ("a"/"an").
 const BEING_ARTICLE = { Archetype: 'the', Occupation: 'a', Type: 'a' };
@@ -18883,7 +18898,16 @@ function importNoteHtml(txt){
 function placeImportElement(el){
   const word = (el.name || '').trim().slice(0, 60); if (!word) return false;
   const sub = validImportSub(el.cat, el.sub);
-  const item = makeElementItem(el.cat, word, 0, sub);
+  let item;
+  if (el.cat === 'being' && el.traits && el.traits.length){
+    const seed = hashStr(word);
+    const idTraits = el.traits.filter(t => IDENTITY_SUBS.includes(t.sub));
+    const primarySub = idTraits.length ? idTraits[0].sub : 'Archetype';
+    const attrs = el.traits.map(t => ({ word: t.value, sub: t.sub }));
+    item = { word, cat: 'being', sub: primarySub, set: 0, role: 'being', attrs, identity: [{ word, sub: primarySub }], sexSeed: seed, gender: (seed % 2) ? 'female' : 'male' };
+  } else {
+    item = makeElementItem(el.cat, word, 0, sub);
+  }
   if (item && !item.icon){ const ic = bestIconMatch(el.cat, word, sub); if (ic) item.icon = ic; }   // auto-link the closest hand-drawn icon
   state.prompt.words.push(item);
   const entry = { word, sub, desc: el.summary, g: [] };
@@ -19024,22 +19048,25 @@ async function extractImport(){
   if (!prose){ $('importStatus').textContent = 'Paste some prose first.'; return; }
   IMP.mode = 'new'; IMP.prose = prose; IMP.title = $('importTitle').value.trim();
   $('importGo').disabled = true; $('importStatus').innerHTML = '<span class="spin"></span>Reading &amp; ingesting…';
-  const subInfo = 'being ∈ [' + IDENTITY_SUBS.join(', ') + ']; setting ∈ [' + importSubNames('setting').join(', ') + ']; object ∈ [' + importSubNames('object').join(', ') + ']; event ∈ [' + importSubNames('event').join(', ') + ']';
+  const nonBeingSubInfo = 'setting ∈ [' + importSubNames('setting').join(', ') + ']; object ∈ [' + importSubNames('object').join(', ') + ']; event ∈ [' + importSubNames('event').join(', ') + ']';
+  const beingTraitInfo = 'traits=[{sub,value}] where sub∈[' + BEING_IMPORT_TRAIT_SUBS.join(',') + '] and value is the exact word or phrase from the text — include ONLY traits explicitly stated, never invent';
   const notesMode = IMP.kind === 'notes';
   let sys, user;
   if (notesMode){
-    sys = 'You analyze an author\u2019s NOTES / worldbuilding / character sheets (NOT a finished manuscript) for a worldbuilding app and return ONLY valid minified JSON \u2014 no prose, no code fences. Schema: {"title":string,"overview":string,"elements":[{"type":"being"|"setting"|"object"|"event","name":string,"note":string,"summary":string,"sub":string}],"relationships":[{"from":string,"to":string,"type":string}]}. ' +
+    sys = 'You analyze an author\u2019s NOTES / worldbuilding / character sheets (NOT a finished manuscript) for a worldbuilding app and return ONLY valid minified JSON \u2014 no prose, no code fences. Schema: {"title":string,"overview":string,"elements":[{"type":"being"|"setting"|"object"|"event","name":string,"note":string,"summary":string,"sub":string,"traits":[{"sub":string,"value":string}]}],"relationships":[{"from":string,"to":string,"type":string}]}. ' +
       'Extract EVERY distinct element the notes describe. being = a character or creature; setting = a place; object = a notable physical thing; event = a key happening. ' +
       'note = that element\u2019s details taken from the notes, cleaned up and consolidated into 1\u20134 sentences, preserving the author\u2019s specifics. summary = ONE short sentence. ' +
-      'sub = the single best-fitting subcategory, chosen from: ' + subInfo + '. ' +
+      'For beings: ' + beingTraitInfo + '. Do NOT fill sub for beings. ' +
+      'For settings/objects/events: sub = single best subcategory from: ' + nonBeingSubInfo + '. ' +
       'relationships = up to 8 of the clearest bonds between the named elements; from/to are exact element names; type = a short phrase. ' +
       'overview = 1\u20132 sentences. Use names exactly as written. Invent nothing \u2014 keep only what the notes say.';
     user = 'Notes:\n\n' + prose.slice(0, 200000) + '\n\nReturn the JSON.';
   } else {
-    sys = 'You analyze a story for a worldbuilding app and return ONLY valid minified JSON — no prose, no code fences. Schema: {"title":string,"overview":string,"sections":[{"title":string,"opening":string}],"elements":[{"type":"being"|"setting"|"object"|"event","name":string,"summary":string,"sub":string}],"relationships":[{"from":string,"to":string,"type":string}]}. ' +
+    sys = 'You analyze a story for a worldbuilding app and return ONLY valid minified JSON — no prose, no code fences. Schema: {"title":string,"overview":string,"sections":[{"title":string,"opening":string}],"elements":[{"type":"being"|"setting"|"object"|"event","name":string,"summary":string,"sub":string,"traits":[{"sub":string,"value":string}]}],"relationships":[{"from":string,"to":string,"type":string}]}. ' +
     'sections = split the story into its parts by chapter/section titles, headers, or clear scene breaks; title = a short section title; opening = the first ~8 words of that section copied EXACTLY/verbatim from the text. If the story is one continuous piece, return a single section. ' +
     'being = a named character or creature; setting = a place; object = a notable physical thing; event = a key happening. summary = ONE short sentence grounded only in the text. ' +
-    'sub = the single best-fitting subcategory, chosen from: ' + subInfo + '. ' +
+    'For beings: ' + beingTraitInfo + '. Do NOT fill sub for beings. ' +
+    'For settings/objects/events: sub = single best subcategory from: ' + nonBeingSubInfo + '. ' +
     'relationships = up to 8 of the clearest bonds between the named elements; from/to are exact element names; type = a short relationship phrase such as "Guardian of","Rivalry","Keeper of","Born of","Betrayal". ' +
     'overview = 2 short sentences. Use names exactly as written. Up to 6 elements of each type. Invent nothing.';
     user = 'Story:\n\n' + prose.slice(0, 200000) + '\n\nReturn the JSON.';
@@ -19066,7 +19093,10 @@ async function extractImport(){
     // PROSE → summarise (no verbatim block).
     const summary = notesMode ? (aiSum || aiNote) : aiSum;
     const note = notesMode ? (importSourceNote(name, IMP.prose) || aiNote) : '';
-    IMP.elements.push({ cat, name, sub: validImportSub(cat, el.sub), summary, note, exists: wordExistsSystem(cat, name), include: true, sys: false });
+    const elTraits = cat === 'being'
+      ? (Array.isArray(el.traits) ? el.traits : []).filter(t => t && BEING_IMPORT_TRAIT_SUBS.includes(t.sub) && String(t.value||'').trim()).map(t => ({sub:t.sub, value:String(t.value).trim().slice(0,60)}))
+      : [];
+    IMP.elements.push({ cat, name, sub: validImportSub(cat, el.sub), traits: elTraits, summary, note, exists: wordExistsSystem(cat, name), include: true, sys: false });
   });
   IMP.sections = notesMode ? [] : splitProseBySections(IMP.prose, norm.sections);            // notes have no manuscript to split
   IMP.relationships = Array.isArray(norm.relationships) ? norm.relationships : [];
@@ -19078,41 +19108,86 @@ async function extractImport(){
   importShow('review');
 }
 const IMP_CATS = [['being', 'Being'], ['setting', 'Setting'], ['object', 'Object'], ['event', 'Event'], ['theme', 'Concepts']];
+function buildTraitArea(d, el){
+  const wrap = d.querySelector('.ir-traits-wrap'); if (!wrap) return;
+  el.traits = el.traits || [];
+  const pills = el.traits.map((t, ti) =>
+    '<span class="ir-trait-pill">' +
+    '<span class="ir-trait-sub">' + esc(t.sub) + '</span>' + esc(t.value) +
+    '<button type="button" class="ir-trait-rm" data-i="' + ti + '" aria-label="Remove">×</button>' +
+    '</span>'
+  ).join('');
+  const none = !el.traits.length ? '<span class="ir-no-traits">No traits found in text</span>' : '';
+  const subOpts = BEING_IMPORT_TRAIT_SUBS.map(s => '<option value="' + esc(s) + '">' + esc(s) + '</option>').join('');
+  wrap.innerHTML =
+    '<div class="ir-traits">' + none + pills +
+    '<button type="button" class="ir-trait-add-btn">+ trait</button>' +
+    '</div>' +
+    '<div class="ir-trait-form" hidden>' +
+    '<select class="ir-ta-sub">' + subOpts + '</select>' +
+    '<input type="text" class="ir-ta-val" placeholder="value…" maxlength="60">' +
+    '<button type="button" class="ir-ta-ok">Add</button>' +
+    '<button type="button" class="ir-ta-cancel">Cancel</button>' +
+    '</div>';
+  wrap.querySelectorAll('.ir-trait-rm').forEach(btn => {
+    btn.addEventListener('click', () => { el.traits.splice(+btn.dataset.i, 1); buildTraitArea(d, el); });
+  });
+  const addBtn = wrap.querySelector('.ir-trait-add-btn');
+  const form = wrap.querySelector('.ir-trait-form');
+  const taOk = wrap.querySelector('.ir-ta-ok');
+  const taCancel = wrap.querySelector('.ir-ta-cancel');
+  const taVal = wrap.querySelector('.ir-ta-val');
+  const taSub = wrap.querySelector('.ir-ta-sub');
+  addBtn.addEventListener('click', () => { form.hidden = false; addBtn.hidden = true; taVal.focus(); });
+  taCancel.addEventListener('click', () => { form.hidden = true; addBtn.hidden = false; taVal.value = ''; });
+  taOk.addEventListener('click', () => {
+    const sub = taSub.value.trim(); const val = taVal.value.trim().slice(0, 60);
+    if (!val){ taVal.focus(); return; }
+    const idx = el.traits.findIndex(t => t.sub === sub);
+    if (idx >= 0) el.traits[idx].value = val; else el.traits.push({sub, value: val});
+    form.hidden = true; addBtn.hidden = false; taVal.value = '';
+    buildTraitArea(d, el);
+  });
+  taVal.addEventListener('keydown', e => { if (e.key === 'Enter') taOk.click(); if (e.key === 'Escape') taCancel.click(); });
+}
 function renderImportReview(){
   const wrap = $('importElements'); wrap.innerHTML = '';
   if (!IMP.elements.length){ wrap.innerHTML = '<div class="ir-lbl" style="color:var(--ink-faint)">No elements found — add some below, or build the story from the prose alone.</div>'; }
   IMP.elements.forEach(el => {
+    if (el.cat === 'being') el.traits = el.traits || [];
     const d = document.createElement('div'); d.className = 'ir-el' + (el.include ? '' : ' off') + (el.sys ? ' sys' : '');
     const opts = IMP_CATS.map(c => '<option value="' + c[0] + '"' + (c[0] === el.cat ? ' selected' : '') + '>' + c[1] + '</option>').join('');
-    const subOpts = importSubNames(el.cat).map(n => '<option value="' + esc(n) + '"' + (n === el.sub ? ' selected' : '') + '>' + esc(n) + '</option>').join('');
+    const subOpts = el.cat === 'being' ? '' : importSubNames(el.cat).map(n => '<option value="' + esc(n) + '"' + (n === el.sub ? ' selected' : '') + '>' + esc(n) + '</option>').join('');
     d.innerHTML =
       '<div class="ir-el-top">' +
       '<label class="ir-inc"><input type="checkbox" class="ir-i"' + (el.include ? ' checked' : '') + '></label>' +
       '<span class="ir-dot" style="background:' + catColor(el.cat) + '"></span>' +
       '<select class="ir-type">' + opts + '</select>' +
-      '<select class="ir-sub" title="Subcategory — AI-suggested; change if needed">' + subOpts + '</select>' +
+      (el.cat !== 'being' ? '<select class="ir-sub" title="Subcategory — AI-suggested; change if needed">' + subOpts + '</select>' : '') +
       '<input class="ir-name" value="' + esc(el.name) + '" placeholder="name">' +
       '<span class="ir-exists"' + (el.exists ? '' : ' style="display:none"') + ' title="Already in the shared library — editing here makes a story-specific variation">✦ in library</span>' +
       '</div>' +
+      (el.cat === 'being' ? '<div class="ir-traits-wrap"></div>' : '') +
       '<textarea class="ir-sum" rows="2" placeholder="summary">' + esc(el.summary) + '</textarea>' +
       (el.note ? '<textarea class="ir-note" rows="5" placeholder="notes (verbatim from source)">' + esc(el.note) + '</textarea>' : '') +
       '<div class="ir-scope-row"><label class="ir-scope"><input type="checkbox" class="ir-sys"' + (el.sys ? ' checked' : '') + '> available in all stories</label>' +
       '<span class="ir-genhint">becomes the description everywhere — keep it generic</span>' +
       '<button type="button" class="ir-gen">✦ generalize</button></div>';
     const inc = d.querySelector('.ir-i'); inc.addEventListener('change', () => { el.include = inc.checked; d.classList.toggle('off', !inc.checked); });
-    d.querySelector('.ir-type').addEventListener('change', e => { el.cat = e.target.value; el.sub = validImportSub(el.cat, ''); renderImportReview(); });
-    d.querySelector('.ir-sub').addEventListener('change', e => { el.sub = e.target.value; });
+    d.querySelector('.ir-type').addEventListener('change', e => { el.cat = e.target.value; el.sub = validImportSub(el.cat, ''); el.traits = el.cat === 'being' ? (el.traits || []) : []; renderImportReview(); });
+    const subSel = d.querySelector('.ir-sub'); if (subSel) subSel.addEventListener('change', e => { el.sub = e.target.value; });
     const nm = d.querySelector('.ir-name'); const ex = d.querySelector('.ir-exists');
     nm.addEventListener('input', () => { el.name = nm.value; el.exists = wordExistsSystem(el.cat, nm.value.trim()); ex.style.display = el.exists ? '' : 'none'; });
     const ta = d.querySelector('.ir-sum'); ta.addEventListener('input', () => { el.summary = ta.value; });
     const na = d.querySelector('.ir-note'); if (na) na.addEventListener('input', () => { el.note = na.value; });
     d.querySelector('.ir-sys').addEventListener('change', e => { el.sys = e.target.checked; d.classList.toggle('sys', el.sys); });
     d.querySelector('.ir-gen').addEventListener('click', () => generalizeDesc(el, ta));
+    if (el.cat === 'being') buildTraitArea(d, el);
     wrap.appendChild(d);
   });
 }
 function addImportEl(){
-  IMP.elements.push({ cat: 'being', name: '', summary: '', exists: false, include: true, sys: false });
+  IMP.elements.push({ cat: 'being', name: '', summary: '', note: '', traits: [], exists: false, include: true, sys: false });
   renderImportReview();
   const cards = $('importElements').querySelectorAll('.ir-el');
   const last = cards[cards.length - 1]; if (last){ last.scrollIntoView({ block: 'nearest' }); const n = last.querySelector('.ir-name'); if (n) n.focus(); }
