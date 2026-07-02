@@ -6212,6 +6212,10 @@ function hybridizeType(word){
 }
 const IDENTITY_SUBS = ['Type', 'Archetype', 'Occupation'];
 const BEING_IMPORT_TRAIT_SUBS = ['Type','Archetype','Occupation','Motivation','Psychological Trait','Physical Trait','Social Trait','Moral Trait','Age','Physical State','Mental State','Mood','Altered State'];
+const OBJECT_IMPORT_TRAIT_SUBS = ['Type','Material','Size','Appearance','Condition','Property','Power','Origin','Purpose','Symbolism'];
+const SETTING_IMPORT_TRAIT_SUBS = ['Type','Terrain','Climate','Size','Atmosphere','Feature','Condition','Population','Origin','Symbolism'];
+// the characteristic-type dropdown for an import element, by category
+function importTraitSubs(cat){ return cat === 'setting' ? SETTING_IMPORT_TRAIT_SUBS : (cat === 'object' ? OBJECT_IMPORT_TRAIT_SUBS : BEING_IMPORT_TRAIT_SUBS); }
 // The connector that links a being's name to its identity word: "Jessy the Anarchist", "Mara a Smuggler".
 // Archetypes read as epithets ("the"); occupations and types read as descriptors ("a"/"an").
 const BEING_ARTICLE = { Archetype: 'the', Occupation: 'a', Type: 'a' };
@@ -18975,6 +18979,7 @@ function placeImportElement(el){
     word = nm;
     item = makeElementItem(el.cat, word, 0, sub);
     item.name = nm;   // proper name in the Name field for settings/objects/events too (label shows name || word)
+    if (el.traits && el.traits.length) item.attrs = el.traits.map(t => ({ word: t.value, sub: t.sub }));   // object/setting characteristics
   }
   // narrative-frame categories (genre/context/concepts/stakes/plot) live in the frame, not as free map nodes
   if (typeof FRAME_IDS !== 'undefined' && FRAME_IDS.has(el.cat)){ item.role = 'frame'; if (el.cat === 'theme' || el.cat === 'stakes') item.scope = 'story'; }
@@ -19253,12 +19258,28 @@ function buildTraitArea(d, el){
     '<button type="button" class="ir-trait-rm" data-i="' + ti + '" aria-label="Remove">×</button>' +
     '</span>'
   ).join('');
-  const none = !el.traits.length ? '<span class="ir-no-traits">No traits found in text</span>' : '';
-  // Only the traits found in the source are shown (removable). Adding more is done later in the being card, not here.
-  wrap.innerHTML = '<div class="ir-traits">' + none + pills + '</div>';
+  const none = !el.traits.length ? ('<span class="ir-no-traits">' + (el.cat === 'being' ? 'No traits found in text' : 'No characteristics yet') + '</span>') : '';
+  const subOpts = importTraitSubs(el.cat).map(s => '<option value="' + esc(s) + '">' + esc(s) + '</option>').join('');
+  // Found traits (removable) + an always-visible add row: pick a trait/characteristic type, name it, Add.
+  wrap.innerHTML = '<div class="ir-traits">' + none + pills + '</div>' +
+    '<div class="ir-trait-form">' +
+    '<select class="ir-ta-sub">' + subOpts + '</select>' +
+    '<input type="text" class="ir-ta-val" placeholder="value…" maxlength="60">' +
+    '<button type="button" class="ir-ta-ok">+ Add trait</button>' +
+    '</div>';
   wrap.querySelectorAll('.ir-trait-rm').forEach(btn => {
     btn.addEventListener('click', () => { el.traits.splice(+btn.dataset.i, 1); buildTraitArea(d, el); });
   });
+  const taOk = wrap.querySelector('.ir-ta-ok'), taVal = wrap.querySelector('.ir-ta-val'), taSub = wrap.querySelector('.ir-ta-sub');
+  const addTrait = () => {
+    const sub = taSub.value.trim(); const val = taVal.value.trim().slice(0, 60);
+    if (!val){ taVal.focus(); return; }
+    const idx = el.traits.findIndex(t => t.sub === sub);
+    if (idx >= 0) el.traits[idx].value = val; else el.traits.push({ sub, value: val });
+    buildTraitArea(d, el);
+  };
+  taOk.addEventListener('click', addTrait);
+  taVal.addEventListener('keydown', e => { if (e.key === 'Enter'){ e.preventDefault(); addTrait(); } });
 }
 function renderImportReview(){
   const wrap = $('importElements'); wrap.innerHTML = '';
@@ -19273,7 +19294,8 @@ function irAppendCards(newEls){
 }
 function irBuildCard(el){
   {
-    if (el.cat === 'being') el.traits = el.traits || [];
+    const hasTraits = (el.cat === 'being' || el.cat === 'object' || el.cat === 'setting');   // beings get traits; objects/settings get characteristics
+    if (hasTraits) el.traits = el.traits || [];
     const d = document.createElement('div'); d.className = 'ir-el' + (el.include ? '' : ' off') + (el.sys ? ' sys' : '');
     const opts = IMP_CATS.map(c => '<option value="' + c[0] + '"' + (c[0] === el.cat ? ' selected' : '') + '>' + c[1] + '</option>').join('');
     const subOpts = el.cat === 'being' ? '' : importSubNames(el.cat).map(n => '<option value="' + esc(n) + '"' + (n === el.sub ? ' selected' : '') + '>' + esc(n) + '</option>').join('');
@@ -19286,14 +19308,14 @@ function irBuildCard(el){
       '<input class="ir-name" value="' + esc(el.name) + '" placeholder="name">' +
       '<span class="ir-exists"' + (el.exists ? '' : ' style="display:none"') + ' title="Already in the shared library — editing here makes a story-specific variation">✦ in library</span>' +
       '</div>' +
-      (el.cat === 'being' ? '<div class="ir-traits-wrap"></div>' : '') +
+      (hasTraits ? '<div class="ir-traits-wrap"></div>' : '') +
       '<textarea class="ir-sum" rows="2" placeholder="summary">' + esc(el.summary) + '</textarea>' +
       (el.note ? '<textarea class="ir-note" rows="5" placeholder="notes (verbatim from source)">' + esc(el.note) + '</textarea>' : '') +
       '<div class="ir-scope-row"><label class="ir-scope"><input type="checkbox" class="ir-sys"' + (el.sys ? ' checked' : '') + '> available in all stories</label>' +
       '<span class="ir-genhint">becomes the description everywhere — keep it generic</span>' +
       '<button type="button" class="ir-gen">✦ generalize</button></div>';
     const inc = d.querySelector('.ir-i'); inc.addEventListener('change', () => { el.include = inc.checked; d.classList.toggle('off', !inc.checked); });
-    d.querySelector('.ir-type').addEventListener('change', e => { el.cat = e.target.value; el.sub = validImportSub(el.cat, ''); el.traits = el.cat === 'being' ? (el.traits || []) : []; renderImportReview(); });
+    d.querySelector('.ir-type').addEventListener('change', e => { el.cat = e.target.value; el.sub = validImportSub(el.cat, ''); if (!(el.cat === 'being' || el.cat === 'object' || el.cat === 'setting')) el.traits = []; else el.traits = el.traits || []; renderImportReview(); });
     const subSel = d.querySelector('.ir-sub'); if (subSel) subSel.addEventListener('change', e => { el.sub = e.target.value; });
     const nm = d.querySelector('.ir-name'); const ex = d.querySelector('.ir-exists');
     nm.addEventListener('input', () => { el.name = nm.value; el.exists = wordExistsSystem(el.cat, nm.value.trim()); ex.style.display = el.exists ? '' : 'none'; });
@@ -19301,7 +19323,7 @@ function irBuildCard(el){
     const na = d.querySelector('.ir-note'); if (na) na.addEventListener('input', () => { el.note = na.value; });
     d.querySelector('.ir-sys').addEventListener('change', e => { el.sys = e.target.checked; d.classList.toggle('sys', el.sys); });
     d.querySelector('.ir-gen').addEventListener('click', () => generalizeDesc(el, ta));
-    if (el.cat === 'being') buildTraitArea(d, el);
+    if (hasTraits) buildTraitArea(d, el);
     return d;
   }
 }
