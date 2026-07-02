@@ -15854,6 +15854,82 @@ function renderMentalOverlay(){
     ov.appendChild(it);
   });
 }
+const FB_GROUP_CATS = { genre: 1, period: 1, theme: 1, stakes: 1 };   // narrative layers that collapse into one combined chip when there are several
+const FB_ORDER = ['genre', 'period', 'theme', 'stakes', 'plot'];
+// build a single narrative-layer chip (the original per-item rendering, factored out)
+function fbChip(i){
+  const words = state.prompt.words, w = words[i];
+  const it = document.createElement('span');
+  it.className = 'fb-item' + (state.selNode === i ? ' sel' : '');
+  if (w._hit){ const um = document.createElement('span'); um.className = 'fb-used'; um.textContent = '✓'; it.appendChild(um); }
+  it.appendChild(document.createTextNode(w.word));
+  it.title = ((getCat(w.cat) || {}).name || w.cat) + ' · ' + w.sub;
+  it.addEventListener('mouseenter', ev => { const d = descFor(w); if (d) showTip(d, ev); });
+  it.addEventListener('mouseleave', hideTip);
+  const cat = document.createElement('span'); cat.className = 'fb-cat'; cat.style.color = catColor(w.cat);
+  cat.textContent = (w.cat === 'theme' && MOTIF_SUBS.has(w.sub)) ? 'Motif' : ((getCat(w.cat) || {}).name || w.cat);
+  it.appendChild(cat);
+  if (w.cat === 'theme' || w.cat === 'stakes'){
+    const dn = document.createElement('span'); dn.className = 'fb-r'; dn.textContent = '↓';
+    dn.title = w.cat === 'stakes' ? 'Make this the stake of the current section' : 'Make this a driver of the current section';
+    dn.addEventListener('click', ev => { ev.stopPropagation(); w.scope = 'frame'; w.frame = state.frameIdx || 0; if (state.nodes[i]){ state.nodes[i].scope = 'frame'; state.nodes[i].frame = w.frame; } renderConstellation(); if (state.session){ state.session.words = state.prompt.words; scheduleAutosave(); } });
+    it.appendChild(dn);
+  }
+  it.appendChild(focusCtl('fb-r', i));
+  it.appendChild(wikiCtl('fb-r', i));
+  it.appendChild(quillCtl('fb-r', wordKey(w)));
+  const x = document.createElement('span'); x.className = 'fb-x'; x.textContent = '×'; x.title = 'Remove';
+  x.addEventListener('click', ev => { ev.stopPropagation(); removeNode(i); });
+  it.appendChild(x);
+  it.addEventListener('click', () => { state.selNode = state.selNode === i ? null : i; renderConstellation(); });
+  return it;
+}
+// a combined chip for a layer with several values — shows the first 1–2 (by order) + a click-to-expand list
+function fbGroupChip(cat, idxs){
+  const words = state.prompt.words;
+  const list = idxs.map(i => words[i].word);
+  const joiner = cat === 'genre' ? ' ' : ' & ';
+  const chip = document.createElement('span'); chip.className = 'fb-item fb-group' + (idxs.indexOf(state.selNode) >= 0 ? ' sel' : '');
+  chip.appendChild(document.createTextNode(list.slice(0, 2).join(joiner)));
+  const cn = document.createElement('span'); cn.className = 'fb-cat'; cn.style.color = catColor(cat); cn.textContent = (getCat(cat) || {}).name || cat; chip.appendChild(cn);
+  const badge = document.createElement('span'); badge.className = 'fb-gcount'; badge.textContent = idxs.length; chip.appendChild(badge);
+  const car = document.createElement('span'); car.className = 'fb-gcaret'; car.textContent = '▾'; chip.appendChild(car);
+  chip.title = ((getCat(cat) || {}).name || cat) + ' — ' + list.join(', ');
+  chip.addEventListener('click', ev => { ev.stopPropagation(); toggleFbDropdown(chip, cat, idxs); });
+  return chip;
+}
+function closeFbDropdown(){ const m = document.getElementById('fbDd'); if (m) m.remove(); document.removeEventListener('mousedown', fbDdOutside, true); }
+function fbDdOutside(e){ const m = document.getElementById('fbDd'); if (m && !m.contains(e.target) && !(e.target.closest && e.target.closest('.fb-group'))) closeFbDropdown(); }
+function toggleFbDropdown(anchor, cat, idxs){
+  const ex = document.getElementById('fbDd'); if (ex && ex.dataset.cat === cat){ closeFbDropdown(); return; }
+  closeFbDropdown();
+  const menu = document.createElement('div'); menu.id = 'fbDd'; menu.className = 'fb-dd'; menu.dataset.cat = cat;
+  idxs.forEach((i, k) => {
+    const w = state.prompt.words[i];
+    const row = document.createElement('div'); row.className = 'fb-dd-row';
+    const mv = document.createElement('span'); mv.className = 'fb-dd-mv';
+    const up = document.createElement('button'); up.type = 'button'; up.textContent = '↑'; up.title = 'Move up'; if (k === 0) up.disabled = true; up.addEventListener('click', e => { e.stopPropagation(); fbReorder(idxs, k, -1); });
+    const dn = document.createElement('button'); dn.type = 'button'; dn.textContent = '↓'; dn.title = 'Move down'; if (k === idxs.length - 1) dn.disabled = true; dn.addEventListener('click', e => { e.stopPropagation(); fbReorder(idxs, k, 1); });
+    mv.appendChild(up); mv.appendChild(dn);
+    const lbl = document.createElement('span'); lbl.className = 'fb-dd-w'; lbl.textContent = w.word; lbl.title = descFor(w) || '';
+    lbl.addEventListener('click', () => { state.selNode = i; closeFbDropdown(); renderConstellation(); });
+    const rm = document.createElement('button'); rm.type = 'button'; rm.className = 'fb-dd-x'; rm.textContent = '×'; rm.title = 'Remove'; rm.addEventListener('click', e => { e.stopPropagation(); closeFbDropdown(); removeNode(i); });
+    row.appendChild(mv); row.appendChild(lbl); row.appendChild(rm); menu.appendChild(row);
+  });
+  document.body.appendChild(menu);
+  const r = anchor.getBoundingClientRect();
+  menu.style.left = Math.round(Math.min(r.left, window.innerWidth - 240)) + 'px';
+  menu.style.top = Math.round(r.bottom + 4) + 'px';
+  setTimeout(() => document.addEventListener('mousedown', fbDdOutside, true), 0);
+}
+function fbReorder(idxs, k, dir){
+  const j = k + dir; if (j < 0 || j >= idxs.length) return;
+  const words = state.prompt.words, a = words[idxs[k]], b = words[idxs[j]];
+  const ta = (typeof a.ord === 'number') ? a.ord : k, tb = (typeof b.ord === 'number') ? b.ord : j;
+  a.ord = tb; b.ord = ta;
+  if (state.session){ state.session.words = words; scheduleAutosave(); }
+  closeFbDropdown(); renderFrameBar(); renderConstellation();
+}
 function renderFrameBar(){
   const fb = $('frameBar');
   fb.style.display = 'flex';
@@ -15884,47 +15960,17 @@ function renderFrameBar(){
       lb.textContent = 'Set ' + (s2 + 1);
       chips.appendChild(lb);
     }
-    idxs.forEach(i => {
-      const w = words[i];
-      const it = document.createElement('span');
-      it.className = 'fb-item' + (state.selNode === i ? ' sel' : '');
-      if (w._hit){
-        const um = document.createElement('span');
-        um.className = 'fb-used';
-        um.textContent = '\u2713';
-        it.appendChild(um);
+    // group the layer chips by category so Genre/Context/Concepts/Stakes collapse instead of running off the page
+    const byCat = {}; idxs.forEach(i => { const c = words[i].cat; (byCat[c] = byCat[c] || []).push(i); });
+    const catRank = c => { const r = FB_ORDER.indexOf(c); return r < 0 ? 99 : r; };
+    Object.keys(byCat).sort((a, b) => catRank(a) - catRank(b)).forEach(c => {
+      let group = byCat[c];
+      if (FB_GROUP_CATS[c]){
+        group = group.slice().sort((x, y) => ((typeof words[x].ord === 'number' ? words[x].ord : 0) - (typeof words[y].ord === 'number' ? words[y].ord : 0)) || (x - y));
+        group.forEach((i, k) => { words[i].ord = k; });   // dense, stable order \u2192 drives which show in the combined label
       }
-      it.appendChild(document.createTextNode(w.word));
-      it.title = ((getCat(w.cat) || {}).name || w.cat) + ' \u00B7 ' + w.sub;
-      it.addEventListener('mouseenter', ev => { const d = descFor(w); if (d) showTip(d, ev); });
-      it.addEventListener('mouseleave', hideTip);
-      const cat = document.createElement('span');
-      cat.className = 'fb-cat';
-      cat.style.color = catColor(w.cat);
-      cat.textContent = (w.cat === 'theme' && MOTIF_SUBS.has(w.sub)) ? 'Motif' : ((getCat(w.cat) || {}).name || w.cat);
-      it.appendChild(cat);
-      if (w.cat === 'theme' || w.cat === 'stakes'){
-        const dn = document.createElement('span');
-        dn.className = 'fb-r';
-        dn.textContent = '\u2193';
-        dn.title = w.cat === 'stakes' ? 'Make this the stake of the current section' : 'Make this a driver of the current section';
-        dn.addEventListener('click', ev => { ev.stopPropagation(); w.scope = 'frame'; w.frame = state.frameIdx || 0; if (state.nodes[i]){ state.nodes[i].scope = 'frame'; state.nodes[i].frame = w.frame; } renderConstellation(); if (state.session){ state.session.words = state.prompt.words; scheduleAutosave(); } });
-        it.appendChild(dn);
-      }
-      it.appendChild(focusCtl('fb-r', i));
-      it.appendChild(wikiCtl('fb-r', i));
-      it.appendChild(quillCtl('fb-r', wordKey(w)));
-      const x = document.createElement('span');
-      x.className = 'fb-x';
-      x.textContent = '\u00D7';
-      x.title = 'Remove';
-      x.addEventListener('click', ev => { ev.stopPropagation(); removeNode(i); });
-      it.appendChild(x);
-      it.addEventListener('click', () => {
-        state.selNode = state.selNode === i ? null : i;
-        renderConstellation();
-      });
-      chips.appendChild(it);
+      if (FB_GROUP_CATS[c] && group.length >= 2) chips.appendChild(fbGroupChip(c, group));
+      else group.forEach(i => chips.appendChild(fbChip(i)));
     });
   }
   try { chips.scrollLeft = _chSX; requestAnimationFrame(() => { try { chips.scrollLeft = _chSX; } catch(e){} }); } catch(e){}   // restore scroll
