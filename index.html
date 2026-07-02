@@ -997,7 +997,8 @@
   #importBack{font-family:var(--sans); font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--ink-soft); background:none; border:1px solid var(--line); border-radius:14px; padding:8px 13px; margin-right:8px; cursor:pointer}
   .ir-block{margin-bottom:12px}
   .ir-lbl{font-family:var(--sans); font-size:9px; font-weight:700; letter-spacing:.14em; text-transform:uppercase; color:var(--ink-faint); margin:6px 0 5px}
-  #importOverview,.ir-name,.ir-sum{width:100%; box-sizing:border-box; font-family:var(--serif); color:var(--ink); border:1px solid var(--line); border-radius:7px; background:var(--bg2); padding:7px 9px; outline:none; resize:vertical}
+  #importOverview,.ir-name,.ir-sum,.ir-note{width:100%; box-sizing:border-box; font-family:var(--serif); color:var(--ink); border:1px solid var(--line); border-radius:7px; background:var(--bg2); padding:7px 9px; outline:none; resize:vertical}
+  .ir-note{font-size:12px; line-height:1.55; margin-top:6px; white-space:pre-wrap; color:var(--ink-soft); border-style:dashed}
   #importOverview{font-style:italic; font-size:13px; line-height:1.5}
   #importElements{max-height:42vh; overflow-y:auto; margin-bottom:4px}
   .ir-el{border:1px solid var(--line); border-radius:9px; padding:9px 10px; margin-bottom:8px; background:var(--paper)}
@@ -18821,6 +18822,63 @@ function normalizeExtract(data){
     relationships: Array.isArray(data.relationships) ? data.relationships : [] };
 }
 const IMP = { mode: 'new', kind: 'prose', title: '', prose: '', overview: '', elements: [], sections: [], relationships: [] };
+// For NOTES/worldbuilding imports: pull the verbatim source text about an element (its own heading section, its
+// bold-label block, or — failing those — the paragraphs that name it) so nothing the author wrote is lost to a summary.
+function importSourceNote(name, prose){
+  if (!name || !prose) return '';
+  const lines = String(prose).split(/\r?\n/);
+  const headRe = /^(#{1,6})\s+(.*)$/;
+  const boldRe = /^\s*\*\*(.+?)\*\*/;
+  const entryRe = /^\s*\*\*(.+?)\*\*\s*(?:\*\([^)]*\)\*|\([^)]*\))?\s*$/;   // a WHOLE line that is just a bold label (+ optional parenthetical) = an entry heading
+  const norm = s => String(s).replace(/\*/g, '').replace(/\s*[—–-]\s.*$/, '').replace(/\s*[\(\*].*$/, '').trim().toLowerCase();
+  const target = norm(name);
+  const parts = t => t.split(/\s*[\/,]\s*/).map(x => x.trim()).filter(Boolean);
+  const tParts = parts(target);
+  const labelMatches = label => { const l = norm(label); if (!l) return false; if (l === target) return true; const lp = parts(l); return lp.some(p => tParts.includes(p)); };
+  const isEntry = ln => { const m = ln.match(entryRe); return m ? m[1] : null; };
+  const cap = s => { s = s.replace(/\*\*/g, '').trim(); return s.length > 2600 ? s.slice(0, 2600).replace(/\s+\S*$/, '') + '…' : s; };
+  // 1) a dedicated markdown heading → take its whole section (until the next heading of the same or higher level)
+  for (let i = 0; i < lines.length; i++){
+    const hm = lines[i].match(headRe);
+    if (hm && labelMatches(hm[2])){
+      const level = hm[1].length, body = [];
+      for (let j = i + 1; j < lines.length; j++){ const hj = lines[j].match(headRe); if (hj && hj[1].length <= level) break; body.push(lines[j]); }
+      const out = (hm[2].trim() + '\n' + body.join('\n')).trim();
+      if (out) return cap(out);
+    }
+  }
+  // 2) a standalone bold ENTRY label ("**Name**" / "**Name** *(…)*") → the whole entry, until the next entry label or heading (keeps its sub-labels + blank lines + paragraphs)
+  for (let i = 0; i < lines.length; i++){
+    const lab = isEntry(lines[i]);
+    if (lab && labelMatches(lab)){
+      const body = [lines[i]];
+      for (let j = i + 1; j < lines.length; j++){ if (lines[j].match(headRe) || isEntry(lines[j])) break; body.push(lines[j]); }
+      const out = body.join('\n').trim();
+      if (out) return cap(out);
+    }
+  }
+  // 3) an inline bold line ("**Name** — description") → that line's description (+ continuation lines until a blank/next element)
+  for (let i = 0; i < lines.length; i++){
+    const bm = lines[i].match(boldRe);
+    if (bm && labelMatches(bm[1])){
+      const first = lines[i].replace(boldRe, '').replace(/^\s*(?:\*\([^)]*\)\*|\([^)]*\))?\s*[—–:-]?\s*/, '').trim();
+      const body = first ? [first] : [];
+      for (let j = i + 1; j < lines.length; j++){ if (!lines[j].trim() || lines[j].match(headRe) || lines[j].match(boldRe)) break; body.push(lines[j]); }
+      const out = body.join('\n').trim();
+      if (out) return cap(out);
+    }
+  }
+  // 4) fallback — every paragraph that names the element, verbatim
+  const e = target.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp('(^|[^a-z])' + e + '([^a-z]|$)', 'i');
+  const hits = String(prose).split(/\n{2,}/).map(p => p.trim()).filter(p => re.test(p));
+  return hits.length ? cap(hits.slice(0, 8).join('\n\n')) : '';
+}
+// convert a plain-text note into simple notepad HTML (paragraphs + line breaks)
+function importNoteHtml(txt){
+  return String(txt || '').split(/\n{2,}/).map(p => p.trim()).filter(Boolean)
+    .map(p => '<p>' + esc(p).replace(/\n/g, '<br>') + '</p>').join('');
+}
 // push one reviewed element onto the current map + archive (story or system) + cache its summary
 function placeImportElement(el){
   const word = (el.name || '').trim().slice(0, 60); if (!word) return false;
@@ -18832,6 +18890,8 @@ function placeImportElement(el){
   if (el.sys){ const cw = loadCustomWords(); cw[el.cat] = cw[el.cat] || []; if (!cw[el.cat].some(e => e.word === word)) cw[el.cat].push(entry); localStorage.setItem(LS_CUSTOM, JSON.stringify(cw)); }
   else { state.session.customWords[el.cat] = state.session.customWords[el.cat] || []; if (!state.session.customWords[el.cat].some(e => e.word === word)) state.session.customWords[el.cat].push(entry); }
   if (el.summary){ state.session.wikiAI = state.session.wikiAI || {}; state.session.wikiAI[el.cat + '|' + word] = { text: el.summary, sig: 0 }; }
+  // Notes/worldbuilding imports carry the verbatim source text → drop it straight into the element's notepad note.
+  if (el.note && el.note.trim()){ const k = wordKey(item); state.session.npNotes = state.session.npNotes || {}; if (!state.session.npNotes[k] || !npPlain(state.session.npNotes[k]).trim()) state.session.npNotes[k] = importNoteHtml(el.note); }
   return true;
 }
 const IMP_TMAP = { being: 'being', character: 'being', creature: 'being', person: 'being', monster: 'being', animal: 'being', setting: 'setting', place: 'setting', location: 'setting', object: 'object', item: 'object', thing: 'object', artifact: 'object', event: 'event', happening: 'event', moment: 'event', scene: 'event' };
@@ -19001,8 +19061,12 @@ async function extractImport(){
     const cat = IMP_TMAP[String(el.type || '').toLowerCase()];
     if (!cat) return;
     const name = String(el.name).trim().slice(0, 60); if (!name) return;
-    const _sum = notesMode ? String(el.note || el.summary || '').trim() : String(el.summary || '').trim();
-    IMP.elements.push({ cat, name, sub: validImportSub(cat, el.sub), summary: _sum, note: _sum, exists: wordExistsSystem(cat, name), include: true, sys: false });
+    const aiSum = String(el.summary || '').trim(), aiNote = String(el.note || '').trim();
+    // NOTES/worldbuilding → keep a short summary for display but attach the VERBATIM source text as the note;
+    // PROSE → summarise (no verbatim block).
+    const summary = notesMode ? (aiSum || aiNote) : aiSum;
+    const note = notesMode ? (importSourceNote(name, IMP.prose) || aiNote) : '';
+    IMP.elements.push({ cat, name, sub: validImportSub(cat, el.sub), summary, note, exists: wordExistsSystem(cat, name), include: true, sys: false });
   });
   IMP.sections = notesMode ? [] : splitProseBySections(IMP.prose, norm.sections);            // notes have no manuscript to split
   IMP.relationships = Array.isArray(norm.relationships) ? norm.relationships : [];
@@ -19031,6 +19095,7 @@ function renderImportReview(){
       '<span class="ir-exists"' + (el.exists ? '' : ' style="display:none"') + ' title="Already in the shared library — editing here makes a story-specific variation">✦ in library</span>' +
       '</div>' +
       '<textarea class="ir-sum" rows="2" placeholder="summary">' + esc(el.summary) + '</textarea>' +
+      (el.note ? '<textarea class="ir-note" rows="5" placeholder="notes (verbatim from source)">' + esc(el.note) + '</textarea>' : '') +
       '<div class="ir-scope-row"><label class="ir-scope"><input type="checkbox" class="ir-sys"' + (el.sys ? ' checked' : '') + '> available in all stories</label>' +
       '<span class="ir-genhint">becomes the description everywhere — keep it generic</span>' +
       '<button type="button" class="ir-gen">✦ generalize</button></div>';
@@ -19040,6 +19105,7 @@ function renderImportReview(){
     const nm = d.querySelector('.ir-name'); const ex = d.querySelector('.ir-exists');
     nm.addEventListener('input', () => { el.name = nm.value; el.exists = wordExistsSystem(el.cat, nm.value.trim()); ex.style.display = el.exists ? '' : 'none'; });
     const ta = d.querySelector('.ir-sum'); ta.addEventListener('input', () => { el.summary = ta.value; });
+    const na = d.querySelector('.ir-note'); if (na) na.addEventListener('input', () => { el.note = na.value; });
     d.querySelector('.ir-sys').addEventListener('change', e => { el.sys = e.target.checked; d.classList.toggle('sys', el.sys); });
     d.querySelector('.ir-gen').addEventListener('click', () => generalizeDesc(el, ta));
     wrap.appendChild(d);
