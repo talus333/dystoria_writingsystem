@@ -7612,7 +7612,10 @@ function openDeleteMenu(i, x, y){
       renderConstellation(); scheduleAutosave();
     });
   }
-  add('✕ Just delete', () => { closeAspectMenu(); removeNode(i); });
+  // roster elements can step off this section without leaving the story — the Library keeps them
+  const rosterCat = nd && { being: 1, setting: 1, object: 1, event: 1 }[nd.cat] && (nd.role === 'being' || nd.role === 'word') && !nd.poly && !nd.line;
+  if (rosterCat) add('↩ Remove from section — keep in Library', () => { closeAspectMenu(); removeNode(i, { keepInLibrary: true }); });
+  add('✕ Delete from story', () => { closeAspectMenu(); removeNode(i); });
   menu.style.left = Math.max(8, Math.min(x, window.innerWidth - 200)) + 'px';
   menu.style.top = Math.max(8, Math.min(y, window.innerHeight - 160)) + 'px';
   menu.style.display = 'block';
@@ -8793,40 +8796,58 @@ function addFromCategory(catId, subName){
   scheduleAutosave();
 }
 
-function removeNode(idx){
-  if (!state.prompt) return;
-  pushUndo();
-  const words = state.prompt.words;
-  dropTimerForGuideWord(words[idx]);     // give back the time a removed guide/exercise had added
+// Core splice: remove word idx (and any relation nodes attached to it) from a prompt, fixing rel indices + links.
+function promptRemoveIdx(p, idx){
+  const words = p.words;
   const toRemove = new Set([idx]);
   words.forEach((w, j) => { if (w.role === 'rel' && (w.fromIdx === idx || w.toIdx === idx)) toRemove.add(j); });
-  // pull each removed story element out of the notepad; keep any notes it had so we can offer to archive them
-  const orphanNotes = [];
-  toRemove.forEach(j => { const w = words[j]; if (!w || typeof npIsElement !== 'function' || !npIsElement(w)) return; const block = (typeof npStripElement === 'function') ? npStripElement(w) : ''; if (block) orphanNotes.push({ name: (typeof elDisplayName === 'function' ? elDisplayName(w) : '') || w.word || 'Element', block }); });
   const map = {};
   const next = [];
   words.forEach((w, j) => { if (!toRemove.has(j)){ map[j] = next.length; next.push(w); } });
   next.forEach(w => { if (w.role === 'rel'){ w.fromIdx = map[w.fromIdx]; w.toIdx = map[w.toIdx]; } });
-  state.prompt.links = (state.prompt.links || [])
+  p.links = (p.links || [])
     .map(l => Array.isArray(l) ? { a: Math.min(l[0], l[1]), b: Math.max(l[0], l[1]) } : l)
     .filter(l => map[l.a] != null && map[l.b] != null)
     .map(l => Object.assign({}, l, { a: Math.min(map[l.a], map[l.b]), b: Math.max(map[l.a], map[l.b]) }));
-  state.prompt.removedLinks = [];
+  p.removedLinks = [];
+}
+// opts.keepInLibrary: pull the element off THIS section only — notepad notes and its Story Library record stay.
+// Without it (a deliberate delete) the notepad entry is stripped (archive offered) and the roster record dropped
+// (unless the element still lives in another section, where the sync re-registers it).
+function removeNode(idx, opts){
+  if (!state.prompt) return;
+  const keep = !!(opts && opts.keepInLibrary);
+  pushUndo();
+  const words = state.prompt.words;
+  dropTimerForGuideWord(words[idx]);     // give back the time a removed guide/exercise had added
+  const w0 = words[idx];
+  const orphanNotes = [];
+  if (!keep){
+    const toStrip = new Set([idx]);
+    words.forEach((w, j) => { if (w.role === 'rel' && (w.fromIdx === idx || w.toIdx === idx)) toStrip.add(j); });
+    // pull each removed story element out of the notepad; keep any notes it had so we can offer to archive them
+    toStrip.forEach(j => { const w = words[j]; if (!w || typeof npIsElement !== 'function' || !npIsElement(w)) return; const block = (typeof npStripElement === 'function') ? npStripElement(w) : ''; if (block) orphanNotes.push({ name: (typeof elDisplayName === 'function' ? elDisplayName(w) : '') || w.word || 'Element', block }); });
+    if (w0 && state.session && Array.isArray(state.session.elemLibrary) && typeof libKeyOf === 'function'){
+      const key = libKeyOf(w0.cat, w0.name || w0.word);
+      state.session.elemLibrary = state.session.elemLibrary.filter(r => libKeyOf(r.cat, r.name || r.word) !== key);
+    }
+  }
+  promptRemoveIdx(state.prompt, idx);
   state.linkFrom = null;
   state.selNode = null;
-  state.prompt.words = next;
-  if (!next.length){
+  if (!state.prompt.words.length){
     state.prompt.links = [];
     refreshSky();
   } else layoutConstellation();
   if (state.session){
-    state.session.words = next;
+    state.session.words = state.prompt.words;
     state.session.links = state.prompt ? (state.prompt.links || []) : [];
     state.session.removedLinks = state.prompt ? (state.prompt.removedLinks || []) : [];
     scheduleAutosave();
   }
   if (typeof renderNpElements === 'function') renderNpElements();   // refresh notepad pills now the element is gone
   if (orphanNotes.length && typeof npOfferArchive === 'function') npOfferArchive(orphanNotes);   // had notes → ask to keep them
+  if (keep && typeof flashStatus === 'function') flashStatus('Removed from this section — still in your Story Library');
 }
 
 function toggleLink(i, j){
@@ -15949,23 +15970,52 @@ function toggleFbDropdown(anchor, cat, idxs){
   const ex = document.getElementById('fbDd'); if (ex && ex.dataset.cat === cat){ closeFbDropdown(); return; }
   closeFbDropdown();
   const menu = document.createElement('div'); menu.id = 'fbDd'; menu.className = 'fb-dd'; menu.dataset.cat = cat;
-  idxs.forEach((i, k) => {
+  const fkeys = new Set(state.focusKeys || []);
+  idxs.forEach(i => {
     const w = state.prompt.words[i];
-    const row = document.createElement('div'); row.className = 'fb-dd-row';
-    const mv = document.createElement('span'); mv.className = 'fb-dd-mv';
-    const up = document.createElement('button'); up.type = 'button'; up.textContent = '↑'; up.title = 'Move up'; if (k === 0) up.disabled = true; up.addEventListener('click', e => { e.stopPropagation(); fbReorder(idxs, k, -1); });
-    const dn = document.createElement('button'); dn.type = 'button'; dn.textContent = '↓'; dn.title = 'Move down'; if (k === idxs.length - 1) dn.disabled = true; dn.addEventListener('click', e => { e.stopPropagation(); fbReorder(idxs, k, 1); });
-    mv.appendChild(up); mv.appendChild(dn);
+    const row = document.createElement('div'); row.className = 'fb-dd-row'; row.dataset.wi = i;
+    // grab zone — drag to reorder within the layer
+    const grip = document.createElement('span'); grip.className = 'fb-dd-grip'; grip.textContent = '⠿'; grip.title = 'Drag to reorder';
+    grip.addEventListener('mousedown', () => { row.draggable = true; });
+    row.addEventListener('dragstart', e => { row.classList.add('dragging'); try { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', ''); } catch (err){} });
+    row.addEventListener('dragend', () => { row.draggable = false; row.classList.remove('dragging'); fbCommitOrder(menu); });
     const lbl = document.createElement('span'); lbl.className = 'fb-dd-w'; lbl.textContent = w.word; lbl.title = descFor(w) || '';
     lbl.addEventListener('click', () => { state.selNode = i; closeFbDropdown(); renderConstellation(); });
+    // ◎ focus · book wiki · quill notepad · ✕ remove — same controls the element offers elsewhere
+    const key = wordKey(w);
+    const foc = document.createElement('button'); foc.type = 'button'; foc.className = 'fb-dd-ico' + (fkeys.has(key) ? ' on' : ''); foc.textContent = '◎';
+    foc.title = fkeys.has(key) ? 'In this section’s Writing Focus — click to remove' : 'Add to this section’s Writing Focus';
+    foc.addEventListener('click', e => { e.stopPropagation(); if (typeof npToggleFocus === 'function') npToggleFocus(key); foc.classList.toggle('on'); });
+    const bk = document.createElement('button'); bk.type = 'button'; bk.className = 'fb-dd-ico'; bk.innerHTML = BOOKOPEN_SVG; bk.title = 'Open this element’s wiki';
+    bk.addEventListener('click', e => { e.stopPropagation(); closeFbDropdown(); openElementWiki(i); });
+    const qu = document.createElement('button'); qu.type = 'button'; qu.className = 'fb-dd-ico'; qu.innerHTML = QUILL_SVG; qu.title = 'Open its notepad';
+    qu.addEventListener('click', e => { e.stopPropagation(); closeFbDropdown(); openElementNotes(key); });
     const rm = document.createElement('button'); rm.type = 'button'; rm.className = 'fb-dd-x'; rm.textContent = '×'; rm.title = 'Remove'; rm.addEventListener('click', e => { e.stopPropagation(); closeFbDropdown(); removeNode(i); });
-    row.appendChild(mv); row.appendChild(lbl); row.appendChild(rm); menu.appendChild(row);
+    row.appendChild(grip); row.appendChild(lbl); row.appendChild(foc); row.appendChild(bk); row.appendChild(qu); row.appendChild(rm); menu.appendChild(row);
+  });
+  // container-level dragover: slide the dragged row past whichever row the pointer is over
+  menu.addEventListener('dragover', e => {
+    e.preventDefault();
+    const dragging = menu.querySelector('.fb-dd-row.dragging'); if (!dragging) return;
+    const over = e.target.closest ? e.target.closest('.fb-dd-row') : null;
+    if (!over || over === dragging) return;
+    const r = over.getBoundingClientRect();
+    if (e.clientY < r.top + r.height / 2) menu.insertBefore(dragging, over);
+    else menu.insertBefore(dragging, over.nextSibling);
   });
   document.body.appendChild(menu);
   const r = anchor.getBoundingClientRect();
-  menu.style.left = Math.round(Math.min(r.left, window.innerWidth - 240)) + 'px';
+  menu.style.left = Math.round(Math.min(r.left, window.innerWidth - 280)) + 'px';
   menu.style.top = Math.round(r.bottom + 4) + 'px';
+  requestAnimationFrame(() => menu.classList.add('show'));   // slide down from the chip
   setTimeout(() => document.addEventListener('mousedown', fbDdOutside, true), 0);
+}
+// After a drag: the menu's DOM order IS the new order — write it into .ord and refresh the bar label.
+function fbCommitOrder(menu){
+  const words = state.prompt && state.prompt.words; if (!words) return;
+  Array.from(menu.querySelectorAll('.fb-dd-row')).forEach((row, pos) => { const wi = +row.dataset.wi; if (words[wi]) words[wi].ord = pos; });
+  if (state.session){ state.session.words = words; scheduleAutosave(); }
+  renderFrameBar();
 }
 function fbReorder(idxs, k, dir){
   const j = k + dir; if (j < 0 || j >= idxs.length) return;
