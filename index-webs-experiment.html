@@ -27996,12 +27996,14 @@ body.eink #expMenu{background:#fff; border-color:#000}
       try{ if (localStorage.getItem('dystoria.expHide' + cfg[0]) === '1') setStrip(cfg[0], true, false); }catch(e){}
     });
     // + Elements pill, first thing in the map head
-    var pill = document.createElement('button'); pill.id = 'expAddPill'; pill.type = 'button'; pill.textContent = '+ Elements';
-    pill.title = 'Add or roll new story elements';
+    var pill = document.createElement('button'); pill.id = 'expAddPill'; pill.type = 'button'; pill.textContent = '+ Element';
+    pill.title = 'Add a story element';
     pill.addEventListener('click', function(e){
       e.stopPropagation();
-      var open = document.body.classList.toggle('expb-rail-open');
-      if (open){ var r = document.getElementById('rail'); if (r){ r.classList.remove('rail-min'); r.style.left = ''; r.style.top = ''; r.style.right = ''; r.style.bottom = ''; } }   // clear any dragged position so the popover opens by the pill
+      expPickMenu(pill, [['being','Being'], ['setting','Setting'], ['object','Object'], ['event','Event']], function(cat, ev){
+        if (typeof EC !== 'undefined'){ EC.x = ev.clientX + 8; EC.y = ev.clientY; }
+        if (typeof openElemCard === 'function') openElemCard(cat, 'add');   // the Add window has Generate — no separate roll needed
+      });
     });
     var mh = document.getElementById('mapHead');
     var mc = document.createElement('div'); mc.id = 'expMapCol';
@@ -28013,11 +28015,7 @@ body.eink #expMenu{background:#fff; border-color:#000}
     var prow = document.createElement('div'); prow.id = 'expMapPills'; mc.appendChild(prow);
     prow.appendChild(pill);
     if (mh) mh.insertBefore(mc, mh.firstChild); else sky.appendChild(mc);
-    document.addEventListener('pointerdown', function(e){
-      if (!document.body.classList.contains('expb-rail-open')) return;
-      if (e.target.closest && (e.target.closest('#rail') || e.target.closest('#expAddPill') || e.target.closest('#elemCard') || e.target.closest('#storyLib'))) return;
-      document.body.classList.remove('expb-rail-open');
-    }, true);
+    // (rail popover retired — the + Element dropdown opens each category's Add window directly)
     // hamburger: relocate the original controls so all their behavior comes along
     var mt = document.getElementById('mapTools');
     if (mt){
@@ -28074,10 +28072,74 @@ body.eink #expMenu{background:#fff; border-color:#000}
     var dw = document.createElement('div'); dw.id = 'expDrawWin'; dw.innerHTML = '<div id="expDrawBody"></div>';
     sky.appendChild(dw);
     var dp = document.createElement('button'); dp.id = 'expDrawPill'; dp.type = 'button'; dp.textContent = '+ draw';
-    dp.title = 'Terrain drawing + writing constraints';
-    dp.addEventListener('click', function(e){ e.stopPropagation(); dp.classList.toggle('on', document.body.classList.toggle('expb-draw-open')); });
+    dp.title = 'Drawing tools';
+    dp.addEventListener('click', function(e){
+      e.stopPropagation();
+      var items = [];
+      document.querySelectorAll('#expDrawBody .cat').forEach(function(c){
+        var nm = c.querySelector('.cat-name'); if (nm) items.push([nm.textContent.trim(), nm.textContent.trim()]);
+      });
+      if (!items.length) return;
+      expPickMenu(dp, items, function(name){ openToolWin(name); });
+    });
     prow.appendChild(dp);
-    // (no click-away: drawing needs the drawer to STAY open — the pill toggles it)
+    // small movable tool window — holds ONE tool's options; drawing stays armed while it's open
+    var toolWin = document.createElement('div'); toolWin.id = 'expToolWin';
+    toolWin.innerHTML = '<div id="expToolHead"><span class="xt-t"></span><button type="button" class="xt-x" title="Close">\u00d7</button></div><div id="expToolBody"></div>';
+    sky.appendChild(toolWin);
+    var toolCat = null;   // the borrowed .cat node currently in the window
+    function toolSetArmed(on){
+      if (!toolCat) return;
+      var isOn = toolCat.classList.contains('on');
+      var tg = toolCat.querySelector('.cat-toggle');
+      if (on !== isOn && tg) tg.click();   // ride the app's own arm/disarm toggle
+    }
+    function closeToolWin(){
+      toolSetArmed(false);
+      if (toolCat){ var db = document.getElementById('expDrawBody'); if (db && toolCat.dataset.xtHome){ var grp = db.querySelectorAll('.group-body')[+toolCat.dataset.xtHome]; if (grp) grp.appendChild(toolCat); } toolCat = null; }
+      toolWin.classList.remove('show');
+      toolWin.dataset.tool = '';
+    }
+    toolWin.querySelector('.xt-x').addEventListener('click', function(e){ e.stopPropagation(); closeToolWin(); });
+    function openToolWin(name){
+      closeToolWin();
+      var db = document.getElementById('expDrawBody'); if (!db) return;
+      var bodies = db.querySelectorAll('.group-body');
+      for (var gi = 0; gi < bodies.length; gi++){
+        var cats = bodies[gi].querySelectorAll('.cat');
+        for (var k = 0; k < cats.length; k++){
+          var nm = cats[k].querySelector('.cat-name');
+          if (nm && nm.textContent.trim() === name){
+            toolCat = cats[k]; toolCat.dataset.xtHome = gi;
+            document.getElementById('expToolBody').appendChild(toolCat);
+            toolCat.classList.add('expanded');
+            toolWin.querySelector('.xt-t').textContent = name;
+            toolWin.dataset.tool = name;
+            toolWin.classList.add('show');
+            toolSetArmed(true);
+            return;
+          }
+        }
+      }
+    }
+    window.__expReopenTool = function(){ var t = toolWin.dataset.tool; if (t && toolWin.classList.contains('show')){ toolCat = null; openToolWin(t); } };
+    // drag the window by its header
+    (function(){
+      var d = null, head = toolWin.querySelector('#expToolHead');
+      head.addEventListener('pointerdown', function(e){
+        if (e.target.closest('.xt-x')) return;
+        var r = toolWin.getBoundingClientRect(), pr = sky.getBoundingClientRect();
+        d = { dx: e.clientX - r.left, dy: e.clientY - r.top, px: pr.left, py: pr.top };
+        try{ head.setPointerCapture(e.pointerId); }catch(_){}
+      });
+      head.addEventListener('pointermove', function(e){
+        if (!d) return;
+        var left = Math.max(4, e.clientX - d.dx - d.px), top = Math.max(4, e.clientY - d.dy - d.py);
+        toolWin.style.left = Math.round(left) + 'px'; toolWin.style.top = Math.round(top) + 'px';
+      });
+      head.addEventListener('pointerup', function(){ d = null; });
+      head.addEventListener('pointercancel', function(){ d = null; });
+    })();
     // + Elements popover keeps ONLY the world elements; Draw + Constraints groups live in the drawer
     if (typeof buildRail === 'function'){
       var _br = buildRail;
@@ -28093,6 +28155,7 @@ body.eink #expMenu{background:#fff; border-color:#000}
           else g.classList.remove('collapsed');
         });
         var rn = document.getElementById('railNote'); if (rn) rn.style.display = 'none';
+        if (window.__expReopenTool) window.__expReopenTool();   // the groups were rebuilt — refresh the open tool window's contents
       };
       buildRail();
     }
