@@ -9400,6 +9400,7 @@ function endLinkDrag(cancel, ev){
 }
 /* ---------------- constellation ---------------- */
 function layoutConstellation(){
+  if (typeof pinLooseNodes === 'function' && state.nodes && state.nodes.length) pinLooseNodes();   // existing elements never reshuffle — only new words get laid out
   const svg = $('skySvg');
   const W = svg.clientWidth || 600, H = svg.clientHeight || 320;
   const words = state.prompt.words;
@@ -15166,19 +15167,31 @@ function startPlacement(idxs){
   state.placeQueue = (state.placeQueue || []).concat(idxs);
   if (state.placing == null) placeNext();
 }
-// pick a spot WITHIN the currently visible map frame (golden-angle spiral, clamped inside)
+// pick the EMPTIEST spot within the currently visible map frame (farthest from every placed element, mild centre pull)
 function autoSpot(i, margin){
   margin = margin || 40;
   const vv = viewBoxVals(); const vx = vv[0], vy = vv[1], vw = vv[2], vh = vv[3];
-  const cx = vx + vw / 2, cy = vy + vh / 2;
-  const seed = ((state.prompt && state.prompt.words.length) || 0) + i + 1;
-  const ang = seed * 2.39996;
-  const maxR = Math.max(0, Math.min(vw, vh) / 2 - margin);
-  const rad = Math.min(maxR, 18 + 16 * Math.sqrt(seed));
-  let x = cx + Math.cos(ang) * rad, y = cy + Math.sin(ang) * rad;
-  x = Math.max(vx + margin, Math.min(vx + vw - margin, x));
-  y = Math.max(vy + margin, Math.min(vy + vh - margin, y));
-  return { x: Math.round(x), y: Math.round(y) };
+  const pts = [];
+  (state.nodes || []).forEach((nd, j) => {
+    const w2 = state.prompt && state.prompt.words[j];
+    if (!w2 || j === i || w2.needsPlace) return;
+    if (w2.role !== 'being' && w2.role !== 'word') return;
+    pts.push([nd.x, nd.y]);
+  });
+  if (!pts.length) return { x: Math.round(vx + vw / 2), y: Math.round(vy + vh / 2) };
+  const cols = 13, rows = 9, cx0 = vx + vw / 2, cy0 = vy + vh / 2;
+  let best = null, bestScore = -Infinity;
+  for (let a = 0; a < cols; a++){
+    for (let b = 0; b < rows; b++){
+      const x = vx + margin + (vw - 2 * margin) * (a / (cols - 1));
+      const y = vy + margin + (vh - 2 * margin) * (b / (rows - 1));
+      let dmin = Infinity;
+      for (let k = 0; k < pts.length; k++){ const d = Math.hypot(pts[k][0] - x, pts[k][1] - y); if (d < dmin) dmin = d; }
+      const score = dmin - 0.08 * Math.hypot(x - cx0, y - cy0);
+      if (score > bestScore){ bestScore = score; best = { x: Math.round(x), y: Math.round(y) }; }
+    }
+  }
+  return best;
 }
 // an organic, island-like closed blob (per-vertex radius jitter; terrainSmoothPath rounds it)
 function autoTerrainPoly(cx, cy, baseR){
@@ -15204,6 +15217,8 @@ function autoPlaceOne(i){
   } else {
     commitPointPlacement(i, autoSpot(i, 42));                                  // beings / objects / settings → a point with its icon
   }
+  state.selNode = i;   // arrive selected — the rest of the map fades so the newcomer is unmistakable
+  if (typeof renderConstellation === 'function') renderConstellation();
 }
 // pin = lock the label where it currently sits; unpin = free to drag it to a new spot on the shape
 function togglePinLabel(i){
