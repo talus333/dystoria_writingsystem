@@ -1030,6 +1030,9 @@
   .ir-el.sys .ir-genhint{display:inline; font-family:var(--serif); font-style:italic; font-size:11px; color:var(--ink-faint)}
   .ir-el.sys .ir-gen{display:inline-block; font-family:var(--sans); font-size:9px; letter-spacing:.08em; text-transform:uppercase; color:#4a6a8a; border:1px solid var(--line); border-radius:12px; padding:4px 9px; cursor:pointer; background:transparent}
   .ir-el.sys .ir-gen:hover{border-color:var(--ink-faint); color:var(--ink)}
+  .ir-poolonly{white-space:nowrap}
+  .ir-pool-sub{display:none; font-size:11px; max-width:130px}
+  .ir-el.pool .ir-traits-wrap, .ir-el.pool .ir-gen{opacity:.3; pointer-events:none}   /* pool words carry no element traits */
   .ir-addel{font-family:var(--sans); font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--ink-soft); border:1px dashed var(--line); border-radius:8px; padding:8px 12px; background:transparent; cursor:pointer; width:100%; margin:2px 0 12px}
   .ir-addel:hover{border-color:var(--ink-faint); color:var(--ink)}
   .ir-traits-wrap{margin-top:6px; padding:0 1px}
@@ -19535,7 +19538,10 @@ function irBuildCard(el){
       (hasTraits ? '<div class="ir-traits-wrap"></div>' : '') +
       '<textarea class="ir-sum" rows="2" placeholder="summary">' + esc(el.summary) + '</textarea>' +
       (el.note ? '<textarea class="ir-note" rows="5" placeholder="notes (verbatim from source)">' + esc(el.note) + '</textarea>' : '') +
-      '<div class="ir-scope-row"><label class="ir-scope"><input type="checkbox" class="ir-sys"' + (el.sys ? ' checked' : '') + '> available in all stories</label>' +
+      '<div class="ir-scope-row">' +
+      '<label class="ir-scope ir-poolonly" title="Don\u2019t create an element \u2014 just add this word to a category pool (e.g. a creature Type)"><input type="checkbox" class="ir-pool"' + (el.poolOnly ? ' checked' : '') + '> pool word only</label>' +
+      '<select class="ir-pool-sub" title="Which pool the word joins">' + importSubNames(el.cat).map(n => '<option value="' + esc(n) + '"' + (n === (el.poolSub || (el.cat === 'being' ? 'Type' : el.sub)) ? ' selected' : '') + '>' + esc(n) + '</option>').join('') + '</select>' +
+      '<label class="ir-scope"><input type="checkbox" class="ir-sys"' + (el.sys ? ' checked' : '') + '> available in all stories</label>' +
       '<span class="ir-genhint">becomes the description everywhere — keep it generic</span>' +
       '<button type="button" class="ir-gen">✦ generalize</button></div>';
     const inc = d.querySelector('.ir-i'); inc.addEventListener('change', () => { el.include = inc.checked; d.classList.toggle('off', !inc.checked); });
@@ -19547,6 +19553,11 @@ function irBuildCard(el){
     const na = d.querySelector('.ir-note'); if (na) na.addEventListener('input', () => { el.note = na.value; });
     d.querySelector('.ir-sys').addEventListener('change', e => { el.sys = e.target.checked; d.classList.toggle('sys', el.sys); });
     d.querySelector('.ir-gen').addEventListener('click', () => generalizeDesc(el, ta));
+    const poolCb = d.querySelector('.ir-pool'), poolSub = d.querySelector('.ir-pool-sub');
+    const syncPool = () => { d.classList.toggle('pool', !!el.poolOnly); if (poolSub) poolSub.style.display = el.poolOnly ? '' : 'none'; };
+    if (poolCb) poolCb.addEventListener('change', () => { el.poolOnly = poolCb.checked; if (el.poolOnly && !el.poolSub) el.poolSub = poolSub ? poolSub.value : (el.cat === 'being' ? 'Type' : el.sub); syncPool(); });
+    if (poolSub) poolSub.addEventListener('change', () => { el.poolSub = poolSub.value; });
+    syncPool();
     if (hasTraits) buildTraitArea(d, el);
     return d;
   }
@@ -19720,7 +19731,9 @@ async function confirmImport(){
   // Prefer the AI's stated section for each element (more intentional); fall back to first textual mention.
   const _titleIdx = {}; secs.forEach((s, i) => { const t = String(s.title || '').trim().toLowerCase(); if (t && !(t in _titleIdx)) _titleIdx[t] = i; });
   const _sectionOf = el => { const s = String(el.section || '').trim().toLowerCase(); return (s && (s in _titleIdx)) ? _titleIdx[s] : _firstSec(el); };
-  const incl = IMP.elements.filter(el => el.include);
+  let _pooled = 0;
+  IMP.elements.filter(el => el.include && el.poolOnly).forEach(el => { const nmP = (el.name || '').trim().slice(0, 60); if (nmP){ el.sub = el.poolSub || el.sub; registerImportWord(el, nmP); _pooled++; } });
+  const incl = IMP.elements.filter(el => el.include && !el.poolOnly);
   let added = 0; const placedKey = new Set(), evPlaced = new Set();
   for (let si = 0; si < secs.length; si++){
     const absIdx = firstIdx + si;
@@ -19752,7 +19765,7 @@ async function confirmImport(){
   layoutConstellation(); renderConstellation(); renderTimeline(); saveSession();
   closeImport();
   const secMsg = secs.length > 1 ? (' across ' + secs.length + ' sections') : '';
-  const propMsg = (_props ? (' · +' + _props + ' pool word' + (_props === 1 ? '' : 's')) : '') + (_goals ? (' · ' + _goals + ' goal' + (_goals === 1 ? '' : 's')) : '');
+  const propMsg = ((_props + _pooled) ? (' · +' + (_props + _pooled) + ' pool word' + ((_props + _pooled) === 1 ? '' : 's')) : '') + (_goals ? (' · ' + _goals + ' goal' + (_goals === 1 ? '' : 's')) : '');
   flashStatus((asSection ? ('Added ' + added + ' element' + (added === 1 ? '' : 's') + secMsg) : ('Imported — ' + added + ' element' + (added === 1 ? '' : 's') + secMsg)) + propMsg);
   } catch (e){ console.warn('import build error:', e); $('importConfirm').disabled = false; flashStatus('Couldn’t build: ' + e.message); }
 }
@@ -19781,7 +19794,9 @@ function confirmNotesImport(){
     const MAPCAT = { being: 1, setting: 1, object: 1, event: 1, concept: 1 };
     const fi = state.frameIdx || 0; if (state.frames && state.frames[fi]) state.prompt = state.frames[fi].prompt;
     let added = 0, libbed = 0;
+    let pooled = 0;
     incl.forEach(el => {
+      if (el.poolOnly){ const nmP = (el.name || '').trim().slice(0, 60); if (nmP){ el.sub = el.poolSub || el.sub; registerImportWord(el, nmP); pooled++; } return; }   // just a pool word (e.g. a new Type) — no element
       if (typeof FRAME_IDS !== 'undefined' && FRAME_IDS.has(el.cat)){ if (placeImportElement(el)) added++; }   // narrative frame → the bar
       else if (MAPCAT[el.cat]){ if (libraryAddFromImport(el)) libbed++; }                                      // beings/settings/objects/events/concepts → library
       else { if (placeImportElement(el)) added++; }                                                            // anything else → placed
@@ -19802,7 +19817,7 @@ function confirmNotesImport(){
     if (libbed && typeof openStoryLibrary === 'function') openStoryLibrary();   // surface the library so the user can start adding elements to the map
     saveSession();
     closeImport();
-    flashStatus('Imported — ' + libbed + ' element' + (libbed === 1 ? '' : 's') + ' in your Story Legend' + (added ? (' · ' + added + ' on the map') : '') + (_props ? (' · +' + _props + ' pool word' + (_props === 1 ? '' : 's')) : '') + (_goals ? (' · ' + _goals + ' goal' + (_goals === 1 ? '' : 's')) : ''));
+    flashStatus('Imported — ' + libbed + ' element' + (libbed === 1 ? '' : 's') + ' in your Story Legend' + (pooled ? (' · ' + pooled + ' pool word' + (pooled === 1 ? '' : 's') + ' filed') : '') + (added ? (' · ' + added + ' on the map') : '') + (_props ? (' · +' + _props + ' pool word' + (_props === 1 ? '' : 's')) : '') + (_goals ? (' · ' + _goals + ' goal' + (_goals === 1 ? '' : 's')) : ''));
   } catch (e){ console.warn('notes import error:', e); $('importConfirm').disabled = false; flashStatus('Couldn\u2019t add notes: ' + e.message); }
 }
 
