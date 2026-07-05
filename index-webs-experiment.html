@@ -27827,7 +27827,11 @@ body.eink .xb-head{color:#000}
 .xb-acts .xa-x{font-size:14px}
 body.eink .xb-nm{color:#000}
 .xb-empty{font-family:var(--serif); font-style:italic; font-size:11.5px; color:#9a948a; padding:6px 4px}
-.xb-port{position:absolute; top:50%; width:9px; height:9px; margin-top:-5px; border-radius:50%; background:#1b150e; border:2px solid #6a6455; box-sizing:border-box; z-index:2}
+.xb-port{position:absolute; top:50%; width:9px; height:9px; margin-top:-5px; border-radius:50%; background:#1b150e; border:2px solid #6a6455; box-sizing:border-box; z-index:2; transition:transform .12s, background .12s, border-color .12s, box-shadow .12s}
+body.expb-linking .xb-port{border-color:var(--xb-c,#fa9a31); transform:scale(1.3); background:rgba(250,154,49,.12)}   /* all ports announce themselves while a link is dragged */
+.xb-row.link-hover{background:rgba(250,154,49,.2); box-shadow:inset 0 0 0 1px var(--xb-c,#fa9a31)}
+.xb-row.link-hover .xb-nm{color:#fff}
+.xb-row.link-hover .xb-port{transform:scale(1.7); background:var(--xb-c,#fa9a31); border-color:var(--xb-c,#fa9a31); box-shadow:0 0 10px -1px var(--xb-c,#fa9a31)}
 #expLeft .xb-port{right:-15px}
 #expRight .xb-port{left:-15px}
 .xb-row.on .xb-port{border-color:var(--xb-c,#fa9a31); background:var(--xb-c,#fa9a31); box-shadow:0 0 8px -1px var(--xb-c,#fa9a31)}
@@ -28182,14 +28186,52 @@ body.eink #expMenu{background:#fff; border-color:#000}
       };
       buildRail();
     }
+    // during a link drag: every port is a visible connection point; the nearest row highlights
+    var linkHoverRow = null;
+    function setLinkHover(row){
+      if (row === linkHoverRow) return;
+      if (linkHoverRow) linkHoverRow.classList.remove('link-hover');
+      linkHoverRow = row;
+      if (row) row.classList.add('link-hover');
+    }
+    function nearestPortRow(x, y){
+      var el = document.elementFromPoint(x, y);
+      var direct = el && el.closest ? (el.closest('#expLRows .xb-row') || el.closest('#expRRows .xb-row')) : null;
+      if (direct) return direct;
+      var cand = null, bd = 30;
+      ['#expLRows', '#expRRows'].forEach(function(sel){
+        var wrap = document.querySelector(sel); if (!wrap) return;
+        var wr = wrap.getBoundingClientRect();
+        if (x < wr.left - 34 || x > wr.right + 34) return;
+        wrap.querySelectorAll('.xb-row').forEach(function(r){
+          var rr = r.getBoundingClientRect();
+          var d = (y >= rr.top - 6 && y <= rr.bottom + 6) ? 0 : Math.min(Math.abs(y - rr.top), Math.abs(y - rr.bottom));
+          if (d < bd){ bd = d; cand = r; }
+        });
+      });
+      return cand;
+    }
+    function onLinkMove(e){ setLinkHover(nearestPortRow(e.clientX, e.clientY)); }
+    if (typeof startLinkDrag === 'function'){
+      var _sld = startLinkDrag;
+      startLinkDrag = function(i, ev){
+        document.body.classList.add('expb-linking');
+        document.addEventListener('pointermove', onLinkMove, true);
+        return _sld.apply(this, arguments);
+      };
+    }
     // drop the LINK drag on a sidebar row to connect: concept rows toggle a concept link, thread rows tag the element
     if (typeof endLinkDrag === 'function'){
       var _eld = endLinkDrag;
       endLinkDrag = function(cancel, ev){
+        var hoverRow = linkHoverRow;
+        document.body.classList.remove('expb-linking');
+        document.removeEventListener('pointermove', onLinkMove, true);
+        setLinkHover(null);
         var ld = (typeof linkDragState !== 'undefined') ? linkDragState : null;
-        if (!cancel && ev && ld && ld.from != null){
-          var el = document.elementFromPoint(ev.clientX, ev.clientY);
-          var row = el && el.closest ? (el.closest('#expLRows .xb-row') || el.closest('#expRRows .xb-row')) : null;
+        if (!cancel && ld && ld.from != null){
+          var el = ev ? document.elementFromPoint(ev.clientX, ev.clientY) : null;
+          var row = hoverRow || (el && el.closest ? (el.closest('#expLRows .xb-row') || el.closest('#expRRows .xb-row')) : null);
           if (row){
             var from = ld.from;
             _eld.call(this, true, ev);   // cancel the node-to-node flow but keep its cleanup
