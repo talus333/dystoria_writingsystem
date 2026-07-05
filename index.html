@@ -19734,23 +19734,31 @@ async function confirmImport(){
   let _pooled = 0;
   IMP.elements.filter(el => el.include && el.poolOnly).forEach(el => { const nmP = (el.name || '').trim().slice(0, 60); if (nmP){ el.sub = el.poolSub || el.sub; registerImportWord(el, nmP); _pooled++; } });
   const incl = IMP.elements.filter(el => el.include && !el.poolOnly);
-  let added = 0; const placedKey = new Set(), evPlaced = new Set();
+  const MAPCAT_I = { being: 1, setting: 1, object: 1, event: 1 };
+  // EVERY map element joins the Story Legend roster up front (registered + notes); sections below only place what their prose mentions
+  incl.forEach(el => { if (MAPCAT_I[el.cat]) libraryAddFromImport(el); });
+  const _aiSec = el => { const s = String(el.section || '').trim().toLowerCase(); return (s && (s in _titleIdx)) ? _titleIdx[s] : -1; };
+  let added = 0; const placedAny = new Set();
   for (let si = 0; si < secs.length; si++){
     const absIdx = firstIdx + si;
     let prompt;
     if (si === 0){ prompt = firstPrompt; }
     else {
       prompt = pruneEventsFromCopy(JSON.parse(JSON.stringify(state.frames[absIdx - 1].prompt)));
+      // a section's map holds ONLY what its own prose mentions — imported elements don't auto-carry forward
+      prompt.words = (prompt.words || []).filter(w => !(w.role === 'rel' || w.cat === 'concept' || (MAPCAT_I[w.cat] && (w.role === 'being' || w.role === 'word'))));
+      prompt.links = []; prompt.removedLinks = [];
       state.frames.push({ gap: 'later', prompt: prompt, stage: absIdx, stageName: secs[si].title || '' });
       appendDivider(absIdx, secs[si].title);
       appendImportProse(ed, secs[si].body);
     }
     state.frameIdx = absIdx; state.prompt = prompt; state.activeSet = 0;
-    incl.forEach(el => { if (el.cat === 'event' || placedKey.has(el)) return; if (_sectionOf(el) === si){ if (placeImportElement(el)){ added++; placedKey.add(el); } } });
-    incl.forEach(el => { if (el.cat !== 'event') return; if (_inSec(el, si) || _sectionOf(el) === si){ if (placeImportElement(el)){ added++; evPlaced.add(el); } } });
+    incl.forEach(el => { if (_inSec(el, si) || _aiSec(el) === si){ if (placeImportElement(el)){ added++; placedAny.add(el); } } });
   }
+  // concepts that never matched a section still belong to the story — seed them on the first section's sidebar
   state.frameIdx = firstIdx; state.prompt = state.frames[firstIdx].prompt;
-  incl.forEach(el => { if (el.cat === 'event' && !evPlaced.has(el)){ if (placeImportElement(el)) added++; } });
+  incl.forEach(el => { if (el.cat === 'concept' && !placedAny.has(el)){ if (placeImportElement(el)){ added++; placedAny.add(el); } } });
+  const legendOnly = incl.filter(el => MAPCAT_I[el.cat] && !placedAny.has(el)).length;
   let _bonds = 0;
   for (let si = 0; si < secs.length; si++){ state.frameIdx = firstIdx + si; state.prompt = state.frames[firstIdx + si].prompt; _bonds += seedRelBonds(IMP.relationships); }
   if (!_bonds){ const li = firstIdx + secs.length - 1; state.frameIdx = li; state.prompt = state.frames[li].prompt; seedHeuristicBonds(); }
@@ -19763,10 +19771,11 @@ async function confirmImport(){
   setMode('type'); updateWordCount();
   if (added || asSection || IMP.prose.trim()){ $('skyEmpty').style.display = 'none'; }
   layoutConstellation(); renderConstellation(); renderTimeline(); saveSession();
+  if (typeof renderStoryLibrary === 'function') renderStoryLibrary();
   closeImport();
   const secMsg = secs.length > 1 ? (' across ' + secs.length + ' sections') : '';
   const propMsg = ((_props + _pooled) ? (' · +' + (_props + _pooled) + ' pool word' + ((_props + _pooled) === 1 ? '' : 's')) : '') + (_goals ? (' · ' + _goals + ' goal' + (_goals === 1 ? '' : 's')) : '');
-  flashStatus((asSection ? ('Added ' + added + ' element' + (added === 1 ? '' : 's') + secMsg) : ('Imported — ' + added + ' element' + (added === 1 ? '' : 's') + secMsg)) + propMsg);
+  flashStatus((asSection ? ('Added ' + added + ' element' + (added === 1 ? '' : 's') + secMsg) : ('Imported — ' + added + ' element' + (added === 1 ? '' : 's') + secMsg)) + (legendOnly ? (' · ' + legendOnly + ' waiting in the Story Legend') : '') + propMsg);
   } catch (e){ console.warn('import build error:', e); $('importConfirm').disabled = false; flashStatus('Couldn’t build: ' + e.message); }
 }
 
@@ -27877,7 +27886,8 @@ body.eink #expMapBar{background:#fff; border-bottom-color:#000}
 .xm-arr{border:none; background:none; color:var(--ink-faint); font-size:14px; line-height:1; padding:2px 5px; cursor:pointer; border-radius:6px}
 .xm-arr:hover{color:var(--gold)}
 .xm-arr:disabled{opacity:.25; cursor:default}
-#expMapRight{margin-left:auto; display:flex; align-items:center; gap:8px}
+#expMapRight{margin-left:auto; display:flex; align-items:center; gap:8px; position:relative}
+#expMapRight #expMenu{right:0; top:34px}
 body.expb #skySvg{top:40px !important; height:calc(100% - 40px) !important; z-index:2; position:absolute}
 body.expb #mapHead{top:48px}
 body.expb #mapTools{top:8px}
@@ -28123,11 +28133,11 @@ body.eink #expMenu{background:#fff; border-color:#000}
     setInterval(function(){ var fi3 = state.frameIdx || 0, n3 = (state.frames || []).length || 1; arrPrev.disabled = fi3 <= 0; arrNext.disabled = fi3 >= n3 - 1; }, 500);
     // (rail popover retired — the + Element dropdown opens each category's Add window directly)
     // hamburger: relocate the original controls so all their behavior comes along
-    var mt = document.getElementById('mapTools');
+    var mt = document.getElementById('expMapRight') || document.getElementById('mapTools');
     if (mt){
       var mb = document.createElement('button'); mb.id = 'expMenuBtn'; mb.type = 'button'; mb.innerHTML = '&#8943;'; mb.title = 'Map options';
       var menu = document.createElement('div'); menu.id = 'expMenu';
-      mt.insertBefore(mb, mt.firstChild); mt.appendChild(menu);
+      mt.appendChild(mb); mt.appendChild(menu);
       ['mapLevelWrap','autoPlaceWrap','clearMapBtn'].forEach(function(id){ var el = document.getElementById(id); if (el) menu.appendChild(el); });
       var mg = document.createElement('div'); mg.id = 'expMenuGrid'; menu.appendChild(mg);   // grid constraint rides at the bottom
       mb.addEventListener('click', function(e){ e.stopPropagation(); menu.classList.toggle('show'); });
