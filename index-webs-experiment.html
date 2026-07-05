@@ -161,6 +161,7 @@
   .threadwiki-card{width:340px}
   .threadwiki-text{font-family:var(--serif); font-size:13px; line-height:1.55; color:var(--ink-soft); margin:2px 0 12px; min-height:18px}
   .node.thread-dim{opacity:.16; transition:opacity .15s}
+  body.expb #skySvg g.node.link-target{opacity:1 !important}   /* the element the link will land on shows at full strength */
   .node.thread-future{opacity:.5; transition:opacity .15s}
   .node .thread-foreshadow-rn{font-family:var(--ancient); font-size:7px; font-weight:600; letter-spacing:.05em}
   .node.sel-dim{opacity:.4; transition:opacity .15s}
@@ -15749,8 +15750,8 @@ function renderConstellation(){
       const inFocus = (state.focusKeys || []).includes(wordKey(nd));
       circ.push({ title: inFocus ? 'Remove from the Writing Focus' : 'Add to the Writing Focus', on: ev => { ev.stopPropagation(); addFocusIdx(i); },
         ic: () => { const t = document.createElementNS(NSx, 'text'); t.setAttribute('class', 'ctl-gly' + (inFocus ? ' infocus' : '')); t.setAttribute('text-anchor', 'middle'); t.setAttribute('y', 4); t.textContent = inFocus ? '◉' : '◎'; return t; } });
-      // thread tag — group this element into a storyline
-      circ.push({ title: 'Add to a thread\u2026', on: ev => { ev.stopPropagation(); openThreadMenu(i, ev.clientX || 200, ev.clientY || 200); },
+      // thread tag retired in this experiment — drag the LINK to a thread's border circle instead
+      if (false) circ.push({ title: 'Add to a thread\u2026', on: ev => { ev.stopPropagation(); openThreadMenu(i, ev.clientX || 200, ev.clientY || 200); },
         ic: () => { const _w = state.prompt && state.prompt.words[i]; const ids = (typeof wordThreadIds === 'function') ? wordThreadIds(_w) : []; const col = ids.length ? ((((typeof threadById === 'function') && threadById(ids[0])) ? threadById(ids[0]).color : '#888')) : 'currentColor'; const g2 = document.createElementNS(NSx, 'g'); g2.setAttribute('class', 'ctl-ic'); const p = document.createElementNS(NSx, 'path'); p.setAttribute('d', 'M-6.5 0 Q-3.25 -3.4 0 0 T6.5 0'); p.setAttribute('fill', 'none'); p.setAttribute('stroke', col); p.setAttribute('stroke-width', '1'); p.setAttribute('stroke-linecap', 'round'); g2.appendChild(p); [[-6.5,0],[0,0],[6.5,0]].forEach(k => { const c = document.createElementNS(NSx, 'circle'); c.setAttribute('cx', k[0]); c.setAttribute('cy', k[1]); c.setAttribute('r', '1.3'); c.setAttribute('fill', col); g2.appendChild(c); }); return g2; } });
       // group — build a party/army around this being as leader
       if (nd.role === 'being'){
@@ -28217,6 +28218,78 @@ body.eink #expMenu{background:#fff; border-color:#000}
       };
       buildRail();
     }
+    // drag FROM a border circle onto a map element to connect it (reverse direction)
+    var portDrag = null;   // {side, id, port, sx, sy, x, y, moved, target}
+    function expConnect(side, id, j){
+      var w2 = state.prompt.words[j]; if (!w2) return;
+      if (side === 'R'){
+        if (typeof toggleWordThread === 'function'){ toggleWordThread(w2, id); if (typeof flashStatus === 'function') flashStatus('Thread updated'); if (typeof renderConstellation === 'function') renderConstellation(); }
+      } else {
+        var cw = state.prompt.words[+id]; if (!cw) return;
+        var key = wordKey(w2) + '>>' + libKeyOf(cw.cat, cw.name || cw.word);
+        var arr = state.session.expLinks = state.session.expLinks || [];
+        var ix = arr.indexOf(key);
+        if (ix >= 0){ arr.splice(ix, 1); if (typeof flashStatus === 'function') flashStatus('Concept link removed'); }
+        else { arr.push(key); if (typeof flashStatus === 'function') flashStatus('Linked to the concept'); }
+        if (typeof scheduleAutosave === 'function') scheduleAutosave();
+      }
+    }
+    function portDragMove(e){
+      if (!portDrag) return;
+      portDrag.x = e.clientX; portDrag.y = e.clientY;
+      if (Math.abs(e.clientX - portDrag.sx) > 4 || Math.abs(e.clientY - portDrag.sy) > 4) portDrag.moved = true;
+      var svg = document.getElementById('skySvg'); if (!svg || !state.nodes) return;
+      var r = svg.getBoundingClientRect(); var vv = viewBoxVals();
+      var MAP2 = { being: 1, setting: 1, object: 1, event: 1 };
+      var best = null, bd = 46;
+      state.nodes.forEach(function(nd, j){
+        var w2 = state.prompt.words[j];
+        if (!w2 || !MAP2[w2.cat] || (w2.role !== 'being' && w2.role !== 'word') || w2.needsPlace) return;
+        var sx2 = r.left + (nd.x - vv[0]) / vv[2] * r.width, sy2 = r.top + (nd.y - vv[1]) / vv[3] * r.height;
+        var d = Math.hypot(sx2 - e.clientX, sy2 - e.clientY);
+        if (d < bd){ bd = d; best = j; }
+      });
+      if (best !== portDrag.target){
+        document.querySelectorAll('#skySvg g.node.link-target').forEach(function(g2){ g2.classList.remove('link-target'); });
+        if (best != null){ var g3 = document.querySelector('#skySvg g.node[data-node="' + best + '"]'); if (g3) g3.classList.add('link-target'); }
+        portDrag.target = best;
+      }
+    }
+    function portDragEnd(e){
+      if (!portDrag) return;
+      var pd = portDrag; portDrag = null;
+      document.removeEventListener('pointermove', portDragMove, true);
+      document.removeEventListener('pointerup', portDragEnd, true);
+      document.querySelectorAll('#skySvg g.node.link-target').forEach(function(g2){ g2.classList.remove('link-target'); });
+      if (!pd.moved){ xbSelect(pd.side, pd.id); return; }   // a plain click still selects
+      if (pd.target != null) expConnect(pd.side, pd.id, pd.target);
+    }
+    function portDragStart(side, id, port, e){
+      e.stopPropagation(); e.preventDefault();
+      portDrag = { side: side, id: id, port: port, sx: e.clientX, sy: e.clientY, x: e.clientX, y: e.clientY, moved: false, target: null };
+      document.addEventListener('pointermove', portDragMove, true);
+      document.addEventListener('pointerup', portDragEnd, true);
+    }
+    window.__expPortDragDraft = function(web, sr){   // called from the web-render loop: the draft line while dragging from a circle
+      if (!portDrag || !portDrag.moved || !portDrag.port) return;
+      var pr = portDrag.port.getBoundingClientRect();
+      var x1 = pr.left + pr.width / 2 - sr.left, y1 = pr.top + pr.height / 2 - sr.top;
+      var x2 = portDrag.x - sr.left, y2 = portDrag.y - sr.top;
+      if (portDrag.target != null && state.nodes && state.nodes[portDrag.target]){
+        var svg = document.getElementById('skySvg'); var r = svg.getBoundingClientRect(); var vv = viewBoxVals();
+        var nd = state.nodes[portDrag.target];
+        x2 = r.left + (nd.x - vv[0]) / vv[2] * r.width - sr.left;
+        y2 = r.top + (nd.y - vv[1]) / vv[3] * r.height - sr.top;
+      }
+      web.setAttribute('viewBox', '0 0 ' + Math.round(sr.width) + ' ' + Math.round(sr.height));
+      web.setAttribute('width', Math.round(sr.width)); web.setAttribute('height', Math.round(sr.height));
+      var col = portDrag.port.style.getPropertyValue('--xb-c') || '#fa9a31';
+      var ln = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      ln.setAttribute('x1', x1); ln.setAttribute('y1', y1); ln.setAttribute('x2', x2); ln.setAttribute('y2', y2);
+      ln.setAttribute('stroke', col); ln.setAttribute('stroke-width', '1.8'); ln.setAttribute('stroke-dasharray', '5 4'); ln.setAttribute('opacity', '.9');
+      web.appendChild(ln);
+    };
+    window.__expPortDragStart = portDragStart;
     // during a link drag: every port is a visible connection point; the nearest row highlights
     var linkHoverRow = null;
     function setLinkHover(row){
@@ -28511,7 +28584,7 @@ body.eink #expMenu{background:#fff; border-color:#000}
       lr.appendChild(row);
       var lport = document.createElement('span'); lport.className = 'xb-port'; lport.dataset.ci = c.i;
       lport.style.setProperty('--xb-c', col); lport.title = c.w.name || c.w.word;
-      lport.addEventListener('click', function(e){ e.stopPropagation(); xbSelect('L', String(c.i)); });
+      lport.addEventListener('pointerdown', function(e){ if (window.__expPortDragStart) window.__expPortDragStart('L', String(c.i), lport, e); });
       document.querySelector('#expLeft .xb-portlayer').appendChild(lport);
     });
     if (!ths.length) rr.innerHTML = '<div class="xb-empty">No threads yet — tag elements with "+ thread".</div>';
@@ -28525,7 +28598,7 @@ body.eink #expMenu{background:#fff; border-color:#000}
       rr.appendChild(row);
       var rport = document.createElement('span'); rport.className = 'xb-port'; rport.dataset.th = t.id;
       rport.style.setProperty('--xb-c', t.color || '#fa9a31'); rport.title = t.name || 'Thread';
-      rport.addEventListener('click', function(e){ e.stopPropagation(); xbSelect('R', t.id); });
+      rport.addEventListener('pointerdown', function(e){ if (window.__expPortDragStart) window.__expPortDragStart('R', t.id, rport, e); });
       document.querySelector('#expRight .xb-portlayer').appendChild(rport);
     });
     applyXbSel();   // restore the selection + its action row across rebuilds
@@ -28553,6 +28626,8 @@ body.eink #expMenu{background:#fff; border-color:#000}
   function drawWeb(){
     var web = document.getElementById('expWeb'); if (!web) return;
     while (web.firstChild) web.removeChild(web.firstChild);
+    var skyE = document.getElementById('sky');
+    if (skyE && window.__expPortDragDraft) window.__expPortDragDraft(web, skyE.getBoundingClientRect());
     document.querySelectorAll('.xb-row.on').forEach(function(r){ r.classList.remove('on'); });
     if (typeof state === 'undefined' || !state || !state.prompt) return;
     var sky = document.getElementById('sky');
