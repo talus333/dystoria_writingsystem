@@ -28182,6 +28182,37 @@ body.eink #expMenu{background:#fff; border-color:#000}
       };
       buildRail();
     }
+    // drop the LINK drag on a sidebar row to connect: concept rows toggle a concept link, thread rows tag the element
+    if (typeof endLinkDrag === 'function'){
+      var _eld = endLinkDrag;
+      endLinkDrag = function(cancel, ev){
+        var ld = (typeof linkDragState !== 'undefined') ? linkDragState : null;
+        if (!cancel && ev && ld && ld.from != null){
+          var el = document.elementFromPoint(ev.clientX, ev.clientY);
+          var row = el && el.closest ? (el.closest('#expLRows .xb-row') || el.closest('#expRRows .xb-row')) : null;
+          if (row){
+            var from = ld.from;
+            _eld.call(this, true, ev);   // cancel the node-to-node flow but keep its cleanup
+            var srcW = state.prompt.words[from]; if (!srcW) return;
+            if (row.dataset.th){
+              if (typeof toggleWordThread === 'function'){ toggleWordThread(srcW, row.dataset.th); if (typeof flashStatus === 'function') flashStatus('Thread updated'); if (typeof renderConstellation === 'function') renderConstellation(); }
+            } else if (row.dataset.ci != null){
+              var cw = state.prompt.words[+row.dataset.ci];
+              if (cw){
+                var key = wordKey(srcW) + '>>' + libKeyOf(cw.cat, cw.name || cw.word);
+                var arr = state.session.expLinks = state.session.expLinks || [];
+                var ix = arr.indexOf(key);
+                if (ix >= 0){ arr.splice(ix, 1); if (typeof flashStatus === 'function') flashStatus('Concept link removed'); }
+                else { arr.push(key); if (typeof flashStatus === 'function') flashStatus('Linked to the concept'); }
+                if (typeof scheduleAutosave === 'function') scheduleAutosave();
+              }
+            }
+            return;
+          }
+        }
+        return _eld.call(this, cancel, ev);
+      };
+    }
     setInterval(function(){ refreshStrips(); refreshMapSec(); }, 700); refreshStrips(); refreshMapSec();
     (function loop(){ try{ drawWeb(); }catch(e){} requestAnimationFrame(loop); })();
   }
@@ -28396,6 +28427,11 @@ body.eink #expMenu{background:#fff; border-color:#000}
   }
   function conceptLinks(selIdx){
     var words = state.prompt.words, out = {};
+    var sk = wordKey(words[selIdx] || {});
+    ((state.session && state.session.expLinks) || []).forEach(function(k){
+      var parts = k.split('>>'); if (parts[0] !== sk) return;
+      words.forEach(function(w, j){ if ((w.cat === 'concept' || w.cat === 'theme') && libKeyOf(w.cat, w.name || w.word) === parts[1]) out[j] = 1; });
+    });
     ((state.prompt.links) || []).forEach(function(l){
       var a = (l && l.a != null) ? l.a : (l && l[0]), b = (l && l.b != null) ? l.b : (l && l[1]);
       if (a === selIdx && words[b] && words[b].cat === 'concept') out[b] = 1;
@@ -28412,14 +28448,49 @@ body.eink #expMenu{background:#fff; border-color:#000}
     var web = document.getElementById('expWeb'); if (!web) return;
     while (web.firstChild) web.removeChild(web.firstChild);
     document.querySelectorAll('.xb-row.on').forEach(function(r){ r.classList.remove('on'); });
-    if (typeof state === 'undefined' || !state || state.selNode == null || !state.prompt) return;
+    if (typeof state === 'undefined' || !state || !state.prompt) return;
+    var sky = document.getElementById('sky');
+    var sr = sky.getBoundingClientRect();
+    var MAP = { being: 1, setting: 1, object: 1, event: 1 };
+    if (state.selNode == null && xbSel){   // sidebar selection: the port fans out to every connected element on this section's map
+      var svgEl = document.getElementById('skySvg'); if (!svgEl) return;
+      var rr = svgEl.getBoundingClientRect(); var vv = viewBoxVals();
+      var nodeScreen = function(j){ var nd = state.nodes && state.nodes[j]; if (!nd) return null;
+        return { x: rr.left - sr.left + (nd.x - vv[0]) / vv[2] * rr.width, y: rr.top - sr.top + (nd.y - vv[1]) / vv[3] * rr.height }; };
+      var row = xbSel.side === 'L' ? document.querySelector('#expLRows .xb-row[data-ci="' + xbSel.id + '"]') : document.querySelector('#expRRows .xb-row[data-th="' + xbSel.id + '"]');
+      var port = row && row.querySelector('.xb-port'); if (!port) return;
+      var pr2 = port.getBoundingClientRect();
+      var px2 = pr2.left + pr2.width / 2 - sr.left, py2 = pr2.top + pr2.height / 2 - sr.top;
+      var col2 = row.style.getPropertyValue('--xb-c') || '#fa9a31';
+      web.setAttribute('viewBox', '0 0 ' + Math.round(sr.width) + ' ' + Math.round(sr.height));
+      web.setAttribute('width', Math.round(sr.width)); web.setAttribute('height', Math.round(sr.height));
+      var members = [];
+      if (xbSel.side === 'R'){
+        state.prompt.words.forEach(function(w2, j){ if (MAP[w2.cat] && (w2.role === 'being' || w2.role === 'word') && !w2.needsPlace && typeof wordThreadIds === 'function' && wordThreadIds(w2).indexOf(xbSel.id) >= 0) members.push(j); });
+      } else {
+        var ci3 = +xbSel.id;
+        state.prompt.words.forEach(function(w2, j){
+          if (!MAP[w2.cat] || (w2.role !== 'being' && w2.role !== 'word') || w2.needsPlace) return;
+          if (conceptLinks(j)[ci3]) members.push(j);
+        });
+      }
+      members.forEach(function(j){
+        var pt2 = nodeScreen(j); if (!pt2) return;
+        var midx2 = (pt2.x + px2) / 2;
+        var p2 = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        p2.setAttribute('d', 'M' + px2 + ' ' + py2 + ' C' + midx2 + ' ' + py2 + ' ' + midx2 + ' ' + pt2.y + ' ' + pt2.x + ' ' + pt2.y);
+        p2.setAttribute('fill', 'none'); p2.setAttribute('stroke', col2); p2.setAttribute('stroke-width', '1.6'); p2.setAttribute('opacity', '.8');
+        web.appendChild(p2);
+      });
+      if (members.length){ var dot2 = document.createElementNS('http://www.w3.org/2000/svg', 'circle'); dot2.setAttribute('cx', px2); dot2.setAttribute('cy', py2); dot2.setAttribute('r', '3'); dot2.setAttribute('fill', col2); web.appendChild(dot2); }
+      return;
+    }
+    if (state.selNode == null) return;
     var i = state.selNode, w = state.prompt.words[i];
     if (!w || (w.role !== 'being' && w.role !== 'word')) return;
-    var MAP = { being: 1, setting: 1, object: 1, event: 1 };
     if (!MAP[w.cat]) return;
     var g = document.querySelector('#skySvg g.node.sel'); if (!g) return;
-    var sky = document.getElementById('sky');
-    var sr = sky.getBoundingClientRect(), nr = g.getBoundingClientRect();
+    var nr = g.getBoundingClientRect();
     web.setAttribute('viewBox', '0 0 ' + Math.round(sr.width) + ' ' + Math.round(sr.height));
     web.setAttribute('width', Math.round(sr.width)); web.setAttribute('height', Math.round(sr.height));
     var nx = nr.left + nr.width / 2 - sr.left, ny = nr.top + nr.height / 2 - sr.top;
