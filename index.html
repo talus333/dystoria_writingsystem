@@ -28000,6 +28000,16 @@ body.expb #storyLibWin:not(.lib-min){top:48px !important}
 .qa-ico:hover{color:#fa9a31}
 .qa-ico.on{color:#fa9a31}
 #qaMic.on{color:#e0564a; animation:qaPulse 1.2s ease-in-out infinite}
+#writeMic{display:none; position:fixed; right:22px; bottom:86px; z-index:120; align-items:center; gap:7px;
+  font-family:var(--sans); font-size:10px; font-weight:600; letter-spacing:.1em; text-transform:uppercase;
+  color:var(--ink-soft); background:var(--paper); border:1px dashed var(--ink-faint); border-radius:16px; padding:7px 14px; cursor:pointer; box-shadow:0 8px 24px rgba(0,0,0,.18)}
+#writeMic.avail{display:inline-flex}
+#writeMic:hover{color:var(--ink); border-color:var(--gold)}
+#writeMic.on{color:#fff; background:#b0563f; border-color:#b0563f; border-style:solid; animation:qaPulse 1.4s ease-in-out infinite}
+body.eink #writeMic{background:#fff; border-color:#000; color:#000}
+#qaIngest{position:fixed; left:50%; bottom:74px; transform:translateX(-50%); z-index:300; font-family:var(--sans); font-size:11px; letter-spacing:.1em; text-transform:uppercase;
+  color:#fbcf83; background:linear-gradient(180deg,#2a2117,#1b150e); border:1px solid rgba(250,154,49,.3); border-radius:16px; padding:9px 18px; box-shadow:0 10px 30px rgba(0,0,0,.4);
+  animation:qaPulse 1.6s ease-in-out infinite}
 @keyframes qaPulse{0%,100%{opacity:1}50%{opacity:.45}}
 /* draw tools popover opens under its pill at the top */
 #expDrawWin{display:none; position:absolute; left:0; top:0; bottom:0; width:220px; z-index:44; overflow-y:auto; scrollbar-width:thin; box-sizing:border-box;
@@ -28730,13 +28740,18 @@ body.eink #expMenu{background:#fff; border-color:#000}
       if (typeof IMP !== 'undefined'){ IMP.kind = 'notes'; IMP.mode = 'new'; IMP.qa = true; }   // Q&A transcript — notes come from the ANSWERS, cleaned, never verbatim
       if (w2) w2.classList.remove('show');
       qaLog = [];
-      var bd2 = document.getElementById('importBackdrop'), ic2 = document.getElementById('importCard');
-      if (bd2) bd2.classList.add('show'); if (ic2) ic2.classList.add('show');
-      if (typeof importShow === 'function') importShow('review');   // no entry screen — it IS notes & worldbuilding
-      var ie2 = document.getElementById('importElements'); if (ie2) ie2.innerHTML = '<div class="ir-lbl" style="color:var(--ink-faint)">Reading the conversation\u2026</div>';
-      var ht2 = document.getElementById('importHeadTitle'); if (ht2) ht2.textContent = 'Organizing your conversation';
-      if (typeof extractImport === 'function') extractImport();
-      if (typeof flashStatus === 'function') flashStatus('Organizing the conversation \u2014 review what it found, then add it to the story');
+      var ing = document.createElement('div'); ing.id = 'qaIngest'; ing.innerHTML = '\u2726 Organizing your conversation\u2026';
+      document.body.appendChild(ing);
+      Promise.resolve(typeof extractImport === 'function' ? extractImport() : null).then(function(){
+        ing.remove();
+        if (typeof IMP !== 'undefined' && IMP.elements && IMP.elements.length){
+          var bd2 = document.getElementById('importBackdrop'), ic2 = document.getElementById('importCard');
+          if (bd2) bd2.classList.add('show'); if (ic2) ic2.classList.add('show');
+          if (typeof importShow === 'function') importShow('review');
+          var ht2 = document.getElementById('importHeadTitle'); if (ht2) ht2.textContent = 'What your conversation produced';
+          if (typeof flashStatus === 'function') flashStatus('Review the findings, then add them to the story');
+        } else if (typeof flashStatus === 'function') flashStatus('Nothing clear enough to organize came out of the conversation');
+      }).catch(function(){ ing.remove(); if (typeof flashStatus === 'function') flashStatus('Couldn\u2019t organize the conversation \u2014 try again'); });
     }
     var qaBtn = document.createElement('button'); qaBtn.id = 'qaBtn'; qaBtn.type = 'button'; qaBtn.textContent = '\u2726 q&a';
     qaBtn.title = 'Talk your story through \u2014 the AI interviews you, then files your answers into notes, elements and traits';
@@ -28750,6 +28765,44 @@ body.eink #expMenu{background:#fff; border-color:#000}
       if (open && !qaLog.length) qaAsk();
     });
     rrow.appendChild(qaBtn);   // sits left of the ⋯ (which is order:99)
+    // ---- Write-mode dictation: a mic pill that lives through the session ----
+    (function(){
+      var SRw = window.SpeechRecognition || window.webkitSpeechRecognition;
+      var btn = document.createElement('button'); btn.id = 'writeMic'; btn.type = 'button'; btn.innerHTML = '\ud83c\udfa4 Dictate';
+      btn.title = 'Dictate into the session \u2014 speech lands at your cursor';
+      document.body.appendChild(btn);
+      var recW = null, onW = false;
+      function insertDict(text){
+        var ed = document.getElementById('editor'); if (!ed || !text) return;
+        try{ ed.focus({ preventScroll: true }); }catch(e){ ed.focus(); }
+        var sel = window.getSelection();
+        if (!sel.rangeCount || !ed.contains(sel.anchorNode)){ var r = document.createRange(); r.selectNodeContents(ed); r.collapse(false); sel.removeAllRanges(); sel.addRange(r); }
+        var before = sel.anchorNode && sel.anchorNode.textContent ? sel.anchorNode.textContent.slice(0, sel.anchorOffset) : '';
+        var pad = before && !/\s$/.test(before) ? ' ' : '';
+        document.execCommand('insertText', false, pad + text.trim());
+      }
+      function micStopW(){ onW = false; btn.classList.remove('on'); btn.innerHTML = '\ud83c\udfa4 Dictate'; if (recW) try{ recW.stop(); }catch(e){} recW = null; }
+      btn.addEventListener('click', function(){
+        if (!SRw){ if (typeof flashStatus === 'function') flashStatus('Voice input isn\u2019t supported in this browser \u2014 try Chrome, Edge or Safari'); return; }
+        if (onW){ micStopW(); return; }
+        if (state.inkMode){ if (typeof flashStatus === 'function') flashStatus('Dictation writes text \u2014 switch from Ink to Type first'); return; }
+        recW = new SRw(); recW.continuous = true; recW.interimResults = true;
+        try{ recW.lang = navigator.language || 'en-US'; }catch(e){}
+        recW.onresult = function(ev){
+          for (var r2 = ev.resultIndex; r2 < ev.results.length; r2++){
+            if (ev.results[r2].isFinal) insertDict(ev.results[r2][0].transcript);
+          }
+        };
+        recW.onend = function(){ if (onW && recW){ try{ recW.start(); }catch(e){ micStopW(); } } };   // Chrome stops on silence — keep listening while toggled on
+        recW.onerror = function(ev){ if (ev && (ev.error === 'not-allowed' || ev.error === 'service-not-allowed')) micStopW(); };
+        try{ recW.start(); onW = true; btn.classList.add('on'); btn.innerHTML = '\ud83c\udfa4 Listening\u2026'; }catch(e){ micStopW(); }
+      });
+      setInterval(function(){
+        var avail = document.body.classList.contains('writing') && (document.body.classList.contains('insession') || (typeof addsLocked === 'function' && addsLocked()));
+        btn.classList.toggle('avail', !!avail);
+        if (!avail && onW) micStopW();   // session over → mic down
+      }, 600);
+    })();
     // sidebar selection lets go when you click empty map or a faded element — but survives clicks on its CONNECTED elements (so they can be moved)
     sky.addEventListener('click', function(e){
       if (!xbSel) return;
