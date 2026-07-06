@@ -28062,6 +28062,13 @@ body.expb #skySvg{position:absolute; left:var(--lw); right:var(--rw); top:0; bot
 body.expb #skyEmpty{left:var(--lw); right:var(--rw); width:auto}
 body.expb.expb-lhide #expLeft{display:none}
 body.expb.expb-rhide #expRight{display:none}
+/* auto-peek: a hidden strip slides in over the map while a selected element needs it — the map itself never reflows */
+body.expb.expb-lhide.expb-lpeek #expLeft{display:flex; z-index:27; transform:translateX(-100%); animation:xbSlideL .26s ease forwards; box-shadow:8px 0 26px rgba(0,0,0,.3)}
+body.expb.expb-rhide.expb-rpeek #expRight{display:flex; z-index:27; transform:translateX(100%); animation:xbSlideR .26s ease forwards; box-shadow:-8px 0 26px rgba(0,0,0,.3)}
+@keyframes xbSlideL{to{transform:translateX(0)}}
+@keyframes xbSlideR{to{transform:translateX(0)}}
+body.expb-lhide.expb-lpeek #expLTab{display:none}
+body.expb-rhide.expb-rpeek #expRTab{display:none}
 .xb-hide{position:absolute; top:9px; z-index:3; border:none; background:none; color:#9a948a; font-size:13px; line-height:1; cursor:pointer; padding:2px 5px; border-radius:6px}
 .xb-hide:hover{color:#fa9a31}
 #expLeft .xb-hide{right:4px}
@@ -28813,8 +28820,8 @@ body.eink #expMenu{background:#fff; border-color:#000}
       if (g && expDimSet && expDimSet[+g.getAttribute('data-node')]) return;   // connected element — keep the concept/thread selected
       xbSel = null; applyXbSel();
     }, true);
-    setInterval(function(){ refreshStrips(); refreshMapSec(); computeDimSet(); syncAutoStrips(); }, 700); refreshStrips(); refreshMapSec();
-    (function loop(){ try{ drawWeb(); }catch(e){} try{ syncPorts(); }catch(e){} try{ applySidebarDim(); }catch(e){} requestAnimationFrame(loop); })();
+    setInterval(function(){ refreshStrips(); refreshMapSec(); computeDimSet(); syncAutoStrips(true); }, 700); refreshStrips(); refreshMapSec();
+    (function loop(){ try{ syncAutoStrips(); }catch(e){} try{ drawWeb(); }catch(e){} try{ syncPorts(); }catch(e){} try{ applySidebarDim(); }catch(e){} requestAnimationFrame(loop); })();
   }
   // stacked group chip: the top word, with CATEGORY · count · caret underneath (bar is taller now)
   if (typeof fbGroupChip === 'function'){
@@ -29019,10 +29026,12 @@ body.eink #expMenu{background:#fff; border-color:#000}
     el.innerHTML = html;
     var nmEl = el.querySelector('.xm-nm'); if (nmEl) nmEl.textContent = name;
   }
-  // hidden strips peek open while a selected element has connections to them, and tuck away again on deselect
-  var autoStrip = { L: false, R: false };
-  function syncAutoStrips(){
+  // hidden strips PEEK (slide over the map) while a selected element has connections to them; they tuck away on deselect
+  var _peekSel = undefined;
+  function syncAutoStrips(force){
     var i = (typeof state !== 'undefined' && state) ? state.selNode : null;
+    if (!force && i === _peekSel) return;
+    _peekSel = i;
     var wantL = false, wantR = false;
     if (i != null && state.prompt && state.prompt.words[i]){
       var w = state.prompt.words[i];
@@ -29031,11 +29040,8 @@ body.eink #expMenu{background:#fff; border-color:#000}
         try{ wantR = ((typeof wordThreadIds === 'function') ? wordThreadIds(w) : []).length > 0; }catch(e){}
       }
     }
-    var ss = window.__expSetStrip; if (!ss) return;
-    if (wantL && document.body.classList.contains('expb-lhide')){ ss('L', false, false); autoStrip.L = true; }
-    if (wantR && document.body.classList.contains('expb-rhide')){ ss('R', false, false); autoStrip.R = true; }
-    if (!wantL && autoStrip.L){ if (!document.body.classList.contains('expb-lhide')) ss('L', true, false); autoStrip.L = false; }
-    if (!wantR && autoStrip.R){ if (!document.body.classList.contains('expb-rhide')) ss('R', true, false); autoStrip.R = false; }
+    document.body.classList.toggle('expb-lpeek', wantL);
+    document.body.classList.toggle('expb-rpeek', wantR);
   }
   function conceptsNow(){
     var out = [];
@@ -29135,7 +29141,7 @@ body.eink #expMenu{background:#fff; border-color:#000}
       var nodeScreen = function(j){ var nd = state.nodes && state.nodes[j]; if (!nd) return null;
         return { x: rr.left - sr.left + (nd.x - vv[0]) / vv[2] * rr.width, y: rr.top - sr.top + (nd.y - vv[1]) / vv[3] * rr.height }; };
       var row = xbSel.side === 'L' ? document.querySelector('#expLRows .xb-row[data-ci="' + xbSel.id + '"]') : document.querySelector('#expRRows .xb-row[data-th="' + xbSel.id + '"]');
-      var port = window.__expPortForRow ? window.__expPortForRow(row) : null; if (!port) return;
+      var port = window.__expPortForRow ? window.__expPortForRow(row) : null; if (!port || !port.offsetParent) return;
       var pr2 = port.getBoundingClientRect();
       var px2 = pr2.left + pr2.width / 2 - sr.left, py2 = pr2.top + pr2.height / 2 - sr.top;
       var col2 = row.style.getPropertyValue('--xb-c') || '#fa9a31';
@@ -29182,7 +29188,7 @@ body.eink #expMenu{background:#fff; border-color:#000}
     });
     targets.forEach(function(row){
       row.classList.add('on');
-      var port = window.__expPortForRow ? window.__expPortForRow(row) : null; if (!port) return;
+      var port = window.__expPortForRow ? window.__expPortForRow(row) : null; if (!port || !port.offsetParent) return;
       var side = row.dataset.ci != null ? 'L' : 'R';
       var a = labelAnchor(i, side, sr) || { x: nx, y: ny };
       var pr = port.getBoundingClientRect();
