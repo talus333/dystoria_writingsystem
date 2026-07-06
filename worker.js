@@ -632,6 +632,15 @@ export default {
     if (url.pathname === '/billing/tip') return handleTip(request, env);
     if (url.pathname === '/stripe-webhook') return handleStripeWebhook(request, env);
     // everything else → the static site
-    return env.ASSETS.fetch(request);
+    const res = await env.ASSETS.fetch(request);
+    // Never cache the HTML documents (index.html, landing pages) at the edge or in the browser, so a
+    // deploy shows up immediately. Assets (fonts, images, mp3s) keep their normal caching.
+    const ct = res.headers.get('content-type') || '';
+    if (ct.includes('text/html') || url.pathname === '/' || url.pathname.endsWith('.html')){
+      const h = new Headers(res.headers);
+      h.set('Cache-Control', 'no-cache, must-revalidate');
+      return new Response(res.body, { status: res.status, statusText: res.statusText, headers: h });
+    }
+    return res;
   },
 };
