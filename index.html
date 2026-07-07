@@ -28379,10 +28379,10 @@ body.expb #storyLibWin{right:calc(var(--rw) + 12px) !important; left:auto !impor
   transition:bottom .28s ease;
   background:linear-gradient(180deg,#2a2117,#1b150e) !important; border-color:rgba(250,154,49,.2) !important}
 body.expb.tl-collapsed #storyLibWin{bottom:36px !important}   /* Story Legend rides just above the timeline — drops when the timeline folds */
-/* Add-Elements window + open Story Legend fit height-wise between the map header and the timeline, and stay off the side strips */
-body.expb #storyLibWin:not(.lib-min){top:250px !important}
-body.expb #elemCard.ec-tall{top:250px !important; height:auto !important; max-height:calc(100vh - 250px - 96px) !important; left:calc(var(--lw) + 12px) !important; right:auto !important}
-body.expb.tl-collapsed #elemCard.ec-tall{max-height:calc(100vh - 250px - 40px) !important}
+/* Add-Elements window + open Story Legend fill the band from just under the map-header bar down to just above the timeline, and stay off the side strips */
+body.expb #storyLibWin:not(.lib-min){top:224px !important}
+body.expb #elemCard.ec-tall{top:224px !important; height:auto !important; max-height:calc(100vh - 224px - 96px) !important; left:calc(var(--lw) + 12px) !important; right:auto !important}
+body.expb.tl-collapsed #elemCard.ec-tall{max-height:calc(100vh - 224px - 40px) !important}
 body.expb #storyLibWin:not(.lib-min){max-height:none}   /* open = the full black window, up to the top of the map (top set with the header band rules) */
 body.expb #undoWrap{top:54px; bottom:auto; right:calc(var(--rw,140px) + 12px)}   /* undo/redo at the map's top-right */
 body.expb #storyLibWin.lib-min{top:auto !important; width:auto; border-radius:14px}
@@ -28980,6 +28980,31 @@ body.eink #expMenu{background:#fff; border-color:#000}
       }
       return { name: (w.name || w.word), cat: w.cat, note: note, traits: traits, mot: mot };
     }
+    function qaListFocusEls(){   // every story element you can point a Q&A at, deduped across sections
+      var out = [], seen = {};
+      var push = function(w){ if (!w) return; if (!(w.role === 'being' || w.role === 'word')) return; if (!({ being: 1, setting: 1, object: 1, event: 1 })[w.cat]) return; var k = wordKey(w); if (seen[k]) return; seen[k] = 1; out.push(w); };
+      ((state.prompt && state.prompt.words) || []).forEach(push);
+      (state.frames || []).forEach(function(fr){ ((fr.prompt && fr.prompt.words) || []).forEach(push); });
+      return out;
+    }
+    function qaSetFocus(key, silent){   // switch what the Q&A is about — mid-session is fine, the conversation carries on
+      qaFocus = key || null;
+      var btn = document.getElementById('qaFocusBtn');
+      var el = qaFocusEl();
+      if (btn) btn.innerHTML = '◎ ' + (el ? (el.name || el.word) : 'Whole story') + ' ▾';
+      var menu = document.getElementById('qaFocusMenu'); if (menu) menu.classList.remove('show');
+      if (!silent){
+        qaBubble('think', el ? ('— now exploring ' + (el.name || el.word) + ' —') : '— now exploring the whole story —');
+        qaAsk();
+      }
+    }
+    function qaBuildFocusMenu(){
+      var menu = document.getElementById('qaFocusMenu'); if (!menu) return;
+      menu.innerHTML = '';
+      var mk = function(label, key, cat){ var b = document.createElement('button'); b.type = 'button'; b.className = 'qafm-item' + (((key || null) === qaFocus) ? ' on' : ''); b.innerHTML = '<span class="qafm-nm"></span>' + (cat ? ' <span class="qafm-cat"></span>' : ''); b.querySelector('.qafm-nm').textContent = label; if (cat) b.querySelector('.qafm-cat').textContent = cat; b.addEventListener('click', function(e){ e.stopPropagation(); qaSetFocus(key); }); menu.appendChild(b); };
+      mk('Whole story', null, '');
+      qaListFocusEls().forEach(function(w){ mk((w.name || w.word), wordKey(w), w.cat); });
+    }
     function qaContext(){
       var goals = ((state.session && state.session.goals) || []).map(function(g){ return (g.word || '') + (g.note ? ' — ' + g.note : ''); }).join('; ');
       var qs = [];
@@ -29000,7 +29025,7 @@ body.eink #expMenu{background:#fff; border-color:#000}
       if (fr && fr.stageName) secName = fr.stageName;
       if (!secName){ var h3q = document.querySelector('#editor h3[data-frame="' + fi + '"]'); if (h3q) secName = (h3q.textContent || '').trim(); }
       var curEls = ((state.prompt && state.prompt.words) || []).filter(function(w){ return (w.role === 'being' || w.role === 'word') && { being: 1, setting: 1, object: 1, event: 1 }[w.cat]; }).map(function(w){ return w.name || w.word; });
-      return { goals: goals, questions: qs, els: elLines, sec: (fi + 1) + (secName ? ' — ' + secName : ''), curEls: curEls };
+      return { goals: goals, questions: qs, els: elLines, sec: (fi + 1) + (secName ? ' — ' + secName : ''), curEls: curEls, focus: qaFocusDetail() };
     }
     var qaVoice = false; try{ qaVoice = localStorage.getItem('dystoria.qaVoice') === '1'; }catch(e){}
     function qaSpeak(text){
@@ -29025,6 +29050,16 @@ body.eink #expMenu{background:#fff; border-color:#000}
         '\nCURRENT SECTION: ' + ctx.sec + ' (on its map: ' + (ctx.curEls.join(', ') || 'nothing yet') + ')' +
         '\n\nCONVERSATION SO FAR:\n' + (convo || '(just beginning \u2014 open warmly with the most interesting question)') +
         '\n\nAsk the next question.';
+      if (ctx.focus){   // element-scoped Q&A: override the whole-story prompt to interview about the chosen element
+        sys = 'You are a story-planning interviewer helping an author develop ONE specific element of their work-in-progress: ' + ctx.focus.name + ' (' + ctx.focus.cat + '). Ask exactly ONE short, concrete, curious question (under 30 words) ABOUT THIS ELEMENT \u2014 its motivations, contradictions, relationships, secrets, or role in the story. Ground it in the details and the conversation. Never answer for them, no preamble \u2014 output only the question.';
+        user = 'FOCUS ELEMENT: ' + ctx.focus.name + ' [' + ctx.focus.cat + ']' +
+          (ctx.focus.traits ? '\nTRAITS: ' + ctx.focus.traits : '') +
+          (ctx.focus.mot ? '\nMOTIVATION: ' + ctx.focus.mot : '') +
+          (ctx.focus.note ? '\nNOTES SO FAR: ' + ctx.focus.note : '') +
+          '\nSTORY GOALS: ' + (ctx.goals || '(none)') +
+          '\n\nCONVERSATION SO FAR:\n' + (convo || '(just beginning \u2014 open with the most interesting question about ' + ctx.focus.name + ')') +
+          '\n\nAsk the next question about ' + ctx.focus.name + '.';
+      }
       try {
         var q = String(await aiCall(sys, user, { maxTokens: 130 }) || '').trim().replace(/^["\u201c]|["\u201d]$/g, '');
         if (think) think.remove();
@@ -29035,13 +29070,19 @@ body.eink #expMenu{background:#fff; border-color:#000}
     function qaBuildWin(){
       if (document.getElementById('qaWin')) return;
       var w2 = document.createElement('div'); w2.id = 'qaWin';
-      w2.innerHTML = '<div id="qaHead"><span class="qa-t">Story Q&amp;A</span><span style="display:flex;gap:2px;align-items:center">' +
+      w2.innerHTML = '<div id="qaHead"><span class="qa-t">Story Q&amp;A</span>' +
+        '<button type="button" class="qa-focus" id="qaFocusBtn" title="Choose which element to explore \u2014 switch anytime">\u25ce Whole story \u25be</button>' +
+        '<span style="display:flex;gap:2px;align-items:center;margin-left:auto">' +
         '<button type="button" class="qa-ico" id="qaVoiceBtn" title="Read the questions aloud">\ud83d\udd0a</button>' +
         '<button type="button" class="qa-x" title="Close (the conversation keeps until you end it)">\u00d7</button></span></div>' +
+        '<div id="qaFocusMenu"></div>' +
         '<div id="qaLog"></div>' +
         '<div id="qaBar"><textarea id="qaInput" placeholder="Answer in your own words \u2014 rough is fine\u2026"></textarea>' +
         '<div class="qa-row"><button type="button" class="qa-ico" id="qaMic" title="Dictate your answer">\ud83c\udfa4</button><button type="button" id="qaSend">Answer</button><button type="button" id="qaSkip" title="Pass \u2014 ask me something else">Skip \u2192</button><button type="button" id="qaEnd" title="End the conversation and file everything into notes, elements and traits (you review first)">End &amp; organize</button></div></div>';
       sky.appendChild(w2);
+      var fbtn = w2.querySelector('#qaFocusBtn');
+      fbtn.addEventListener('click', function(e){ e.stopPropagation(); var menu = document.getElementById('qaFocusMenu'); var open = !menu.classList.contains('show'); if (open) qaBuildFocusMenu(); menu.classList.toggle('show', open); });
+      document.addEventListener('mousedown', function(e){ var menu = document.getElementById('qaFocusMenu'); if (menu && menu.classList.contains('show') && !menu.contains(e.target) && !(e.target.closest && e.target.closest('#qaFocusBtn'))) menu.classList.remove('show'); });
       var vb = w2.querySelector('#qaVoiceBtn'); vb.classList.toggle('on', qaVoice);
       vb.addEventListener('click', function(){ qaVoice = !qaVoice; vb.classList.toggle('on', qaVoice); try{ localStorage.setItem('dystoria.qaVoice', qaVoice ? '1' : '0'); }catch(e){} if (!qaVoice && window.speechSynthesis) try{ speechSynthesis.cancel(); }catch(e){} });
       // 🎤 dictation — browser speech recognition, live into the answer box
@@ -29100,7 +29141,7 @@ body.eink #expMenu{background:#fff; border-color:#000}
       var tt2 = document.getElementById('importTitle'); if (tt2) tt2.value = '';
       if (typeof IMP !== 'undefined'){ IMP.kind = 'notes'; IMP.mode = 'new'; IMP.qa = true; }   // Q&A transcript — notes come from the ANSWERS, cleaned, never verbatim
       if (w2) w2.classList.remove('show');
-      qaLog = [];
+      qaLog = []; qaFocus = null;
       var ing = document.createElement('div'); ing.id = 'qaIngest'; ing.innerHTML = '\u2726 Organizing your conversation\u2026';
       document.body.appendChild(ing);
       Promise.resolve(typeof extractImport === 'function' ? extractImport() : null).then(function(){
@@ -29123,7 +29164,13 @@ body.eink #expMenu{background:#fff; border-color:#000}
       var w2 = document.getElementById('qaWin');
       var open = !w2.classList.contains('show');
       w2.classList.toggle('show', open);
-      if (open && !qaLog.length) qaAsk();
+      if (open && !qaLog.length){
+        var selW = (state.selNode != null && state.prompt && state.prompt.words) ? state.prompt.words[state.selNode] : null;   // if a map element is selected, start the Q&A about it
+        qaSetFocus((selW && (selW.role === 'being' || selW.role === 'word') && ({ being: 1, setting: 1, object: 1, event: 1 })[selW.cat]) ? wordKey(selW) : null, true);
+        qaAsk();
+      } else if (open){
+        var fb2 = document.getElementById('qaFocusBtn'); if (fb2) qaSetFocus(qaFocus, true);   // keep the label in sync when reopening a live conversation
+      }
     });
     rrow.appendChild(qaBtn);   // sits left of the ⋯ (which is order:99)
     // ---- Write-mode dictation: a mic pill that lives through the session ----
