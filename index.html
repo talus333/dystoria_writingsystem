@@ -20664,6 +20664,50 @@ function setWikiUpdating(on){
 }
 window.setWikiUpdating = setWikiUpdating;
 let _wikiAllRunning = false;
+// Full wiki rebuild in cycles (like the importer): write the element entries in small batches so a long
+// story is never cut off by the model's output cap, then synthesise the Overview / Questions / Reading List.
+async function buildWikiChunked(used, unused, npAll, ctx, body){
+  const pre = (ctx._pf ? ctx._pf + '\n\n' : '') + (ctx._gc ? ctx._gc + '\n\n' : '') + (ctx._rb ? ctx._rb + '\n\n' : '');
+  const blockFor = u => {
+    const el = u.el; const facts = [el.word + (el.name ? (' “' + el.name + '”') : '') + ' — ' + wikiCatName(el.cat) + (el.sub ? (' · ' + el.sub) : '')];
+    if (el.attrs && el.attrs.length) facts.push('traits: ' + el.attrs.map(a => a.word).join(', '));
+    const rels = wikiRelations(el); if (rels.length) facts.push('relationships: ' + rels.join('; '));
+    return '### ' + (el.name ? (el.name + ' (' + el.word + ')') : el.word) + '\n' + facts.join('\n')
+      + (u.qs.length ? ('\nexcerpts: ' + u.qs.slice(0, 8).map(q => '“' + q + '”').join(' ')) : '')
+      + (u.notes ? ('\nnotes: ' + u.notes) : '');
+  };
+  // 1) element entries, in batches — the excerpts already span the whole prose, so each entry is whole-story-aware
+  const BATCH = 7, nB = Math.ceil(used.length / BATCH) || 0;
+  let elementsDoc = '';
+  const sysE = 'You write the "### <name>" entries for a story wiki. For EACH element under ELEMENTS output ONE "### <name>" markdown entry describing what the prose is DOING with it — patterns, recurring associations, connections to other elements, emerging meaning, tension — folding in its notes. ~3–6 sentences each, grounded ONLY in the given facts/excerpts/notes: never invent, never mention the author/writer/reader, and refer to story parts as "Section N". Output ONLY the ### entries — no other headings or preamble.';
+  for (let bi = 0; bi < nB; bi++){
+    const batch = used.slice(bi * BATCH, (bi + 1) * BATCH);
+    if (body) body.innerHTML = '<div class="wk-doc-empty"><span class="spin"></span> Reading the story in cycles — element entries ' + Math.min((bi + 1) * BATCH, used.length) + '/' + used.length + '…</div>';
+    try { const o = await aiCall(sysE, pre + 'ELEMENTS:\n\n' + batch.map(blockFor).join('\n\n') + '\n\nWrite the ### entries:', { maxTokens: 4096 }); if (o && o.trim()) elementsDoc += (elementsDoc ? '\n\n' : '') + o.trim(); }
+    catch (e){ /* a failed batch is skipped, not fatal — keep the rest */ }
+  }
+  // 2) Overview + Questions + Reading List, from the (whole-story) element entries + notes
+  const unusedNames = unused.map(e => e.name ? (e.word + ' “' + e.name + '”') : e.word);
+  if (body) body.innerHTML = '<div class="wk-doc-empty"><span class="spin"></span> Writing the overview, questions and reading list…</div>';
+  const sysO = 'You write three sections of a story wiki — "## Overview", "## Questions the story raises", and "## Suggested Reading List" — from the wiki\'s already-written element entries (they cover the whole story) plus notes. '
+    + '## Overview — 4–7 sentences surfacing the meaningful patterns and threads tying the story together (throughlines, motifs, tensions, how elements relate), not a plot recap. '
+    + '## Questions the story raises — open questions, no answers or critique; for the key elements pose one question from that element’s perspective, and for each element under ELEMENTS NOT YET IN THE STORY raise a question about its possible role. Each as a bullet "- Element — question". '
+    + '## Suggested Reading List — real, published books that would help this writer with THIS story (this section MAY draw on your knowledge of literature): 1–2 sentences on what they stand to gain, then 6–12 well-chosen books grouped under a few short **bold** sub-labels, each "- *Title* — Author: one sentence on why it fits"; never invent titles or authors and never recommend a book listed under BOOKS THE WRITER HAS ALREADY READ. '
+    + 'For Overview and Questions use ONLY the given material; never mention the author/writer/reader; refer to story parts as "Section N". Output the three sections with those exact headings and nothing else.';
+  let meta = '';
+  try {
+    meta = await aiCall(sysO, pre + 'ELEMENT ENTRIES (already written — the whole story):\n\n' + elementsDoc.slice(0, 14000)
+      + (unusedNames.length ? ('\n\nELEMENTS NOT YET IN THE STORY: ' + unusedNames.join(', ')) : '')
+      + (npAll ? ('\n\nNOTES:\n' + npAll.slice(0, 2000)) : '')
+      + '\n\nWrite the three sections:', { maxTokens: 4096 });
+  } catch (e){ meta = ''; }
+  // 3) assemble in canonical order: Overview · Elements · Questions · Reading List
+  const sec = (src, name) => { const m = String(src || '').match(new RegExp('##\\s*' + name + '[^\\n]*\\n([\\s\\S]*?)(?:\\n##\\s|$)', 'i')); return m ? m[1].trim() : ''; };
+  const overview = sec(meta, 'Overview'), questions = sec(meta, 'Questions'), reading = sec(meta, 'Suggested Reading');
+  let doc = '## Overview\n\n' + (overview || '') + '\n\n## Elements\n\n' + (elementsDoc || '') + '\n\n## Questions the story raises\n\n' + (questions || '');
+  if (reading) doc += '\n\n## Suggested Reading List\n\n' + reading;
+  return doc.trim();
+}
 async function runWikiAll(){
   if (_wikiAllRunning) return;
   if (typeof aiAuthed==='function' && !aiAuthed()){ if(typeof promptAiSignup==='function') promptAiSignup(); return; }
@@ -20680,7 +20724,9 @@ async function runWikiAll(){
   // incremental: if a wiki already exists and the story only grew, update with the NEW writing only (cheaper than a full re-read)
   const prevDoc = (state.session && state.session.wikiDoc) ? String(state.session.wikiDoc) : '';
   const prevLen = (state.session && state.session.wikiProseLen) || 0;
-  const incremental = !!prevDoc && prose.length > prevLen + 40;
+  const prevEntries = (prevDoc.match(/^###\s/gm) || []).length;                      // element entries the current wiki actually has
+  const wikiIncomplete = used.length > 4 && prevEntries < Math.floor(used.length * 0.75);   // missing >25% of elements → the last build was cut short
+  const incremental = !!prevDoc && prose.length > prevLen + 40 && (prose.length - prevLen) < 18000 && !wikiIncomplete;    // grew a little → cheap single-pass update; a big addition or a doc missing elements → full (chunked) rebuild
   const _gc = (typeof goalContext === 'function') ? (goalContext() || '') : '';
   const _pf = (typeof getProfileContext === 'function') ? getProfileContext() : '';
   const _rb = (typeof getReadBooksContext === 'function') ? getReadBooksContext() : '';
@@ -20722,7 +20768,9 @@ async function runWikiAll(){
         + '\n\nFULL PROSE:\n\n' + (prose.slice(0, 15000) || '(no prose yet)')
         + '\n\nWrite the wiki document:';
     }
-    const out = await aiCall(sys, prompt, { maxTokens: 4096 });   // full document — needs the headroom (worker caps at 4096)
+    const out = incremental
+      ? await aiCall(sys, prompt, { maxTokens: 4096 })
+      : await buildWikiChunked(used, unused, npAll, { _pf: _pf, _gc: _gc, _rb: _rb }, body);   // full rebuild: read the whole story in cycles so a long story isn't cut off by the 4096-token output cap
     state.session.wikiDoc = out; state.session.wikiProseLen = prose.length; state.session.wikiSig = wikiSig(); scheduleAutosave(500);
     try { const qm = out.match(/##\s*Questions[^\n]*\n([\s\S]*?)(?:\n##\s|$)/i); if (qm && typeof captureElementQuestions === 'function'){ const qtext = qm[1].replace(/^\s*[-*]\s+/gm, '').trim(); captureElementQuestions(qtext); state.session.wikiQuestions = qtext; } } catch(e){}
     renderWikiDoc(out);
