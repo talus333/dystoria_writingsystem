@@ -17905,20 +17905,20 @@ function startWritingSession(fullscreen){
       const k = state.frameIdx || 0;
       const fm = (typeof nodeFrameMap === 'function') ? nodeFrameMap() : null;
       // ensure the current section has a Begin/Continue prompt to write into (it only appears now, on Start)
-      let hasPh = false, hasProse = false, lastK = null;
+      let hasPh = false, hasProse = false, lastK = null, phEl = null;
       Array.from(ed.children).forEach(c => {
         if ((fm ? fm.get(c) : 0) !== k) return;
-        if (c.classList && c.classList.contains('ph') && !(c.textContent || '').trim()) hasPh = true;
+        if (c.classList && c.classList.contains('ph') && !(c.textContent || '').trim()){ hasPh = true; phEl = c; }
         else if ((c.textContent || '').trim() && !(c.classList && c.classList.contains('sec-mark')) && c.tagName !== 'H3'){ hasProse = true; lastK = c; }
       });
       if (!hasPh){
         const d = document.createElement('div'); d.className = 'ph'; d.dataset.ph = hasProse ? 'Continue\u2026' : 'Begin\u2026';
         if (lastK && lastK.nextSibling) ed.insertBefore(d, lastK.nextSibling); else ed.appendChild(d);
+        phEl = d;   // the freshly-made prompt isn't in the frame map yet \u2014 reference it directly so the caret + scroll land ON it (was falling back to the editor's end)
       }
       try { ed.focus({ preventScroll: true }); } catch(e){ ed.focus(); }   // preventScroll: stop iOS from scrolling the window to the caret (which pushes the fixed header out of view)
-      let phEl = null;
       try {
-        phEl = Array.from(ed.children).reverse().find(c => c.classList && c.classList.contains('ph') && (fm ? fm.get(c) : 0) === k);
+        if (!phEl || !phEl.isConnected) phEl = Array.from(ed.children).reverse().find(c => c.classList && c.classList.contains('ph') && !(c.textContent || '').trim()) || null;   // safety net
         const r = document.createRange();
         if (phEl){ r.selectNodeContents(phEl); r.collapse(true); } else { r.selectNodeContents(ed); r.collapse(false); }
         const s = window.getSelection(); s.removeAllRanges(); s.addRange(r);
@@ -28640,6 +28640,16 @@ body.eink #writeMic{background:#fff; border-color:#000; color:#000}
 /* Full-screen writing session: dictate button rides in the top-right of the timer header (2026-07-05) */
 body.writing.insession #writeMic{top:18px; right:24px; bottom:auto; z-index:121}
 @media (max-width:500px){ body.writing.insession #writeMic{top:10px; right:12px} }
+/* AI auto-punctuation toggle — a small pill riding with the Dictate button */
+#writeMicAI{display:none; position:fixed; right:22px; bottom:130px; z-index:120; align-items:center; gap:6px;
+  font-family:var(--sans); font-size:9px; font-weight:600; letter-spacing:.07em; text-transform:uppercase;
+  color:var(--ink-faint); background:var(--paper); border:1px solid var(--line); border-radius:14px; padding:5px 11px; cursor:pointer; box-shadow:0 6px 18px rgba(0,0,0,.14)}
+#writeMicAI.avail{display:inline-flex}
+#writeMicAI:hover{color:var(--ink); border-color:var(--gold)}
+#writeMicAI.on{color:#8a5a1e; border-color:var(--gold); background:rgba(250,154,49,.10)}
+body.eink #writeMicAI{background:#fff; border-color:#000; color:#000}
+body.writing.insession #writeMicAI{top:54px; right:24px; bottom:auto; z-index:121}
+@media (max-width:500px){ body.writing.insession #writeMicAI{top:44px; right:12px} }
 #qaIngest{position:fixed; left:50%; bottom:74px; transform:translateX(-50%); z-index:300; font-family:var(--sans); font-size:11px; letter-spacing:.1em; text-transform:uppercase;
   color:#fbcf83; background:linear-gradient(180deg,#2a2117,#1b150e); border:1px solid rgba(250,154,49,.3); border-radius:16px; padding:9px 18px; box-shadow:0 10px 30px rgba(0,0,0,.4);
   animation:qaPulse 1.6s ease-in-out infinite}
@@ -29550,6 +29560,45 @@ body.eink #expMenu{background:#fff; border-color:#000}
       btn.title = 'Dictate into the session \u2014 speech lands at your cursor';
       document.body.appendChild(btn);
       var recW = null, onW = false;
+      // ---- AI auto-punctuation: buffer raw speech, punctuate on a pause via the AI worker ----
+      var aiMode = false; try{ aiMode = localStorage.getItem('dystoria.dictateAI') !== '0'; }catch(e){}   // default ON
+      var aiBuf = '', aiTimer = null, aiBusy = false;
+      var aiBtn = document.createElement('button'); aiBtn.id = 'writeMicAI'; aiBtn.type = 'button';
+      function paintAi(){ aiBtn.innerHTML = aiMode ? '✨ Auto-punctuate' : '✨ Punctuation: manual'; aiBtn.classList.toggle('on', aiMode); aiBtn.title = aiMode ? 'AI adds punctuation to your dictation — tap to switch to manual (say “period”, “comma”…)' : 'Tap to let AI punctuate your dictation automatically'; }
+      document.body.appendChild(aiBtn); paintAi();
+      aiBtn.addEventListener('click', function(e){ e.stopPropagation(); aiMode = !aiMode; try{ localStorage.setItem('dystoria.dictateAI', aiMode ? '1' : '0'); }catch(_){} paintAi(); if (typeof flashStatus === 'function') flashStatus(aiMode ? 'AI punctuation on — just speak naturally' : 'Manual mode — say “period”, “comma”, “new paragraph”…'); });
+      function aiReady(){ return aiMode && (typeof aiCall === 'function') && (typeof aiAuthed !== 'function' || aiAuthed()); }
+      async function aiPunctuate(text){
+        var sys = 'You punctuate dictated prose. Add correct punctuation, capitalization, and paragraph breaks. Keep every word exactly as given — do not add, remove, reorder, translate, or reword anything, and do not wrap the result in quotes or add commentary. Return only the corrected text.';
+        return await aiCall(sys, text, { maxTokens: 500, temperature: 0 });
+      }
+      function insertPunct(text){
+        var ed = document.getElementById('editor'); if (!ed) return;
+        var t = String(text || '').replace(/\r/g, '').trim(); if (!t) return;
+        try{ ed.focus({ preventScroll: true }); }catch(e){ ed.focus(); }
+        var sel = window.getSelection();
+        if (!sel.rangeCount || !ed.contains(sel.anchorNode) || sel.anchorNode === ed){ var ph = Array.from(ed.children).reverse().find(function(c){ return c.classList && c.classList.contains('ph') && !(c.textContent||'').trim(); }); var r = document.createRange(); if (ph){ r.selectNodeContents(ph); r.collapse(true); } else { r.selectNodeContents(ed); r.collapse(false); } sel.removeAllRanges(); sel.addRange(r); }
+        var parts = t.split(/\n+/);
+        parts.forEach(function(p, i){
+          if (i > 0) document.execCommand('insertParagraph');
+          p = p.trim(); if (!p) return;
+          var s2 = window.getSelection();
+          var before = (s2.anchorNode && s2.anchorNode.textContent) ? s2.anchorNode.textContent.slice(0, s2.anchorOffset) : '';
+          var lead = (i === 0 && before && !/\s$/.test(before) && !/[“(]$/.test(before)) ? ' ' : '';
+          document.execCommand('insertText', false, lead + p);
+        });
+      }
+      function aiFlush(){
+        if (aiTimer){ clearTimeout(aiTimer); aiTimer = null; }
+        if (aiBusy){ aiSchedule(); return; }
+        var chunk = aiBuf.trim(); if (!chunk) return; aiBuf = '';
+        if (!aiReady()){ insertDict(chunk); return; }
+        aiBusy = true;
+        var prev = btn.innerHTML; if (onW) btn.innerHTML = '✨ Punctuating…';
+        aiPunctuate(chunk).then(function(out){ insertPunct(out && out.trim() ? out : chunk); }).catch(function(){ insertDict(chunk); })
+          .then(function(){ aiBusy = false; if (onW && btn.innerHTML === '✨ Punctuating…') btn.innerHTML = prev; if (aiBuf.trim()) aiSchedule(); });
+      }
+      function aiSchedule(){ if (aiTimer) clearTimeout(aiTimer); aiTimer = setTimeout(aiFlush, 850); }   // flush a beat after speech pauses
       var _capNext = false;
       // Turn spoken punctuation cues into real punctuation (the browser engine only transcribes words). \u0001 = new paragraph, \u0002 = new line.
       function dictationFormat(raw){
@@ -29581,7 +29630,7 @@ body.eink #expMenu{background:#fff; border-color:#000}
         var ed = document.getElementById('editor'); if (!ed || !raw) return;
         try{ ed.focus({ preventScroll: true }); }catch(e){ ed.focus(); }
         var sel = window.getSelection();
-        if (!sel.rangeCount || !ed.contains(sel.anchorNode)){ var r = document.createRange(); r.selectNodeContents(ed); r.collapse(false); sel.removeAllRanges(); sel.addRange(r); }
+        if (!sel.rangeCount || !ed.contains(sel.anchorNode) || sel.anchorNode === ed){ var ph = Array.from(ed.children).reverse().find(function(c){ return c.classList && c.classList.contains('ph') && !(c.textContent||'').trim(); }); var r = document.createRange(); if (ph){ r.selectNodeContents(ph); r.collapse(true); } else { r.selectNodeContents(ed); r.collapse(false); } sel.removeAllRanges(); sel.addRange(r); }
         var processed = dictationFormat(raw);
         var tokens = processed.split(/([\u0001\u0002])/);
         tokens.forEach(function(tok){
@@ -29599,7 +29648,7 @@ body.eink #expMenu{background:#fff; border-color:#000}
           document.execCommand('insertText', false, lead + t);
         });
       }
-      function micStopW(){ onW = false; btn.classList.remove('on'); btn.innerHTML = '\ud83c\udfa4 Dictate'; if (recW) try{ recW.stop(); }catch(e){} recW = null; }
+      function micStopW(){ onW = false; btn.classList.remove('on'); btn.innerHTML = '\ud83c\udfa4 Dictate'; if (recW) try{ recW.stop(); }catch(e){} recW = null; if (aiBuf.trim()) aiFlush(); }   // punctuate whatever's left when the mic goes down
       btn.addEventListener('click', function(){
         if (!SRw){ if (typeof flashStatus === 'function') flashStatus('Voice input isn\u2019t supported in this browser \u2014 try Chrome, Edge or Safari'); return; }
         if (onW){ micStopW(); return; }
@@ -29608,7 +29657,10 @@ body.eink #expMenu{background:#fff; border-color:#000}
         try{ recW.lang = navigator.language || 'en-US'; }catch(e){}
         recW.onresult = function(ev){
           for (var r2 = ev.resultIndex; r2 < ev.results.length; r2++){
-            if (ev.results[r2].isFinal) insertDict(ev.results[r2][0].transcript);
+            if (!ev.results[r2].isFinal) continue;
+            var tr = ev.results[r2][0].transcript;
+            if (aiReady()){ aiBuf += (aiBuf && !/\s$/.test(aiBuf) ? ' ' : '') + tr; if (aiBuf.length > 240) aiFlush(); else aiSchedule(); }   // buffer → AI punctuates on a pause (or when it gets long)
+            else insertDict(tr);
           }
         };
         recW.onend = function(){ if (onW && recW){ try{ recW.start(); }catch(e){ micStopW(); } } };   // Chrome stops on silence — keep listening while toggled on
@@ -29618,6 +29670,7 @@ body.eink #expMenu{background:#fff; border-color:#000}
       setInterval(function(){
         var avail = document.body.classList.contains('writing') && (document.body.classList.contains('insession') || (typeof addsLocked === 'function' && addsLocked()));
         btn.classList.toggle('avail', !!avail);
+        aiBtn.classList.toggle('avail', !!avail);
         if (!avail && onW) micStopW();   // session over → mic down
       }, 600);
     })();
