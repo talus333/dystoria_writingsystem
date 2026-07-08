@@ -19738,19 +19738,19 @@ async function extractImport(){
   const total = chunks.length;
   IMP.elements = []; IMP.relationships = []; IMP.sections = []; IMP.genres = [];
   const seenEl = {}, seenR = {};
-  let secsRaw = [], propsRaw = [], goalsRaw = [], overview = '', gotTitle = '', reviewShown = false;
+  let secsRaw = [], propsRaw = [], goalsRaw = [], overview = '', gotTitle = '', gotAny = false;
   const confirmBtn = $('importConfirm');
   const confirmLabel = confirmBtn ? (confirmBtn.textContent || 'Build these in') : 'Build these in';
   const setConfirmProgress = done => { if (!confirmBtn) return; if (done < total){ confirmBtn.disabled = true; confirmBtn.textContent = 'Reading ' + done + '/' + total + '… (you can review now)'; } else { confirmBtn.disabled = false; confirmBtn.textContent = confirmLabel; } };
   for (let ci = 0; ci < total; ci++){
-    if (!reviewShown) $('importStatus').innerHTML = '<span class="spin"></span>Reading' + (total > 1 ? (' part ' + (ci + 1) + ' of ' + total) : ' &amp; ingesting') + '…';
+    $('importStatus').innerHTML = '<span class="spin"></span>Reading' + (total > 1 ? (' part ' + (ci + 1) + ' of ' + total) : ' &amp; ingesting') + '… <span style="opacity:.7">merging repeated elements</span>';
     const uc = (notesMode ? 'Notes' : 'Story') + (total > 1 ? (' (part ' + (ci + 1) + ' of ' + total + ' — extract only what THIS part establishes)') : '') + ':\n\n' + chunks[ci] + '\n\nReturn the JSON.';
     let normC = null;
     for (let attempt = 0; attempt < 2 && !normC; attempt++){
       try {
         const out = await aiCall(sys, uc, { maxTokens: 8000, json: true, kind: 'import' });   // dedicated large-context import model
         normC = normalizeExtract(parseJsonLoose(out));
-      } catch (e){ if (!reviewShown){ $('importGo').disabled = false; $('importStatus').textContent = aiErrMsg(e); return; } flashStatus(aiErrMsg(e)); break; }   // once reviewing, a failed part is skipped, not fatal
+      } catch (e){ if (!gotAny){ $('importGo').disabled = false; $('importStatus').textContent = aiErrMsg(e); return; } flashStatus(aiErrMsg(e)); break; }   // after at least one good part, a failed part just stops early — keep what we have
     }
     if (!normC) { setConfirmProgress(ci + 1); continue; }   // a part failed to parse — keep what the other parts gave
     (normC.relationships || []).forEach(r => { if (!r || !r.from || !r.to) return; const k = (String(r.from) + '|' + String(r.to)).toLowerCase(); if (seenR[k]) return; seenR[k] = 1; IMP.relationships.push(r); });
@@ -19773,7 +19773,11 @@ async function extractImport(){
       const key = cat + '|' + name.toLowerCase();
       if (seenEl[key]){
         const ex = seenEl[key];
-        if (!ex.summary && summary) ex.summary = summary;
+        // enrich, don't overwrite — the same element usually gains detail across later sections
+        if (summary){ if (!ex.summary) ex.summary = summary; else if (ex.summary.toLowerCase().indexOf(summary.toLowerCase()) < 0) ex.summary = ex.summary.replace(/[\s.]*$/, '') + '. ' + summary; }
+        { const moreNote = (notesMode && IMP.qa) ? aiNote : '';   // Q&A notes accumulate across answers; NOTES notes are already pulled whole-doc; PROSE has none
+          if (moreNote){ if (!ex.note) ex.note = moreNote; else if (ex.note.toLowerCase().indexOf(moreNote.toLowerCase()) < 0) ex.note = ex.note.replace(/\s*$/, '') + '\n\n' + moreNote; } }
+        { const sec2 = String(el.section || '').trim(); if (sec2){ ex.sections = ex.sections || (ex.section ? [ex.section] : []); if (ex.sections.map(s => s.toLowerCase()).indexOf(sec2.toLowerCase()) < 0) ex.sections.push(sec2); } }
         if (elTraits.length){ const have = new Set(ex.traits.map(t => t.sub + '|' + t.value.toLowerCase())); elTraits.forEach(t => { const k = t.sub + '|' + t.value.toLowerCase(); if (!have.has(k)){ ex.traits.push(t); have.add(k); } }); }
         return;
       }
@@ -19782,22 +19786,16 @@ async function extractImport(){
       seenEl[key] = rec; IMP.elements.push(rec); newEls.push(rec);
     });
     IMP.genres = IMP.elements.filter(e => e.cat === 'genre').map(e => e.name);   // tag imported words for future generation bias
-    if (newEls.length){
-      if (!reviewShown){
-        reviewShown = true;
-        if (gotTitle && !IMP.title) IMP.title = String(gotTitle).slice(0, 80);
-        IMP.overview = overview || '';
-        $('importTitle').value = IMP.title; $('importOverview').value = IMP.overview;
-        $('importGo').disabled = false;
-        renderImportReview(); importShow('review');
-      } else {
-        irAppendCards(newEls);
-        if (overview && !$('importOverview').value.trim()) $('importOverview').value = overview;
-      }
-    }
+    if (newEls.length && !gotAny){ gotAny = true; if (gotTitle && !IMP.title) IMP.title = String(gotTitle).slice(0, 80); }   // defer the review until every part is merged, so each element shows with ALL its details
     setConfirmProgress(ci + 1);
   }
   IMP.overview = $('importOverview') ? ($('importOverview').value.trim() || overview || '') : (overview || '');
+  // all parts ingested + merged → NOW reveal the complete, de-duplicated list (each element carries every section's detail)
+  if (IMP.elements.length){
+    if (IMP.title) $('importTitle').value = IMP.title;
+    if ($('importOverview')) $('importOverview').value = IMP.overview || '';
+    renderImportReview(); importShow('review');
+  }
   if (notesMode){
     // notes only get sections if the source actually describes chapters/parts — dedupe titles in first-seen order
     const seenT = {}; IMP.sections = [];
