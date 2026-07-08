@@ -29547,14 +29547,54 @@ body.eink #expMenu{background:#fff; border-color:#000}
       btn.title = 'Dictate into the session \u2014 speech lands at your cursor';
       document.body.appendChild(btn);
       var recW = null, onW = false;
-      function insertDict(text){
-        var ed = document.getElementById('editor'); if (!ed || !text) return;
+      var _capNext = false;
+      // Turn spoken punctuation cues into real punctuation (the browser engine only transcribes words). \u0001 = new paragraph, \u0002 = new line.
+      function dictationFormat(raw){
+        var s = ' ' + String(raw || '') + ' ';
+        s = s.replace(/\b(?:new|next)\s+paragraph\b/gi, ' \u0001 ');
+        s = s.replace(/\b(?:new|next)\s+line\b/gi, ' \u0002 ');
+        s = s.replace(/\bnew\s+sentence\b/gi, '. ');
+        s = s.replace(/\b(?:full\s*stop|period)\b/gi, '. ');
+        s = s.replace(/\bcomma\b/gi, ', ');
+        s = s.replace(/\bquestion\s*mark\b/gi, '? ');
+        s = s.replace(/\bexclamation\s*(?:mark|point)\b/gi, '! ');
+        s = s.replace(/\bsemi[\s-]*colon\b/gi, '; ');
+        s = s.replace(/\bcolon\b/gi, ': ');
+        s = s.replace(/\b(?:ellipsis|dot\s+dot\s+dot)\b/gi, '… ');
+        s = s.replace(/\b(?:em[\s-]*dash|dash)\b/gi, ' — ');
+        s = s.replace(/\bhyphen\b/gi, '-');
+        s = s.replace(/\bopen\s*(?:paren|parenthesis|bracket)\b/gi, ' (');
+        s = s.replace(/\bclose\s*(?:paren|parenthesis|bracket)\b/gi, ') ');
+        s = s.replace(/\b(?:open\s*quotes?|begin\s*quote)\b/gi, ' “');
+        s = s.replace(/\b(?:close\s*quotes?|end\s*quote|unquote)\b/gi, '” ');
+        s = s.replace(/\bapostrophe\b/gi, '’');
+        s = s.replace(/\bampersand\b/gi, ' & ');
+        s = s.replace(/\s+([.,?!;:…”)])/g, '$1');   // no space before closing punctuation
+        s = s.replace(/([“(])\s+/g, '$1');               // no space after opening punctuation
+        s = s.replace(/[ \t]{2,}/g, ' ');
+        return s;
+      }
+      function insertDict(raw){
+        var ed = document.getElementById('editor'); if (!ed || !raw) return;
         try{ ed.focus({ preventScroll: true }); }catch(e){ ed.focus(); }
         var sel = window.getSelection();
         if (!sel.rangeCount || !ed.contains(sel.anchorNode)){ var r = document.createRange(); r.selectNodeContents(ed); r.collapse(false); sel.removeAllRanges(); sel.addRange(r); }
-        var before = sel.anchorNode && sel.anchorNode.textContent ? sel.anchorNode.textContent.slice(0, sel.anchorOffset) : '';
-        var pad = before && !/\s$/.test(before) ? ' ' : '';
-        document.execCommand('insertText', false, pad + text.trim());
+        var processed = dictationFormat(raw);
+        var tokens = processed.split(/([\u0001\u0002])/);
+        tokens.forEach(function(tok){
+          if (!tok) return;
+          if (tok === '\u0001'){ document.execCommand('insertParagraph'); _capNext = true; return; }
+          if (tok === '\u0002'){ try{ document.execCommand('insertLineBreak'); }catch(e){ document.execCommand('insertText', false, '\n'); } _capNext = true; return; }
+          var t = tok.trim(); if (!t) return;
+          var s2 = window.getSelection();
+          var before = (s2.anchorNode && s2.anchorNode.textContent) ? s2.anchorNode.textContent.slice(0, s2.anchorOffset) : '';
+          if (_capNext || !before.trim() || /[.!?…][”)\s]*$/.test(before)){
+            t = t.replace(/[a-z]/, function(c){ return c.toUpperCase(); });   // start of a sentence → capitalise the first letter
+            _capNext = false;
+          }
+          var lead = (before && !/\s$/.test(before) && !/[“(]$/.test(before) && !/^[.,?!;:…”)]/.test(t)) ? ' ' : '';
+          document.execCommand('insertText', false, lead + t);
+        });
       }
       function micStopW(){ onW = false; btn.classList.remove('on'); btn.innerHTML = '\ud83c\udfa4 Dictate'; if (recW) try{ recW.stop(); }catch(e){} recW = null; }
       btn.addEventListener('click', function(){
