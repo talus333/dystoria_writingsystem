@@ -20664,8 +20664,20 @@ function setWikiUpdating(on){
 }
 window.setWikiUpdating = setWikiUpdating;
 let _wikiAllRunning = false;
-// Full wiki rebuild in cycles (like the importer): write the element entries in small batches so a long
-// story is never cut off by the model's output cap, then synthesise the Overview / Questions / Reading List.
+// the story's narrative-frame words (genre, context, themes, stakes, plot, concepts) — role 'frame', which wikiGather skips
+function wikiFrameGather(){
+  const byKey = {};
+  wikiFrames().forEach(fr => {
+    ((fr.prompt && fr.prompt.words) || []).forEach(w => {
+      if (w.role !== 'frame') return;
+      const key = w.cat + '|' + w.word;
+      if (!byKey[key]) byKey[key] = { word: w.word, cat: w.cat, name: w.name || '' };
+    });
+  });
+  return Object.values(byKey);
+}
+// Full wiki rebuild in cycles (like the importer): entries written in small batches so a long story is never
+// cut off by the model's output cap, GROUPED by element category, with an Overview + Frame + Questions + Reading List.
 async function buildWikiChunked(used, unused, npAll, ctx, body){
   const pre = (ctx._pf ? ctx._pf + '\n\n' : '') + (ctx._gc ? ctx._gc + '\n\n' : '') + (ctx._rb ? ctx._rb + '\n\n' : '');
   const blockFor = u => {
@@ -20676,35 +20688,52 @@ async function buildWikiChunked(used, unused, npAll, ctx, body){
       + (u.qs.length ? ('\nexcerpts: ' + u.qs.slice(0, 8).map(q => '“' + q + '”').join(' ')) : '')
       + (u.notes ? ('\nnotes: ' + u.notes) : '');
   };
-  // 1) element entries, in batches — the excerpts already span the whole prose, so each entry is whole-story-aware
-  const BATCH = 7, nB = Math.ceil(used.length / BATCH) || 0;
-  let elementsDoc = '';
+  // 1) element entries — grouped under a "## <Category>" heading, batched within each so nothing is dropped
   const sysE = 'You write the "### <name>" entries for a story wiki. For EACH element under ELEMENTS output ONE "### <name>" markdown entry describing what the prose is DOING with it — patterns, recurring associations, connections to other elements, emerging meaning, tension — folding in its notes. ~3–6 sentences each, grounded ONLY in the given facts/excerpts/notes: never invent, never mention the author/writer/reader, and refer to story parts as "Section N". Output ONLY the ### entries — no other headings or preamble.';
-  for (let bi = 0; bi < nB; bi++){
-    const batch = used.slice(bi * BATCH, (bi + 1) * BATCH);
-    if (body) body.innerHTML = '<div class="wk-doc-empty"><span class="spin"></span> Reading the story in cycles — element entries ' + Math.min((bi + 1) * BATCH, used.length) + '/' + used.length + '…</div>';
-    try { const o = await aiCall(sysE, pre + 'ELEMENTS:\n\n' + batch.map(blockFor).join('\n\n') + '\n\nWrite the ### entries:', { maxTokens: 4096 }); if (o && o.trim()) elementsDoc += (elementsDoc ? '\n\n' : '') + o.trim(); }
-    catch (e){ /* a failed batch is skipped, not fatal — keep the rest */ }
+  const known = ['being', 'setting', 'object', 'event'], labelOf = { being: 'Beings', setting: 'Settings', object: 'Objects', event: 'Events' };
+  const catOrder = known.concat(used.map(u => u.el.cat).filter(c => known.indexOf(c) < 0));   // then any other categories present
+  const seenCat = {}; const groups = [];
+  catOrder.forEach(c => { if (seenCat[c]) return; seenCat[c] = 1; const list = used.filter(u => u.el.cat === c); if (list.length) groups.push([c, labelOf[c] || (typeof wikiCatName === 'function' ? wikiCatName(c) : c), list]); });
+  const BATCH = 7, totalUsed = used.length; let done = 0, elementsDoc = '';
+  for (const g of groups){
+    const label = g[1], catUsed = g[2]; let catEntries = '';
+    for (let bi = 0; bi < Math.ceil(catUsed.length / BATCH); bi++){
+      const batch = catUsed.slice(bi * BATCH, (bi + 1) * BATCH); done += batch.length;
+      if (body) body.innerHTML = '<div class="wk-doc-empty"><span class="spin"></span> Reading the story in cycles — ' + label.toLowerCase() + ' (' + done + '/' + totalUsed + ')…</div>';
+      try { const o = await aiCall(sysE, pre + 'ELEMENTS (' + label + '):\n\n' + batch.map(blockFor).join('\n\n') + '\n\nWrite the ### entries:', { maxTokens: 4096 }); if (o && o.trim()) catEntries += (catEntries ? '\n\n' : '') + o.trim(); }
+      catch (e){ /* a failed batch is skipped, not fatal */ }
+    }
+    if (catEntries) elementsDoc += (elementsDoc ? '\n\n' : '') + '## ' + label + '\n\n' + catEntries;
   }
-  // 2) Overview + Questions + Reading List, from the (whole-story) element entries + notes
+  // 2) narrative frame (genre / context / themes / stakes / plot) → a compact list for the synthesis call
+  const frameEls = wikiFrameGather(); const frameByCat = {};
+  frameEls.forEach(f => { (frameByCat[f.cat] = frameByCat[f.cat] || []).push(f.name ? (f.name + ' (' + f.word + ')') : f.word); });
+  const frameLines = [];
+  [['genre', 'Genre'], ['period', 'Context'], ['theme', 'Themes'], ['stakes', 'Stakes'], ['plot', 'Plot'], ['concept', 'Concepts / terms']].forEach(cl => { if (frameByCat[cl[0]] && frameByCat[cl[0]].length) frameLines.push(cl[1] + ': ' + frameByCat[cl[0]].join(', ')); });
+  // 3) Overview + Frame + Questions + Reading List
   const unusedNames = unused.map(e => e.name ? (e.word + ' “' + e.name + '”') : e.word);
-  if (body) body.innerHTML = '<div class="wk-doc-empty"><span class="spin"></span> Writing the overview, questions and reading list…</div>';
-  const sysO = 'You write three sections of a story wiki — "## Overview", "## Questions the story raises", and "## Suggested Reading List" — from the wiki\'s already-written element entries (they cover the whole story) plus notes. '
+  if (body) body.innerHTML = '<div class="wk-doc-empty"><span class="spin"></span> Writing the overview, frame, questions and reading list…</div>';
+  const sysO = 'You write four sections of a story wiki — "## Overview", "## Frame", "## Questions the story raises", and "## Suggested Reading List" — from the wiki\'s already-written element entries plus the narrative layers and notes. '
     + '## Overview — 4–7 sentences surfacing the meaningful patterns and threads tying the story together (throughlines, motifs, tensions, how elements relate), not a plot recap. '
+    + '## Frame — a short structured rundown of the story\'s narrative frame drawn from NARRATIVE LAYERS, with bold sub-labels **Genre**, **Context**, **Themes**, **Stakes**, **Plot** (include ONLY those provided), one to two sentences each on how it shapes the story. '
     + '## Questions the story raises — open questions, no answers or critique; for the key elements pose one question from that element’s perspective, and for each element under ELEMENTS NOT YET IN THE STORY raise a question about its possible role. Each as a bullet "- Element — question". '
     + '## Suggested Reading List — real, published books that would help this writer with THIS story (this section MAY draw on your knowledge of literature): 1–2 sentences on what they stand to gain, then 6–12 well-chosen books grouped under a few short **bold** sub-labels, each "- *Title* — Author: one sentence on why it fits"; never invent titles or authors and never recommend a book listed under BOOKS THE WRITER HAS ALREADY READ. '
-    + 'For Overview and Questions use ONLY the given material; never mention the author/writer/reader; refer to story parts as "Section N". Output the three sections with those exact headings and nothing else.';
+    + 'For Overview, Frame and Questions use ONLY the given material; never mention the author/writer/reader; refer to story parts as "Section N". Output the four sections with those exact headings and nothing else.';
   let meta = '';
   try {
-    meta = await aiCall(sysO, pre + 'ELEMENT ENTRIES (already written — the whole story):\n\n' + elementsDoc.slice(0, 14000)
+    meta = await aiCall(sysO, pre + 'ELEMENT ENTRIES (already written — the whole story):\n\n' + elementsDoc.slice(0, 13000)
+      + (frameLines.length ? ('\n\nNARRATIVE LAYERS:\n' + frameLines.join('\n')) : '')
       + (unusedNames.length ? ('\n\nELEMENTS NOT YET IN THE STORY: ' + unusedNames.join(', ')) : '')
       + (npAll ? ('\n\nNOTES:\n' + npAll.slice(0, 2000)) : '')
-      + '\n\nWrite the three sections:', { maxTokens: 4096 });
+      + '\n\nWrite the four sections:', { maxTokens: 4096 });
   } catch (e){ meta = ''; }
-  // 3) assemble in canonical order: Overview · Elements · Questions · Reading List
+  // 4) assemble: Overview · Frame · <category sections> · Questions · Reading List
   const sec = (src, name) => { const m = String(src || '').match(new RegExp('##\\s*' + name + '[^\\n]*\\n([\\s\\S]*?)(?:\\n##\\s|$)', 'i')); return m ? m[1].trim() : ''; };
-  const overview = sec(meta, 'Overview'), questions = sec(meta, 'Questions'), reading = sec(meta, 'Suggested Reading');
-  let doc = '## Overview\n\n' + (overview || '') + '\n\n## Elements\n\n' + (elementsDoc || '') + '\n\n## Questions the story raises\n\n' + (questions || '');
+  const overview = sec(meta, 'Overview'), frame = sec(meta, 'Frame'), questions = sec(meta, 'Questions'), reading = sec(meta, 'Suggested Reading');
+  let doc = '## Overview\n\n' + (overview || '');
+  if (frame) doc += '\n\n## Frame\n\n' + frame;
+  if (elementsDoc) doc += '\n\n' + elementsDoc;
+  doc += '\n\n## Questions the story raises\n\n' + (questions || '');
   if (reading) doc += '\n\n## Suggested Reading List\n\n' + reading;
   return doc.trim();
 }
