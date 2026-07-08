@@ -890,6 +890,7 @@
   #wikiBody .wk-doc{max-width:800px; margin:0 auto; padding:6px 18px 30px; box-sizing:border-box}
   .wk-doc-h2{font-family:var(--ancient); font-size:19px; letter-spacing:.04em; color:var(--ink); margin:24px 0 8px; padding-bottom:5px; border-bottom:1px solid var(--line)}
   .wk-doc-h3{font-family:var(--serif); font-weight:700; font-size:16px; color:var(--ink); margin:16px 0 4px}
+  .wk-doc-h4{font-family:var(--serif); font-weight:600; font-size:14.5px; color:var(--ink-soft); margin:12px 0 3px 12px}   /* nested element entry (e.g. a being under its Group/Type) */
   .wk-doc-p{font-family:var(--serif); font-size:14.5px; line-height:1.65; color:var(--ink); margin:0 0 10px}
   .wk-doc-li{font-family:var(--serif); font-size:14px; line-height:1.55; color:var(--ink); margin:0 0 8px; padding-left:16px; text-indent:-16px}
   .wk-doc-li::before{content:'?'; font-family:var(--sans); font-weight:700; color:var(--gold); margin-right:9px}
@@ -20640,7 +20641,8 @@ function mdToWikiHtml(md){
   // so questions never merge together
   String(md || '').replace(/\r/g, '').split('\n').forEach(raw => {
     const line = raw.trim(); if (!line) return; let m;
-    if (m = line.match(/^#{3,}\s+(.*)/)){ const h = document.createElement('div'); h.className = 'wk-doc-h3'; h.innerHTML = inline(m[1]); root.appendChild(h); return; }
+    if (m = line.match(/^#{4,}\s+(.*)/)){ const h = document.createElement('div'); h.className = 'wk-doc-h4'; h.innerHTML = inline(m[1]); root.appendChild(h); return; }
+    if (m = line.match(/^#{3}\s+(.*)/)){ const h = document.createElement('div'); h.className = 'wk-doc-h3'; h.innerHTML = inline(m[1]); root.appendChild(h); return; }
     if (m = line.match(/^#{1,2}\s+(.*)/)){ const h = document.createElement('div'); h.className = 'wk-doc-h2'; h.innerHTML = inline(m[1]); root.appendChild(h); return; }
     if (m = line.match(/^[-*]\s+(.*)/)){ const li = document.createElement('div'); li.className = 'wk-doc-li'; li.innerHTML = inline(m[1]); root.appendChild(li); return; }
     const p = document.createElement('div'); p.className = 'wk-doc-p'; p.innerHTML = inline(line); root.appendChild(p);
@@ -20680,30 +20682,63 @@ function wikiFrameGather(){
 // cut off by the model's output cap, GROUPED by element category, with an Overview + Frame + Questions + Reading List.
 async function buildWikiChunked(used, unused, npAll, ctx, body){
   const pre = (ctx._pf ? ctx._pf + '\n\n' : '') + (ctx._gc ? ctx._gc + '\n\n' : '') + (ctx._rb ? ctx._rb + '\n\n' : '');
-  const blockFor = u => {
+  const blockFor = (u, hd) => {
     const el = u.el; const facts = [el.word + (el.name ? (' “' + el.name + '”') : '') + ' — ' + wikiCatName(el.cat) + (el.sub ? (' · ' + el.sub) : '')];
     if (el.attrs && el.attrs.length) facts.push('traits: ' + el.attrs.map(a => a.word).join(', '));
     const rels = wikiRelations(el); if (rels.length) facts.push('relationships: ' + rels.join('; '));
-    return '### ' + (el.name ? (el.name + ' (' + el.word + ')') : el.word) + '\n' + facts.join('\n')
+    return (hd || '###') + ' ' + (el.name ? (el.name + ' (' + el.word + ')') : el.word) + '\n' + facts.join('\n')
       + (u.qs.length ? ('\nexcerpts: ' + u.qs.slice(0, 8).map(q => '“' + q + '”').join(' ')) : '')
       + (u.notes ? ('\nnotes: ' + u.notes) : '');
   };
-  // 1) element entries — grouped under a "## <Category>" heading, batched within each so nothing is dropped
-  const sysE = 'You write the "### <name>" entries for a story wiki. For EACH element under ELEMENTS output ONE "### <name>" markdown entry describing what the prose is DOING with it — patterns, recurring associations, connections to other elements, emerging meaning, tension — folding in its notes. ~3–6 sentences each, grounded ONLY in the given facts/excerpts/notes: never invent, never mention the author/writer/reader, and refer to story parts as "Section N". Output ONLY the ### entries — no other headings or preamble.';
+  const sysEntries = lvl => 'You write the "' + lvl + ' <name>" entries for a story wiki. For EACH element under ELEMENTS output ONE "' + lvl + ' <name>" markdown entry describing what the prose is DOING with it — patterns, recurring associations, connections to other elements, emerging meaning, tension — folding in its notes. ~3–6 sentences each, grounded ONLY in the given facts/excerpts/notes: never invent, never mention the author/writer/reader, and refer to story parts as "Section N". Output ONLY the ' + lvl + ' entries — no other headings or preamble.';
   const known = ['being', 'setting', 'object', 'event'], labelOf = { being: 'Beings', setting: 'Settings', object: 'Objects', event: 'Events' };
   const catOrder = known.concat(used.map(u => u.el.cat).filter(c => known.indexOf(c) < 0));   // then any other categories present
   const seenCat = {}; const groups = [];
   catOrder.forEach(c => { if (seenCat[c]) return; seenCat[c] = 1; const list = used.filter(u => u.el.cat === c); if (list.length) groups.push([c, labelOf[c] || (typeof wikiCatName === 'function' ? wikiCatName(c) : c), list]); });
   const BATCH = 7, totalUsed = used.length; let done = 0, elementsDoc = '';
-  for (const g of groups){
-    const label = g[1], catUsed = g[2]; let catEntries = '';
-    for (let bi = 0; bi < Math.ceil(catUsed.length / BATCH); bi++){
-      const batch = catUsed.slice(bi * BATCH, (bi + 1) * BATCH); done += batch.length;
-      if (body) body.innerHTML = '<div class="wk-doc-empty"><span class="spin"></span> Reading the story in cycles — ' + label.toLowerCase() + ' (' + done + '/' + totalUsed + ')…</div>';
-      try { const o = await aiCall(sysE, pre + 'ELEMENTS (' + label + '):\n\n' + batch.map(blockFor).join('\n\n') + '\n\nWrite the ### entries:', { maxTokens: 4096 }); if (o && o.trim()) catEntries += (catEntries ? '\n\n' : '') + o.trim(); }
+  const genEntries = async (items, lvl, progressLabel) => {
+    let outAcc = '';
+    for (let bi = 0; bi < Math.ceil(items.length / BATCH); bi++){
+      const batch = items.slice(bi * BATCH, (bi + 1) * BATCH); done += batch.length;
+      if (body) body.innerHTML = '<div class="wk-doc-empty"><span class="spin"></span> Reading the story in cycles — ' + progressLabel + ' (' + done + '/' + totalUsed + ')…</div>';
+      try { const o = await aiCall(sysEntries(lvl), pre + 'ELEMENTS:\n\n' + batch.map(u => blockFor(u, lvl)).join('\n\n') + '\n\nWrite the ' + lvl + ' entries:', { maxTokens: 4096 }); if (o && o.trim()) outAcc += (outAcc ? '\n\n' : '') + o.trim(); }
       catch (e){ /* a failed batch is skipped, not fatal */ }
     }
-    if (catEntries) elementsDoc += (elementsDoc ? '\n\n' : '') + '## ' + label + '\n\n' + catEntries;
+    return outAcc;
+  };
+  // a being's sub-group label: its named Group (party/faction) > an affiliation-ish trait > its Type
+  const beingSubgroupInfo = u => {
+    try { const ref = u.el && u.el.ref; if (ref && typeof beingGroupOf === 'function' && typeof wordKey === 'function'){ const grp = beingGroupOf(wordKey(ref)); if (grp) return { label: (grp.name || '').trim() || 'Group', kind: 'group' }; } } catch (e){}
+    const attrs = (u.el && u.el.attrs) || [];
+    const aff = attrs.find(a => a && /affiliation|faction|allegiance|house|clan|order|guild|side|tribe/i.test(String(a.sub || ''))); if (aff && aff.word) return { label: String(aff.word).trim(), kind: 'affiliation' };
+    const type = attrs.find(a => a && a.sub === 'Type'); if (type && type.word) return { label: String(type.word).trim(), kind: 'type' };
+    return { label: '', kind: '' };
+  };
+  for (const g of groups){
+    const cat = g[0], label = g[1], catUsed = g[2];
+    // Beings get an extra tier: sub-group by Group / Affiliation / Type when it actually clusters them
+    if (cat === 'being' && catUsed.length > 1){
+      const info = catUsed.map(u => { const s = beingSubgroupInfo(u); return { u: u, label: s.label, kind: s.kind }; });
+      const cnt = {}; info.forEach(x => { if (x.label) cnt[x.label] = (cnt[x.label] || 0) + 1; });
+      info.forEach(x => { x.final = (x.label && (x.kind === 'group' || cnt[x.label] >= 2)) ? x.label : ''; });   // keep explicit groups always; type/affiliation only when ≥2 share it
+      const kindRank = { group: 0, affiliation: 1, type: 2 }, labelKind = {};
+      info.forEach(x => { if (x.final && labelKind[x.final] == null) labelKind[x.final] = x.kind; });
+      const subLabels = [...new Set(info.filter(x => x.final).map(x => x.final))].sort((a, b) => ((kindRank[labelKind[a]] != null ? kindRank[labelKind[a]] : 3) - (kindRank[labelKind[b]] != null ? kindRank[labelKind[b]] : 3)) || ((cnt[b] || 0) - (cnt[a] || 0)));   // explicit Groups, then Affiliations, then Types; each by size
+      if (subLabels.length){
+        let beingsDoc = '';
+        for (const sl of subLabels){
+          const items = info.filter(x => x.final === sl).map(x => x.u);
+          const e = await genEntries(items, '####', label.toLowerCase() + ' · ' + sl);
+          if (e) beingsDoc += (beingsDoc ? '\n\n' : '') + '### ' + sl + '\n\n' + e;
+        }
+        const rest = info.filter(x => !x.final).map(x => x.u);
+        if (rest.length){ const e = await genEntries(rest, '####', label.toLowerCase()); if (e) beingsDoc += (beingsDoc ? '\n\n' : '') + '### Others\n\n' + e; }
+        if (beingsDoc) elementsDoc += (elementsDoc ? '\n\n' : '') + '## ' + label + '\n\n' + beingsDoc;
+        continue;
+      }
+    }
+    const flat = await genEntries(catUsed, '###', label.toLowerCase());
+    if (flat) elementsDoc += (elementsDoc ? '\n\n' : '') + '## ' + label + '\n\n' + flat;
   }
   // 2) narrative frame (genre / context / themes / stakes / plot) → a compact list for the synthesis call
   const frameEls = wikiFrameGather(); const frameByCat = {};
