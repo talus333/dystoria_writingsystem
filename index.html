@@ -1104,6 +1104,7 @@
   .ir-scope{display:flex; align-items:center; gap:6px; font-family:var(--sans); font-size:9.5px; letter-spacing:.05em; color:var(--ink-faint); cursor:pointer; flex:none}
   .ir-type{font-family:var(--sans); font-size:9px; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-soft); border:1px solid var(--line); border-radius:6px; background:var(--paper); padding:3px 4px; flex:none}
   .ir-exists{flex:none; color:#9a7b1e; font-family:var(--sans); font-size:9px; letter-spacing:.08em; text-transform:uppercase; cursor:default}
+  .ir-instory{flex:none; color:#2f7d55; font-family:var(--sans); font-size:9px; letter-spacing:.08em; text-transform:uppercase; cursor:default}
   .ir-scope-row{display:flex; align-items:center; gap:10px; margin-top:6px; flex-wrap:wrap}
   .ir-genhint,.ir-gen{display:none}
   .ir-el.sys .ir-genhint{display:inline; font-family:var(--serif); font-style:italic; font-size:11px; color:var(--ink-faint)}
@@ -15473,6 +15474,42 @@ function autoSpot(i, margin){
   });
   return best;
 }
+// Lay an imported section's map out in clean concentric rings by category, so it reads as a scene
+// instead of one central pile: main setting at the centre, other settings around it, then beings,
+// then objects, then events on a line below. Positions are pinned (fx/fy) so layoutConstellation keeps them.
+function arrangeImportSection(prompt){
+  if (!prompt || !Array.isArray(prompt.words) || !prompt.words.length) return;
+  const svg = $('skySvg');
+  const W = (svg && svg.clientWidth) || 1100, H = (svg && svg.clientHeight) || 640;
+  const words = prompt.words;
+  const pick = cat => words.map((w, i) => [w, i]).filter(a => a[0] && a[0].cat === cat && a[0].role !== 'rel' && a[0].role !== 'frame' && a[0].role !== 'constraint').map(a => a[1]);
+  const settings = pick('setting'), beings = pick('being'), objects = pick('object'), events = pick('event');
+  if (!(settings.length || beings.length || objects.length || events.length)) return;
+  const put = (i, x, y) => { const w = words[i]; if (!w) return; w.fx = Math.round(x); w.fy = Math.round(y); delete w.needsPlace; };   // fx/fy pins it (layoutConstellation honours it, won't reshuffle); still freely draggable
+  const hasEvents = events.length > 0;
+  const cx = W / 2, cy = H * (hasEvents ? 0.40 : 0.46);
+  // outermost ring radius that still fits: leave a top margin and (if any) room below for the events line
+  const ryMax = Math.max(110, Math.min(cy - 56, (hasEvents ? H * 0.70 : H * 0.95) - cy));
+  const aspect = Math.min(1.7, Math.max(1.1, W / H));   // stretch the "circles" horizontally to use the wide map
+  const main = settings.length ? settings[0] : -1;
+  if (main >= 0) put(main, cx, cy);
+  const others = settings.filter(i => i !== main);
+  const tiers = [others, beings, objects];               // inner → outer
+  const nPop = tiers.filter(t => t.length).length || 1;
+  const fracs = nPop === 1 ? [1] : nPop === 2 ? [0.55, 1] : [0.4, 0.7, 1];
+  const rots = [-Math.PI / 2, -Math.PI / 2 + 0.35, -Math.PI / 2 + 0.7];
+  let fi = 0;
+  tiers.forEach((idxs, ti) => {
+    if (!idxs.length) return;
+    const ry = ryMax * fracs[fi], rx = Math.min(W / 2 - 70, ry * aspect); fi++;
+    idxs.forEach((idx, k) => { const a = rots[ti] + (k / idxs.length) * Math.PI * 2; put(idx, cx + Math.cos(a) * rx, cy + Math.sin(a) * ry); });
+  });
+  if (hasEvents){
+    const n = events.length, yLine = Math.min(H - 34, cy + ryMax + H * 0.10);
+    const span = Math.min(W - 90, Math.max(0, n - 1) * 150);
+    events.forEach((i, k) => { const x = n <= 1 ? cx : (cx - span / 2 + k * span / (n - 1)); put(i, x, yLine); });
+  }
+}
 // an organic, island-like closed blob (per-vertex radius jitter; terrainSmoothPath rounds it)
 function autoTerrainPoly(cx, cy, baseR){
   baseR = baseR || 56;
@@ -19546,8 +19583,50 @@ function registerImportWord(el, word){
   if (el.summary){ state.session.wikiAI = state.session.wikiAI || {}; state.session.wikiAI[el.cat + '|' + word] = { text: el.summary, sig: 0 }; }
 }
 function importNoteToNotes(el, item){ if (el.note && el.note.trim()){ const k = wordKey(item); state.session.npNotes = state.session.npNotes || {}; if (!state.session.npNotes[k] || !npPlain(state.session.npNotes[k]).trim()) state.session.npNotes[k] = importNoteHtml(el.note); } }
+// ---- import de-dup: find an element already in the story so we enrich it instead of making a copy ----
+function importNameLc(x){ return String(x || '').trim().toLowerCase(); }
+// normalise for fuzzy matching: strip case, accents, leading articles, possessives and punctuation
+function importNorm(s){ return String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/['’`]/g, "'").replace(/'s\b/g, '').replace(/[^a-z0-9 ]+/g, ' ').replace(/\b(?:the|a|an)\b/g, ' ').replace(/\s+/g, ' ').trim(); }
+function importLev(a, b){ if (a === b) return 0; const m = a.length, n = b.length; if (!m) return n; if (!n) return m; let prev = []; for (let j = 0; j <= n; j++) prev[j] = j; for (let i = 1; i <= m; i++){ let cur = [i]; for (let j = 1; j <= n; j++){ const cost = a.charCodeAt(i - 1) === b.charCodeAt(j - 1) ? 0 : 1; cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost); } prev = cur; } return prev[n]; }
+// do two element names refer to the same thing? — articles/possessives/punctuation ignored, small typos tolerated
+function importNameMatch(a, b){ const na = importNorm(a), nb = importNorm(b); if (!na || !nb) return false; if (na === nb) return true; const d = importLev(na, nb), L = Math.max(na.length, nb.length); if (d <= 1 && L >= 4) return true; if (d <= 2 && L >= 8) return true; return false; }
+function findPromptElement(cat, name){
+  if (!name || !state.prompt || !Array.isArray(state.prompt.words)) return null;
+  return state.prompt.words.find(w => w && w.cat === cat && (importNameMatch(w.name, name) || importNameMatch(w.word, name))) || null;
+}
+function findLibraryElement(cat, name){
+  if (!name || !state.session || !Array.isArray(state.session.elemLibrary)) return null;
+  return state.session.elemLibrary.find(e => e && e.cat === cat && (importNameMatch(e.name, name) || importNameMatch(e.word, name))) || null;
+}
+// is this cat+name already anywhere in the current story (roster or any section's map)?
+function existsInStory(cat, name){
+  if (!name) return false;
+  if (findLibraryElement(cat, name)) return true;
+  if (state.frames && state.frames.length) return state.frames.some(f => f && f.prompt && (f.prompt.words || []).some(w => w && w.cat === cat && (importNameMatch(w.name, name) || importNameMatch(w.word, name))));
+  return findPromptElement(cat, name) != null;
+}
+// fold an imported element's NEW details into an existing story item (never clobber what's there)
+function mergeImportDetail(item, el){
+  if (!item || !el) return;
+  const traits = (el.traits || []).filter(t => t && t.sub && String(t.value || '').trim());
+  if (traits.length){ item.attrs = item.attrs || []; const have = {}; item.attrs.forEach(a => { have[a.sub + '|' + importNameLc(a.word)] = 1; }); traits.forEach(t => { const k = t.sub + '|' + importNameLc(t.value); if (!have[k]){ item.attrs.push({ word: t.value, sub: t.sub }); have[k] = 1; } }); }
+  if (el.note && el.note.trim()){
+    const k = wordKey(item); state.session.npNotes = state.session.npNotes || {};
+    const cur = state.session.npNotes[k]; const curPlain = cur ? npPlain(cur).trim() : '';
+    if (!curPlain) state.session.npNotes[k] = importNoteHtml(el.note);
+    else if (curPlain.toLowerCase().indexOf(el.note.trim().slice(0, 40).toLowerCase()) < 0) state.session.npNotes[k] = cur + importNoteHtml('\n\n' + el.note);
+  }
+  if (el.summary && el.summary.trim()){
+    state.session.wikiAI = state.session.wikiAI || {};
+    const wk = el.cat + '|' + (item.word || ''); const ex = state.session.wikiAI[wk] && state.session.wikiAI[wk].text;
+    if (!ex) state.session.wikiAI[wk] = { text: el.summary.trim(), sig: 0 };
+    else if (ex.toLowerCase().indexOf(el.summary.trim().toLowerCase()) < 0) state.session.wikiAI[wk] = { text: ex.replace(/[\s.]*$/, '') + '. ' + el.summary.trim(), sig: 0 };
+  }
+}
 // push one reviewed element straight onto the current map + register it
 function placeImportElement(el){
+  const existing = findPromptElement(el.cat, el.name);
+  if (existing){ mergeImportDetail(existing, el); return true; }   // already on this map → enrich, don't duplicate
   const b = buildImportItem(el); if (!b) return false;
   state.prompt.words.push(b.item);
   const MAPEL = { being: 1, setting: 1, object: 1, event: 1 };
@@ -19560,6 +19639,8 @@ function placeImportElement(el){
 }
 // Add a reviewed element to the story LIBRARY (registered + notable, but NOT auto-placed on the map — the user adds it on demand)
 function libraryAddFromImport(el){
+  const existing = findLibraryElement(el.cat, el.name);
+  if (existing){ mergeImportDetail(existing.item, el); return true; }   // already in the Story Legend roster → enrich it, no duplicate entry
   const b = buildImportItem(el); if (!b) return false;
   registerImportWord(el, b.word);
   importNoteToNotes(el, b.item);
@@ -19770,9 +19851,10 @@ async function extractImport(){
       const elTraits = cat === 'being'
         ? (Array.isArray(el.traits) ? el.traits : []).filter(t => t && BEING_IMPORT_TRAIT_SUBS.includes(t.sub) && String(t.value || '').trim()).map(t => ({ sub: t.sub, value: String(t.value).trim().slice(0, 60) }))
         : [];
-      const key = cat + '|' + name.toLowerCase();
-      if (seenEl[key]){
-        const ex = seenEl[key];
+      const key = cat + '|' + importNorm(name);
+      const ex = seenEl[key] || IMP.elements.find(r => r.cat === cat && importNameMatch(r.name, name));   // fuzzy: "The Woodcutter" == "Woodcutter", minor typos
+      if (ex){
+        if (!seenEl[key]) seenEl[key] = ex;
         // enrich, don't overwrite — the same element usually gains detail across later sections
         if (summary){ if (!ex.summary) ex.summary = summary; else if (ex.summary.toLowerCase().indexOf(summary.toLowerCase()) < 0) ex.summary = ex.summary.replace(/[\s.]*$/, '') + '. ' + summary; }
         { const moreNote = (notesMode && IMP.qa) ? aiNote : '';   // Q&A notes accumulate across answers; NOTES notes are already pulled whole-doc; PROSE has none
@@ -19782,7 +19864,7 @@ async function extractImport(){
         return;
       }
       const note = notesMode ? (IMP.qa ? aiNote : (importSourceNote(name, IMP.prose) || aiNote)) : '';   // NOTES → verbatim from doc; Q&A → the AI's cleaned restatement; PROSE → summarise
-      const rec = { cat, name, sub: validImportSub(cat, el.sub), traits: elTraits, summary, note, section: String(el.section || '').trim(), exists: wordExistsSystem(cat, name), include: true, sys: false };
+      const rec = { cat, name, sub: validImportSub(cat, el.sub), traits: elTraits, summary, note, section: String(el.section || '').trim(), exists: wordExistsSystem(cat, name), existsStory: existsInStory(cat, name), include: true, sys: false };
       seenEl[key] = rec; IMP.elements.push(rec); newEls.push(rec);
     });
     IMP.genres = IMP.elements.filter(e => e.cat === 'genre').map(e => e.name);   // tag imported words for future generation bias
@@ -19888,6 +19970,7 @@ function irBuildCard(el){
       (el.cat !== 'being' ? '<select class="ir-sub" title="Subcategory — AI-suggested; change if needed">' + subOpts + '</select>' : '') +
       '<input class="ir-name" value="' + esc(el.name) + '" placeholder="name">' +
       '<span class="ir-exists"' + (el.exists ? '' : ' style="display:none"') + ' title="Already in the shared library — editing here makes a story-specific variation">✦ in library</span>' +
+      '<span class="ir-instory"' + (el.existsStory ? '' : ' style="display:none"') + ' title="Already in this story — importing adds any NEW details to it instead of creating a duplicate">↩ updates existing</span>' +
       '</div>' +
       (hasTraits ? '<div class="ir-traits-wrap"></div>' : '') +
       '<textarea class="ir-sum" rows="2" placeholder="summary">' + esc(el.summary) + '</textarea>' +
@@ -19901,8 +19984,8 @@ function irBuildCard(el){
     const inc = d.querySelector('.ir-i'); inc.addEventListener('change', () => { el.include = inc.checked; d.classList.toggle('off', !inc.checked); });
     d.querySelector('.ir-type').addEventListener('change', e => { el.cat = e.target.value; el.sub = validImportSub(el.cat, ''); if (!(el.cat === 'being' || el.cat === 'object' || el.cat === 'setting')) el.traits = []; else el.traits = el.traits || []; renderImportReview(); });
     const subSel = d.querySelector('.ir-sub'); if (subSel) subSel.addEventListener('change', e => { el.sub = e.target.value; });
-    const nm = d.querySelector('.ir-name'); const ex = d.querySelector('.ir-exists');
-    nm.addEventListener('input', () => { el.name = nm.value; el.exists = wordExistsSystem(el.cat, nm.value.trim()); ex.style.display = el.exists ? '' : 'none'; });
+    const nm = d.querySelector('.ir-name'); const ex = d.querySelector('.ir-exists'); const inst = d.querySelector('.ir-instory');
+    nm.addEventListener('input', () => { el.name = nm.value; el.exists = wordExistsSystem(el.cat, nm.value.trim()); ex.style.display = el.exists ? '' : 'none'; el.existsStory = existsInStory(el.cat, nm.value.trim()); if (inst) inst.style.display = el.existsStory ? '' : 'none'; });
     const ta = d.querySelector('.ir-sum'); ta.addEventListener('input', () => { el.summary = ta.value; });
     const na = d.querySelector('.ir-note'); if (na) na.addEventListener('input', () => { el.note = na.value; });
     d.querySelector('.ir-sys').addEventListener('change', e => { el.sys = e.target.checked; d.classList.toggle('sys', el.sys); });
@@ -20113,6 +20196,8 @@ async function confirmImport(){
   state.frameIdx = firstIdx; state.prompt = state.frames[firstIdx].prompt;
   incl.forEach(el => { if (el.cat === 'concept' && !placedAny.has(el)){ if (placeImportElement(el)){ added++; placedAny.add(el); } } });
   const legendOnly = incl.filter(el => MAPCAT_I[el.cat] && !placedAny.has(el)).length;
+  // organise each imported section into clean rings (setting centre → settings → beings → objects → events) instead of one central pile
+  for (let si = 0; si < secs.length; si++){ try { arrangeImportSection(state.frames[firstIdx + si].prompt); } catch (e){} }
   // weave concept ↔ element connections per section: a sentence that names both makes the link
   let _cweb = 0;
   try {
