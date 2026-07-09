@@ -23371,7 +23371,11 @@ async function runAIOverview(){
     const elNames = els.map(e => e.name ? (e.word + ' “' + e.name + '”') : e.word);
     const npAll = (state.session && state.session.npNotes) ? Object.values(state.session.npNotes).map(h => npPlain(h)).filter(Boolean).join('\n') : '';
     const sys = 'You write the top-level overview for a story wiki: organize what the story is about and surface the meaningful patterns and threads tying it together — its throughlines, motifs, the tensions and questions in motion, and how the elements relate — not just a plot recap. Draw on the prose (primary), the list of story elements, and the writer’s notes. Use ONLY what is given; do not invent, and never mention the author, the writer, or the act of writing. Refer to parts as "Section N", not "timeframe". 4–7 sentences, clear and substantive, no preamble.';
+    const _orgs = (typeof orgsContext === 'function') ? orgsContext() : [];
+    const _conns = (typeof connectionsContext === 'function') ? connectionsContext() : [];
     const prompt = (elNames.length ? ('Story elements: ' + elNames.join(', ') + '\n\n') : '')
+      + (_orgs.length ? ('Organizations: ' + _orgs.join('; ') + '\n\n') : '')
+      + (_conns.length ? ('Connections (typed links between elements): ' + _conns.join('; ') + '\n\n') : '')
       + (npAll ? ('Writer’s notes (rough context):\n' + npAll.slice(0, 3000) + '\n\n') : '')
       + 'Story so far:\n\n' + text.slice(0, 16000)
       + (prior ? ('\n\nExisting overview (build on it — keep what still holds, fold in what is new; do NOT rewrite from scratch):\n' + prior) : '')
@@ -31217,19 +31221,29 @@ body.eink #expMenu{background:#fff; border-color:#000}
     var nx = nr.left + nr.width / 2 - sr.left, ny = nr.top + nr.height / 2 - sr.top;
     var svgN = document.getElementById('skySvg'); var rrN = svgN.getBoundingClientRect(); var vvN = viewBoxVals();
     var nodeScreenN = function(j){ var nd = state.nodes && state.nodes[j]; if (!nd) return null; return { x: rrN.left - sr.left + (nd.x - vvN[0]) / vvN[2] * rrN.width, y: rrN.top - sr.top + (nd.y - vvN[1]) / vvN[3] * rrN.height }; };
-    // 1) connections to other MAP elements → a curved web line + type pill (the persistent edges are hidden in the Webs UI)
+    // 1) connections to other MAP elements → a curved web line (stops at each label edge, with a direction arrow) + a type pill
+    var _NSm = 'http://www.w3.org/2000/svg';
     ((state.prompt.links) || []).forEach(function(l){
       var oj = (l.a === i) ? l.b : ((l.b === i) ? l.a : -1); if (oj < 0) return;
       var ow = state.prompt.words[oj]; if (!ow || !MAP[ow.cat] || (ow.role !== 'being' && ow.role !== 'word') || ow.needsPlace) return;
-      var pa = nodeScreenN(oj); if (!pa) return;
+      var oc = nodeScreenN(oj); if (!oc) return;
+      var toRight = oc.x >= nx;
+      var endA = labelAnchor(oj, toRight ? 'L' : 'R', sr) || oc;                 // stop at the connected element's near label edge (don't overlap letters)
+      var startA = labelAnchor(i, toRight ? 'R' : 'L', sr) || { x: nx, y: ny };  // leave from the selected element's near label edge
       var col0 = (typeof catColor === 'function') ? catColor(ow.cat) : '#8a8f98';
-      var dx = pa.x - nx, dy = pa.y - ny, len = Math.hypot(dx, dy) || 1;
+      var dx = endA.x - startA.x, dy = endA.y - startA.y, len = Math.hypot(dx, dy) || 1;
       var ox = -dy / len, oy = dx / len, bow = Math.min(34, len * 0.14);
-      var mx = (nx + pa.x) / 2 + ox * bow, my = (ny + pa.y) / 2 + oy * bow;
-      var pm = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-      pm.setAttribute('d', 'M' + nx + ' ' + ny + ' Q' + mx + ' ' + my + ' ' + pa.x + ' ' + pa.y);
+      var mx = (startA.x + endA.x) / 2 + ox * bow, my = (startA.y + endA.y) / 2 + oy * bow;
+      var pm = document.createElementNS(_NSm, 'path');
+      pm.setAttribute('d', 'M' + startA.x + ' ' + startA.y + ' Q' + mx + ' ' + my + ' ' + endA.x + ' ' + endA.y);
       pm.setAttribute('fill', 'none'); pm.setAttribute('stroke', col0); pm.setAttribute('stroke-width', '1.6'); pm.setAttribute('opacity', '.72');
       web.appendChild(pm);
+      // direction arrow at the connected end (points from the selected element toward what it's connected to)
+      var adx = endA.x - mx, ady = endA.y - my, al = Math.hypot(adx, ady) || 1; adx /= al; ady /= al;
+      var bx = endA.x - adx * 8, by = endA.y - ady * 8, pxp = -ady, pyp = adx;
+      var tri = document.createElementNS(_NSm, 'path');
+      tri.setAttribute('d', 'M' + endA.x + ' ' + endA.y + ' L' + (bx + pxp * 3.3) + ' ' + (by + pyp * 3.3) + ' L' + (bx - pxp * 3.3) + ' ' + (by - pyp * 3.3) + ' Z');
+      tri.setAttribute('fill', col0); tri.setAttribute('opacity', '.8'); web.appendChild(tri);
       expConnChip(mx, my, i, oj);
     });
     // 2) connections to SIDEBAR elements (concepts/orgs + threads) → line to the row's port + (typed) pill
