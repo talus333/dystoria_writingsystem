@@ -9445,6 +9445,34 @@ function normalizeLink(l){
   return l;
 }
 function getLink(a, b){ if (!state.prompt) return null; const lo = Math.min(a, b), hi = Math.max(a, b); return (state.prompt.links || []).find(l => l.a === lo && l.b === hi) || null; }
+/* A story-wide list of typed connections for AI context — covers map↔map, map↔sidebar, and sidebar↔sidebar,
+   including Organizations (cat 'org') and Concepts (cat 'concept'). Returns lines like "A —member of→ B". */
+function connectionsContext(){
+  const words = (state.prompt && state.prompt.words) || [];
+  const links = (state.prompt && state.prompt.links) || [];
+  const catName = c => c === 'org' ? 'organization' : c;
+  const nm = w => { if (!w) return '?'; const n = (w.name || '').trim(), wd = (w.word || '').trim(); const base = (n && wd && n.toLowerCase() !== wd.toLowerCase()) ? (n + ' (' + wd + ')') : (n || wd); return base + (w.cat ? ' [' + catName(w.cat) + ']' : ''); };
+  const out = [];
+  links.forEach(l => {
+    const a = (l && l.a != null) ? l.a : (l && l[0]), b = (l && l.b != null) ? l.b : (l && l[1]);
+    const wa = words[a], wb = words[b]; if (!wa || !wb) return;
+    const fwd = (l.fwd && l.fwd.type) || (l.rel || ''), rev = (l.rev && l.rev.type) || '';
+    if (fwd) out.push(nm(wa) + ' —' + fwd + '→ ' + nm(wb));
+    if (rev) out.push(nm(wb) + ' —' + rev + '→ ' + nm(wa));
+    if (!fwd && !rev) out.push(nm(wa) + ' — connected to — ' + nm(wb));
+  });
+  return out;
+}
+/* All Organizations in the current section, with their characteristics — for AI rosters that filter out frame words. */
+function orgsContext(){
+  const words = (state.prompt && state.prompt.words) || [];
+  return words.filter(w => w.cat === 'org').map(w => {
+    const n = (w.name || '').trim(), wd = (w.word || '').trim();
+    const nmeLabel = (n && wd && n.toLowerCase() !== wd.toLowerCase()) ? (n + ' (' + wd + ')') : (n || wd);
+    const chars = ((w.attrs) || []).map(a => a.word).filter(Boolean);
+    return nmeLabel + (chars.length ? (' — ' + chars.join(', ')) : '');
+  });
+}
 function relSubFor(i, j){
   const wi = state.prompt.words[i], wj = state.prompt.words[j]; if (!wi || !wj) return null;
   const relCat = getCat('relationship');
@@ -21006,6 +21034,8 @@ async function buildWikiChunked(used, unused, npAll, ctx, body){
   frameEls.forEach(f => { (frameByCat[f.cat] = frameByCat[f.cat] || []).push(f.name ? (f.name + ' (' + f.word + ')') : f.word); });
   const frameLines = [];
   [['genre', 'Genre'], ['period', 'Context'], ['theme', 'Themes'], ['stakes', 'Stakes'], ['plot', 'Plot'], ['concept', 'Concepts / terms']].forEach(cl => { if (frameByCat[cl[0]] && frameByCat[cl[0]].length) frameLines.push(cl[1] + ': ' + frameByCat[cl[0]].join(', ')); });
+  { const _oc = (typeof orgsContext === 'function') ? orgsContext() : []; if (_oc.length) frameLines.push('Organizations: ' + _oc.join('; '));   // orgs (with characteristics)
+    const _conns = (typeof connectionsContext === 'function') ? connectionsContext() : []; if (_conns.length) frameLines.push('Connections: ' + _conns.join('; ')); }
   // 3) Overview + Frame + Questions + Reading List
   const unusedNames = unused.map(e => e.name ? (e.word + ' “' + e.name + '”') : e.word);
   if (body) body.innerHTML = '<div class="wk-doc-empty"><span class="spin"></span> Writing the overview, frame, questions and reading list…</div>';
@@ -29027,7 +29057,9 @@ body.eink #mobileNotice .mn-card{border:2px solid #000}
       prose = Array.from(ed.children).filter(function(c){ return (fm ? fm.get(c) : 0) === fi && !(c.classList && c.classList.contains('sec-mark')) && c.tagName !== 'H3'; }).map(function(c){ return (c.textContent || '').trim(); }).filter(Boolean).join('\n\n').slice(-2600);
     } catch(e){}
     var goals = (typeof goalContext === 'function') ? (goalContext() || '') : '';
-    return { sec: (fi + 1) + (secName ? ' — ' + secName : ''), stage: stage, stakes: stakes, threads: threads, els: els, prose: prose, goals: goals };
+    var orgs = (typeof orgsContext === 'function') ? orgsContext() : [];
+    var conns = (typeof connectionsContext === 'function') ? connectionsContext() : [];
+    return { sec: (fi + 1) + (secName ? ' — ' + secName : ''), stage: stage, stakes: stakes, threads: threads, els: els, orgs: orgs, conns: conns, prose: prose, goals: goals };
   }
   function setWhereNext(text){
     if (!text || !text.trim()) return;
@@ -29073,7 +29105,7 @@ body.eink #mobileNotice .mn-card{border:2px solid #000}
     p.innerHTML = '<div class="ex-head"><span class="ex-t">Where next? — Section ' + c.sec + '</span><button type="button" class="ex-x" title="Close">×</button></div><div class="ex-body"><div class="ex-think"><span class="spin"></span> weighing the possibilities…</div></div>';
     p.querySelector('.ex-x').addEventListener('click', function(){ p.classList.remove('show'); });
     var sys = 'You help a writer who is stuck mid-section. From the section\'s plot stage, open stakes, unresolved threads, its elements, and the prose so far, propose exactly 3 possible NEXT BEATS — concrete things that could happen next in THIS section. Each a DIFFERENT direction, one vivid specific sentence, growing out of what is on the page and pushing a stake or a thread forward. Ground every beat in the given material; never generic writing advice, never meta-commentary about writing. Return ONLY a JSON array of exactly 3 strings.';
-    var user = 'CURRENT SECTION: ' + c.sec + (c.stage ? ('\nPLOT STAGE: ' + c.stage) : '') + (c.stakes.length ? ('\nOPEN STAKES: ' + c.stakes.join(', ')) : '') + (c.threads.length ? ('\nTHREADS: ' + c.threads.join('; ')) : '') + (c.els.length ? ('\nELEMENTS IN THIS SECTION: ' + c.els.join(', ')) : '') + (c.goals ? ('\n' + c.goals) : '') + '\n\nPROSE SO FAR (end of the section):\n' + (c.prose || '(nothing written in this section yet)') + '\n\nReturn 3 possible next beats as a JSON array of strings.';
+    var user = 'CURRENT SECTION: ' + c.sec + (c.stage ? ('\nPLOT STAGE: ' + c.stage) : '') + (c.stakes.length ? ('\nOPEN STAKES: ' + c.stakes.join(', ')) : '') + (c.threads.length ? ('\nTHREADS: ' + c.threads.join('; ')) : '') + (c.els.length ? ('\nELEMENTS IN THIS SECTION: ' + c.els.join(', ')) : '') + (c.orgs && c.orgs.length ? ('\nORGANIZATIONS: ' + c.orgs.join('; ')) : '') + (c.conns && c.conns.length ? ('\nCONNECTIONS: ' + c.conns.join('; ')) : '') + (c.goals ? ('\n' + c.goals) : '') + '\n\nPROSE SO FAR (end of the section):\n' + (c.prose || '(nothing written in this section yet)') + '\n\nReturn 3 possible next beats as a JSON array of strings.';
     try {
       var out = await aiCall(sys, user, { maxTokens: 500, json: true });
       var arr = []; try { arr = JSON.parse(out); } catch(e){ if (typeof parseJsonLoose === 'function'){ try { arr = parseJsonLoose(out); } catch(_){} } }
@@ -30384,7 +30416,9 @@ body.eink #expMenu{background:#fff; border-color:#000}
       if (fr && fr.stageName) secName = fr.stageName;
       if (!secName){ var h3q = document.querySelector('#editor h3[data-frame="' + fi + '"]'); if (h3q) secName = (h3q.textContent || '').trim(); }
       var curEls = ((state.prompt && state.prompt.words) || []).filter(function(w){ return (w.role === 'being' || w.role === 'word') && { being: 1, setting: 1, object: 1, event: 1 }[w.cat]; }).map(function(w){ return w.name || w.word; });
-      return { goals: goals, questions: qs, els: elLines, sec: (fi + 1) + (secName ? ' — ' + secName : ''), curEls: curEls, focus: qaFocusDetail() };
+      var orgs = (typeof orgsContext === 'function') ? orgsContext() : [];
+      var conns = (typeof connectionsContext === 'function') ? connectionsContext() : [];
+      return { goals: goals, questions: qs, els: elLines, sec: (fi + 1) + (secName ? ' — ' + secName : ''), curEls: curEls, orgs: orgs, conns: conns, focus: qaFocusDetail() };
     }
     var qaVoice = false; try{ qaVoice = localStorage.getItem('dystoria.qaVoice') === '1'; }catch(e){}
     function qaSpeak(text){
@@ -30406,6 +30440,8 @@ body.eink #expMenu{background:#fff; border-color:#000}
       var user = 'STORY GOALS: ' + (ctx.goals || '(none)') +
         '\nOPEN QUESTIONS FROM THE WIKI:\n' + (ctx.questions.join('\n') || '(none yet)') +
         '\nELEMENTS + NOTES:\n' + (ctx.els.join('\n') || '(none)') +
+        (ctx.orgs && ctx.orgs.length ? ('\nORGANIZATIONS: ' + ctx.orgs.join('; ')) : '') +
+        (ctx.conns && ctx.conns.length ? ('\nCONNECTIONS: ' + ctx.conns.join('; ')) : '') +
         '\nCURRENT SECTION: ' + ctx.sec + ' (on its map: ' + (ctx.curEls.join(', ') || 'nothing yet') + ')' +
         '\n\nCONVERSATION SO FAR:\n' + (convo || '(just beginning \u2014 open warmly with the most interesting question)') +
         '\n\nAsk the next question.';
