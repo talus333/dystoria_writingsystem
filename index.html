@@ -3567,7 +3567,7 @@
     </div>
     <div id="npAddMenu" hidden></div>
     <div id="sessMenu"></div>
-    <div id="fsHeader"><div id="miniClock" title="Time left in this session"></div><div id="fsWords"></div><button id="fsPillsToggle" type="button"></button><div id="sessionGoal"></div><div id="fsGoalHint"></div></div>
+    <div id="fsHeader"><div id="miniClock" title="Time left in this session"></div><div id="fsWords"></div><button id="fsPillsToggle" type="button"></button><div id="sessionGoal"></div><div id="sessionNext"></div><div id="fsGoalHint"></div></div>
     <div id="focusTab" title="Peek your focus elements">Focus</div>
     <div id="redoChoice"><div class="rdc-card">
       <div class="rdc-q">Keep this rewrite?</div>
@@ -17883,6 +17883,13 @@ function applyFsHeader(){
     if (fsShow.prompt && prep){ sg.textContent = prep; sg.classList.add('show'); }
     else { sg.textContent = ''; sg.classList.remove('show'); }
   }
+  // "Where next?" beat the writer chose — sits below the clock, and below the prompt when there is one
+  const sn = $('sessionNext');
+  if (sn){
+    const nx = (state.session && state.session.whereNext) ? String(state.session.whereNext).trim() : '';
+    if (nx){ sn.innerHTML = '<span class="sn-lbl">Where next</span>' + esc(nx); sn.classList.add('show'); }
+    else { sn.innerHTML = ''; sn.classList.remove('show'); }
+  }
   // the top header is fixed, so push the editor down by its actual height (clock + pills vary) — every width,
   // so the active prompt (prior sessions are hidden in full-screen) sits right below the header with no scroll needed.
   {
@@ -24167,6 +24174,7 @@ function setWriting(on){
   if (wb) wb.classList.toggle('on', on);
   setMode(state.inkMode ? 'ink' : 'type');   // restore the right surface (editor vs notepad, + correct ink page)
   if (on){
+    if (window.paintPrepWhereNext) window.paintPrepWhereNext();   // restore the chosen "Where next?" beat in the prep panel
     { const _wg=$('wmGuide'); if(_wg) _wg.style.display = guideDone('write') ? 'none' : ''; }
     updateWmTitle();
     renderWriteFrame();
@@ -28751,7 +28759,6 @@ body.eink #mobileNotice .mn-card{border:2px solid #000}
   function $id(x){ return document.getElementById(x); }
   var btn = document.createElement('button'); btn.id = 'whereNextBtn'; btn.type = 'button'; btn.innerHTML = '✦ Where next?';
   btn.title = 'Stuck? The AI suggests a few possible next beats for this section — grounded in its plot stage, open stakes and unresolved threads';
-  if (document.body) document.body.appendChild(btn); else document.addEventListener('DOMContentLoaded', function(){ document.body.appendChild(btn); });
   function pop(){ var p = $id('wnPop'); if (!p){ p = document.createElement('div'); p.id = 'wnPop'; document.body.appendChild(p); } return p; }
   function wnContext(){
     var fi = (typeof state !== 'undefined' && state.frameIdx) || 0;
@@ -28776,16 +28783,41 @@ body.eink #mobileNotice .mn-card{border:2px solid #000}
     var goals = (typeof goalContext === 'function') ? (goalContext() || '') : '';
     return { sec: (fi + 1) + (secName ? ' — ' + secName : ''), stage: stage, stakes: stakes, threads: threads, els: els, prose: prose, goals: goals };
   }
+  function setWhereNext(text){
+    if (!text || !text.trim()) return;
+    if (typeof ensureSession === 'function' && !state.session) ensureSession();
+    if (state.session) state.session.whereNext = text.trim();
+    if (typeof scheduleAutosave === 'function') scheduleAutosave();
+    paintPrepNext();
+    if (typeof applyFsHeader === 'function') applyFsHeader();   // ride below the clock (and below the prompt) in the session
+    if (typeof flashStatus === 'function') flashStatus('Set as your next beat');
+    var p = $id('wnPop'); if (p) p.classList.remove('show');
+  }
+  function clearWhereNext(){ if (state.session) state.session.whereNext = ''; if (typeof scheduleAutosave === 'function') scheduleAutosave(); paintPrepNext(); if (typeof applyFsHeader === 'function') applyFsHeader(); }
+  function paintPrepNext(){
+    var host = $id('whereNextShow'); if (!host) return;
+    var nx = (state.session && state.session.whereNext) ? String(state.session.whereNext).trim() : '';
+    if (nx){ host.innerHTML = '<span class="wn-show-lbl">Where next</span><span class="wn-show-t"></span><button type="button" class="wn-show-x" title="Clear">×</button>'; host.querySelector('.wn-show-t').textContent = nx; host.querySelector('.wn-show-x').addEventListener('click', clearWhereNext); host.style.display = ''; }
+    else { host.innerHTML = ''; host.style.display = 'none'; }
+  }
+  window.paintPrepWhereNext = paintPrepNext;   // let a session/story load repaint it
   function cards(p, arr){
     var body = p.querySelector('.ex-body'); body.innerHTML = '';
-    if (!arr.length){ body.innerHTML = '<div class="ex-think">Nothing surfaced — try again.</div>'; return; }
+    if (!arr.length){ var none = document.createElement('div'); none.className = 'ex-think'; none.textContent = 'Nothing surfaced — write your own next beat below.'; body.appendChild(none); }
     arr.forEach(function(text){
       var card = document.createElement('div'); card.className = 'ex-card';
       var t = document.createElement('div'); t.className = 'ex-card-t'; t.textContent = text; card.appendChild(t);
       var acts = document.createElement('div'); acts.className = 'ex-card-acts';
-      var dis = document.createElement('button'); dis.type = 'button'; dis.className = 'ex-dismiss'; dis.textContent = '×'; dis.title = 'Dismiss'; dis.addEventListener('click', function(){ card.remove(); if (!body.querySelector('.ex-card')) p.classList.remove('show'); });
-      acts.appendChild(dis); card.appendChild(acts); body.appendChild(card);
+      var use = document.createElement('button'); use.type = 'button'; use.className = 'ex-note'; use.textContent = '✦ use this'; use.title = 'Set this as your next beat — it rides below the clock in the session'; use.addEventListener('click', function(){ setWhereNext(text); }); acts.appendChild(use);
+      var dis = document.createElement('button'); dis.type = 'button'; dis.className = 'ex-dismiss'; dis.textContent = '×'; dis.title = 'Dismiss'; dis.addEventListener('click', function(){ card.remove(); }); acts.appendChild(dis);
+      card.appendChild(acts); body.appendChild(card);
     });
+    // ...or write your own, drawing on the cards above for inspiration
+    var own = document.createElement('div'); own.className = 'wn-own';
+    var lbl = document.createElement('div'); lbl.className = 'wn-own-lbl'; lbl.textContent = '…or set your own next beat'; own.appendChild(lbl);
+    var ta = document.createElement('textarea'); ta.className = 'wn-own-ta'; ta.placeholder = 'Where you want this section to go next — in your own words'; if (state.session && state.session.whereNext) ta.value = state.session.whereNext; own.appendChild(ta);
+    var setb = document.createElement('button'); setb.type = 'button'; setb.className = 'wn-own-set'; setb.textContent = 'Set as where-next'; setb.addEventListener('click', function(){ setWhereNext(ta.value); }); own.appendChild(setb);
+    body.appendChild(own);
   }
   async function run(){
     if (typeof aiAuthed === 'function' && !aiAuthed()){ if (typeof promptAiSignup === 'function') promptAiSignup(); return; }
@@ -28800,9 +28832,23 @@ body.eink #mobileNotice .mn-card{border:2px solid #000}
       if (!Array.isArray(arr)) arr = (arr && Array.isArray(arr.beats)) ? arr.beats : [];
       arr = arr.filter(function(x){ return typeof x === 'string' && x.trim(); }).slice(0, 4);
       cards(p, arr);
-    } catch(e){ var b = p.querySelector('.ex-body'); if (b) b.innerHTML = '<div class="ex-think">Couldn\'t reach the AI — try again.</div>'; }
+    } catch(e){ cards(p, []); }   // AI failed → still offer the write-your-own field
   }
   btn.addEventListener('click', function(e){ e.stopPropagation(); run(); });
+  // place the pill + the chosen-beat display inside the Writing Focus panel, with the other focus controls
+  function mount(){
+    var host = $id('focusScroll'); if (!host) return false;
+    if ($id('whereNextBlock')) return true;
+    var block = document.createElement('div'); block.id = 'whereNextBlock';
+    btn.classList.add('wn-pill');
+    var show = document.createElement('div'); show.id = 'whereNextShow'; show.style.display = 'none';
+    block.appendChild(btn); block.appendChild(show);
+    var anchor = $id('focusAddBtn');
+    if (anchor && anchor.parentNode === host) host.insertBefore(block, anchor.nextSibling); else host.appendChild(block);
+    paintPrepNext();
+    return true;
+  }
+  if (!mount()){ document.addEventListener('DOMContentLoaded', mount); setTimeout(mount, 800); setTimeout(mount, 2000); }
 })();
 </script>
 
@@ -29045,10 +29091,26 @@ body.expb #storyLibWin:not(.lib-min){top:48px !important}
 /* ---- Explore (map) + Where next? (write): AI idea cards when stuck ---- */
 #exploreBtn{pointer-events:auto; font-family:var(--sans); font-size:9.5px; font-weight:600; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-soft); background:transparent; border:1px dashed var(--ink-faint); border-radius:13px; padding:3px 11px; cursor:pointer; white-space:nowrap}
 #exploreBtn:hover{color:var(--ink); border-color:var(--gold)}
-#whereNextBtn{display:none; position:fixed; left:22px; bottom:86px; z-index:120; align-items:center; gap:6px; font-family:var(--sans); font-size:10px; font-weight:600; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-soft); background:var(--paper); border:1px dashed var(--ink-faint); border-radius:16px; padding:7px 14px; cursor:pointer; box-shadow:0 8px 24px rgba(0,0,0,.18)}
-#whereNextBtn:hover{color:var(--ink); border-color:var(--gold)}
-body.writing #whereNextBtn{display:inline-flex}
-body.eink #whereNextBtn{background:#fff; border-color:#000; color:#000}
+#whereNextBtn.wn-pill{display:inline-flex; align-items:center; gap:6px; font-family:var(--sans); font-size:9.5px; font-weight:600; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-soft); background:transparent; border:1px dashed var(--ink-faint); border-radius:14px; padding:5px 13px; cursor:pointer}
+#whereNextBtn.wn-pill:hover{color:var(--ink); border-color:var(--gold)}
+body.eink #whereNextBtn.wn-pill{border-color:#000; color:#000}
+#whereNextBlock{display:flex; flex-direction:column; align-items:center; gap:7px; margin:10px 0 2px}
+#whereNextShow{display:flex; align-items:flex-start; gap:7px; max-width:300px; box-sizing:border-box; font-family:var(--serif); font-size:13.5px; line-height:1.4; color:var(--gold); background:var(--bg2); border:1px solid var(--line); border-radius:10px; padding:8px 10px}
+body:not(.eink) #whereNextShow{color:var(--gold)}
+#whereNextShow .wn-show-lbl{flex:none; font-family:var(--sans); font-size:8px; letter-spacing:.14em; text-transform:uppercase; color:var(--ink-faint); margin-top:2px}
+#whereNextShow .wn-show-t{flex:1}
+#whereNextShow .wn-show-x{flex:none; border:none; background:none; color:var(--ink-faint); font-size:15px; line-height:1; cursor:pointer; padding:0 2px}
+#whereNextShow .wn-show-x:hover{color:#c0392b}
+.wn-own{border-top:1px solid var(--line); margin-top:10px; padding-top:12px}
+.wn-own-lbl{font-family:var(--sans); font-size:10px; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-faint); margin-bottom:7px}
+.wn-own-ta{width:100%; box-sizing:border-box; min-height:60px; resize:vertical; font-family:var(--serif); font-size:14px; line-height:1.45; color:var(--ink); background:var(--bg2); border:1px solid var(--line); border-radius:9px; padding:8px 10px; outline:none}
+.wn-own-ta:focus{border-color:var(--gold)}
+.wn-own-set{margin-top:8px; font-family:var(--sans); font-size:9px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; border:none; border-radius:9px; background:var(--ink); color:var(--paper); padding:7px 14px; cursor:pointer}
+.wn-own-set:hover{opacity:.88}
+body.eink .wn-own-set{background:#000}
+body.writing.insession #sessionNext{display:none}
+body.writing.insession #sessionNext.show{display:block; margin:8px auto 0; max-width:680px; text-align:center; font-family:var(--serif); font-style:italic; font-size:15px; line-height:1.5; color:var(--ink-soft)}
+body.writing.insession #sessionNext .sn-lbl{display:block; font-family:var(--sans); font-style:normal; font-size:8px; letter-spacing:.18em; text-transform:uppercase; color:var(--ink-faint); margin-bottom:4px}
 #exPop, #wnPop{display:none; z-index:80; width:340px; max-width:calc(100vw - 40px); max-height:70vh; overflow-y:auto; background:var(--paper); border:1px solid var(--line); border-radius:16px; box-shadow:0 18px 50px rgba(0,0,0,.3); scrollbar-width:thin}
 #exPop{position:absolute; left:calc(var(--lw,140px) + 12px); top:48px}
 #wnPop{position:fixed; left:22px; bottom:130px}
