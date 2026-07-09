@@ -19688,9 +19688,21 @@ function splitProseBySections(prose, sections){
   if (uniq[0].idx > 0){ const pre = prose.slice(0, uniq[0].idx).trim(); if (pre) out[0].body = pre + '\n\n' + out[0].body; }
   return out;
 }
-/* append a body of prose as paragraph <div>s into the editor */
+/* append a body of prose as paragraph <div>s into the editor; returns the blocks created */
 function appendImportProse(ed, body){
-  String(body || '').split(/\n{2,}/).forEach(p => { const t = p.trim(); if (!t && ed.lastElementChild) return; const x = document.createElement('div'); x.textContent = t; ed.appendChild(x); });
+  const made = [];
+  String(body || '').split(/\n{2,}/).forEach(p => { const t = p.trim(); if (!t && ed.lastElementChild) return; const x = document.createElement('div'); x.textContent = t; ed.appendChild(x); if (t) made.push(x); });
+  return made;
+}
+// Lock a section's imported prose as ONE completed writing session, so it has session identity —
+// it won't get swept into the next session you write (lockWrittenInSection skips .lk blocks), and it can be deleted/restored on its own.
+function lockImportedSession(blocks, frame){
+  if (!blocks || !blocks.length || !state.session) return;
+  const sid = 'sess' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5) + 'i';
+  const words = blocks.reduce((s, b) => s + ((b.textContent || '').trim().split(/\s+/).filter(Boolean).length), 0);
+  blocks.forEach((b, j) => { b.classList.add('lk'); b.contentEditable = 'false'; b.dataset.sess = sid; if (j === 0){ b.classList.add('session-start'); b.dataset.sessLabel = 'Session · imported'; } });
+  state.session.sessionLog = state.session.sessionLog || [];
+  state.session.sessionLog.push({ id: sid, at: new Date().toISOString(), words: words, html: blocks.map(b => b.outerHTML).join(''), review: '', frame: (frame != null ? frame : 0), imported: true });
 }
 /* create directed starter bonds from the AI's relationships (by name); heuristic fallback if none */
 function seedRelBonds(rels){
@@ -20161,7 +20173,7 @@ async function confirmImport(){
     firstIdx = 0; firstPrompt = state.prompt; state.frameIdx = 0; state.activeSet = 0;
     $('sectionTitle').value = secs[0].title || '';
   }
-  appendImportProse(ed, secs[0].body);
+  lockImportedSession(appendImportProse(ed, secs[0].body), firstIdx);   // each section's imported prose = one complete (locked) session
   const _bodies = secs.map(x => String(x.body || '').toLowerCase());
   const _termOf = el => String(el.name || '').toLowerCase().trim();
   const _inSec = (el, si) => { const t = _termOf(el); return t ? textHasWord(_bodies[si], t) : false; };
@@ -20188,7 +20200,7 @@ async function confirmImport(){
       prompt.links = []; prompt.removedLinks = [];
       state.frames.push({ gap: 'later', prompt: prompt, stage: absIdx, stageName: secs[si].title || '' });
       appendDivider(absIdx, secs[si].title);
-      appendImportProse(ed, secs[si].body);
+      lockImportedSession(appendImportProse(ed, secs[si].body), absIdx);   // each section's imported prose = one complete (locked) session
     }
     state.frameIdx = absIdx; state.prompt = prompt; state.activeSet = 0;
     incl.forEach(el => { if (_inSec(el, si) || _aiSec(el) === si){ if (placeImportElement(el)){ added++; placedAny.add(el); } } });
@@ -20226,6 +20238,7 @@ async function confirmImport(){
   for (let si = 0; si < secs.length; si++){ state.frameIdx = firstIdx + si; state.prompt = state.frames[firstIdx + si].prompt; _bonds += seedRelBonds(IMP.relationships); }
   if (!_bonds){ const li = firstIdx + secs.length - 1; state.frameIdx = li; state.prompt = state.frames[li].prompt; seedHeuristicBonds(); }
   state.frameIdx = firstIdx; state.prompt = state.frames[firstIdx].prompt;
+  if (typeof renumberSessionLabels === 'function') renumberSessionLabels();   // number the imported-prose sessions per section
   if (IMP.overview){ state.session.wikiOverview = asSection && state.session.wikiOverview ? (state.session.wikiOverview + ' ' + IMP.overview) : IMP.overview; }
   state.session.text = editorText(); state.session.html = editorHTML(); state.session.frames = state.frames; state.session.words = state.prompt.words;
   const _props = applyImportProposals();   // Phase 2: add approved net-new words to the pools
@@ -21495,10 +21508,18 @@ function restoreArchivedSession(id){
   }
   // fall back to the end of the frame's prose if the original neighbour is gone
   if (!lastRef){ Array.from(ed.children).forEach(c => { if ((fm ? fm.get(c) : 0) === k && !(c.classList && c.classList.contains('ph'))) lastRef = c; }); }
+  // section k is now EMPTY (its only prose was this session) → don't dump it at the end of the story; land it inside section k, before the next section's divider
+  let insBefore = null;
+  if (!lastRef){
+    const nextH3 = ed.querySelector('h3[data-frame="' + (k + 1) + '"]');
+    if (nextH3){ const pm = nextH3.previousElementSibling; insBefore = (pm && pm.classList && pm.classList.contains('sec-mark')) ? pm : nextH3; }
+  }
   newBlocks.forEach((b, j) => {
     b.classList.add('lk'); b.contentEditable = 'false'; b.dataset.sess = nid;
     if (j === 0){ b.classList.add('session-start'); b.dataset.sessLabel = 'Session'; }
-    if (lastRef && lastRef.nextSibling) ed.insertBefore(b, lastRef.nextSibling); else ed.appendChild(b);
+    if (lastRef){ if (lastRef.nextSibling) ed.insertBefore(b, lastRef.nextSibling); else ed.appendChild(b); }
+    else if (insBefore){ ed.insertBefore(b, insBefore); }
+    else ed.appendChild(b);
     lastRef = b;
   });
   state.session.sessionLog = state.session.sessionLog || [];
