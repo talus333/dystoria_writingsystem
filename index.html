@@ -30058,11 +30058,37 @@ body.eink #expMenu{background:#fff; border-color:#000}
         var d = Math.hypot(sx2 - e.clientX, sy2 - e.clientY);
         if (d < bd){ bd = d; best = j; }
       });
+      // also allow dropping on another SIDEBAR row (concept/org/thread) → a sidebar-to-sidebar connection
+      var overRow = (typeof nearestPortRow === 'function') ? nearestPortRow(e.clientX, e.clientY) : null;
+      var validRow = null;
+      if (overRow){
+        var isSelf = (portDrag.side === 'L' && overRow.dataset.ci === portDrag.id) || (portDrag.side === 'R' && overRow.dataset.th === portDrag.id);
+        if (!isSelf) validRow = overRow;
+      }
+      if (validRow) best = null;   // a sidebar target takes precedence over a map node
+      if (portDrag.rowTarget !== validRow){
+        if (portDrag.rowTarget) portDrag.rowTarget.classList.remove('link-hover');
+        if (validRow) validRow.classList.add('link-hover');
+        portDrag.rowTarget = validRow;
+      }
       if (best !== portDrag.target){
         document.querySelectorAll('#skySvg g.node.link-target').forEach(function(g2){ g2.classList.remove('link-target'); });
         if (best != null){ var g3 = document.querySelector('#skySvg g.node[data-node="' + best + '"]'); if (g3) g3.classList.add('link-target'); }
         portDrag.target = best;
       }
+    }
+    function connectSidebarRows(side, id, row){
+      if (row.dataset.ci != null && side === 'L'){
+        var ai = +id, bi = +row.dataset.ci; if (ai === bi) return;
+        if (typeof toggleLink === 'function') toggleLink(ai, bi);   // concept/org ↔ concept/org (both live in prompt.words)
+      } else if (row.dataset.th != null && side === 'L'){
+        var w = state.prompt.words[+id]; if (w && typeof toggleWordThread === 'function') toggleWordThread(w, row.dataset.th);   // concept/org ↔ thread
+      } else if (row.dataset.ci != null && side === 'R'){
+        var w2 = state.prompt.words[+row.dataset.ci]; if (w2 && typeof toggleWordThread === 'function') toggleWordThread(w2, id);   // thread ↔ concept/org
+      } else return;
+      if (typeof flashStatus === 'function') flashStatus('Connection updated');
+      if (typeof renderConstellation === 'function') renderConstellation();
+      lastSig = ''; refreshStrips();
     }
     function portDragEnd(e){
       if (!portDrag) return;
@@ -30071,7 +30097,9 @@ body.eink #expMenu{background:#fff; border-color:#000}
       document.removeEventListener('pointermove', portDragMove, true);
       document.removeEventListener('pointerup', portDragEnd, true);
       document.querySelectorAll('#skySvg g.node.link-target').forEach(function(g2){ g2.classList.remove('link-target'); });
+      if (pd.rowTarget) pd.rowTarget.classList.remove('link-hover');
       if (!pd.moved){ xbSelect(pd.side, pd.id); return; }   // a plain click still selects
+      if (pd.rowTarget){ connectSidebarRows(pd.side, pd.id, pd.rowTarget); return; }
       if (pd.target != null) expConnect(pd.side, pd.id, pd.target);
     }
     var pendingRow = null, suppressRowClick = false;
@@ -31011,6 +31039,32 @@ body.eink #expMenu{background:#fff; border-color:#000}
         web.appendChild(p2);
       });
       if (members.length){ var dot2 = document.createElementNS('http://www.w3.org/2000/svg', 'circle'); dot2.setAttribute('cx', px2); dot2.setAttribute('cy', py2); dot2.setAttribute('r', '3'); dot2.setAttribute('fill', col2); web.appendChild(dot2); }
+      // arcs to connected SIDEBAR elements: concept↔concept/org, org↔org, and concept/org↔thread
+      var sideRows = [];
+      if (xbSel.side === 'L'){
+        var selW2 = state.prompt.words[+xbSel.id];
+        ((state.prompt.links) || []).forEach(function(l){
+          var oi = (l.a === +xbSel.id) ? l.b : ((l.b === +xbSel.id) ? l.a : -1); if (oi < 0) return;
+          var ow = state.prompt.words[oi]; if (!ow || (ow.cat !== 'concept' && ow.cat !== 'org')) return;
+          var orow = document.querySelector('#expLeft .xb-row[data-ci="' + oi + '"]'); if (orow) sideRows.push(orow);
+        });
+        var _tids = (typeof wordThreadIds === 'function' && selW2) ? wordThreadIds(selW2) : [];
+        _tids.forEach(function(tid){ var trow = document.querySelector('#expRRows .xb-row[data-th="' + tid + '"]'); if (trow) sideRows.push(trow); });
+      } else {
+        state.prompt.words.forEach(function(w2, j){ if ((w2.cat === 'concept' || w2.cat === 'org') && typeof wordThreadIds === 'function' && wordThreadIds(w2).indexOf(xbSel.id) >= 0){ var orow = document.querySelector('#expLeft .xb-row[data-ci="' + j + '"]'); if (orow) sideRows.push(orow); } });
+      }
+      sideRows.forEach(function(trow){
+        var tport = window.__expPortForRow ? window.__expPortForRow(trow) : null; if (!tport || !tport.offsetParent) return;
+        var tpr = tport.getBoundingClientRect();
+        var tx = tpr.left + tpr.width / 2 - sr.left, ty = tpr.top + tpr.height / 2 - sr.top;
+        var mid = sr.width / 2, bulge = 44;
+        var cx1 = px2 + (px2 < mid ? bulge : -bulge), cx2 = tx + (tx < mid ? bulge : -bulge);
+        var p3 = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        p3.setAttribute('d', 'M' + px2 + ' ' + py2 + ' C' + cx1 + ' ' + py2 + ' ' + cx2 + ' ' + ty + ' ' + tx + ' ' + ty);
+        p3.setAttribute('fill', 'none'); p3.setAttribute('stroke', col2); p3.setAttribute('stroke-width', '1.5'); p3.setAttribute('opacity', '.72');
+        web.appendChild(p3);
+        trow.classList.add('on');
+      });
       return;
     }
     if (state.selNode == null) return;
