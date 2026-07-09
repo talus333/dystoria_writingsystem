@@ -7252,7 +7252,7 @@ async function seedFromGoal(){
       const raw = await aiCall(sys, goal + '\n\nReturn the JSON:', { json: true, maxTokens: 900 });
       const data = (typeof parseJsonLoose === 'function') ? parseJsonLoose(raw) : null;
       const els = (data && Array.isArray(data.elements)) ? data.elements : [];
-      els.forEach(e => { if (!e) return; let cat = String(e.cat || e.type || '').toLowerCase(); cat = IMP_TMAP[cat] || (['being','setting','object','concept'].includes(cat) ? cat : ''); if (!cat) return; if (buildEl(cat, e.word || e.name, e.sub, e.name, e.summary)) aiPlaced++; });
+      els.forEach(e => { if (!e) return; let cat = String(e.cat || e.type || '').toLowerCase(); cat = IMP_TMAP[cat] || (['being','setting','object','concept','org'].includes(cat) ? cat : ''); if (!cat) return; if (buildEl(cat, e.word || e.name, e.sub, e.name, e.summary)) aiPlaced++; });
       if (data && data.premise){ try { const cur = (typeof npGetNotes === 'function') ? (npGetNotes('general') || '').replace(/<[^>]*>/g, '').trim() : 'x'; if (typeof npSetNotes === 'function' && !cur){ npSetNotes('general', '<p><em>Premise:</em> ' + esc(String(data.premise)) + '</p>'); } } catch (e){} }
     } catch (e){ /* fall back to a random cast below */ }
   }
@@ -8408,10 +8408,12 @@ function expConnChip(cx, cy, aIdx, bIdx){
     row.addEventListener('click', e => { e.stopPropagation(); if (window.openConnTypeMenu) window.openConnTypeMenu(fromIdx, otherKey, e.clientX, e.clientY); });
     chip.appendChild(row);
   };
-  if (t1) typeRow(t1, aIdx, bKey);
-  if (t2) typeRow(t2, bIdx, aKey);
-  if (!t1) addRow(aIdx, bKey); else if (!t2) addRow(bIdx, aKey);
-  ['pointerdown', 'pointerup', 'click'].forEach(ev => chip.addEventListener(ev, e => e.stopPropagation()));   // a click on the pill must not deselect the map
+  // Show ONLY the direction from the selected element (aIdx) to the connected one (bIdx).
+  // The reverse direction (bIdx→aIdx) is seen by selecting the other element.
+  if (t1) typeRow(t1, aIdx, bKey); else addRow(aIdx, bKey);
+  chip.addEventListener('pointerdown', () => { window.__connPillTs = Date.now(); }, true);   // capture: stamp for inner buttons too (they stopPropagation)
+  chip.addEventListener('click', () => { window.__connPillTs = Date.now(); }, true);
+  ['pointerdown', 'pointerup', 'click'].forEach(ev => chip.addEventListener(ev, e => { window.__connPillTs = Date.now(); e.stopPropagation(); }));   // bubble: a click on the pill background must not deselect the map
   host.appendChild(chip);
   const cs = getComputedStyle(document.body);
   const lw = parseFloat(cs.getPropertyValue('--lw')) || 0, rw = parseFloat(cs.getPropertyValue('--rw')) || 0;
@@ -19937,7 +19939,8 @@ const IMP_TMAP = { being: 'being', character: 'being', creature: 'being', person
   concepts: 'theme', theme: 'theme',
   stakes: 'stakes', stake: 'stakes',
   plot: 'plot', plotline: 'plot', 'plot archetype': 'plot',
-  concept: 'concept', term: 'concept', terminology: 'concept', idea: 'concept', technology: 'concept', faction: 'concept' };
+  concept: 'concept', term: 'concept', terminology: 'concept', idea: 'concept', technology: 'concept',
+  org: 'org', organization: 'org', organisation: 'org', faction: 'org', company: 'org', corporation: 'org', guild: 'org', order: 'org', council: 'org', clan: 'org', house: 'org', tribe: 'org', gang: 'org', cult: 'org', church: 'org', army: 'org', party: 'org', institution: 'org', society: 'org', group: 'org' };
 /* subcategory names for a category (for the AI prompt + the review dropdown) */
 function importSubNames(cat){ const c = getCat(cat); return c ? c.subcategories.filter(s => !s.retired).map(s => s.name) : []; }
 /* validate the AI's sub against the category; fall back to a sensible default */
@@ -20081,8 +20084,8 @@ async function extractImport(){
   $('importGo').disabled = true; $('importStatus').innerHTML = '<span class="spin"></span>Reading &amp; ingesting…';
   const nonBeingSubInfo = 'setting ∈ [' + importSubNames('setting').join(', ') + ']; object ∈ [' + importSubNames('object').join(', ') + ']; event ∈ [' + importSubNames('event').join(', ') + ']';
   const narrSubInfo = ['genre', 'period', 'theme', 'stakes', 'plot', 'concept'].map(c => { const s = importSubNames(c); return s.length ? (c + ' ∈ [' + s.join(', ') + ']') : null; }).filter(Boolean).join('; ');
-  const typeUnion = '"being"|"setting"|"object"|"event"|"genre"|"context"|"concepts"|"stakes"|"plot"|"concept"';
-  const typeGuide = 'being = a named character or creature; setting = a place; object = a notable physical thing; event = a key happening; genre = the story’s genre(s); context = the time period or setting era; concepts = the central themes / big ideas the work explores; stakes = what is at risk; plot = a plot archetype or through-line; concept = an in-world term, technology, faction, or coined idea (worldbuilding vocabulary). ';
+  const typeUnion = '"being"|"setting"|"object"|"event"|"organization"|"genre"|"context"|"concepts"|"stakes"|"plot"|"concept"';
+  const typeGuide = 'being = a named character or creature; setting = a place; object = a notable physical thing; event = a key happening; organization = a collective with a life of its own (company, guild, order, faction, council, cult, church, army, party, clan, house, tribe, secret society) that beings belong to or contend with; genre = the story’s genre(s); context = the time period or setting era; concepts = the central themes / big ideas the work explores; stakes = what is at risk; plot = a plot archetype or through-line; concept = an in-world term, technology, or coined idea (worldbuilding vocabulary). ';
   const sectionGuideNotes = 'sections = ONLY if these notes describe a story split into chapters/parts, list those titles in order; otherwise []. Each element’s "section" = the chapter/part title it primarily belongs to, or "" if the notes have no chapters or the element is world-wide. ';
   const sectionGuideProse = 'Each element’s "section" = the exact title (from sections) of the section where it first / most centrally appears. ';
   const proposalGuide = 'proposals = generic reusable VOCABULARY the source uses that fits a Dystoria pool category but is likely not already a standard option (so it could enrich future generation) — e.g., a genre, a setting-type, an object-type, a being archetype, an adjective, a concept. NOT proper-named story elements (those are elements). Each: {cat ∈ [genre,period,theme,stakes,plot,being,setting,object,event,concept,adjective,relationship,state], word = the generic term (1–3 words), common = true if it is a widely-known term worth offering in ALL stories, false if it is specific to THIS world}. Up to 12; invent nothing. ';
@@ -24744,6 +24747,8 @@ function init(){
     lassoPath = null;
     state.lastDrag = Date.now();
     if (pts.length < 3){   // a tap on empty map (not a drag) → deselect whatever's selected
+      if (window.__connPillTs && Date.now() - window.__connPillTs < 600) return;   // don't deselect right after interacting with a connection-type pill
+      { const _vp = document.getElementById('vocabPicker'); if (_vp && _vp.classList.contains('show')) return; }
       let changed = clearGroupSel();
       if (window.__expClearSidebarSel && window.__expClearSidebarSel()) changed = true;   // concept/thread sidebar selection lets go too
       if (state.selNode != null){ state.selNode = null; changed = true; }
@@ -24929,6 +24934,8 @@ function init(){
   document.addEventListener('pointerup', e => { if (typeof linkDragActive === 'function' && linkDragActive()) endLinkDrag(false, e); }, true);   // guarantee the link drop is handled even if the sky never gets the pointerup
   sky.addEventListener('click', e => {
     if (state.lastDrag && Date.now() - state.lastDrag < 250) return;
+    if (window.__connPillTs && Date.now() - window.__connPillTs < 600) return;   // just interacted with a connection-type pill → keep the selection
+    { const _vp = document.getElementById('vocabPicker'); if (_vp && _vp.classList.contains('show')) return; }
     if (state.terrainDraw || state.pathDraw || state.shapeDraw || state.eraseDraw) return;   // draw/erase clicks are handled in pointerdown
     if (state.linkFrom != null){ state.linkFrom = null; renderConstellation(); return; }
     // a click on empty map clears every selection at once — lasso group and the selected element
@@ -29272,9 +29279,11 @@ body.eink #mobileNotice .mn-card{border:2px solid #000}
     var allStakes = {}; (state.frames || []).forEach(function(fr){ ((fr.prompt && fr.prompt.words) || []).forEach(function(w){ if (w.cat === 'stakes') allStakes[w.name || w.word] = 1; }); });
     var goals = (typeof goalContext === 'function') ? (goalContext() || '') : '';
     var prose = (typeof editorText === 'function') ? editorText().trim() : '';
-    return { els: elInfo, secs: secs, stakes: Object.keys(allStakes), goals: goals, prose: prose };
+    var orgs = (typeof orgsContext === 'function') ? orgsContext() : [];
+    var conns = (typeof connectionsContext === 'function') ? connectionsContext() : [];
+    return { els: elInfo, secs: secs, stakes: Object.keys(allStakes), goals: goals, prose: prose, orgs: orgs, conns: conns };
   }
-  function elTable(g){ return g.els.map(function(e){ return '- ' + e.name + ' [' + e.cat + '] — ' + e.apps + ' prose mentions, ' + e.rels + ' relationships, sections ' + (e.secs.join(',') || 'none') + (e.traits ? ('; traits: ' + e.traits) : '') + (e.relText ? ('; rels: ' + e.relText) : '') + (e.note ? ('; note: ' + e.note) : ''); }).join('\n'); }
+  function elTable(g){ var base = g.els.map(function(e){ return '- ' + e.name + ' [' + e.cat + '] — ' + e.apps + ' prose mentions, ' + e.rels + ' relationships, sections ' + (e.secs.join(',') || 'none') + (e.traits ? ('; traits: ' + e.traits) : '') + (e.relText ? ('; rels: ' + e.relText) : '') + (e.note ? ('; note: ' + e.note) : ''); }).join('\n'); if (g.orgs && g.orgs.length) base += '\nORGANIZATIONS: ' + g.orgs.join('; '); if (g.conns && g.conns.length) base += '\nCONNECTIONS (all typed links): ' + g.conns.join('; '); return base; }
   function secTable(g){ return g.secs.map(function(s){ return 'Section ' + s.i + (s.name ? (' — ' + s.name) : '') + ': ' + s.words + ' words'; }).join('\n'); }
   var TOOLS = {
     gap: { title: 'Gap & Chekhov check', kind: 'list',
@@ -31104,6 +31113,8 @@ body.eink #expMenu{background:#fff; border-color:#000}
   }
   function drawWeb(){
     var web = document.getElementById('expWeb'); if (!web) return;
+    var _vp = document.getElementById('vocabPicker');   // freeze the web while the connection-type picker is open → pills stay put, clicks land, selection holds
+    if (_vp && _vp.classList.contains('show')) return;
     while (web.firstChild) web.removeChild(web.firstChild);
     var webTop = document.getElementById('expWebTop');
     if (webTop){ while (webTop.firstChild) webTop.removeChild(webTop.firstChild); }
