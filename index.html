@@ -8474,10 +8474,14 @@ function expConnChip(cx, cy, aIdx, bIdx){
   if (!chip){   // create the pill ONCE; handlers read live context from chip._*
     chip = document.createElement('div'); chip.className = 'ctp'; chip.dataset.conn = key; host.appendChild(chip);
     ['pointerdown', 'pointerup', 'click'].forEach(ev => chip.addEventListener(ev, e => { window.__connPillTs = Date.now(); e.stopPropagation(); }));
-    chip.addEventListener('pointerdown', () => { window.__connPillTs = Date.now(); }, true);
+    // capture the current selection the instant a pill is touched — drawWeb restores it every frame while interacting, so nothing can drop the web
+    const _lock = () => { window.__connLock = { sel: state.selNode, xb: (window.__expSnapSel ? window.__expSnapSel() : null), ts: Date.now() }; window.__connPillTs = Date.now(); };
+    chip.addEventListener('pointerdown', _lock, true);
+    chip.addEventListener('click', _lock, true);
     chip.addEventListener('click', e => { if (window.__connDragEndTs && Date.now() - window.__connDragEndTs < 260){ e.stopPropagation(); e.preventDefault(); } }, true);
     chip.addEventListener('pointerdown', ev => {   // drag to reposition the pill (nudge overlapping ones apart)
       const L = chip._link; if (!L) return;
+      try { chip.setPointerCapture(ev.pointerId); } catch (er){}   // keep the pointer on the pill so the release never reaches the map
       const sx = ev.clientX, sy = ev.clientY, bx = (L._cdx) || 0, by = (L._cdy) || 0; let moved = false;
       const mv = e2 => { const ddx = e2.clientX - sx, ddy = e2.clientY - sy; if (!moved && Math.abs(ddx) + Math.abs(ddy) > 4){ moved = true; chip.style.cursor = 'grabbing'; } if (moved){ L._cdx = bx + ddx; L._cdy = by + ddy; window.__connPillTs = Date.now(); reposition(chip); } };
       const up = () => { document.removeEventListener('pointermove', mv, true); document.removeEventListener('pointerup', up, true); chip.style.cursor = ''; if (moved){ window.__connPillTs = Date.now(); window.__connDragEndTs = Date.now(); if (typeof scheduleAutosave === 'function') scheduleAutosave(); } };
@@ -20676,7 +20680,7 @@ function confirmNotesImport(){
 }
 
 /* ---------------- Story Library: imported map-elements, added to the map on demand ---------------- */
-const LIB_GROUPS = [['being', 'Beings'], ['setting', 'Settings'], ['object', 'Objects'], ['event', 'Events']];   // concepts live in the Narrative Layers bar, not the roster
+const LIB_GROUPS = [['being', 'Beings'], ['setting', 'Settings'], ['object', 'Objects'], ['event', 'Events'], ['concept', 'Concepts'], ['org', 'Organizations']];   // concepts & organizations ride the roster too (side-panel elements, addable/removable per section)
 function storyLibrary(){ return (state.session && Array.isArray(state.session.elemLibrary)) ? state.session.elemLibrary : []; }
 function libUnplacedCount(){ return storyLibrary().filter(r => !r.placed).length; }
 /* The library is the story's element ROSTER, embedded at the top of the Add Story Elements rail.
@@ -20689,16 +20693,16 @@ function libKeyOf(cat, name){ return cat + '|' + String(name || '').trim().toLow
 function libSyncFromMap(){
   if (!state.session) return;
   const lib = state.session.elemLibrary = state.session.elemLibrary || [];
-  const MAPCAT = { being: 1, setting: 1, object: 1, event: 1 };   // concept is a narrative layer, not a map element
-  for (let i = lib.length - 1; i >= 0; i--){ if (lib[i].cat === 'concept') lib.splice(i, 1); }   // migrate: purge concept records from older rosters
+  const MAPCAT = { being: 1, setting: 1, object: 1, event: 1 };
+  const ROSTERCAT = { being: 1, setting: 1, object: 1, event: 1, concept: 1, org: 1 };   // concepts/orgs live in the roster too (side-panel elements)
   const byKey = {}; lib.forEach(r => { byKey[libKeyOf(r.cat, r.name || r.word)] = r; });
   const seen = new Set();
   const frames = state.frames || (state.prompt ? [{ prompt: state.prompt }] : []);
   frames.forEach((fr, fi) => {
     ((fr.prompt && fr.prompt.words) || []).forEach(w => {
-      if (w.cat === 'concept' && w.role !== 'frame'){ w.role = 'frame'; w.scope = 'story'; }   // migrate: concepts that landed on the map move to the Narrative Layers bar
-      if (!MAPCAT[w.cat]) return;
-      if (w.role !== 'being' && w.role !== 'word') return;   // skip frame/constraint/relation nodes
+      if (!ROSTERCAT[w.cat]) return;
+      const isSidebar = (w.cat === 'concept' || w.cat === 'org');
+      if (!isSidebar && w.role !== 'being' && w.role !== 'word') return;   // map cats: skip frame/constraint/relation nodes
       if (w.poly || w.line) return;                          // drawn terrain + lines are scenery, not roster elements
       const key = libKeyOf(w.cat, w.name || w.word);
       let rec = byKey[key];
@@ -20716,7 +20720,7 @@ function libRecKey(rec){
   const want = libKeyOf(rec.cat, rec.name || rec.word);
   const frames = state.frames || (state.prompt ? [{ prompt: state.prompt }] : []);
   const cur = (state.prompt && state.prompt.words) || [];
-  const match = ws => ws.find(w => (w.role === 'being' || w.role === 'word') && libKeyOf(w.cat, w.name || w.word) === want);
+  const match = ws => ws.find(w => (w.role === 'being' || w.role === 'word' || w.cat === 'concept' || w.cat === 'org') && libKeyOf(w.cat, w.name || w.word) === want);
   let w = match(cur);
   if (!w){ for (const fr of frames){ w = match((fr.prompt && fr.prompt.words) || []); if (w) break; } }
   return wordKey(w || rec.item || { set: 0, cat: rec.cat, word: rec.word });
@@ -20855,8 +20859,8 @@ function libAddToMap(id){
     delete clone.fx; delete clone.fy; delete clone.x; delete clone.y;
     if (typeof startPlacement === 'function' && (clone.role === 'being' || (clone.role === 'word' && (clone.cat === 'setting' || clone.cat === 'object')))){
       clone.needsPlace = true; startPlacement([idx]);   // same flow as Add/Roll (respects the Autoplace toggle)
-    } else if (typeof autoSpot === 'function'){
-      const s = autoSpot(idx); clone.fx = s.x; clone.fy = s.y;   // events etc: pin to a free visible spot so nothing else shifts
+    } else if (typeof autoSpot === 'function' && clone.role !== 'frame'){
+      const s = autoSpot(idx); clone.fx = s.x; clone.fy = s.y;   // events etc: pin to a free visible spot so nothing else shifts (concepts/orgs are side-panel — no map spot)
     }
   }
   layoutConstellation(); renderConstellation(); saveSession();
@@ -20879,7 +20883,7 @@ async function libDeleteFromLibrary(id){
   frames.forEach(fr => {
     const p = fr.prompt; if (!p || !p.words) return;
     let i;
-    while ((i = p.words.findIndex(w => (w.role === 'being' || w.role === 'word') && libKeyOf(w.cat, w.name || w.word) === key)) >= 0){
+    while ((i = p.words.findIndex(w => (w.role === 'being' || w.role === 'word' || w.cat === 'concept' || w.cat === 'org') && libKeyOf(w.cat, w.name || w.word) === key)) >= 0){
       const w = p.words[i];
       if (!stripped && typeof npIsElement === 'function' && npIsElement(w) && typeof npStripElement === 'function'){
         stripped = true;
@@ -31208,6 +31212,17 @@ body.eink #expMenu{background:#fff; border-color:#000}
   }
   function drawWeb(){
     var web = document.getElementById('expWeb'); if (!web) return;
+    // While interacting with a connection pill, restore the selection every frame so the web can't be dropped.
+    if (window.__connLock){
+      var _vpS = document.getElementById('vocabPicker'); if (_vpS && _vpS.classList.contains('show')) window.__connLock.ts = Date.now();   // keep alive while the type picker is open
+      if (Date.now() - window.__connLock.ts < 500){
+        var _L = window.__connLock;
+        if (typeof state !== 'undefined' && state){
+          if (_L.sel != null && state.selNode !== _L.sel){ state.selNode = _L.sel; if (typeof renderConstellation === 'function') renderConstellation(); }
+          if (_L.xb && !xbSel && window.__expRestoreSel){ window.__expRestoreSel(_L.xb); }
+        }
+      } else window.__connLock = null;
+    }
     while (web.firstChild) web.removeChild(web.firstChild);
     // Pills are STABLE DOM (reused frame to frame) so clicks/hover/drag land; mark all, expConnChip flips seen, then sweep the untouched.
     var webTop = document.getElementById('expWebTop');
