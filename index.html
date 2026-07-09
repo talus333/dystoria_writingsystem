@@ -28735,6 +28735,68 @@ body.eink #mobileNotice .mn-card{border:2px solid #000}
 })();
 </script>
 
+<script id="whereNextJS">
+/* "Where next?" — when stuck in Write mode, the AI offers 2–3 possible next beats for the current section,
+   grounded in its plot stage, open stakes, unresolved threads, elements and the prose so far. */
+(function(){
+  function $id(x){ return document.getElementById(x); }
+  var btn = document.createElement('button'); btn.id = 'whereNextBtn'; btn.type = 'button'; btn.innerHTML = '✦ Where next?';
+  btn.title = 'Stuck? The AI suggests a few possible next beats for this section — grounded in its plot stage, open stakes and unresolved threads';
+  if (document.body) document.body.appendChild(btn); else document.addEventListener('DOMContentLoaded', function(){ document.body.appendChild(btn); });
+  function pop(){ var p = $id('wnPop'); if (!p){ p = document.createElement('div'); p.id = 'wnPop'; document.body.appendChild(p); } return p; }
+  function wnContext(){
+    var fi = (typeof state !== 'undefined' && state.frameIdx) || 0;
+    var fr = (typeof state !== 'undefined' && state.frames) ? state.frames[fi] : null;
+    var secName = ''; if (fr && fr.stageName) secName = fr.stageName;
+    if (!secName){ var h3 = document.querySelector('#editor h3[data-frame="' + fi + '"]'); if (h3) secName = (h3.textContent || '').trim(); }
+    if (!secName && fi === 0){ var st = $id('sectionTitle'); if (st) secName = (st.value || '').trim(); }
+    var stage = (typeof plotStageName === 'function') ? (plotStageName(fi) || '') : '';
+    var words = (typeof state !== 'undefined' && state.prompt && state.prompt.words) || [];
+    var isEl = function(w){ return (w.role === 'being' || w.role === 'word') && ({ being: 1, setting: 1, object: 1, event: 1 })[w.cat]; };
+    var stakes = words.filter(function(w){ return w.cat === 'stakes'; }).map(function(w){ return w.name || w.word; });
+    var els = words.filter(isEl).map(function(w){ return (w.name || w.word) + ' [' + w.cat + ']'; });
+    var threads = [];
+    try { (typeof threadsList === 'function' ? threadsList() : []).forEach(function(t){
+      var sts = words.map(function(w){ return (typeof wordThreadState === 'function') ? wordThreadState(w, t.id, fi) : null; }).filter(Boolean);
+      if (sts.length){ var future = sts.indexOf('future') >= 0 && sts.indexOf('member') < 0; threads.push((t.name || 'thread') + (future ? ' (foreshadowed, unresolved here)' : '')); }
+    }); } catch(e){}
+    var prose = '';
+    try { var ed = $id('editor'); var fm = (typeof nodeFrameMap === 'function') ? nodeFrameMap() : null;
+      prose = Array.from(ed.children).filter(function(c){ return (fm ? fm.get(c) : 0) === fi && !(c.classList && c.classList.contains('sec-mark')) && c.tagName !== 'H3'; }).map(function(c){ return (c.textContent || '').trim(); }).filter(Boolean).join('\n\n').slice(-2600);
+    } catch(e){}
+    var goals = (typeof goalContext === 'function') ? (goalContext() || '') : '';
+    return { sec: (fi + 1) + (secName ? ' — ' + secName : ''), stage: stage, stakes: stakes, threads: threads, els: els, prose: prose, goals: goals };
+  }
+  function cards(p, arr){
+    var body = p.querySelector('.ex-body'); body.innerHTML = '';
+    if (!arr.length){ body.innerHTML = '<div class="ex-think">Nothing surfaced — try again.</div>'; return; }
+    arr.forEach(function(text){
+      var card = document.createElement('div'); card.className = 'ex-card';
+      var t = document.createElement('div'); t.className = 'ex-card-t'; t.textContent = text; card.appendChild(t);
+      var acts = document.createElement('div'); acts.className = 'ex-card-acts';
+      var dis = document.createElement('button'); dis.type = 'button'; dis.className = 'ex-dismiss'; dis.textContent = '×'; dis.title = 'Dismiss'; dis.addEventListener('click', function(){ card.remove(); if (!body.querySelector('.ex-card')) p.classList.remove('show'); });
+      acts.appendChild(dis); card.appendChild(acts); body.appendChild(card);
+    });
+  }
+  async function run(){
+    if (typeof aiAuthed === 'function' && !aiAuthed()){ if (typeof promptAiSignup === 'function') promptAiSignup(); return; }
+    var c = wnContext(); var p = pop(); p.classList.add('show');
+    p.innerHTML = '<div class="ex-head"><span class="ex-t">Where next? — Section ' + c.sec + '</span><button type="button" class="ex-x" title="Close">×</button></div><div class="ex-body"><div class="ex-think"><span class="spin"></span> weighing the possibilities…</div></div>';
+    p.querySelector('.ex-x').addEventListener('click', function(){ p.classList.remove('show'); });
+    var sys = 'You help a writer who is stuck mid-section. From the section\'s plot stage, open stakes, unresolved threads, its elements, and the prose so far, propose exactly 3 possible NEXT BEATS — concrete things that could happen next in THIS section. Each a DIFFERENT direction, one vivid specific sentence, growing out of what is on the page and pushing a stake or a thread forward. Ground every beat in the given material; never generic writing advice, never meta-commentary about writing. Return ONLY a JSON array of exactly 3 strings.';
+    var user = 'CURRENT SECTION: ' + c.sec + (c.stage ? ('\nPLOT STAGE: ' + c.stage) : '') + (c.stakes.length ? ('\nOPEN STAKES: ' + c.stakes.join(', ')) : '') + (c.threads.length ? ('\nTHREADS: ' + c.threads.join('; ')) : '') + (c.els.length ? ('\nELEMENTS IN THIS SECTION: ' + c.els.join(', ')) : '') + (c.goals ? ('\n' + c.goals) : '') + '\n\nPROSE SO FAR (end of the section):\n' + (c.prose || '(nothing written in this section yet)') + '\n\nReturn 3 possible next beats as a JSON array of strings.';
+    try {
+      var out = await aiCall(sys, user, { maxTokens: 500, json: true });
+      var arr = []; try { arr = JSON.parse(out); } catch(e){ if (typeof parseJsonLoose === 'function'){ try { arr = parseJsonLoose(out); } catch(_){} } }
+      if (!Array.isArray(arr)) arr = (arr && Array.isArray(arr.beats)) ? arr.beats : [];
+      arr = arr.filter(function(x){ return typeof x === 'string' && x.trim(); }).slice(0, 4);
+      cards(p, arr);
+    } catch(e){ var b = p.querySelector('.ex-body'); if (b) b.innerHTML = '<div class="ex-think">Couldn\'t reach the AI — try again.</div>'; }
+  }
+  btn.addEventListener('click', function(e){ e.stopPropagation(); run(); });
+})();
+</script>
+
 <style id="expWebsCss">
 /* ===== MAP WEBS UI: concept/thread border strips, selection webs, map header band ===== */
 body.expb #expLeft, body.expb #expRight{position:absolute; top:0; bottom:0; width:140px; z-index:26; display:flex; flex-direction:column; box-sizing:border-box; padding:12px 10px 70px; overflow:visible;
@@ -28804,6 +28866,32 @@ body.expb #storyLibWin:not(.lib-min){top:48px !important}
 #qaBtn{pointer-events:auto; font-family:var(--sans); font-size:9.5px; font-weight:600; letter-spacing:.1em; text-transform:uppercase;
   color:var(--ink-soft); background:transparent; border:1px dashed var(--ink-faint); border-radius:13px; padding:3px 11px; cursor:pointer; white-space:nowrap}
 #qaBtn:hover{color:var(--ink); border-color:var(--gold)}
+/* ---- Explore (map) + Where next? (write): AI idea cards when stuck ---- */
+#exploreBtn{pointer-events:auto; font-family:var(--sans); font-size:9.5px; font-weight:600; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-soft); background:transparent; border:1px dashed var(--ink-faint); border-radius:13px; padding:3px 11px; cursor:pointer; white-space:nowrap}
+#exploreBtn:hover{color:var(--ink); border-color:var(--gold)}
+#whereNextBtn{display:none; position:fixed; left:22px; bottom:86px; z-index:120; align-items:center; gap:6px; font-family:var(--sans); font-size:10px; font-weight:600; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-soft); background:var(--paper); border:1px dashed var(--ink-faint); border-radius:16px; padding:7px 14px; cursor:pointer; box-shadow:0 8px 24px rgba(0,0,0,.18)}
+#whereNextBtn:hover{color:var(--ink); border-color:var(--gold)}
+body.writing #whereNextBtn{display:inline-flex}
+body.eink #whereNextBtn{background:#fff; border-color:#000; color:#000}
+#exPop, #wnPop{display:none; z-index:80; width:340px; max-width:calc(100vw - 40px); max-height:70vh; overflow-y:auto; background:var(--paper); border:1px solid var(--line); border-radius:16px; box-shadow:0 18px 50px rgba(0,0,0,.3); scrollbar-width:thin}
+#exPop{position:absolute; left:calc(var(--lw,140px) + 12px); top:48px}
+#wnPop{position:fixed; left:22px; bottom:130px}
+#exPop.show, #wnPop.show{display:block}
+.ex-head{display:flex; align-items:center; justify-content:space-between; gap:8px; padding:12px 14px 9px; border-bottom:1px solid var(--line); position:sticky; top:0; background:var(--paper); border-radius:16px 16px 0 0}
+.ex-t{font-family:'Cinzel','Cormorant SC',serif; font-size:10px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:var(--ink-soft)}
+.ex-x{border:none; background:none; color:var(--ink-faint); font-size:17px; line-height:1; cursor:pointer; padding:2px 6px; border-radius:6px}
+.ex-x:hover{color:var(--gold)}
+.ex-body{padding:10px 12px 12px}
+.ex-think{font-family:var(--serif); font-style:italic; font-size:13px; color:var(--ink-faint); padding:6px 2px}
+.ex-card{background:var(--bg2); border:1px solid var(--line); border-radius:11px; padding:10px 12px; margin-bottom:8px}
+.ex-card-t{font-family:var(--serif); font-size:14px; line-height:1.45; color:var(--ink)}
+.ex-card-acts{display:flex; align-items:center; gap:8px; margin-top:8px}
+.ex-note{font-family:var(--sans); font-size:9px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; border:1px solid var(--line); border-radius:9px; background:var(--paper); color:var(--ink-soft); padding:3px 9px; cursor:pointer}
+.ex-note:hover{border-color:var(--gold); color:var(--ink)}
+.ex-note:disabled{opacity:.7; cursor:default; color:#2f7d55; border-color:#2f7d55}
+.ex-dismiss{margin-left:auto; border:none; background:none; color:var(--ink-faint); font-size:15px; line-height:1; cursor:pointer; padding:2px 6px; border-radius:6px}
+.ex-dismiss:hover{color:#c0392b}
+body.eink #exPop, body.eink #wnPop{border:2px solid #000; background:#fff}
 #qaWin{display:none; position:absolute; right:calc(var(--rw,140px) + 12px); top:48px; bottom:14px; width:360px; z-index:47; box-sizing:border-box;
   background:linear-gradient(180deg,#2a2117,#1b150e); border:1px solid rgba(250,154,49,.2); border-radius:16px; box-shadow:0 14px 44px rgba(0,0,0,.45);
   flex-direction:column; overflow:hidden}
