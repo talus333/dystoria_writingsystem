@@ -8451,51 +8451,60 @@ window.openBeingOrgPicker = openBeingOrgPicker;
    [feather → connection notes] [type word → change type] [× → remove]; stacked vertically when a
    connection carries both directions. cx/cy are pixels relative to #sky's top-left. */
 function expConnChip(cx, cy, aIdx, bIdx){
-  if (window.__connFrozen) return;   // hovering / picking / dragging → don't rebuild, so the interaction lands
   const host = document.getElementById('expWebTop'); if (!host || !state.prompt) return;
   const words = state.prompt.words, aw = words[aIdx], bw = words[bIdx]; if (!aw || !bw) return;
   const bKey = wordKey(bw);
   const link = (typeof getLink === 'function') ? getLink(aIdx, bIdx) : null;
   const dirType = (fromIdx) => { if (!link) return ''; const side = (link.a === fromIdx) ? 'fwd' : 'rev'; const sd = link[side]; if (sd && sd.type) return sd.type; if (link.rel) return link.rel; return ''; };
   const t1 = dirType(aIdx);   // only the direction from the selected element (aIdx → bIdx)
-  const chip = document.createElement('div'); chip.className = 'ctp';
-  chip.addEventListener('pointerenter', () => { window.__connHover = true; });   // freeze the rebuild while hovered
-  chip.addEventListener('pointerleave', () => { window.__connHover = false; });
   const feather = () => '<svg width="11" height="11" viewBox="0 0 24 24" style="width:11px;height:11px;display:block;flex:none" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">' + ((typeof LUCIDE !== 'undefined' && LUCIDE['feather']) || '<path d="M20 5c-6 0-11 5-11 11v3h3c6 0 11-5 11-11V5zM9 19l-4 4M14 12H9"/>') + '</svg>';
-  const row = document.createElement('div'); row.className = 'ctp-row' + (t1 ? '' : ' ctp-add');
-  if (t1){
-    const f = document.createElement('span'); f.className = 'ctp-feather'; f.title = 'Notes about this connection'; f.innerHTML = feather();
-    f.addEventListener('click', e => { e.stopPropagation(); if (window.openConnectionNotes) window.openConnectionNotes(aIdx, bKey); });
-    const w = document.createElement('span'); w.className = 'ctp-word'; w.textContent = t1; w.title = 'Change the connection type';
-    w.addEventListener('click', e => { e.stopPropagation(); if (window.openConnTypeMenu) window.openConnTypeMenu(aIdx, bKey, e.clientX, e.clientY); });
-    const x = document.createElement('span'); x.className = 'ctp-x'; x.textContent = '×'; x.title = 'Remove this type';
-    x.addEventListener('click', e => { e.stopPropagation(); if (window.setConnType) window.setConnType(aIdx, bKey, ''); });
-    row.appendChild(f); row.appendChild(w); row.appendChild(x);
-  } else {
-    row.title = 'Add a connection type';
-    const w = document.createElement('span'); w.className = 'ctp-word'; w.textContent = '+ type'; row.appendChild(w);
-    row.addEventListener('click', e => { e.stopPropagation(); if (window.openConnTypeMenu) window.openConnTypeMenu(aIdx, bKey, e.clientX, e.clientY); });
+  const key = aIdx + '_' + bIdx, sig = key + '|' + t1;
+  let chip = host.querySelector('.ctp[data-conn="' + key + '"]');
+  function reposition(ch){
+    const L = ch._link, X = ch._cx, Y = ch._cy;
+    const cs = getComputedStyle(document.body);
+    const lw = parseFloat(cs.getPropertyValue('--lw')) || 0, rw = parseFloat(cs.getPropertyValue('--rw')) || 0;
+    const W = host.clientWidth || 0;
+    if (!ch._cw) ch._cw = ch.offsetWidth || 90;
+    const cw = ch._cw, odx = (L && L._cdx) || 0, ody = (L && L._cdy) || 0;
+    let left = X - cw / 2 + odx;
+    left = Math.max(lw + 8, Math.min(left, Math.max(lw + 8, W - rw - 8 - cw)));
+    ch.style.left = Math.round(left) + 'px'; ch.style.top = Math.round(Y + ody) + 'px';
   }
-  chip.appendChild(row);
-  chip.addEventListener('click', e => { if (window.__connDragEndTs && Date.now() - window.__connDragEndTs < 260){ e.stopPropagation(); e.preventDefault(); } }, true);   // a drag must not also fire a button click
-  ['pointerdown', 'pointerup', 'click'].forEach(ev => chip.addEventListener(ev, e => { window.__connPillTs = Date.now(); e.stopPropagation(); }));
-  chip.addEventListener('pointerdown', () => { window.__connPillTs = Date.now(); }, true);
-  chip.addEventListener('pointerdown', ev => {   // drag to reposition the pill (nudge overlapping ones apart)
-    if (!link) return;
-    const sx = ev.clientX, sy = ev.clientY, bx = (link._cdx) || 0, by = (link._cdy) || 0; let moved = false;
-    const mv = e2 => { const ddx = e2.clientX - sx, ddy = e2.clientY - sy; if (!moved && Math.abs(ddx) + Math.abs(ddy) > 4){ moved = true; window.__connDragging = true; chip.style.cursor = 'grabbing'; } if (moved){ link._cdx = bx + ddx; link._cdy = by + ddy; window.__connPillTs = Date.now(); chip.style.left = Math.round(cx - (chip.offsetWidth || 90) / 2 + link._cdx) + 'px'; chip.style.top = Math.round(cy + link._cdy) + 'px'; } };
-    const up = () => { document.removeEventListener('pointermove', mv, true); document.removeEventListener('pointerup', up, true); chip.style.cursor = ''; window.__connDragging = false; if (moved){ window.__connPillTs = Date.now(); window.__connDragEndTs = Date.now(); if (typeof scheduleAutosave === 'function') scheduleAutosave(); } };
-    document.addEventListener('pointermove', mv, true); document.addEventListener('pointerup', up, true);
-  });
-  host.appendChild(chip);
-  const cs = getComputedStyle(document.body);
-  const lw = parseFloat(cs.getPropertyValue('--lw')) || 0, rw = parseFloat(cs.getPropertyValue('--rw')) || 0;
-  const W = host.clientWidth || 0, cw = chip.offsetWidth || 90;
-  const odx = (link && link._cdx) || 0, ody = (link && link._cdy) || 0;
-  let left = cx - cw / 2 + odx;
-  left = Math.max(lw + 8, Math.min(left, Math.max(lw + 8, W - rw - 8 - cw)));
-  chip.style.left = Math.round(left) + 'px';
-  chip.style.top = Math.round(cy + ody) + 'px';
+  if (!chip){   // create the pill ONCE; handlers read live context from chip._*
+    chip = document.createElement('div'); chip.className = 'ctp'; chip.dataset.conn = key; host.appendChild(chip);
+    ['pointerdown', 'pointerup', 'click'].forEach(ev => chip.addEventListener(ev, e => { window.__connPillTs = Date.now(); e.stopPropagation(); }));
+    chip.addEventListener('pointerdown', () => { window.__connPillTs = Date.now(); }, true);
+    chip.addEventListener('click', e => { if (window.__connDragEndTs && Date.now() - window.__connDragEndTs < 260){ e.stopPropagation(); e.preventDefault(); } }, true);
+    chip.addEventListener('pointerdown', ev => {   // drag to reposition the pill (nudge overlapping ones apart)
+      const L = chip._link; if (!L) return;
+      const sx = ev.clientX, sy = ev.clientY, bx = (L._cdx) || 0, by = (L._cdy) || 0; let moved = false;
+      const mv = e2 => { const ddx = e2.clientX - sx, ddy = e2.clientY - sy; if (!moved && Math.abs(ddx) + Math.abs(ddy) > 4){ moved = true; chip.style.cursor = 'grabbing'; } if (moved){ L._cdx = bx + ddx; L._cdy = by + ddy; window.__connPillTs = Date.now(); reposition(chip); } };
+      const up = () => { document.removeEventListener('pointermove', mv, true); document.removeEventListener('pointerup', up, true); chip.style.cursor = ''; if (moved){ window.__connPillTs = Date.now(); window.__connDragEndTs = Date.now(); if (typeof scheduleAutosave === 'function') scheduleAutosave(); } };
+      document.addEventListener('pointermove', mv, true); document.addEventListener('pointerup', up, true);
+    });
+  }
+  chip._seen = true; chip._link = link; chip._cx = cx; chip._cy = cy; chip._aIdx = aIdx; chip._bKey = bKey;
+  if (chip.dataset.sig !== sig){   // rebuild inner content only when the type changes → DOM stays stable for hover/click/drag
+    chip.innerHTML = '';
+    const row = document.createElement('div'); row.className = 'ctp-row' + (t1 ? '' : ' ctp-add');
+    if (t1){
+      const f = document.createElement('span'); f.className = 'ctp-feather'; f.title = 'Notes about this connection'; f.innerHTML = feather();
+      f.addEventListener('click', e => { e.stopPropagation(); if (window.openConnectionNotes) window.openConnectionNotes(chip._aIdx, chip._bKey); });
+      const w = document.createElement('span'); w.className = 'ctp-word'; w.textContent = t1; w.title = 'Change the connection type';
+      w.addEventListener('click', e => { e.stopPropagation(); if (window.openConnTypeMenu) window.openConnTypeMenu(chip._aIdx, chip._bKey, e.clientX, e.clientY); });
+      const x = document.createElement('span'); x.className = 'ctp-x'; x.textContent = '×'; x.title = 'Remove this type';
+      x.addEventListener('click', e => { e.stopPropagation(); if (window.setConnType) window.setConnType(chip._aIdx, chip._bKey, ''); });
+      row.appendChild(f); row.appendChild(w); row.appendChild(x);
+    } else {
+      row.title = 'Add a connection type';
+      const w = document.createElement('span'); w.className = 'ctp-word'; w.textContent = '+ type'; row.appendChild(w);
+      row.addEventListener('click', e => { e.stopPropagation(); if (window.openConnTypeMenu) window.openConnTypeMenu(chip._aIdx, chip._bKey, e.clientX, e.clientY); });
+    }
+    chip.appendChild(row);
+    chip.dataset.sig = sig; chip._cw = 0;
+  }
+  reposition(chip);
 }
 window.expConnChip = expConnChip;
 
@@ -31290,13 +31299,13 @@ body.eink #expMenu{background:#fff; border-color:#000}
           expConnChip(apexX, (py2 + ty) / 2, +xbSel.id, +trow.dataset.ci);
         }
       });
-      return;
+      _sweepPills(); return;
     }
-    if (state.selNode == null) return;
+    if (state.selNode == null){ _sweepPills(); return; }
     var i = state.selNode, w = state.prompt.words[i];
-    if (!w || (w.role !== 'being' && w.role !== 'word')) return;
-    if (!MAP[w.cat]) return;
-    var g = document.querySelector('#skySvg g.node.sel'); if (!g) return;
+    if (!w || (w.role !== 'being' && w.role !== 'word')){ _sweepPills(); return; }
+    if (!MAP[w.cat]){ _sweepPills(); return; }
+    var g = document.querySelector('#skySvg g.node.sel'); if (!g){ _sweepPills(); return; }
     var nr = g.getBoundingClientRect();
     web.setAttribute('viewBox', '0 0 ' + Math.round(sr.width) + ' ' + Math.round(sr.height));
     web.setAttribute('width', Math.round(sr.width)); web.setAttribute('height', Math.round(sr.height));
@@ -31362,6 +31371,7 @@ body.eink #expMenu{background:#fff; border-color:#000}
       dot.setAttribute('fill', col); web.appendChild(dot);
       if (row.dataset.ci != null) expConnChip((a.x + px) / 2, (a.y + py) / 2, i, +row.dataset.ci);   // concept/org: typed pill (threads carry no type)
     });
+    _sweepPills();
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else setTimeout(init, 0);
 })();
