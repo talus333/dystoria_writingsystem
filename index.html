@@ -29762,6 +29762,62 @@ body.eink #expMenu{background:#fff; border-color:#000}
       }
     });
     rrow.appendChild(qaBtn);   // sits left of the ⋯ (which is order:99)
+    // ---- Explore: pointed possibilities for one element (a wound, a secret, a contradiction) ----
+    var exploreBtn = document.createElement('button'); exploreBtn.id = 'exploreBtn'; exploreBtn.type = 'button'; exploreBtn.textContent = '✧ explore';
+    exploreBtn.title = 'Pick an element — the AI surfaces a few pointed possibilities (a wound, a secret, a contradiction) specific to it';
+    function exploreElByKey(key){ return qaListFocusEls().find(function(w){ return wordKey(w) === key; }) || null; }
+    function exploreDetail(w){
+      var note = qaStrip(((state.session && state.session.npNotes) || {})[wordKey(w)] || '').slice(0, 400);
+      var traits = ((w.attrs || []).map(function(a){ return typeof a === 'string' ? a : (a && a.word); }).filter(Boolean)).join(', ');
+      var rels = ''; try { if (typeof wikiRelations === 'function') rels = wikiRelations({ word: w.word, cat: w.cat }).slice(0, 6).join('; '); } catch(e){}
+      var mot = ''; if (w.motivation){ var m = w.motivation, parts = []; if (m.want) parts.push('wants ' + m.want); if (m.stake) parts.push(m.stake + ' at stake'); mot = parts.join('; '); }
+      return { name: (w.name || w.word), word: w.word, cat: w.cat, sub: w.sub || '', note: note, traits: traits, rels: rels, mot: mot, key: wordKey(w) };
+    }
+    function exPop(){ var p = document.getElementById('exPop'); if (!p){ p = document.createElement('div'); p.id = 'exPop'; sky.appendChild(p); } return p; }
+    function exploreAddNote(key, text){
+      if (!key || !state.session) return;
+      state.session.npNotes = state.session.npNotes || {};
+      state.session.npNotes[key] = (state.session.npNotes[key] || '') + '<div>✧ ' + String(text).replace(/</g, '&lt;') + '</div>';
+      if (typeof scheduleAutosave === 'function') scheduleAutosave();
+      if (typeof flashStatus === 'function') flashStatus('Added to notes');
+    }
+    function exCards(p, arr, onNote){
+      var body = p.querySelector('.ex-body'); body.innerHTML = '';
+      if (!arr.length){ body.innerHTML = '<div class="ex-think">Nothing surfaced — try again.</div>'; return; }
+      arr.forEach(function(text){
+        var card = document.createElement('div'); card.className = 'ex-card';
+        var t = document.createElement('div'); t.className = 'ex-card-t'; t.textContent = text; card.appendChild(t);
+        var acts = document.createElement('div'); acts.className = 'ex-card-acts';
+        if (onNote){ var nb = document.createElement('button'); nb.type = 'button'; nb.className = 'ex-note'; nb.textContent = '+ note'; nb.addEventListener('click', function(){ onNote(text); nb.textContent = '✓ noted'; nb.disabled = true; }); acts.appendChild(nb); }
+        var dis = document.createElement('button'); dis.type = 'button'; dis.className = 'ex-dismiss'; dis.textContent = '×'; dis.title = 'Dismiss'; dis.addEventListener('click', function(){ card.remove(); if (!body.querySelector('.ex-card')) p.classList.remove('show'); });
+        acts.appendChild(dis); card.appendChild(acts); body.appendChild(card);
+      });
+    }
+    async function exploreEl(w){
+      if (!w) return;
+      if (typeof aiAuthed === 'function' && !aiAuthed()){ if (typeof promptAiSignup === 'function') promptAiSignup(); return; }
+      var d = exploreDetail(w); var p = exPop(); p.classList.add('show');
+      p.innerHTML = '<div class="ex-head"><span class="ex-t">Explore — ' + (d.name || '') + '</span><button type="button" class="ex-x" title="Close">×</button></div><div class="ex-body"><div class="ex-think"><span class="spin"></span> finding the pressure points…</div></div>';
+      p.querySelector('.ex-x').addEventListener('click', function(){ p.classList.remove('show'); });
+      var sys = 'You help a writer deepen ONE story element by surfacing what is unspoken or unresolved about it. Given the element and its details, offer exactly 3 pointed possibilities to explore — each a DIFFERENT angle such as a wound, a secret, a contradiction, a hidden want, a private fear, a lie it embodies, or a cost it hides. Each must be ONE vivid, specific sentence about THIS element, grounded in its given details and plausible for the story — never generic writing advice. Return ONLY a JSON array of exactly 3 strings.';
+      var user = 'ELEMENT: ' + d.name + ' [' + d.cat + (d.sub ? ' · ' + d.sub : '') + ']' + (d.traits ? '\nTRAITS: ' + d.traits : '') + (d.mot ? '\nMOTIVATION: ' + d.mot : '') + (d.rels ? '\nRELATIONSHIPS: ' + d.rels : '') + (d.note ? '\nNOTES: ' + d.note : '') + '\n\nReturn 3 pointed possibilities as a JSON array of strings.';
+      try {
+        var out = await aiCall(sys, user, { maxTokens: 400, json: true });
+        var arr = []; try { arr = JSON.parse(out); } catch(e){ if (typeof parseJsonLoose === 'function'){ try { arr = parseJsonLoose(out); } catch(_){} } }
+        if (!Array.isArray(arr)) arr = (arr && Array.isArray(arr.possibilities)) ? arr.possibilities : [];
+        arr = arr.filter(function(x){ return typeof x === 'string' && x.trim(); }).slice(0, 4);
+        exCards(p, arr, function(text){ exploreAddNote(d.key, text); });
+      } catch (e){ var b = p.querySelector('.ex-body'); if (b) b.innerHTML = '<div class="ex-think">Couldn’t reach the AI — try again.</div>'; }
+    }
+    exploreBtn.addEventListener('click', function(e){
+      e.stopPropagation();
+      var selW = (state.selNode != null && state.prompt && state.prompt.words) ? state.prompt.words[state.selNode] : null;
+      if (selW && (selW.role === 'being' || selW.role === 'word') && ({ being: 1, setting: 1, object: 1, event: 1 })[selW.cat]){ exploreEl(selW); return; }
+      var items = qaListFocusEls().map(function(w){ return [wordKey(w), (w.name || w.word)]; });
+      if (!items.length){ if (typeof flashStatus === 'function') flashStatus('Add an element to the story first'); return; }
+      expPickMenu(exploreBtn, items, function(key){ exploreEl(exploreElByKey(key)); });
+    });
+    rrow.appendChild(exploreBtn);
     // ---- Write-mode dictation: a mic pill that lives through the session ----
     (function(){
       var SRw = window.SpeechRecognition || window.webkitSpeechRecognition;
