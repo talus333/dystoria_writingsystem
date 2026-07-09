@@ -8386,52 +8386,59 @@ window.openBeingOrgPicker = openBeingOrgPicker;
 function expConnChip(cx, cy, aIdx, bIdx){
   const host = document.getElementById('expWebTop'); if (!host || !state.prompt) return;
   const words = state.prompt.words, aw = words[aIdx], bw = words[bIdx]; if (!aw || !bw) return;
-  const aKey = wordKey(aw), bKey = wordKey(bw);
+  const bKey = wordKey(bw);
   const link = (typeof getLink === 'function') ? getLink(aIdx, bIdx) : null;
   const dirType = (fromIdx) => { if (!link) return ''; const side = (link.a === fromIdx) ? 'fwd' : 'rev'; const sd = link[side]; if (sd && sd.type) return sd.type; if (link.rel) return link.rel; return ''; };
-  const t1 = dirType(aIdx), t2 = dirType(bIdx);
-  const chip = document.createElement('div'); chip.className = 'ctp';
-  const feather = () => '<svg width="11" height="11" viewBox="0 0 24 24" style="width:11px;height:11px;display:block;flex:none" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">' + ((typeof LUCIDE !== 'undefined' && LUCIDE['feather']) || '<path d="M20 5c-6 0-11 5-11 11v3h3c6 0 11-5 11-11V5zM9 19l-4 4M14 12H9"/>') + '</svg>';
-  const typeRow = (word, fromIdx, otherKey) => {
-    const row = document.createElement('div'); row.className = 'ctp-row';
-    const f = document.createElement('span'); f.className = 'ctp-feather'; f.title = 'Notes about this connection'; f.innerHTML = feather();
-    f.addEventListener('click', e => { e.stopPropagation(); if (window.openConnectionNotes) window.openConnectionNotes(fromIdx, otherKey); });
-    const w = document.createElement('span'); w.className = 'ctp-word'; w.textContent = word; w.title = 'Change the connection type';
-    w.addEventListener('click', e => { e.stopPropagation(); if (window.openConnTypeMenu) window.openConnTypeMenu(fromIdx, otherKey, e.clientX, e.clientY); });
-    const x = document.createElement('span'); x.className = 'ctp-x'; x.textContent = '×'; x.title = 'Remove this type';
-    x.addEventListener('click', e => { e.stopPropagation(); if (window.setConnType) window.setConnType(fromIdx, otherKey, ''); });
-    row.appendChild(f); row.appendChild(w); row.appendChild(x); chip.appendChild(row);
-  };
-  const addRow = (fromIdx, otherKey) => {
-    const row = document.createElement('div'); row.className = 'ctp-row ctp-add'; row.title = 'Add a connection type';
-    const w = document.createElement('span'); w.className = 'ctp-word'; w.textContent = '+ type'; row.appendChild(w);
-    row.addEventListener('click', e => { e.stopPropagation(); if (window.openConnTypeMenu) window.openConnTypeMenu(fromIdx, otherKey, e.clientX, e.clientY); });
+  const t1 = dirType(aIdx);   // only the direction from the selected element (aIdx → bIdx); the reverse shows when the other element is selected
+  const key = aIdx + '_' + bIdx, sig = key + '|' + t1;
+  if (window.__connPillsUsed) window.__connPillsUsed.add(key);
+  let chip = host.querySelector('.ctp[data-conn="' + key + '"]');
+  function reposition(ch){
+    const L = ch._link, X = ch._cx, Y = ch._cy;
+    const cs = getComputedStyle(document.body);
+    const lw = parseFloat(cs.getPropertyValue('--lw')) || 0, rw = parseFloat(cs.getPropertyValue('--rw')) || 0;
+    const W = host.clientWidth || 0;
+    if (!ch._cw) ch._cw = ch.offsetWidth || 90;
+    const cw = ch._cw, odx = (L && L._cdx) || 0, ody = (L && L._cdy) || 0;
+    let left = X - cw / 2 + odx;
+    left = Math.max(lw + 8, Math.min(left, Math.max(lw + 8, W - rw - 8 - cw)));
+    ch.style.left = Math.round(left) + 'px';
+    ch.style.top = Math.round(Y + ody) + 'px';
+  }
+  if (!chip){   // create once — handlers attached once, and read the live context from chip._*
+    chip = document.createElement('div'); chip.className = 'ctp'; chip.dataset.conn = key; host.appendChild(chip);
+    ['pointerdown', 'pointerup', 'click'].forEach(ev => chip.addEventListener(ev, e => { window.__connPillTs = Date.now(); e.stopPropagation(); }));   // don't deselect the map
+    chip.addEventListener('click', e => { if (window.__connDragEndTs && Date.now() - window.__connDragEndTs < 260){ e.stopPropagation(); e.preventDefault(); } }, true);   // a drag must not also fire a button click
+    chip.addEventListener('pointerdown', ev => {   // drag to reposition along/around the line
+      const L = chip._link; if (!L) return;
+      const sx = ev.clientX, sy = ev.clientY, bx = (L._cdx) || 0, by = (L._cdy) || 0; let moved = false;
+      const mv = e2 => { const ddx = e2.clientX - sx, ddy = e2.clientY - sy; if (!moved && Math.abs(ddx) + Math.abs(ddy) > 4){ moved = true; chip.style.cursor = 'grabbing'; } if (moved){ L._cdx = bx + ddx; L._cdy = by + ddy; window.__connPillTs = Date.now(); reposition(chip); } };
+      const up = () => { document.removeEventListener('pointermove', mv, true); document.removeEventListener('pointerup', up, true); chip.style.cursor = ''; if (moved){ window.__connPillTs = Date.now(); window.__connDragEndTs = Date.now(); if (typeof scheduleAutosave === 'function') scheduleAutosave(); } };
+      document.addEventListener('pointermove', mv, true); document.addEventListener('pointerup', up, true);
+    });
+  }
+  chip._link = link; chip._cx = cx; chip._cy = cy; chip._aIdx = aIdx; chip._bKey = bKey;
+  if (chip.dataset.sig !== sig){   // (re)build inner content only when the type changes — keeps the DOM stable for hover/click
+    const feather = () => '<svg width="11" height="11" viewBox="0 0 24 24" style="width:11px;height:11px;display:block;flex:none" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">' + ((typeof LUCIDE !== 'undefined' && LUCIDE['feather']) || '<path d="M20 5c-6 0-11 5-11 11v3h3c6 0 11-5 11-11V5zM9 19l-4 4M14 12H9"/>') + '</svg>';
+    chip.innerHTML = '';
+    const row = document.createElement('div'); row.className = 'ctp-row' + (t1 ? '' : ' ctp-add');
+    if (t1){
+      const f = document.createElement('span'); f.className = 'ctp-feather'; f.title = 'Notes about this connection'; f.innerHTML = feather();
+      f.addEventListener('click', e => { e.stopPropagation(); if (window.openConnectionNotes) window.openConnectionNotes(chip._aIdx, chip._bKey); });
+      const w = document.createElement('span'); w.className = 'ctp-word'; w.textContent = t1; w.title = 'Change the connection type';
+      w.addEventListener('click', e => { e.stopPropagation(); if (window.openConnTypeMenu) window.openConnTypeMenu(chip._aIdx, chip._bKey, e.clientX, e.clientY); });
+      const x = document.createElement('span'); x.className = 'ctp-x'; x.textContent = '×'; x.title = 'Remove this type';
+      x.addEventListener('click', e => { e.stopPropagation(); if (window.setConnType) window.setConnType(chip._aIdx, chip._bKey, ''); });
+      row.appendChild(f); row.appendChild(w); row.appendChild(x);
+    } else {
+      row.title = 'Add a connection type';
+      const w = document.createElement('span'); w.className = 'ctp-word'; w.textContent = '+ type'; row.appendChild(w);
+      row.addEventListener('click', e => { e.stopPropagation(); if (window.openConnTypeMenu) window.openConnTypeMenu(chip._aIdx, chip._bKey, e.clientX, e.clientY); });
+    }
     chip.appendChild(row);
-  };
-  // Show ONLY the direction from the selected element (aIdx) to the connected one (bIdx).
-  // The reverse direction (bIdx→aIdx) is seen by selecting the other element.
-  if (t1) typeRow(t1, aIdx, bKey); else addRow(aIdx, bKey);
-  chip.addEventListener('pointerdown', () => { window.__connPillTs = Date.now(); }, true);   // capture: stamp for inner buttons too (they stopPropagation)
-  chip.addEventListener('click', () => { window.__connPillTs = Date.now(); }, true);
-  ['pointerdown', 'pointerup', 'click'].forEach(ev => chip.addEventListener(ev, e => { window.__connPillTs = Date.now(); e.stopPropagation(); }));   // bubble: a click on the pill background must not deselect the map
-  host.appendChild(chip);
-  const cs = getComputedStyle(document.body);
-  const lw = parseFloat(cs.getPropertyValue('--lw')) || 0, rw = parseFloat(cs.getPropertyValue('--rw')) || 0;
-  const W = host.clientWidth || 0, cw = chip.offsetWidth || 90;
-  const odx = (link && link._cdx) || 0, ody = (link && link._cdy) || 0;   // drag offset (persists on the link) so overlapping pills can be nudged apart
-  let left = cx - cw / 2 + odx;
-  left = Math.max(lw + 8, Math.min(left, Math.max(lw + 8, W - rw - 8 - cw)));   // never tuck behind either sidebar strip
-  chip.style.left = Math.round(left) + 'px';
-  chip.style.top = Math.round(cy + ody) + 'px';
-  // drag the pill to reposition it (start on the pill background; the word/feather/× still click if you don't drag)
-  chip.addEventListener('click', e => { if (window.__connDragEndTs && Date.now() - window.__connDragEndTs < 260){ e.stopPropagation(); e.preventDefault(); } }, true);   // a drag must not also fire a button click
-  chip.addEventListener('pointerdown', ev => {
-    if (!link) return;
-    const sx = ev.clientX, sy = ev.clientY, bx = (link._cdx) || 0, by = (link._cdy) || 0; let moved = false;
-    const mv = e2 => { const ddx = e2.clientX - sx, ddy = e2.clientY - sy; if (!moved && Math.abs(ddx) + Math.abs(ddy) > 4){ moved = true; chip.style.cursor = 'grabbing'; } if (moved){ link._cdx = bx + ddx; link._cdy = by + ddy; window.__connPillTs = Date.now(); chip.style.left = Math.round(cx - cw / 2 + link._cdx) + 'px'; chip.style.top = Math.round(cy + link._cdy) + 'px'; } };
-    const up = () => { document.removeEventListener('pointermove', mv, true); document.removeEventListener('pointerup', up, true); chip.style.cursor = ''; if (moved){ window.__connPillTs = Date.now(); window.__connDragEndTs = Date.now(); if (typeof scheduleAutosave === 'function') scheduleAutosave(); } };
-    document.addEventListener('pointermove', mv, true); document.addEventListener('pointerup', up, true);
-  });
+    chip.dataset.sig = sig; chip._cw = 0;   // remeasure width for the new content
+  }
+  reposition(chip);
 }
 window.expConnChip = expConnChip;
 
