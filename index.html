@@ -3261,6 +3261,15 @@
         <button id="edUndoBtn" title="Undo (⌘Z)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg></button>
         <button id="edRedoBtn" title="Redo (⌘⇧Z)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 14 5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/></svg></button>
       </span>
+      <div id="aiSupportWrap">
+        <button id="aiSupportBtn" type="button" title="AI reviews of your whole story — diagnostics, not fixes">✦ AI Support ▾</button>
+        <div id="aiSupportMenu">
+          <button type="button" data-ais="gap" title="Under-developed threads: a stake never paid off, a being with no relationships, a setting never entered, an object that vanishes">Gap &amp; Chekhov check</button>
+          <button type="button" data-ais="continuity" title="Flags contradictions: a trait that changed, a destroyed place reappearing, a timeline slip">Continuity pass</button>
+          <button type="button" data-ais="health" title="A gentle read: pacing, POV, elements woven vs dormant, stakes open vs resolved">Story-health read</button>
+          <button type="button" data-ais="retelling" title="The one-paragraph version, as someone would retell it — the retelling test made visible">The Retelling</button>
+        </div>
+      </div>
       <div id="edModeSwitch" class="mode-switch" style="display:none" title="Suggest changes for approval, or edit the text directly">
         <button id="edSuggestSeg" class="active">Suggest</button>
         <button id="edEditSeg">Edit</button>
@@ -28797,6 +28806,103 @@ body.eink #mobileNotice .mn-card{border:2px solid #000}
 })();
 </script>
 
+<script id="aiSupportJS">
+/* Refine-mode "AI Support" dropdown — whole-story reviews: Gap & Chekhov, Continuity, Story-health, The Retelling. */
+(function(){
+  function $id(x){ return document.getElementById(x); }
+  function ready(fn){ if (document.readyState !== 'loading') fn(); else document.addEventListener('DOMContentLoaded', fn); }
+  ready(function(){
+    var wrap = $id('aiSupportWrap'), btn = $id('aiSupportBtn'), menu = $id('aiSupportMenu');
+    if (!wrap || !btn || !menu) return;
+    btn.addEventListener('click', function(e){ e.stopPropagation(); wrap.classList.toggle('open'); });
+    document.addEventListener('click', function(e){ if (wrap.classList.contains('open') && !wrap.contains(e.target)) wrap.classList.remove('open'); });
+    menu.querySelectorAll('button[data-ais]').forEach(function(b){ b.addEventListener('click', function(e){ e.stopPropagation(); wrap.classList.remove('open'); aisRun(b.getAttribute('data-ais')); }); });
+  });
+  function strip(h){ return String(h || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim(); }
+  function pop(){ var p = $id('aisPop'); if (!p){ p = document.createElement('div'); p.id = 'aisPop'; document.body.appendChild(p); } return p; }
+  function gather(){
+    var els = (typeof wikiGather === 'function') ? wikiGather() : [];
+    var elInfo = els.map(function(e){
+      var apps = (typeof wikiAppearances === 'function') ? wikiAppearances(e).length : 0;
+      var rels = (typeof wikiRelations === 'function') ? wikiRelations(e) : [];
+      var note = strip(((state.session && state.session.npNotes) || {})[wordKey(e.ref)] || '').slice(0, 140);
+      var secs = e.frames ? Array.from(e.frames) : [];
+      return { name: (e.name || e.word), cat: e.cat, traits: (e.attrs || []).map(function(a){ return a.word || a; }).filter(Boolean).join(', '), apps: apps, rels: rels.length, relText: rels.slice(0, 4).join('; '), secs: secs, note: note };
+    });
+    var secs = [];
+    try {
+      var ed = $id('editor'); var fm = (typeof nodeFrameMap === 'function') ? nodeFrameMap() : null; var frames = (state.frames || [{}]);
+      frames.forEach(function(fr, i){
+        var name = (fr && fr.stageName) || ''; if (!name){ var h3 = document.querySelector('#editor h3[data-frame="' + i + '"]'); if (h3) name = (h3.textContent || '').trim(); }
+        var wc = 0; if (ed) Array.from(ed.children).forEach(function(c){ if ((fm ? fm.get(c) : 0) === i && !(c.classList && c.classList.contains('sec-mark')) && c.tagName !== 'H3'){ wc += (c.textContent || '').trim().split(/\s+/).filter(Boolean).length; } });
+        secs.push({ i: i + 1, name: name, words: wc });
+      });
+    } catch(e){}
+    var allStakes = {}; (state.frames || []).forEach(function(fr){ ((fr.prompt && fr.prompt.words) || []).forEach(function(w){ if (w.cat === 'stakes') allStakes[w.name || w.word] = 1; }); });
+    var goals = (typeof goalContext === 'function') ? (goalContext() || '') : '';
+    var prose = (typeof editorText === 'function') ? editorText().trim() : '';
+    return { els: elInfo, secs: secs, stakes: Object.keys(allStakes), goals: goals, prose: prose };
+  }
+  function elTable(g){ return g.els.map(function(e){ return '- ' + e.name + ' [' + e.cat + '] — ' + e.apps + ' prose mentions, ' + e.rels + ' relationships, sections ' + (e.secs.join(',') || 'none') + (e.traits ? ('; traits: ' + e.traits) : '') + (e.relText ? ('; rels: ' + e.relText) : '') + (e.note ? ('; note: ' + e.note) : ''); }).join('\n'); }
+  function secTable(g){ return g.secs.map(function(s){ return 'Section ' + s.i + (s.name ? (' — ' + s.name) : '') + ': ' + s.words + ' words'; }).join('\n'); }
+  var TOOLS = {
+    gap: { title: 'Gap & Chekhov check', kind: 'list',
+      sys: 'You do a Chekhov\'s-gun / loose-thread pass on a work-in-progress. Using ONLY the element and section data, list under-developed threads that are actually present: a stake introduced but never paid off, a being with no relationships, a setting or object mentioned but never entered or used, an element that appears once then vanishes. DIAGNOSTIC not prescriptive — name each gap in one plain sentence citing the element/stake; no fixes, no praise, no invented issues. If little stands out, return few or none. Return ONLY a JSON array of short strings.',
+      user: function(g){ return 'ELEMENTS (mentions / relationships / sections):\n' + elTable(g) + '\n\nSTAKES: ' + (g.stakes.join(', ') || '(none)') + '\nSECTIONS:\n' + secTable(g) + (g.goals ? ('\n' + g.goals) : '') + '\n\nList the real gaps as a JSON array of strings.'; } },
+    continuity: { title: 'Continuity pass', kind: 'list',
+      sys: 'You do a continuity pass on a manuscript. Read the prose and element facts and flag concrete CONTRADICTIONS only: a trait or description that changed, a place destroyed then present again, a character in two places at once, a timeline slip, an inconsistent name or detail. One plain sentence each, citing where (Section N). No style notes, no praise, and never invent a problem — only real contradictions you can point to in the text. If continuity holds, return an empty array. Return ONLY a JSON array of short strings.',
+      user: function(g){ return 'ELEMENT FACTS:\n' + elTable(g) + '\n\nSECTIONS:\n' + secTable(g) + '\n\nPROSE:\n' + g.prose.slice(0, 16000) + '\n\nReturn the contradictions as a JSON array of strings.'; } },
+    health: { title: 'Story-health read', kind: 'health',
+      sys: 'You give a gentle, honest STORY-HEALTH read of a work-in-progress. In flowing prose (3–5 sentences, no headers) cover: pacing (from the section word counts), POV consistency (from the prose), how many elements are woven into the prose vs sitting dormant, and stakes open vs resolved. Non-judgemental and specific to THIS story; observe, don\'t prescribe. Use ONLY the given data. Output only the paragraph.',
+      user: function(g){ return 'SECTION LENGTHS:\n' + secTable(g) + '\n\nELEMENTS (mentions / relationships / sections):\n' + elTable(g) + '\n\nSTAKES: ' + (g.stakes.join(', ') || '(none)') + (g.goals ? ('\n' + g.goals) : '') + '\n\nPROSE (sample):\n' + g.prose.slice(0, 9000) + '\n\nWrite the health read.'; } },
+    retelling: { title: 'The Retelling', kind: 'prose',
+      sys: 'Write the one-paragraph version of this story as someone would retell it to a friend from memory — the emergent shape it leaves behind, not a beat-by-beat summary. Natural and flowing, 4–7 sentences. Use ONLY what the story establishes; if it is thin or fragmentary, retell only what is genuinely there. No preamble, no title, no meta-commentary about writing — output only the retelling paragraph.',
+      user: function(g){ return 'STORY ELEMENTS: ' + g.els.map(function(e){ return e.name; }).slice(0, 50).join(', ') + '\nSECTIONS:\n' + secTable(g) + (g.goals ? ('\n' + g.goals) : '') + '\n\nPROSE:\n' + g.prose.slice(0, 16000) + '\n\nRetell the story in one paragraph.'; } }
+  };
+  function renderList(p, arr, emptyMsg){
+    var body = p.querySelector('.ex-body'); body.innerHTML = '';
+    if (!arr.length){ body.innerHTML = '<div class="ex-think">' + emptyMsg + '</div>'; return; }
+    arr.forEach(function(text){
+      var card = document.createElement('div'); card.className = 'ex-card';
+      var t = document.createElement('div'); t.className = 'ex-card-t'; t.textContent = text; card.appendChild(t);
+      var acts = document.createElement('div'); acts.className = 'ex-card-acts';
+      var dis = document.createElement('button'); dis.type = 'button'; dis.className = 'ex-dismiss'; dis.textContent = '×'; dis.title = 'Dismiss'; dis.addEventListener('click', function(){ card.remove(); }); acts.appendChild(dis);
+      card.appendChild(acts); body.appendChild(card);
+    });
+  }
+  function renderProse(p, text, stats){
+    var body = p.querySelector('.ex-body'); body.innerHTML = '';
+    if (stats){ var s = document.createElement('div'); s.className = 'ais-stats'; s.innerHTML = stats; body.appendChild(s); }
+    var d = document.createElement('div'); d.className = 'ex-prose';
+    String(text || '').split(/\n{2,}/).forEach(function(par){ if (par.trim()){ var pp = document.createElement('p'); pp.textContent = par.trim(); d.appendChild(pp); } });
+    body.appendChild(d);
+  }
+  function healthStats(g){
+    var woven = g.els.filter(function(e){ return e.apps > 0; }).length, dormant = g.els.length - woven;
+    return '<span class="ais-stat"><b>' + g.secs.length + '</b> sections</span><span class="ais-stat"><b>' + g.els.length + '</b> elements</span><span class="ais-stat"><b>' + woven + '</b> woven · <b>' + dormant + '</b> dormant</span><span class="ais-stat"><b>' + g.stakes.length + '</b> stakes</span>';
+  }
+  async function aisRun(kind){
+    var tool = TOOLS[kind]; if (!tool) return;
+    if (typeof aiAuthed === 'function' && !aiAuthed()){ if (typeof promptAiSignup === 'function') promptAiSignup(); return; }
+    var p = pop(); p.classList.add('show');
+    p.innerHTML = '<div class="ex-head"><span class="ex-t">' + tool.title + '</span><button type="button" class="ex-x" title="Close">×</button></div><div class="ex-body"><div class="ex-think"><span class="spin"></span> reading the whole story…</div></div>';
+    p.querySelector('.ex-x').addEventListener('click', function(){ p.classList.remove('show'); });
+    var g = gather();
+    try {
+      var opts = (tool.kind === 'list') ? { maxTokens: 800, json: true } : { maxTokens: 600 };
+      var out = await aiCall(tool.sys, tool.user(g), opts);
+      if (tool.kind === 'list'){
+        var arr = []; try { arr = JSON.parse(out); } catch(e){ if (typeof parseJsonLoose === 'function'){ try { arr = parseJsonLoose(out); } catch(_){} } }
+        if (!Array.isArray(arr)) arr = (arr && Array.isArray(arr.items)) ? arr.items : [];
+        arr = arr.filter(function(x){ return typeof x === 'string' && x.trim(); });
+        renderList(p, arr, kind === 'continuity' ? 'No contradictions surfaced — the continuity holds.' : 'Nothing under-developed stood out.');
+      } else if (tool.kind === 'health'){ renderProse(p, out, healthStats(g)); }
+      else { renderProse(p, out, null); }
+    } catch(e){ var b = p.querySelector('.ex-body'); if (b) b.innerHTML = '<div class="ex-think">Couldn\'t reach the AI — try again.</div>'; }
+  }
+})();
+</script>
+
 <style id="expWebsCss">
 /* ===== MAP WEBS UI: concept/thread border strips, selection webs, map header band ===== */
 body.expb #expLeft, body.expb #expRight{position:absolute; top:0; bottom:0; width:140px; z-index:26; display:flex; flex-direction:column; box-sizing:border-box; padding:12px 10px 70px; overflow:visible;
@@ -28892,6 +28998,24 @@ body.eink #whereNextBtn{background:#fff; border-color:#000; color:#000}
 .ex-dismiss{margin-left:auto; border:none; background:none; color:var(--ink-faint); font-size:15px; line-height:1; cursor:pointer; padding:2px 6px; border-radius:6px}
 .ex-dismiss:hover{color:#c0392b}
 body.eink #exPop, body.eink #wnPop{border:2px solid #000; background:#fff}
+/* AI Support dropdown (Refine mode bar) */
+#aiSupportWrap{position:relative; display:inline-flex}
+#aiSupportBtn{font-family:var(--sans); font-size:9px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:var(--ink-soft); background:transparent; border:1px dashed var(--ink-faint); border-radius:13px; padding:4px 10px; cursor:pointer; white-space:nowrap}
+#aiSupportBtn:hover{color:var(--ink); border-color:var(--gold)}
+#aiSupportWrap.open #aiSupportBtn{color:var(--ink); border-color:var(--gold); border-style:solid}
+#aiSupportMenu{display:none; position:absolute; right:0; top:calc(100% + 6px); z-index:120; min-width:210px; flex-direction:column; gap:2px; background:var(--paper); border:1px solid var(--line); border-radius:12px; box-shadow:0 14px 40px rgba(0,0,0,.26); padding:7px}
+#aiSupportWrap.open #aiSupportMenu{display:flex}
+#aiSupportMenu button{border:none; background:none; text-align:left; font-family:var(--serif); font-size:13.5px; color:var(--ink); padding:7px 10px; border-radius:8px; cursor:pointer}
+#aiSupportMenu button:hover{background:var(--bg2); color:var(--ink)}
+body.eink #aiSupportMenu{background:#fff; border-color:#000}
+#aisPop{display:none; position:fixed; right:18px; top:64px; z-index:200; width:420px; max-width:calc(100vw - 36px); max-height:76vh; overflow-y:auto; background:var(--paper); border:1px solid var(--line); border-radius:16px; box-shadow:0 20px 56px rgba(0,0,0,.32); scrollbar-width:thin}
+#aisPop.show{display:block}
+.ex-prose{font-family:var(--serif); font-size:15px; line-height:1.6; color:var(--ink); padding:4px 2px}
+.ex-prose p{margin:0 0 10px}
+.ais-stats{display:flex; flex-wrap:wrap; gap:6px; margin:2px 0 12px}
+.ais-stat{font-family:var(--sans); font-size:10px; letter-spacing:.04em; color:var(--ink-soft); background:var(--bg2); border:1px solid var(--line); border-radius:10px; padding:4px 9px}
+.ais-stat b{color:var(--ink); font-weight:700}
+body.eink #aisPop{border:2px solid #000; background:#fff}
 #qaWin{display:none; position:absolute; right:calc(var(--rw,140px) + 12px); top:48px; bottom:14px; width:360px; z-index:47; box-sizing:border-box;
   background:linear-gradient(180deg,#2a2117,#1b150e); border:1px solid rgba(250,154,49,.2); border-radius:16px; box-shadow:0 14px 44px rgba(0,0,0,.45);
   flex-direction:column; overflow:hidden}
