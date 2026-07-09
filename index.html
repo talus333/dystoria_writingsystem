@@ -28847,11 +28847,11 @@ body.eink #mobileNotice .mn-card{border:2px solid #000}
   function secTable(g){ return g.secs.map(function(s){ return 'Section ' + s.i + (s.name ? (' — ' + s.name) : '') + ': ' + s.words + ' words'; }).join('\n'); }
   var TOOLS = {
     gap: { title: 'Gap & Chekhov check', kind: 'list',
-      sys: 'You do a Chekhov\'s-gun / loose-thread pass on a work-in-progress. Using ONLY the element and section data, list under-developed threads that are actually present: a stake introduced but never paid off, a being with no relationships, a setting or object mentioned but never entered or used, an element that appears once then vanishes. DIAGNOSTIC not prescriptive — name each gap in one plain sentence citing the element/stake; no fixes, no praise, no invented issues. If little stands out, return few or none. Return ONLY a JSON array of short strings.',
-      user: function(g){ return 'ELEMENTS (mentions / relationships / sections):\n' + elTable(g) + '\n\nSTAKES: ' + (g.stakes.join(', ') || '(none)') + '\nSECTIONS:\n' + secTable(g) + (g.goals ? ('\n' + g.goals) : '') + '\n\nList the real gaps as a JSON array of strings.'; } },
+      sys: 'You do a Chekhov\'s-gun / loose-thread pass on a work-in-progress. Using ONLY the element and section data, list under-developed threads that are actually present: a stake introduced but never paid off, a being with no relationships, a setting or object mentioned but never entered or used, an element that appears once then vanishes. DIAGNOSTIC not prescriptive — name each gap in one plain sentence; no fixes, no praise, no invented issues. If little stands out, return few or none. Return ONLY a JSON array of objects, each {"text": the one-sentence gap, "element": the exact element or stake name it concerns (or ""), "section": the section number it most concerns (integer) or null}.',
+      user: function(g){ return 'ELEMENTS (mentions / relationships / sections):\n' + elTable(g) + '\n\nSTAKES: ' + (g.stakes.join(', ') || '(none)') + '\nSECTIONS:\n' + secTable(g) + (g.goals ? ('\n' + g.goals) : '') + '\n\nList the real gaps as the JSON array described.'; } },
     continuity: { title: 'Continuity pass', kind: 'list',
-      sys: 'You do a continuity pass on a manuscript. Read the prose and element facts and flag concrete CONTRADICTIONS only: a trait or description that changed, a place destroyed then present again, a character in two places at once, a timeline slip, an inconsistent name or detail. One plain sentence each, citing where (Section N). No style notes, no praise, and never invent a problem — only real contradictions you can point to in the text. If continuity holds, return an empty array. Return ONLY a JSON array of short strings.',
-      user: function(g){ return 'ELEMENT FACTS:\n' + elTable(g) + '\n\nSECTIONS:\n' + secTable(g) + '\n\nPROSE:\n' + g.prose.slice(0, 16000) + '\n\nReturn the contradictions as a JSON array of strings.'; } },
+      sys: 'You do a continuity pass on a manuscript. Read the prose and element facts and flag concrete CONTRADICTIONS only: a trait or description that changed, a place destroyed then present again, a character in two places at once, a timeline slip, an inconsistent name or detail. One plain sentence each. No style notes, no praise, and never invent a problem — only real contradictions you can point to in the text. If continuity holds, return an empty array. Return ONLY a JSON array of objects, each {"text": the one-sentence contradiction, "element": the exact element name it concerns (or ""), "section": the section number where it occurs (integer) or null}.',
+      user: function(g){ return 'ELEMENT FACTS:\n' + elTable(g) + '\n\nSECTIONS:\n' + secTable(g) + '\n\nPROSE:\n' + g.prose.slice(0, 16000) + '\n\nReturn the contradictions as the JSON array described.'; } },
     health: { title: 'Story-health read', kind: 'health',
       sys: 'You give a gentle, honest STORY-HEALTH read of a work-in-progress. In flowing prose (3–5 sentences, no headers) cover: pacing (from the section word counts), POV consistency (from the prose), how many elements are woven into the prose vs sitting dormant, and stakes open vs resolved. Non-judgemental and specific to THIS story; observe, don\'t prescribe. Use ONLY the given data. Output only the paragraph.',
       user: function(g){ return 'SECTION LENGTHS:\n' + secTable(g) + '\n\nELEMENTS (mentions / relationships / sections):\n' + elTable(g) + '\n\nSTAKES: ' + (g.stakes.join(', ') || '(none)') + (g.goals ? ('\n' + g.goals) : '') + '\n\nPROSE (sample):\n' + g.prose.slice(0, 9000) + '\n\nWrite the health read.'; } },
@@ -28859,27 +28859,96 @@ body.eink #mobileNotice .mn-card{border:2px solid #000}
       sys: 'Write the one-paragraph version of this story as someone would retell it to a friend from memory — the emergent shape it leaves behind, not a beat-by-beat summary. Natural and flowing, 4–7 sentences. Use ONLY what the story establishes; if it is thin or fragmentary, retell only what is genuinely there. No preamble, no title, no meta-commentary about writing — output only the retelling paragraph.',
       user: function(g){ return 'STORY ELEMENTS: ' + g.els.map(function(e){ return e.name; }).slice(0, 50).join(', ') + '\nSECTIONS:\n' + secTable(g) + (g.goals ? ('\n' + g.goals) : '') + '\n\nPROSE:\n' + g.prose.slice(0, 16000) + '\n\nRetell the story in one paragraph.'; } }
   };
-  function renderList(p, arr, emptyMsg){
+  // scroll the Refine editor to a query (element name, or "section N") and flash it, so the author can go fix it
+  function aisFindInProse(query){
+    var ed = document.getElementById('editBody') || document.getElementById('editor'); if (!ed || !query) return false;
+    var target = null;
+    var secN = /^section\s+(\d+)/i.exec(String(query));
+    if (secN){ var hs = ed.querySelectorAll('h3'); target = hs[(+secN[1]) - 1] || null; }
+    if (!target){
+      var q = String(query).toLowerCase(), walker = document.createTreeWalker(ed, NodeFilter.SHOW_TEXT, null);
+      while (walker.nextNode()){ if ((walker.currentNode.textContent || '').toLowerCase().indexOf(q) >= 0){ target = walker.currentNode.parentElement; break; } }
+    }
+    if (!target) return false;
+    try { target.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch(e){ try { target.scrollIntoView(); } catch(_){} }
+    target.classList.add('ais-flash'); setTimeout(function(){ target.classList.remove('ais-flash'); }, 1700);
+    return true;
+  }
+  function aisNoteKey(name){   // element wordKey by (fuzzy) name so a finding can be filed to its notes
+    if (!name) return null;
+    var els = (typeof wikiGather === 'function') ? wikiGather() : []; var lc = String(name).toLowerCase();
+    var m = els.find(function(e){ return String(e.name || e.word).toLowerCase() === lc; }) || els.find(function(e){ var en = String(e.name || e.word).toLowerCase(); return en && (lc.indexOf(en) >= 0 || en.indexOf(lc) >= 0); });
+    return m ? wordKey(m.ref) : null;
+  }
+  function aisSaveNote(key, prefix, text){
+    if (!key || !state.session) return false;
+    state.session.npNotes = state.session.npNotes || {};
+    state.session.npNotes[key] = (state.session.npNotes[key] || '') + '<div>' + prefix + ' ' + String(text).replace(/</g, '&lt;') + '</div>';
+    if (typeof scheduleAutosave === 'function') scheduleAutosave();
+    if (typeof flashStatus === 'function') flashStatus('Saved to notes');
+    return true;
+  }
+  function renderList(p, arr, emptyMsg, prefix){
     var body = p.querySelector('.ex-body'); body.innerHTML = '';
     if (!arr.length){ body.innerHTML = '<div class="ex-think">' + emptyMsg + '</div>'; return; }
-    arr.forEach(function(text){
+    arr.forEach(function(f){
+      var text = (typeof f === 'string') ? f : (f && f.text) || '';
+      if (!text.trim()) return;
+      var elName = (f && typeof f === 'object') ? (f.element || '') : '';
+      var secNo = (f && typeof f === 'object' && f.section != null && f.section !== '') ? f.section : null;
       var card = document.createElement('div'); card.className = 'ex-card';
       var t = document.createElement('div'); t.className = 'ex-card-t'; t.textContent = text; card.appendChild(t);
       var acts = document.createElement('div'); acts.className = 'ex-card-acts';
+      var loc = elName || (secNo != null ? ('Section ' + secNo) : '');
+      if (loc){
+        var chip = document.createElement('button'); chip.type = 'button'; chip.className = 'ais-chip'; chip.textContent = '→ ' + loc; chip.title = 'Find it in the prose';
+        chip.addEventListener('click', function(){ if (!aisFindInProse(elName || ('section ' + secNo)) && typeof flashStatus === 'function') flashStatus('Couldn’t locate it in the prose'); });
+        acts.appendChild(chip);
+      }
+      var key = aisNoteKey(elName);
+      if (key){ var nb = document.createElement('button'); nb.type = 'button'; nb.className = 'ex-note'; nb.textContent = '+ note'; nb.addEventListener('click', function(){ if (aisSaveNote(key, prefix || '✦', text)){ nb.textContent = '✓ noted'; nb.disabled = true; } }); acts.appendChild(nb); }
       var dis = document.createElement('button'); dis.type = 'button'; dis.className = 'ex-dismiss'; dis.textContent = '×'; dis.title = 'Dismiss'; dis.addEventListener('click', function(){ card.remove(); }); acts.appendChild(dis);
       card.appendChild(acts); body.appendChild(card);
     });
   }
-  function renderProse(p, text, stats){
+  function healthStats(g){
+    var woven = g.els.filter(function(e){ return e.apps > 0; }).length, dormant = g.els.length - woven;
+    return '<span class="ais-stat"><b>' + g.secs.length + '</b> sections</span><span class="ais-stat"><b>' + g.els.length + '</b> elements</span><span class="ais-stat"><b>' + woven + '</b> woven · <b>' + dormant + '</b> dormant</span><span class="ais-stat"><b>' + g.stakes.length + '</b> stakes</span>';
+  }
+  function renderHealth(p, text, g){
     var body = p.querySelector('.ex-body'); body.innerHTML = '';
-    if (stats){ var s = document.createElement('div'); s.className = 'ais-stats'; s.innerHTML = stats; body.appendChild(s); }
+    var s = document.createElement('div'); s.className = 'ais-stats'; s.innerHTML = healthStats(g); body.appendChild(s);
+    if (g.secs.length){
+      var max = Math.max.apply(null, g.secs.map(function(x){ return x.words || 0; })) || 1;
+      var pace = document.createElement('div'); pace.className = 'ais-pace';
+      g.secs.forEach(function(x){
+        var row = document.createElement('div'); row.className = 'ais-pace-row'; row.title = 'Find Section ' + x.i + ' in the prose';
+        var lab = document.createElement('span'); lab.className = 'ais-pace-lab'; lab.textContent = '§' + x.i; row.appendChild(lab);
+        var track = document.createElement('span'); track.className = 'ais-pace-track'; var bar = document.createElement('span'); bar.className = 'ais-pace-bar'; bar.style.width = Math.max(3, Math.round((x.words || 0) / max * 100)) + '%'; track.appendChild(bar); row.appendChild(track);
+        var wc = document.createElement('span'); wc.className = 'ais-pace-wc'; wc.textContent = (x.words || 0) + 'w'; row.appendChild(wc);
+        row.addEventListener('click', function(){ aisFindInProse('section ' + x.i); });
+        pace.appendChild(row);
+      });
+      body.appendChild(pace);
+    }
+    var dorm = g.els.filter(function(e){ return e.apps === 0; }).map(function(e){ return e.name; });
+    if (dorm.length){
+      var dl = document.createElement('div'); dl.className = 'ais-dorm'; var lb = document.createElement('div'); lb.className = 'ais-dorm-lbl'; lb.textContent = 'Dormant — on the map but not yet in the prose:'; dl.appendChild(lb);
+      dorm.slice(0, 24).forEach(function(nm){ var c = document.createElement('span'); c.className = 'ais-chip static'; c.textContent = nm; dl.appendChild(c); });
+      body.appendChild(dl);
+    }
     var d = document.createElement('div'); d.className = 'ex-prose';
     String(text || '').split(/\n{2,}/).forEach(function(par){ if (par.trim()){ var pp = document.createElement('p'); pp.textContent = par.trim(); d.appendChild(pp); } });
     body.appendChild(d);
   }
-  function healthStats(g){
-    var woven = g.els.filter(function(e){ return e.apps > 0; }).length, dormant = g.els.length - woven;
-    return '<span class="ais-stat"><b>' + g.secs.length + '</b> sections</span><span class="ais-stat"><b>' + g.els.length + '</b> elements</span><span class="ais-stat"><b>' + woven + '</b> woven · <b>' + dormant + '</b> dormant</span><span class="ais-stat"><b>' + g.stakes.length + '</b> stakes</span>';
+  function renderRetelling(p, text, g){
+    var body = p.querySelector('.ex-body'); body.innerHTML = '';
+    var cap = document.createElement('div'); cap.className = 'ais-cap'; cap.textContent = 'How the story reads back right now — the retelling test made visible. Does it match what you set out to write?'; body.appendChild(cap);
+    var goal = String(g.goals || '').replace(/^[^:]*:\s*/, '').trim();
+    if (goal){ var gb = document.createElement('div'); gb.className = 'ais-goal'; gb.textContent = 'Your intention: ' + goal.slice(0, 260); body.appendChild(gb); }
+    var d = document.createElement('div'); d.className = 'ex-prose';
+    String(text || '').split(/\n{2,}/).forEach(function(par){ if (par.trim()){ var pp = document.createElement('p'); pp.textContent = par.trim(); d.appendChild(pp); } });
+    body.appendChild(d);
   }
   async function aisRun(kind){
     var tool = TOOLS[kind]; if (!tool) return;
@@ -28889,16 +28958,17 @@ body.eink #mobileNotice .mn-card{border:2px solid #000}
     p.querySelector('.ex-x').addEventListener('click', function(){ p.classList.remove('show'); });
     var g = gather();
     try {
-      var opts = (tool.kind === 'list') ? { maxTokens: 800, json: true } : { maxTokens: 600 };
+      var opts = (tool.kind === 'list') ? { maxTokens: 900, json: true } : { maxTokens: 600 };
       var out = await aiCall(tool.sys, tool.user(g), opts);
       if (tool.kind === 'list'){
         var arr = []; try { arr = JSON.parse(out); } catch(e){ if (typeof parseJsonLoose === 'function'){ try { arr = parseJsonLoose(out); } catch(_){} } }
-        if (!Array.isArray(arr)) arr = (arr && Array.isArray(arr.items)) ? arr.items : [];
-        arr = arr.filter(function(x){ return typeof x === 'string' && x.trim(); });
-        renderList(p, arr, kind === 'continuity' ? 'No contradictions surfaced — the continuity holds.' : 'Nothing under-developed stood out.');
-      } else if (tool.kind === 'health'){ renderProse(p, out, healthStats(g)); }
-      else { renderProse(p, out, null); }
-    } catch(e){ var b = p.querySelector('.ex-body'); if (b) b.innerHTML = '<div class="ex-think">Couldn\'t reach the AI — try again.</div>'; }
+        if (!Array.isArray(arr)) arr = (arr && (arr.items || arr.gaps || arr.contradictions)) || [];
+        if (!Array.isArray(arr)) arr = [];
+        renderList(p, arr, kind === 'continuity' ? 'No contradictions surfaced — the continuity holds.' : 'Nothing under-developed stood out.', kind === 'continuity' ? '⚠ continuity' : '✦ gap');
+      } else if (tool.kind === 'health'){ renderHealth(p, out, g); }
+      else if (kind === 'retelling'){ renderRetelling(p, out, g); }
+      else { var b = p.querySelector('.ex-body'); b.innerHTML = ''; var d = document.createElement('div'); d.className = 'ex-prose'; String(out || '').split(/\n{2,}/).forEach(function(par){ if (par.trim()){ var pp = document.createElement('p'); pp.textContent = par.trim(); d.appendChild(pp); } }); b.appendChild(d); }
+    } catch(e){ var bb = p.querySelector('.ex-body'); if (bb) bb.innerHTML = '<div class="ex-think">Couldn\'t reach the AI — try again.</div>'; }
   }
 })();
 </script>
@@ -29015,6 +29085,23 @@ body.eink #aiSupportMenu{background:#fff; border-color:#000}
 .ais-stats{display:flex; flex-wrap:wrap; gap:6px; margin:2px 0 12px}
 .ais-stat{font-family:var(--sans); font-size:10px; letter-spacing:.04em; color:var(--ink-soft); background:var(--bg2); border:1px solid var(--line); border-radius:10px; padding:4px 9px}
 .ais-stat b{color:var(--ink); font-weight:700}
+.ais-chip{font-family:var(--sans); font-size:9px; font-weight:600; letter-spacing:.04em; border:1px solid var(--line); border-radius:9px; background:var(--paper); color:var(--gold-deep,#9a7b1e); padding:3px 9px; cursor:pointer; white-space:nowrap}
+.ais-chip:hover{border-color:var(--gold); color:var(--ink)}
+.ais-chip.static{cursor:default; color:var(--ink-soft)}
+.ais-chip.static:hover{border-color:var(--line); color:var(--ink-soft)}
+.ais-pace{display:flex; flex-direction:column; gap:4px; margin:2px 0 12px}
+.ais-pace-row{display:flex; align-items:center; gap:8px; cursor:pointer; padding:1px 0}
+.ais-pace-row:hover .ais-pace-bar{background:var(--gold)}
+.ais-pace-lab{flex:none; width:26px; font-family:var(--sans); font-size:10px; color:var(--ink-faint); text-align:right}
+.ais-pace-track{flex:1; height:8px; background:var(--bg2); border-radius:5px; overflow:hidden}
+.ais-pace-bar{display:block; height:100%; background:var(--ink-faint); border-radius:5px; transition:background .15s}
+.ais-pace-wc{flex:none; width:44px; font-family:var(--sans); font-size:9.5px; color:var(--ink-faint); text-align:right}
+.ais-dorm{margin:2px 0 12px}
+.ais-dorm-lbl{font-family:var(--sans); font-size:10px; letter-spacing:.03em; color:var(--ink-faint); margin-bottom:5px}
+.ais-dorm .ais-chip{margin:0 5px 5px 0; display:inline-block}
+.ais-cap{font-family:var(--sans); font-size:11px; font-style:italic; color:var(--ink-soft); margin:0 0 8px; line-height:1.4}
+.ais-goal{font-family:var(--serif); font-size:13px; color:var(--ink-soft); background:var(--bg2); border-left:2px solid var(--gold); border-radius:0 8px 8px 0; padding:7px 10px; margin:0 0 12px}
+.ais-flash{background:rgba(250,190,90,.30) !important; border-radius:5px; transition:background 1.4s ease}
 body.eink #aisPop{border:2px solid #000; background:#fff}
 #qaWin{display:none; position:absolute; right:calc(var(--rw,140px) + 12px); top:48px; bottom:14px; width:360px; z-index:47; box-sizing:border-box;
   background:linear-gradient(180deg,#2a2117,#1b150e); border:1px solid rgba(250,154,49,.2); border-radius:16px; box-shadow:0 14px 44px rgba(0,0,0,.45);
