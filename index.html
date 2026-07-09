@@ -8473,17 +8473,14 @@ function expConnChip(cx, cy, aIdx, bIdx){
   }
   if (!chip){   // create the pill ONCE; handlers read live context from chip._*
     chip = document.createElement('div'); chip.className = 'ctp'; chip.dataset.conn = key; host.appendChild(chip);
+    // stamp the interaction time in BOTH phases (capture fires before any deselect handler; bubble also stops propagation)
+    ['pointerdown', 'pointerup', 'click'].forEach(ev => chip.addEventListener(ev, () => { window.__connPillTs = Date.now(); }, true));
     ['pointerdown', 'pointerup', 'click'].forEach(ev => chip.addEventListener(ev, e => { window.__connPillTs = Date.now(); e.stopPropagation(); }));
-    // capture the current selection the instant a pill is touched — drawWeb restores it every frame while interacting, so nothing can drop the web
-    const _lock = () => { window.__connLock = { sel: state.selNode, xb: (window.__expSnapSel ? window.__expSnapSel() : null), ts: Date.now() }; window.__connPillTs = Date.now(); };
-    chip.addEventListener('pointerdown', _lock, true);
-    chip.addEventListener('click', _lock, true);
     chip.addEventListener('click', e => { if (window.__connDragEndTs && Date.now() - window.__connDragEndTs < 260){ e.stopPropagation(); e.preventDefault(); } }, true);
     chip.addEventListener('pointerdown', ev => {   // drag to reposition the pill (nudge overlapping ones apart)
       const L = chip._link; if (!L) return;
-      try { chip.setPointerCapture(ev.pointerId); } catch (er){}   // keep the pointer on the pill so the release never reaches the map
       const sx = ev.clientX, sy = ev.clientY, bx = (L._cdx) || 0, by = (L._cdy) || 0; let moved = false;
-      const mv = e2 => { const ddx = e2.clientX - sx, ddy = e2.clientY - sy; if (!moved && Math.abs(ddx) + Math.abs(ddy) > 4){ moved = true; chip.style.cursor = 'grabbing'; } if (moved){ L._cdx = bx + ddx; L._cdy = by + ddy; window.__connPillTs = Date.now(); reposition(chip); } };
+      const mv = e2 => { const ddx = e2.clientX - sx, ddy = e2.clientY - sy; if (!moved && Math.abs(ddx) + Math.abs(ddy) > 4){ moved = true; try { chip.setPointerCapture(ev.pointerId); } catch (er){} chip.style.cursor = 'grabbing'; } if (moved){ L._cdx = bx + ddx; L._cdy = by + ddy; window.__connPillTs = Date.now(); reposition(chip); } };
       const up = () => { document.removeEventListener('pointermove', mv, true); document.removeEventListener('pointerup', up, true); chip.style.cursor = ''; if (moved){ window.__connPillTs = Date.now(); window.__connDragEndTs = Date.now(); if (typeof scheduleAutosave === 'function') scheduleAutosave(); } };
       document.addEventListener('pointermove', mv, true); document.addEventListener('pointerup', up, true);
     });
@@ -31212,16 +31209,17 @@ body.eink #expMenu{background:#fff; border-color:#000}
   }
   function drawWeb(){
     var web = document.getElementById('expWeb'); if (!web) return;
-    // While interacting with a connection pill, restore the selection every frame so the web can't be dropped.
-    if (window.__connLock){
-      var _vpS = document.getElementById('vocabPicker'); if (_vpS && _vpS.classList.contains('show')) window.__connLock.ts = Date.now();   // keep alive while the type picker is open
-      if (Date.now() - window.__connLock.ts < 500){
-        var _L = window.__connLock;
-        if (typeof state !== 'undefined' && state){
-          if (_L.sel != null && state.selNode !== _L.sel){ state.selNode = _L.sel; if (typeof renderConstellation === 'function') renderConstellation(); }
-          if (_L.xb && !xbSel && window.__expRestoreSel){ window.__expRestoreSel(_L.xb); }
-        }
-      } else window.__connLock = null;
+    // Remember the last real selection every frame WHILE it's still selected; if a pill interaction (or the open type
+    // picker) just cleared it, put it straight back — bulletproof against every deselect path.
+    if (typeof state !== 'undefined' && state){
+      var _vpS = document.getElementById('vocabPicker'); var _vpShow = !!(_vpS && _vpS.classList.contains('show'));
+      if (_vpShow) window.__connPillTs = Date.now();   // keep the restore window open while picking a type
+      if (state.selNode != null || xbSel){ window.__lastWebSel = { sel: state.selNode, xb: (xbSel ? { side: xbSel.side, id: xbSel.id } : null) }; }
+      else if (window.__lastWebSel && window.__connPillTs && (Date.now() - window.__connPillTs < 500)){
+        var LW = window.__lastWebSel;
+        if (LW.sel != null){ state.selNode = LW.sel; if (typeof renderConstellation === 'function') renderConstellation(); }
+        if (LW.xb && window.__expRestoreSel){ window.__expRestoreSel(LW.xb); }
+      }
     }
     while (web.firstChild) web.removeChild(web.firstChild);
     // Pills are STABLE DOM (reused frame to frame) so clicks/hover/drag land; mark all, expConnChip flips seen, then sweep the untouched.
