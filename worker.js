@@ -619,6 +619,19 @@ async function handleStripeWebhook(request, env) {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+    if (url.pathname === '/version'){
+      // Report the deployed app version (read once per isolate from index.html) so the client can
+      // detect a new release and offer to back up + update. Never cached.
+      try {
+        if (!globalThis.__dystVer){
+          const r = await env.ASSETS.fetch(new URL('/', request.url));
+          const t = await r.text();
+          const m = t.match(/APP_VERSION\s*=\s*['"]([^'"]+)['"]/);
+          globalThis.__dystVer = (m && m[1]) || 'unknown';
+        }
+      } catch (e){ globalThis.__dystVer = globalThis.__dystVer || 'unknown'; }
+      return new Response(globalThis.__dystVer, { headers: { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*' } });
+    }
     if (url.pathname === '/ai'){
       // Never let an unhandled exception become an opaque 500 — return the real reason so the client can show it.
       try { return await handleAI(request, env); }
