@@ -12,6 +12,12 @@ const SUPABASE_ANON_KEY = 'sb_publishable_bb709imkZ55IGfwcAqVGgQ_vTLHGodY';
 // Everyone else runs the free chain only (enforced server-side in runFrontier — can't be bypassed by the client).
 const ADMIN_EMAILS = ['jeremyplante7@gmail.com'];
 function isAdminEmail(e) { return ADMIN_EMAILS.includes(String(e || '').toLowerCase()); }
+// Set true ONCE you turn on "Confirm email" in Supabase → Auth → Providers → Email. Until then, leave false
+// so brand-new signups can use the AI before they click the confirmation link.
+const REQUIRE_CONFIRMED_EMAIL = false;
+// Hard ceiling on total AI calls per day across ALL users — a coarse KV-backed backstop against a runaway
+// bill. Set via env (a plain var in wrangler.jsonc), e.g. "5000". 0/unset = no global cap (billing alerts
+// remain the true hard stop — see the deploy notes). The precise stop is the Cloudflare/Anthropic spend cap.
 const _tokCache = new Map();   // access token -> { user, t }
 const _rate = new Map();       // user id -> [timestamps] (per-isolate soft limit)
 async function verifyUser(token) {
@@ -23,8 +29,15 @@ async function verifyUser(token) {
     const r = await fetch(SUPABASE_URL + '/auth/v1/user', { headers: { Authorization: 'Bearer ' + token, apikey: SUPABASE_ANON_KEY } });
     if (!r.ok) return null;
     const u = await r.json();
-    const user = u && u.id ? { id: u.id, email: String(u.email || '').toLowerCase() } : null;
-    if (user) { _tokCache.set(token, { user, t: now }); if (_tokCache.size > 600) _tokCache.clear(); }
+    // Reject ANONYMOUS accounts (guest commenters use these) and email-less/unconfirmed users: otherwise
+    // each throwaway anon token is a fresh AI quota, so the per-user caps mean nothing. Real signups only.
+    if (!u || !u.id) return null;
+    if (u.is_anonymous === true) return null;
+    const email = String(u.email || '').toLowerCase();
+    if (!email) return null;
+    if (REQUIRE_CONFIRMED_EMAIL && !(u.email_confirmed_at || u.confirmed_at)) return null;
+    const user = { id: u.id, email: email };
+    _tokCache.set(token, { user, t: now }); if (_tokCache.size > 600) _tokCache.clear();
     return user;
   } catch (e) { return null; }
 }
@@ -76,6 +89,30 @@ function dailyOk(user, limit) {
   if (!d || d.day !== day) { _daily.set(user, { day, n: 1 }); if (_daily.size > 5000) _daily.clear(); return true; }
   if (d.n >= limit) return false;
   d.n++; return true;
+}
+// ---- KV-backed daily caps (survive isolate cycling + span all isolates, unlike the in-memory maps above) ----
+// Requires a KV binding named AILIMITS in wrangler.jsonc. If it's absent (e.g. local dev), these no-op and the
+// in-memory caps still apply. Note: KV is eventually-consistent with a ~1 write/sec/key ceiling, so under a
+// burst the counts can lag — good enough as a BACKSTOP; the billing spend-cap is the true hard stop.
+async function _kvIncr(env, key, ttlSec) {
+  if (!env || !env.AILIMITS) return null;
+  try {
+    const cur = parseInt((await env.AILIMITS.get(key)) || '0', 10) || 0;
+    const next = cur + 1;
+    await env.AILIMITS.put(key, String(next), { expirationTtl: ttlSec });
+    return next;
+  } catch (e) { return null; }
+}
+function _utcDay() { return new Date().toISOString().slice(0, 10); }   // YYYY-MM-DD
+async function dailyOkKV(env, user, limit) {
+  const n = await _kvIncr(env, 'u:' + user + ':' + _utcDay(), 90000);
+  return n == null ? true : n <= limit;   // KV unavailable → don't block (in-memory cap still guards)
+}
+async function globalDailyOk(env) {
+  const cap = parseInt((env && env.AI_GLOBAL_DAILY_CAP) || '0', 10) || 0;
+  if (!cap) return true;   // not configured → rely on billing alerts
+  const n = await _kvIncr(env, 'global:' + _utcDay(), 90000);
+  return n == null ? true : n <= cap;
 }
 // Current Workers AI model. Lighter/cheaper alternative: '@cf/meta/llama-3.1-8b-instruct-fast'
 const MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
@@ -272,6 +309,13 @@ async function runFrontier(env, system, prompt, maxTokens, temperature, opts) {
     if (!opts.allowPaid) chain = chain.filter(p => !p.paid);   // the paid model (Claude) is included ONLY when the caller is entitled (admin or Pro); allowPaid is set server-side from the verified plan, never from the request body
     if (opts.allowLast === false) chain = chain.filter(p => !p.last);
   }
+  // Per-user privacy opt-out: the writer can switch OFF any provider that may train on / human-review free-tier prose
+  // (set in the app's AI-model consent screen + Settings). We honor it for EVERY caller here (unlike the admin-only
+  // `only` testing whitelist above). Non-training providers always remain, so the AI features still work. Filtering
+  // can only ever narrow a user's own results, so it needs no entitlement check.
+  if (Array.isArray(opts.exclude) && opts.exclude.length){
+    chain = chain.filter(p => !opts.exclude.includes(p.name));
+  }
   const now = Date.now();
   const tried = [];
   let exhausted = false;
@@ -317,6 +361,7 @@ async function handleAI(request, env) {
   const prompt = String(body.prompt || '').slice(0, body.kind === 'import' ? 300000 : 24000);
   const image = typeof body.image === 'string' ? body.image : '';   // data URL (e.g. data:image/png;base64,...)
   if (!prompt && !image) return new Response(JSON.stringify({ error: 'no prompt' }), { status: 400, headers });
+  if (image && image.length > 8_000_000) return new Response(JSON.stringify({ error: 'Image too large' }), { status: 413, headers });   // ~6MB decoded — cap the vision payload
 
   // Require a signed-in Dystoria user (verified Supabase token), then throttle per user.
   const token = (request.headers.get('authorization') || '').replace(/^Bearer\s+/i, '').trim();
@@ -326,10 +371,17 @@ async function handleAI(request, env) {
   const plan = admin ? 'pro' : await planOf(env, user.id);   // entitlement from the subscriptions table; admin is treated as Pro
   const paid = admin || plan === 'pro';                       // may use the paid Claude model + gets the higher quotas
   if (!rateOk(user.id, image ? (paid ? 30 : 12) : (paid ? 120 : 45))) return new Response(JSON.stringify({ error: 'Too many AI requests — give it a moment' }), { status: 429, headers });
-  if (!dailyOk(user.id, image ? (paid ? 1500 : 400) : (paid ? 6000 : 1200))) return new Response(JSON.stringify({ error: 'You’ve hit today’s AI limit — it resets tomorrow. Reach out if you need more.' }), { status: 429, headers });
+  const _dailyCap = image ? (paid ? 1500 : 400) : (paid ? 6000 : 1200);
+  if (!dailyOk(user.id, _dailyCap)) return new Response(JSON.stringify({ error: 'You’ve hit today’s AI limit — it resets tomorrow. Reach out if you need more.', limit: 'day' }), { status: 429, headers });
+  // Cross-isolate per-user cap (KV) — closes the "each Cloudflare isolate hands out a fresh in-memory quota" gap.
+  if (!(await dailyOkKV(env, user.id, _dailyCap))) return new Response(JSON.stringify({ error: 'You’ve hit today’s AI limit — it resets tomorrow. Reach out if you need more.', limit: 'day' }), { status: 429, headers });
+  // Global backstop across every account — a coarse ceiling so a mass-signup attack can't run up the bill.
+  if (!(await globalDailyOk(env))) return new Response(JSON.stringify({ error: 'Dystoria’s AI is at today’s capacity — please try again later.', limit: 'global' }), { status: 503, headers });
 
   const maxTokens = Math.min(Math.max(parseInt(body.max_tokens, 10) || 600, 64), body.kind === 'import' ? 8192 : 4096);   // import returns a big element list → allow a larger JSON reply
   const model = body.model || (image ? VISION_MODEL : MODEL);
+  // Providers the user opted out of (may-train-on-free-prose toggles). Sanitized; only ever narrows the chain.
+  const exclude = Array.isArray(body.exclude) ? body.exclude.filter(x => typeof x === 'string').slice(0, 12) : [];
 
   // ---- image (vision / OCR / handwriting) ----
   if (image) {
@@ -350,7 +402,7 @@ async function handleAI(request, env) {
   // The chain auto-falls-through when a model is busy or its daily quota is used up. Icons skip the Workers-AI llama (too low quality);
   // briefs may use it as a final resort. allowPaid (= admin || Pro) decides whether Claude leads; free users get the free chain.
   if (body.kind === 'icon' || body.kind === 'brief') {
-    const fr = await runFrontier(env, system, prompt, maxTokens, temperature, { admin, allowPaid: paid, allowLast: body.kind !== 'icon', only: body.models, kind: body.kind });
+    const fr = await runFrontier(env, system, prompt, maxTokens, temperature, { admin, allowPaid: paid, allowLast: body.kind !== 'icon', only: body.models, exclude, kind: body.kind });
     if (fr.text) return new Response(JSON.stringify({ text: fr.text, via: fr.via }), { headers });
     const err = fr.error || '';
     if (fr.exhausted) return new Response(JSON.stringify({ error: 'Free AI models at today’s limit — ' + err, limit: 'day' }), { status: 429, headers });
@@ -359,7 +411,7 @@ async function handleAI(request, env) {
 
   // ---- Import extraction: dedicated large-context model (Gemini 2.5 Pro), reserved so its free quota isn't spent on frequent small calls ----
   if (body.kind === 'import'){
-    const fr = await runFrontier(env, system, prompt, maxTokens, temperature, { admin, allowPaid: paid, importOnly: true, json: !!body.json, only: body.models });
+    const fr = await runFrontier(env, system, prompt, maxTokens, temperature, { admin, allowPaid: paid, importOnly: true, json: !!body.json, only: body.models, exclude });
     if (fr.text) return new Response(JSON.stringify({ text: fr.text, via: fr.via }), { headers });
     const err = fr.error || '';
     if (fr.exhausted) return new Response(JSON.stringify({ error: 'The import model is at today’s limit — it resets tomorrow.', limit: 'day' }), { status: 429, headers });
@@ -371,7 +423,7 @@ async function handleAI(request, env) {
   // EVERYONE, including Pro. Gemini 2.5 Pro leads and is already frontier-grade, and text is high-volume, so Claude
   // stays reserved for the premium ICON path to bound cost. (Only admins get Claude here, for testing.) To also give
   // Pro subscribers Claude for text, change `allowPaid: admin` → `allowPaid: paid`. Pass json mode through.
-  const tr = await runFrontier(env, system, prompt, maxTokens, temperature, { admin, allowPaid: admin, json: !!body.json, only: body.models });
+  const tr = await runFrontier(env, system, prompt, maxTokens, temperature, { admin, allowPaid: admin, json: !!body.json, only: body.models, exclude });
   if (tr.text) return new Response(JSON.stringify({ text: tr.text, via: tr.via }), { headers });
   const terr = tr.error || '';
   if (tr.exhausted) return new Response(JSON.stringify({ error: 'Dystoria’s free AI models are all at today’s limit — they reset tomorrow.', limit: 'day' }), { status: 429, headers });
