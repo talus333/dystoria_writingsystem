@@ -668,6 +668,48 @@ async function handleStripeWebhook(request, env) {
   return new Response(JSON.stringify({ received: true }), { status: 200, headers: { 'Content-Type': 'application/json' } });
 }
 
+// ---- Feedback → Discord relay -------------------------------------------------
+// A Supabase Database Webhook (INSERT on public.feedback) POSTs the new row here; we format it and
+// forward it to a Discord channel webhook. Guarded by a shared secret (?token= or x-hook-secret header)
+// so the endpoint can't be spammed. Always returns 200 on downstream problems so Supabase doesn't retry-loop.
+async function handleFeedbackHook(request, env){
+  if (request.method !== 'POST') return new Response('method not allowed', { status: 405 });
+  const url = new URL(request.url);
+  const secret = env.FEEDBACK_HOOK_SECRET || '';
+  const given = url.searchParams.get('token') || request.headers.get('x-hook-secret') || '';
+  if (!secret || given !== secret) return new Response('forbidden', { status: 403 });
+  const hook = env.DISCORD_WEBHOOK_URL;
+  if (!hook) return new Response('discord webhook not configured', { status: 200 });
+  let rec = {};
+  try { const body = await request.json(); rec = (body && body.record) || body || {}; }
+  catch (e){ return new Response('bad json', { status: 200 }); }
+  const clip = (v, n) => { let x = (v == null ? '' : String(v)); return x.length > n ? x.slice(0, n - 1) + '\u2026' : x; };
+  const from = rec.contact_email || rec.user_email || 'anonymous';
+  const fields = [
+    { name: 'From', value: clip(from, 200) || '\u2014', inline: true },
+    { name: 'Build', value: clip(rec.build, 100) || '\u2014', inline: true },
+  ];
+  if (rec.story) fields.push({ name: 'Story', value: clip(rec.story, 200), inline: true });
+  if (rec.url)   fields.push({ name: 'URL', value: clip(rec.url, 500) });
+  const ts = (rec.created_at && String(rec.created_at).includes('T')) ? rec.created_at : undefined;
+  const payload = {
+    username: 'Dystoria Feedback',
+    embeds: [{
+      title: '\uD83D\uDCDD New feedback',
+      description: clip(rec.message, 4000) || '(no message)',
+      color: 0xfa9a31,
+      fields: fields,
+      timestamp: ts,
+    }],
+  };
+  try {
+    const r = await fetch(hook, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    return new Response('ok ' + r.status, { status: 200 });
+  } catch (e){
+    return new Response('discord error: ' + String((e && e.message) || e), { status: 200 });
+  }
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -696,6 +738,7 @@ export default {
     if (url.pathname === '/billing/portal') return handleBilling(request, env, 'portal');
     if (url.pathname === '/billing/tip') return handleTip(request, env);
     if (url.pathname === '/stripe-webhook') return handleStripeWebhook(request, env);
+    if (url.pathname === '/hooks/feedback') return handleFeedbackHook(request, env);
     // everything else → the static site
     const res = await env.ASSETS.fetch(request);
     // Never cache the HTML documents (index.html, landing pages) at the edge or in the browser, so a
