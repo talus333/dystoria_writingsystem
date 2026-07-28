@@ -23383,7 +23383,7 @@ function openSession(id){
   state.placing = null; state.placeQueue = []; state.autoPlace = true; state.autoPlaceSeen = true;   // auto-place is the default
   (state.frames || []).forEach(fr => ((fr.prompt && fr.prompt.words) || []).forEach(w => { if (w.needsPlace) delete w.needsPlace; }));
   if (state.prompt && state.prompt.words) state.prompt.words.forEach(w => { if (w.needsPlace) delete w.needsPlace; });
-  if (state.npActive && state.npActive !== 'general' && state.npActive !== 'plotmain' && state.npActive.indexOf('goal:') !== 0 && state.npActive.indexOf('thread:') !== 0 && state.npActive.indexOf('group:') !== 0 && state.npActive.indexOf('part:') !== 0 && state.npActive.indexOf('section:') !== 0 && state.npActive.indexOf('grouptree:') !== 0 && typeof npFindEl === 'function' && !npFindEl(state.npActive)){ state.npActive = 'general'; state.cardTrait = null; }   // restored selection's element is gone → fall back
+  if (state.npActive && state.npActive !== 'general' && state.npActive !== 'plotmain' && state.npActive.indexOf('goal:') !== 0 && state.npActive.indexOf('thread:') !== 0 && state.npActive.indexOf('group:') !== 0 && state.npActive.indexOf('part:') !== 0 && state.npActive.indexOf('section:') !== 0 && state.npActive.indexOf('grouptree:') !== 0 && state.npActive.indexOf('session:') !== 0 && typeof npFindEl === 'function' && !npFindEl(state.npActive)){ state.npActive = 'general'; state.cardTrait = null; }   // restored selection's element is gone → fall back
   renderNpElements();           // now the words/frames are loaded, so element chips resolve their real names
   if (typeof renderNotepad === 'function') renderNotepad();
   if (typeof renderNpCard === 'function') renderNpCard();
@@ -30675,6 +30675,7 @@ function npLabelFor(key){
   if (key === NP_ARCHIVE_KEY) return { word: 'Archived Notes', cat: '', catId: null };
   if (key.indexOf('section:') === 0){ const i = parseInt(key.slice(8), 10) || 0; const sl = npSectionName(i); return { word: (sl.label || ('Section ' + sl.n)) + (sl.name ? ' — ' + sl.name : ''), cat: 'Section', catId: null }; }
   if (key.indexOf('goal:') === 0){ const it = (typeof goalById === 'function') ? goalById(key.slice(5)) : null; return { word: it ? it.word : 'Goal', cat: 'Goal', catId: null }; }
+  if (key.indexOf('session:') === 0){ const s = ((state.session && state.session.sessionLog) || []).find(x => x.id === key.slice(8)); let nm = (s && s.title && s.title.trim()) ? s.title.trim() : 'Session'; if (s && (!s.title || !s.title.trim())){ try { nm = 'Session · ' + new Date(s.at).toLocaleDateString(undefined, { month:'short', day:'numeric' }); } catch(_){} } return { word: nm, cat: 'Session', catId: null }; }
   if (key.indexOf('part:') === 0){ const p = (typeof partById === 'function') ? partById(key.slice(5)) : null; return { word: (p && p.name) ? p.name : 'Part', cat: 'Part', catId: null }; }
   if (key.indexOf('thread:') === 0){ const t = (typeof threadById === 'function') ? threadById(key.slice(7)) : null; return { word: t ? t.name : 'Thread', cat: 'Thread', catId: null }; }
   if (key.indexOf('group:') === 0){ const g = (typeof beingGroupById === 'function') ? beingGroupById(key.slice(6)) : null; let nm = 'Party'; if (g){ if (g.name) nm = g.name; else { const lw = (typeof npFindEl === 'function') ? npFindEl(g.leader) : null; nm = (lw ? (lw.name || lw.word) : '') + '\u2019s party'; } } return { word: nm, cat: 'Party', catId: null }; }
@@ -30739,7 +30740,7 @@ function renderNpElements(){
   let filter = state.npCatFilter || 'all';
   if (filter === 'sections' || filter === 'parts') filter = 'plot';   // retired tabs → fold into the Plot tab (sections now live in the plot card)
   const _arcs = (typeof window.__dystArcsList === 'function') ? (window.__dystArcsList() || []) : [];
-  if (filter !== 'all' && filter !== 'goals' && filter !== 'threads' && filter !== 'groups' && filter !== 'plot' && filter !== 'arcs' && cats.indexOf(filter) < 0) filter = 'all';   // a category that no longer exists → fall back
+  if (filter !== 'all' && filter !== 'goals' && filter !== 'threads' && filter !== 'groups' && filter !== 'plot' && filter !== 'arcs' && filter !== 'sessions' && cats.indexOf(filter) < 0) filter = 'all';   // a category that no longer exists → fall back
   {
     const fr = document.createElement('div'); fr.className = 'np-filters';
     const mkF = (cid, label, color) => { const b = document.createElement('button'); b.className = 'np-catfilter' + (filter === cid ? ' on' : ''); b.textContent = label;
@@ -30755,6 +30756,7 @@ function renderNpElements(){
     if (threadsList().length) mkF('threads', 'Threads');
     if (_grps.length) mkF('groups', 'Parties');
     if (_arcs.length) mkF('arcs', 'Arcs', 'var(--gold,#c49e4a)');
+    { const _slog = (state.session && state.session.sessionLog) || []; if (_slog.length) mkF('sessions', 'Sessions', 'var(--gold,#c49e4a)'); }   // R37 — writing sessions as notepad pills
     cats.forEach(c => { if (c === 'plot') return; mkF(c, (getCat(c) || {}).name || c, catColor(c)); });   // 'plot' is folded into the merged Plot tab above
     // search box — narrows the pills to those whose name matches, within the active filter tab
     const sb = document.createElement('div'); sb.className = 'np-search' + ((state.npSearch || '').trim() ? ' has-q' : '');
@@ -30806,6 +30808,23 @@ function renderNpElements(){
     if (!goals.length){ const e = document.createElement('span'); e.className = 'np-goalempty'; e.textContent = 'No goals yet'; host.appendChild(e); }
     goals.forEach(mkGoal);
     mkGoalAdd();
+    return;
+  }
+  if (filter === 'sessions'){   // R37 — writing sessions (newest first); selecting one shows its record above the pad
+    const _slog = ((state.session && state.session.sessionLog) || []).slice().reverse();
+    if (!_slog.length){ const e = document.createElement('span'); e.className = 'np-goalempty'; e.textContent = 'No sessions yet'; host.appendChild(e); return; }
+    _slog.forEach(s => {
+      const key = 'session:' + s.id;
+      const chip = document.createElement('span'); chip.className = 'np-chip np-session' + (key === active ? ' on' : '');
+      let when = ''; try { when = new Date(s.at).toLocaleDateString(undefined, { month:'short', day:'numeric' }); } catch(_){}
+      const lbl = (s.title && s.title.trim()) ? s.title.trim() : ('Session · ' + when);
+      chip.title = lbl + (s.words ? (' · ' + s.words + 'w') : '');
+      const l = document.createElement('span'); l.className = 'np-label'; l.textContent = lbl; chip.appendChild(l);
+      if (s.words){ const wc = document.createElement('span'); wc.className = 'np-cat'; wc.style.color = 'var(--ink-faint)'; wc.textContent = s.words + 'w'; chip.appendChild(wc); }
+      const ar = document.createElement('span'); ar.className = 'np-arrow'; ar.textContent = '▸'; chip.appendChild(ar);
+      chip.addEventListener('click', () => npSelect(key));
+      host.appendChild(chip);
+    });
     return;
   }
   const mkThread = t => {
@@ -30925,7 +30944,7 @@ function npSelect(key){
   // (Rename, icon, +role, +group…) act on the element's index in the CURRENT section,
   // so if it isn't loaded here they'd silently do nothing. Load its section first.
   try {
-    if (key && key !== NP_ARCHIVE_KEY && !/^(general|goal:|thread:|group:|section:|part:|grouptree:|arc:)/.test(key)
+    if (key && key !== NP_ARCHIVE_KEY && !/^(general|goal:|thread:|group:|section:|part:|grouptree:|arc:|session:)/.test(key)
         && state.frames && state.frames.length > 1){
       const here = (state.prompt && state.prompt.words) || [];
       if (!here.some(w => wordKey(w) === key)){
@@ -31083,6 +31102,24 @@ function renderNotepad(){
       }
       panel.innerHTML = h; panel.style.display = '';
     } else if (panel){ panel.style.display = 'none'; }
+  } catch(e){}
+  // R37 (Phase 1b) — a read-only Session record above the pad when a session is selected; the pad below holds your own notes about it.
+  try {
+    const _n = $('notepad'); const _host = _n && _n.parentNode; let sp = document.getElementById('npSessionRead');
+    const mS = /^session:(.+)$/.exec(key); const sid = mS ? mS[1] : null;
+    const s = sid ? (((state.session && state.session.sessionLog) || []).find(x => x.id === sid)) : null;
+    if (s && _host){
+      if (!sp){ sp = document.createElement('div'); sp.id = 'npSessionRead'; _host.insertBefore(sp, _n); }
+      const _es = v => String(v == null ? '' : v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      let when = ''; try { when = new Date(s.at).toLocaleString(undefined, { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' }); } catch(_){}
+      const meta = [when, (s.frame != null ? ('Section ' + ((s.frame|0)+1)) : ''), (s.words != null ? (s.words + ' words') : '')].filter(Boolean).join(' · ');
+      let h = '<input id="npSessTitle" class="npsr-title" placeholder="Name this session…" value="' + _es(s.title || '') + '">';
+      h += '<div class="npsr-meta">' + _es(meta) + '</div>';
+      if (s.review) h += '<div class="npsr-review"><div class="npsr-lbl">✦ Feedback</div><div class="npsr-rtext">' + _es(s.review).replace(/\n{2,}/g,'<br><br>').replace(/\n/g,'<br>') + '</div></div>';
+      if (s.html) h += '<details class="npsr-passage"><summary>Show what you wrote</summary><div class="npsr-prose">' + s.html + '</div></details>';
+      sp.innerHTML = h; sp.style.display = '';
+      const _ti = document.getElementById('npSessTitle'); if (_ti) _ti.addEventListener('input', () => { s.title = _ti.value; if (typeof renderNpElements === 'function') renderNpElements(); scheduleAutosave(1500); });
+    } else if (sp){ sp.style.display = 'none'; }
   } catch(e){}
 }
 function saveNotepad(){ if (!state.session) ensureSession(); const k = npActiveKey(); npSetNotes(k, $('notepad').innerHTML); if (k.indexOf('goal:') === 0) refreshGoalTokens(); scheduleAutosave(); }
@@ -40425,8 +40462,11 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.133';
+  var APP_VERSION = '2026.07.20.134';
   var APP_CHANGELOG = [
+    { v:'2026.07.20.134', date:'July 28, 2026', notes:[
+      'Your writing sessions now live in the Notepad under a new “Sessions” tab. Open any session to see its name, when you wrote it, the word count, the AI feedback, and the passage itself — and jot your own notes about it. Rename a session right there.'
+    ]},
     { v:'2026.07.20.133', date:'July 28, 2026', notes:[
       'The end-of-session card is becoming a proper wrap-up: you can now name the session, turn the AI feedback on or off, and update the Story Wiki with that session from a button. Every session is saved to your session notes.'
     ]},
@@ -41192,6 +41232,20 @@ body.plan-view-arcs #planArcs{ display:block; }
 .arc-beat-q{ font-family:var(--serif); font-style:italic; font-size:12px; line-height:1.45; color:#8a6a2c; background:rgba(196,158,74,.1); border-left:2px solid rgba(196,158,74,.5); border-radius:0 6px 6px 0; padding:5px 9px; margin-top:5px; }
 body.eink .arc-scale-pill.on{ background:#000; color:#fff; }
 body.eink .arc-type-pill.on{ background:#000; color:#fff; }
+/* R37 (Phase 1b) — Notepad Session record panel (shown above the pad when a session pill is selected) */
+#npSessionRead{ margin:0 0 9px; padding:11px 13px; background:rgba(196,158,74,.07); border:1px solid rgba(196,158,74,.22); border-radius:10px; font-family:var(--sans,system-ui,sans-serif); }
+#npSessionRead .npsr-title{ width:100%; box-sizing:border-box; font-family:var(--serif); font-style:italic; font-size:15px; color:var(--ink); border:none; border-bottom:1px solid rgba(196,158,74,.3); background:transparent; padding:1px 2px 5px; outline:none; }
+#npSessionRead .npsr-title:focus{ border-bottom-color:var(--gold); }
+#npSessionRead .npsr-title::placeholder{ color:var(--ink-faint); font-style:italic; }
+#npSessionRead .npsr-meta{ font-size:10px; letter-spacing:.04em; text-transform:uppercase; color:#a4977a; margin-top:6px; }
+#npSessionRead .npsr-review{ margin-top:9px; }
+#npSessionRead .npsr-lbl{ font-size:9px; font-weight:800; letter-spacing:.1em; text-transform:uppercase; color:#b0781d; margin-bottom:3px; }
+#npSessionRead .npsr-rtext{ font-family:var(--serif); font-style:italic; font-size:13px; line-height:1.55; color:var(--ink-soft); }
+#npSessionRead .npsr-passage{ margin-top:9px; }
+#npSessionRead .npsr-passage > summary{ font-size:10px; letter-spacing:.06em; text-transform:uppercase; color:#8a7c56; cursor:pointer; list-style:none; }
+#npSessionRead .npsr-passage > summary:hover{ color:var(--gold); }
+#npSessionRead .npsr-prose{ margin-top:7px; padding-top:7px; border-top:1px dashed rgba(196,158,74,.28); font-family:var(--serif); font-size:13.5px; line-height:1.7; color:var(--ink); max-height:280px; overflow-y:auto; }
+body.eink #npSessionRead{ background:#fff; border-color:#000; }
 #npArcRead{ margin:0 0 9px; padding:9px 11px; background:rgba(196,158,74,.08); border:1px solid rgba(196,158,74,.24); border-radius:9px; font-family:var(--sans,system-ui,sans-serif); }
 #npArcRead .npar-h{ font-size:10px; font-weight:800; letter-spacing:.06em; text-transform:uppercase; color:#b0781d; margin-bottom:5px; }
 #npArcRead .npar-sub{ font-weight:600; letter-spacing:0; text-transform:none; color:#a4977a; }
