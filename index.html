@@ -1144,6 +1144,22 @@
   #focusCard .fc-empty{font-family:var(--serif); font-style:italic; font-size:12px; color:var(--ink-faint)}
   /* the story title lives in the header — don't repeat it in the writing area */
   #wmTitleBar{display:none !important}
+  /* Full-screen entry curtain: a paper veil drops to cover the mode swap + the OS fullscreen
+     zoom, then dissolves to reveal the composed writing surface. See fsEnterTransition(). */
+  #fsVeil{position:fixed; inset:0; z-index:9999; background:var(--paper,#f4efe4); opacity:0; pointer-events:none; display:none; transition:opacity .13s ease}
+  #fsVeil.on{opacity:1}
+  #fsVeil.on.lifting{opacity:0; transition:opacity .42s cubic-bezier(.22,.61,.36,1)}
+  body.eink #fsVeil{background:#fff}
+  /* As the veil lifts, the header/clock and the prose ease in rather than snapping into place. */
+  @keyframes fsHdrIn{from{opacity:0; transform:translateY(-9px)} to{opacity:1; transform:none}}
+  @keyframes fsProseIn{from{opacity:0; transform:translateY(6px)} to{opacity:1; transform:none}}
+  body.fs-entering #fsHeader{animation:fsHdrIn .5s ease .04s both}
+  body.fs-entering #editor{animation:fsProseIn .58s cubic-bezier(.22,.61,.36,1) .06s both}
+  body.fs-entering #focusTab{animation:fsHdrIn .5s ease .12s both}
+  @media (prefers-reduced-motion: reduce){
+    #fsVeil, #fsVeil.on, #fsVeil.on.lifting{transition:none}
+    body.fs-entering #fsHeader, body.fs-entering #editor, body.fs-entering #focusTab{animation:none}
+  }
   /* in-session ("Start session" pressed): full-screen, immersive — hide all chrome */
   body.writing.insession header{display:none}
   body.writing.insession #deskbar{display:none}   /* the grey Think/Write/Read/Refine bar + "session in progress" message */
@@ -22255,11 +22271,37 @@ async function sendFeedback(){
 // Native browser full-screen for a writing session — hides the browser chrome entirely, not just Dystoria's own UI.
 function enterNativeFS(){
   try{
-    if (document.fullscreenElement || document.webkitFullscreenElement) return;   // already full-screen (e.g. via the header button) — leave it, and don't claim it as the session's
+    if (state._fsSession || document.fullscreenElement || document.webkitFullscreenElement) return;   // already full-screen (e.g. via the header button, or pre-fired in-gesture by the entry transition) — don't request twice
     var el = document.documentElement;
     var req = el.requestFullscreen || el.webkitRequestFullscreen;
     if (req){ state._fsSession = true; var p = req.call(el); if (p && p.catch) p.catch(function(){ state._fsSession = false; }); }
   }catch(e){}
+}
+// Entry curtain: drop an opaque paper veil, run the mode swap + native-FS zoom UNDER it, then
+// dissolve to reveal the composed full-screen surface (header/clock/prose easing in). Keeps the
+// whole transition smooth by hiding every instant chrome swap and the OS fullscreen reflow.
+function fsEnterTransition(doSwap){
+  var reduced = (typeof window.matchMedia === 'function') && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (reduced){ try { doSwap(); } catch(e){} return; }
+  var veil = document.getElementById('fsVeil');
+  if (!veil){ veil = document.createElement('div'); veil.id = 'fsVeil'; document.body.appendChild(veil); }
+  veil.classList.remove('on','lifting');
+  veil.style.display = 'block';
+  void veil.offsetWidth;                 // flush styles so the fade-in transition takes hold
+  veil.classList.add('on');              // cover (opacity → 1, ~130ms)
+  var swapped = false;
+  var lift = function(){
+    veil.classList.add('lifting');       // dissolve (opacity → 0, ~420ms)
+    setTimeout(function(){ veil.classList.remove('on','lifting'); veil.style.display = 'none'; document.body.classList.remove('fs-entering'); }, 460);
+  };
+  var runSwap = function(){
+    if (swapped) return; swapped = true;
+    try { doSwap(); } catch(e){}
+    document.body.classList.add('fs-entering');   // header/clock/prose ease-in as the veil clears
+    // let the swap + native-FS reflow settle beneath the opaque veil, then reveal
+    setTimeout(function(){ requestAnimationFrame(lift); }, 190);
+  };
+  setTimeout(runSwap, 150);              // run the swap once the curtain is fully opaque
 }
 function exitNativeFS(){
   try{
@@ -26655,8 +26697,18 @@ function enterWriteFullscreen(){
   try { if (typeof closeWiki === 'function') closeWiki(); } catch(e){}
   try { if (typeof closeReadMode === 'function') closeReadMode(); } catch(e){}
   try { if (typeof closeEditMode === 'function') closeEditMode(); } catch(e){}
-  if (!document.body.classList.contains('writing')){ try { setWriting(true); } catch(e){} }   // enter Write (resumes at the last section)
-  if (!document.body.classList.contains('insession')){ try { startWritingSession(true); } catch(e){} }
+  var _doSwap = function(){
+    if (!document.body.classList.contains('writing')){ try { setWriting(true); } catch(e){} }   // enter Write (resumes at the last section)
+    if (!document.body.classList.contains('insession')){ try { startWritingSession(true); } catch(e){} }
+  };
+  // Smooth, curtained entry into a NEW full-screen session. Fire the OS fullscreen NOW (we're inside
+  // the click gesture, so requestFullscreen is allowed) — its zoom then runs hidden under the veil.
+  if (!document.body.classList.contains('insession') && typeof fsEnterTransition === 'function'){
+    try { enterNativeFS(); } catch(e){}
+    fsEnterTransition(_doSwap);
+  } else {
+    _doSwap();
+  }
 }
 window.enterWriteFullscreen = enterWriteFullscreen;
 function goMode(target){
@@ -41063,8 +41115,11 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.150';
+  var APP_VERSION = '2026.07.20.151';
   var APP_CHANGELOG = [
+    { v:'2026.07.20.151', date:'July 28, 2026', notes:[
+      'Entering a full-screen writing session is now a smooth, curtained transition — a soft paper veil covers the mode change and the fullscreen zoom, then dissolves to reveal the writing surface, with the header, clock and prose easing in instead of snapping. (The title-bar fullscreen toggle is unchanged.)'
+    ]},
     { v:'2026.07.20.150', date:'July 28, 2026', notes:[
       'A session’s record and its feedback now reflect ONLY what you wrote that session — prose that was already in the section when you entered write mode is no longer swept into the session or graded by the feedback (it’s passed to the AI as context to compare against instead).',
       'Turning a session into prose no longer copies the writing into your elements’ notes — the prose already lives in the Session.',
