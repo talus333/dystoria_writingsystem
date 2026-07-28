@@ -424,11 +424,16 @@
   #recapBody .rc-route-saved{font-size:11px; font-style:italic; color:var(--ink-faint)}
   #recapBody .rc-route-move{font-family:var(--sans); font-style:normal; font-size:9.5px; letter-spacing:.08em; text-transform:uppercase; color:#4a6a8a; background:transparent; border:none; border-bottom:1px dotted #4a6a8a; padding:0 0 1px; margin-left:4px; cursor:pointer}
   #recapBody .rc-route-move:hover{color:var(--ink)}
-  #recapBody .rc-route-btns{display:flex; flex-wrap:wrap; gap:7px; justify-content:center; margin-top:9px}
-  #recapBody .rc-route-btn{font-family:var(--sans); font-size:9.5px; letter-spacing:.08em; text-transform:uppercase; color:var(--ink-soft); background:transparent; border:1px solid var(--line); border-radius:14px; padding:7px 13px; cursor:pointer}
+  #recapBody .rc-route-btns{display:flex; flex-wrap:wrap; gap:9px; justify-content:center; margin-top:9px}
+  #recapBody .rc-route-btn{font-family:var(--sans); font-size:11px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-soft); background:transparent; border:1px solid var(--line); border-radius:16px; padding:9px 18px; cursor:pointer}
   #recapBody .rc-route-btn:hover{border-color:var(--ink-faint); color:var(--ink)}
-  #recapBody .rc-route-btn.rc-route-notes{color:#b0781d; border-color:rgba(196,158,74,.4)}
+  #recapBody .rc-route-btn.rc-route-prose{color:#3f5f7f; border-color:rgba(74,106,138,.42)}
+  #recapBody .rc-route-btn.rc-route-prose:hover{border-color:#4a6a8a; background:rgba(74,106,138,.08); color:#2b3f54}
+  #recapBody .rc-route-btn.rc-route-notes{color:#b0781d; border-color:rgba(196,158,74,.42)}
   #recapBody .rc-route-btn.rc-route-notes:hover{border-color:var(--gold); background:rgba(196,158,74,.07)}
+  #recapBody .rc-route-newsec{display:flex; align-items:center; justify-content:center; gap:6px; margin-top:9px; font-family:var(--sans); font-size:10.5px; letter-spacing:.03em; color:var(--ink-soft); cursor:pointer}
+  #recapBody .rc-route-newsec input{accent-color:var(--gold,#c49e4a); cursor:pointer}
+  #recapBody .rc-route-hint{margin-top:8px; font-size:10.5px; font-style:italic; line-height:1.5; color:var(--ink-faint); text-align:center}
   #recapBody .rc-route-btn.on{background:var(--ink); color:#fff; border-color:var(--ink)}
   #recapBody .rc-route-picker{display:flex; flex-wrap:wrap; gap:6px; justify-content:center; margin-top:9px}
   #recapBody .rc-route-sec{font-family:var(--serif); font-size:12px; color:var(--ink-soft); background:transparent; border:1px solid var(--line); border-radius:12px; padding:5px 11px; cursor:pointer; max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
@@ -1158,6 +1163,8 @@
   body.writing.insession #firstMark,
   body.writing.insession #sectionTitle{display:none !important}
   body.writing.insession #editor .ph, body.writing.insession #editor .sess-open{margin-top:72px}   /* space above the active Continue/Begin line; .sess-open keeps that gap once you type (the .ph class is stripped on first keystroke) so the caret stays put instead of jumping up under the last session */
+  /* R37 — each session is its own page: while writing full-screen, prior locked sessions are hidden entirely (no scroll-to-revisit). Each session gets sorted afterward. */
+  body.writing.insession #editor > .lk{display:none !important}
   /* the Writing Focus sidebar becomes a slide-open drawer */
   body.writing.insession #focusPanel{position:fixed; left:0; top:0; bottom:0; width:278px; z-index:70; transform:translateX(-100%); transition:transform .22s ease; box-shadow:6px 0 28px rgba(28,27,25,.22)}
   body.writing.insession.focusdrawer #focusPanel{transform:translateX(0)}
@@ -21288,7 +21295,9 @@ function updateEndBtn(){
   // Full-screen (insession) is NOT tied to running — it's only set by "Full screen session".
   // Here we just CLEAR it (plus drawer + goal) when the session ends.
   const graceOn = !!(state.timer && state.timer.graceHandle);
-  if (!running && !graceOn){   // keep full-screen open during the "finish your thought" grace countdown
+  // R37 — the end-session SORT CARD lives in full-screen: keep insession while `body.recap` is up; the chosen
+  // route (Prose/Notes) exits full-screen itself via _recapExitFullscreen.
+  if (!running && !graceOn && !document.body.classList.contains('recap')){   // keep full-screen open during the "finish your thought" grace countdown + while sorting
     document.body.classList.remove('insession', 'focusdrawer', 'fs-bare');
     try{ lpStop(); }catch(e){}   // Living Page off when the session ends (reverts editor styling)
     exitNativeFS();   // session over → leave native full-screen (if the session was the one that entered it)
@@ -21499,18 +21508,51 @@ function recapRouteNewScene(sid){
   } catch(e){}
   return ok;
 }
-// Send the just-written passage to Notes: it leaves the scene, stays in the Sessions surface (flagged),
-// and the importer opens in NOTES mode preloaded with the text so its elements can be confirmed in one tap.
-function recapRouteNotes(sid){
-  const ed = $('editor');
+// ---- Session sorting (R37): the end-session card routes EVERY session to Prose (Refine) or Notes. ----
+function _recapSessionPassage(sid){
   const blocks = (sid && typeof sessionBlocks === 'function') ? sessionBlocks(sid) : [];
   let passage = '';
   if (blocks.length){ const tmp = document.createElement('div'); blocks.forEach(b => tmp.appendChild(b.cloneNode(true))); passage = (tmp.textContent || '').replace(/\n{3,}/g, '\n\n').trim(); }
   if (!passage && typeof editorText === 'function') passage = editorText().trim();
+  return passage;
+}
+function _recapSessionTitle(sid){
+  try { const e = ((state.session && state.session.sessionLog) || []).find(x => x.id === sid); return (e && e.title && e.title.trim()) || ''; } catch(e){ return ''; }
+}
+// Leave the full-screen session cleanly (used right before routing to Refine or Notes).
+function _recapExitFullscreen(){
+  document.body.classList.remove('recap', 'insession', 'focusdrawer', 'fs-bare', 'fsadd-open');
+  try { if (typeof lpStop === 'function') lpStop(); } catch(e){}
+  try { if (typeof exitNativeFS === 'function') exitNativeFS(); } catch(e){}
+  { const ew = $('editorWrap'); if (ew) ew.style.paddingTop = ''; }
+  const sg = $('sessionGoal'); if (sg){ sg.classList.remove('show'); sg.textContent = ''; }
+  const fam = $('fsAddMenu'); if (fam){ fam.classList.remove('show'); fam.hidden = true; }
+}
+// → Prose: the writing stays as prose. Default = at the end of this scene; optionally a NEW section named
+// after the session. Then the importer scans it (in the background, results shown to approve) for any new
+// elements/traits, and the writer lands in Refine on that section.
+function recapRouteProse(sid, newSec){
+  const passage = _recapSessionPassage(sid);
+  const title = _recapSessionTitle(sid);
+  document.body.classList.remove('recap');
+  if (newSec){
+    const ok = recapRouteNewScene(sid);   // moves this session's prose into a fresh trailing section, switches to it
+    if (ok){ try { const k = state.frameIdx || 0; if (state.frames && state.frames[k]){ state.frames[k].stageName = title || state.frames[k].stageName || ''; } if (typeof renumberSections === 'function') renumberSections(); if (typeof renderTimeline === 'function') renderTimeline(); } catch(e){} }
+  }
+  runSessionImport(passage, title, function(){
+    _recapExitFullscreen();
+    try { if (typeof goMode === 'function') goMode('edit'); } catch(e){}   // Refine mode on the section
+  });
+}
+// → Notes: the writing leaves the scene and lives in the Sessions surface; the importer scans it (background,
+// results shown to approve) for elements/traits, then the writer lands on this session's Notepad pill.
+function recapRouteNotesFlow(sid){
+  const ed = $('editor');
+  const passage = _recapSessionPassage(sid);
+  const blocks = (sid && typeof sessionBlocks === 'function') ? sessionBlocks(sid) : [];
   const log = (state.session && state.session.sessionLog) || [];
   const e = log.find(x => x.id === sid);
   if (e) e.toNotes = true;
-  // the passage lives in Notes now — pull the blocks out of the scene
   if (ed && blocks.length){
     const k = state.frameIdx || 0;
     blocks.forEach(b => b.remove());
@@ -21523,10 +21565,19 @@ function recapRouteNotes(sid){
   if (typeof renderSessionHistory === 'function') renderSessionHistory();
   if (typeof scheduleAutosave === 'function') scheduleAutosave();
   document.body.classList.remove('recap');
-  // R37 — run the notes import in the BACKGROUND (no importer window). A small progress pill shows it working,
-  // then reports what it found; the elements + their notes are built straight into the story.
-  try { runSessionNotesImport(passage, (e && e.title) || ''); } catch(err){ if (typeof flashStatus === 'function') flashStatus('Saved to Notes.'); }
-  return true;
+  runSessionImport(passage, (e && e.title) || '', function(){
+    _recapExitFullscreen();
+    try { if (typeof setWriting === 'function') setWriting(false); } catch(e){}   // leave Write → Plan (Elements is the fallback under the notepad)
+    try { if (typeof window.__planSetView === 'function') window.__planSetView('narrative'); } catch(e){}
+    try {
+      state.npCatFilter = 'sessions';
+      if (typeof npSelect === 'function') npSelect('session:' + sid);
+      document.body.classList.add('np-open');
+      const tb = $('npTab'); if (tb){ const l = tb.querySelector('.npt-lbl'); if (l) l.textContent = 'Hide'; }
+      if (typeof renderNpElements === 'function') renderNpElements();
+      if (typeof renderNotepad === 'function') renderNotepad();
+    } catch(e){}
+  });
 }
 // R37 — a small bottom-center progress pill for the background notes import (working → result).
 function bgNotesToast(msg, opts){
@@ -21538,20 +21589,16 @@ function bgNotesToast(msg, opts){
   clearTimeout(t._h);
   if (opts.done || opts.err){ t._h = setTimeout(function(){ t.classList.remove('show'); }, opts.err ? 6500 : 5000); }
 }
-// Run the "→ Notes" import in the BACKGROUND: reuse the importer machinery (extractImport → confirmNotesImport)
-// without ever showing the importer card. Suppresses that flow's own UI reveals (Story Legend / library / notify).
-async function runSessionNotesImport(passage, title){
+// Scan the just-written passage for elements/traits IN THE BACKGROUND (progress pill), then SURFACE the
+// importer's review list so the writer approves what gets added. Whether they approve or dismiss the review,
+// `onDone` runs (via closeImport's hook) so the session sorting always completes to its destination.
+async function runSessionImport(passage, title, onDone){
+  onDone = onDone || function(){};
   passage = (passage || '').trim();
-  if (!passage){ bgNotesToast('Nothing to send to Notes.', { done: true }); return; }
-  if (typeof IMP === 'undefined'){ if (typeof flashStatus === 'function') flashStatus('Saved to Notes.'); return; }
-  // No AI available → keep the passage in the notepad and say so (can't auto-extract elements).
-  if (typeof aiAuthed === 'function' && !aiAuthed()){
-    try { const cur = (state.session && state.session.notepad) || ''; if (state.session) state.session.notepad = (cur ? (cur + '<p><br></p>') : '') + '<p>' + esc(passage).replace(/\n+/g, '</p><p>') + '</p>'; if (typeof scheduleAutosave === 'function') scheduleAutosave(); } catch(e){}
-    bgNotesToast('Saved to your notes — sign in to auto-find its elements.', { done: true });
-    return;
-  }
+  if (!passage || typeof IMP === 'undefined'){ onDone(); return; }
+  if (typeof aiAuthed === 'function' && !aiAuthed()){ bgNotesToast('Signed out — skipped the element scan.', { done: true }); onDone(); return; }
   bgNotesToast('Reading your session for elements…');
-  IMP.mode = 'new'; IMP.kind = 'notes'; IMP.qa = false; IMP.proposals = []; IMP.goals = []; IMP._bg = true;
+  IMP.mode = 'new'; IMP.kind = 'notes'; IMP.qa = false; IMP.proposals = []; IMP.goals = []; IMP._bg = true; IMP._sessionImport = true; IMP._afterConfirm = null;
   try {
     const tx = $('importText'); if (tx) tx.value = passage;
     const tt = $('importTitle'); if (tt) tt.value = title || '';
@@ -21561,34 +21608,25 @@ async function runSessionNotesImport(passage, title){
     const ds = document.querySelector('input[name=impdest][value=section]'); if (ds) ds.checked = true;
     await extractImport();
     const n = (IMP.elements || []).filter(el => el && el.include !== false).length;
-    if (n){ confirmNotesImport(); bgNotesToast('Added ' + n + ' element' + (n === 1 ? '' : 's') + ' from this session to your Story Legend.', { done: true }); }
-    else { bgNotesToast('No new elements found — the session stays in your Sessions notes.', { done: true }); }
-  } catch(e){ bgNotesToast('Couldn’t finish reading the session (' + ((e && e.message) || 'error') + ').', { err: true }); }
-  finally { IMP._bg = false; }
+    if (n){
+      // Surface the results for approval. Keep _sessionImport so confirm suppresses its own UI reveals; hook the
+      // single exit point (closeImport) to run onDone whether the writer approves or dismisses.
+      IMP._bg = false;
+      IMP._afterConfirm = function(){ onDone(); };
+      bgNotesToast('Found ' + n + ' element' + (n === 1 ? '' : 's') + ' — review to approve.', { done: true });
+      if (typeof importShow === 'function') importShow('review');
+      const cb = $('importConfirm'); if (cb) cb.disabled = false;
+      $('importBackdrop').classList.add('show'); $('importCard').classList.add('show');
+    } else {
+      IMP._sessionImport = false; bgNotesToast('No new elements found.', { done: true }); onDone();
+    }
+  } catch(e){ IMP._bg = false; IMP._sessionImport = false; bgNotesToast('Couldn’t finish the scan (' + ((e && e.message) || 'error') + ').', { err: true }); onDone(); }
 }
-function recapShowScenePicker(){
-  const pick = $('rcRoutePicker'); if (!pick) return;
-  const opts = $('rcRouteOpts'); if (opts) opts.style.display = 'none';
-  const cur = state.frameIdx || 0;
-  const nS = (typeof npSectionCount === 'function') ? npSectionCount() : ((state.frames && state.frames.length) || 1);
-  pick.innerHTML = '';
-  for (let i = 0; i < nS; i++){
-    if (i === cur) continue;
-    let nm = '';
-    try { const sl = (typeof npSectionName === 'function') ? npSectionName(i) : null; nm = sl ? ((sl.label || ('Section ' + (i + 1))) + (sl.name ? ' — ' + sl.name : '')) : ('Section ' + (i + 1)); } catch(e){ nm = 'Section ' + (i + 1); }
-    const b = document.createElement('button'); b.type = 'button'; b.className = 'rc-route-sec'; b.textContent = nm;
-    b.addEventListener('click', () => recapRoute('append', i));
-    pick.appendChild(b);
-  }
-  pick.style.display = pick.children.length ? 'flex' : 'none';
-  if (!pick.children.length) _rcRouteDone('No other scene to move to.');
-}
-function recapRoute(route, targetFrame){
+// The end-session sort card routes to Prose (Refine) or Notes. New-section toggle rides on #rcNewSection.
+function recapRoute(route){
   const sid = state._lastSnapId;
-  if (route === 'scene'){ _rcRouteDone('Kept as a scene.'); return; }
-  if (route === 'notes'){ recapRouteNotes(sid); return; }
-  if (route === 'new'){ const ok = recapRouteNewScene(sid); _rcRouteDone(ok ? 'Moved to a new scene.' : 'Couldn’t move — kept in this scene.'); return; }
-  if (route === 'append'){ const ok = recapMoveSessionToFrame(sid, targetFrame | 0); _rcRouteDone(ok ? 'Moved to that scene.' : 'Couldn’t move — kept in this scene.'); return; }
+  if (route === 'prose'){ const newSec = !!($('rcNewSection') && $('rcNewSection').checked); recapRouteProse(sid, newSec); return; }
+  if (route === 'notes'){ recapRouteNotesFlow(sid); return; }
 }
 function showRecap(){
   const base = state.sessionStart || { words: 0, woven: 0 };
@@ -21620,26 +21658,15 @@ function showRecap(){
     h += '<div id="rcSuggest"></div>';
   }
   h += '<div class="rc-foot"><button type="button" id="rcWikiBtn" class="rc-foot-btn">\u2726 Update Wiki with this session</button><div class="rc-wikilink" id="rcWikiLink">Open the Story Wiki \u2192</div></div>';   // R37 \u2014 explicit Add-to-Wiki (replaces the auto-prompt)
-  if (wrote){   // R37 (Phase 1b-2) \u2014 "Where does this go?" router (context-aware: Write-About sessions actively ask Notes vs Scene)
-    const _about = !!(state._writeAboutKey);
-    const _nSec = (typeof npSectionCount === 'function') ? npSectionCount() : ((state.frames && state.frames.length) || 1);
-    const _hasOther = _nSec > 1;
+  if (wrote){   // R37 \u2014 the sort card: every session goes to Prose (Refine) or Notes; both are one click.
     h += '<div class="rc-route" id="rcRoute">';
-    if (_about){
-      h += '<div class="rc-route-q">Where does this belong?</div>';
-      h += '<div class="rc-route-btns">'
-         + '<button type="button" class="rc-route-btn" data-route="scene">Keep as a scene</button>'
-         + '<button type="button" class="rc-route-btn rc-route-notes" data-route="notes">\u2192 Send to Notes</button>'
-         + '</div>';
-    } else {
-      h += '<div class="rc-route-saved">Saved to this scene<span class="rc-route-savemsg"> \u00b7 in your session notes</span>. <button type="button" class="rc-route-move" id="rcRouteMore">Move\u2026</button></div>';
-      h += '<div class="rc-route-btns" id="rcRouteOpts" style="display:none">'
-         + '<button type="button" class="rc-route-btn" data-route="new">New scene</button>'
-         + (_hasOther ? '<button type="button" class="rc-route-btn" data-route="append">Another scene\u2026</button>' : '')
-         + '<button type="button" class="rc-route-btn rc-route-notes" data-route="notes">\u2192 Notes</button>'
-         + '</div>';
-    }
-    h += '<div class="rc-route-picker" id="rcRoutePicker" style="display:none"></div>';
+    h += '<div class="rc-route-q">Where does this go?</div>';
+    h += '<div class="rc-route-btns">'
+       + '<button type="button" class="rc-route-btn rc-route-prose" data-route="prose">\u2192 Prose</button>'
+       + '<button type="button" class="rc-route-btn rc-route-notes" data-route="notes">\u2192 Notes</button>'
+       + '</div>';
+    h += '<label class="rc-route-newsec"><input type="checkbox" id="rcNewSection"> as a new section</label>';
+    h += '<div class="rc-route-hint">Prose lands at the end of this scene, then opens in Refine \u00b7 Notes lifts it out to your Sessions. Either way, its elements are scanned for you to approve.</div>';
     h += '</div>';
   }
   b.innerHTML = h;
@@ -21659,14 +21686,12 @@ function showRecap(){
       try { if (typeof runWikiAll === 'function') await runWikiAll(); } catch(e){}
       _wb.textContent = '✓ Wiki updated';
     }); }
-  // R37 (Phase 1b-2) — router wiring: Move… reveal, route buttons, and the "Another scene" section picker
-  { const _mr = $('rcRouteMore'); if (_mr) _mr.addEventListener('click', () => { const o = $('rcRouteOpts'); if (o) o.style.display = (o.style.display === 'none' ? 'flex' : 'none'); }); }
+  // R37 — sort-card wiring: one click routes to Prose or Notes
   { const _rt = $('rcRoute'); if (_rt) _rt.addEventListener('click', ev => {
       const btn = ev.target.closest('.rc-route-btn'); if (!btn) return;
-      const route = btn.dataset.route;
-      if (route === 'append'){ recapShowScenePicker(); return; }
-      recapRoute(route);
+      recapRoute(btn.dataset.route);
     }); }
+  { const _rc = $('recapClose'); if (_rc) _rc.style.display = wrote ? 'none' : ''; }   // the two route buttons are the exit; no separate Continue when there's writing to sort
   if (wrote && state.session){
     state.session.sessionLog = state.session.sessionLog || [];
     const _snapEls = (state.focusKeys||[]).map(k=>{ const w=(state.prompt&&state.prompt.words||[]).find(x=>wordKey(x)===k); return w?elDisplayName(w):null; }).filter(Boolean);
@@ -24622,7 +24647,11 @@ function openImport(){
   $('importBackdrop').classList.add('show'); $('importCard').classList.add('show');
   setTimeout(() => $('importText').focus(), 60);
 }
-function closeImport(){ $('importCard').classList.remove('show'); $('importBackdrop').classList.remove('show'); }
+function closeImport(){ $('importCard').classList.remove('show'); $('importBackdrop').classList.remove('show');
+  // R37 session-import hook: whether the writer approved (confirm calls closeImport) or dismissed the review,
+  // run the pending navigation once so the session sorting always completes to Refine / Notes.
+  if (typeof IMP !== 'undefined' && IMP._afterConfirm){ const _cb = IMP._afterConfirm; IMP._afterConfirm = null; IMP._sessionImport = false; try { _cb(); } catch(e){} }
+}
 // Does this word already exist in the SHARED library (built-in pool or system-wide custom),
 // ignoring words that only exist because of the currently-open story?
 function wordExistsSystem(cat, word){
@@ -25204,12 +25233,12 @@ function confirmNotesImport(){
     if (added){ $('skyEmpty').style.display = 'none'; layoutConstellation(); }
     renderConstellation(); renderTimeline(); if (typeof renderNpElements === 'function') renderNpElements();
     if (typeof updateStoryLibraryButton === 'function') updateStoryLibraryButton();
-    if (!IMP._bg && libbed && typeof openStoryLibrary === 'function') openStoryLibrary();   // surface the library so the user can start adding elements to the map
+    if (!(IMP._bg || IMP._sessionImport) && libbed && typeof openStoryLibrary === 'function') openStoryLibrary();   // surface the library so the user can start adding elements to the map
     saveSession();
     closeImport();
-    if (!IMP._bg && window.openStoryLegend) window.openStoryLegend();   // R33 — the Story Legend opens by default on a notes/Q&A import (skipped when running in the background from a session)
-    if (!IMP._bg) flashStatus('Imported — ' + libbed + ' element' + (libbed === 1 ? '' : 's') + ' in your Story Legend' + (pooled ? (' · ' + pooled + ' pool word' + (pooled === 1 ? '' : 's') + ' filed') : '') + (added ? (' · ' + added + ' on the map') : '') + (_props ? (' · +' + _props + ' pool word' + (_props === 1 ? '' : 's')) : '') + (_goals ? (' · ' + _goals + ' goal' + (_goals === 1 ? '' : 's')) : ''));
-    if (!IMP._bg && typeof importDoneNotify === 'function') importDoneNotify(libbed + added);   // same confirmation + notepad shortcut for Q&A / notes imports
+    if (!(IMP._bg || IMP._sessionImport) && window.openStoryLegend) window.openStoryLegend();   // R33 — the Story Legend opens by default on a notes/Q&A import (skipped when running in the background from a session)
+    if (!(IMP._bg || IMP._sessionImport)) flashStatus('Imported — ' + libbed + ' element' + (libbed === 1 ? '' : 's') + ' in your Story Legend' + (pooled ? (' · ' + pooled + ' pool word' + (pooled === 1 ? '' : 's') + ' filed') : '') + (added ? (' · ' + added + ' on the map') : '') + (_props ? (' · +' + _props + ' pool word' + (_props === 1 ? '' : 's')) : '') + (_goals ? (' · ' + _goals + ' goal' + (_goals === 1 ? '' : 's')) : ''));
+    if (!(IMP._bg || IMP._sessionImport) && typeof importDoneNotify === 'function') importDoneNotify(libbed + added);   // same confirmation + notepad shortcut for Q&A / notes imports
   } catch (e){ console.warn('notes import error:', e); $('importConfirm').disabled = false; flashStatus('Couldn\u2019t add notes: ' + e.message); }
 }
 
@@ -40846,8 +40875,13 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.142';
+  var APP_VERSION = '2026.07.20.143';
   var APP_CHANGELOG = [
+    { v:'2026.07.20.143', date:'July 28, 2026', notes:[
+      'Write is now purely a full-screen space, and every session is its own page — previous sessions are no longer pulled in behind you.',
+      'Ending a session brings up the sort card right there in full screen, with both paths one click away: → Prose or → Notes (and a “new section” option that takes the session’s name). Whichever you pick, the writing is scanned in the background for new elements and characteristics, and the results are surfaced for you to approve.',
+      'After sorting: Prose opens the section in Refine; Notes takes you to that session in the Notepad (with your Elements page behind it).'
+    ]},
     { v:'2026.07.20.142', date:'July 28, 2026', notes:[
       'Added “✍ Write about this” to the bottom of the element pop-up card (and the thread card) in Plan → Elements — so you can jump into a focused full-screen session straight from an element’s detail card, not just its pill.'
     ]},
