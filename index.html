@@ -21541,7 +21541,8 @@ function recapRouteProse(sid, newSec){
   }
   runSessionImport(passage, title, function(){
     _recapExitFullscreen();
-    try { if (typeof goMode === 'function') goMode('edit'); } catch(e){}   // Refine mode on the section
+    try { if (typeof setWriting === 'function') setWriting(false); } catch(e){}   // leave Write mode so its pill de-selects (Refine is the active mode now)
+    try { if (typeof goMode === 'function') goMode('edit'); } catch(e){}   // Refine mode on the section (persists uiMode='refine')
   });
 }
 // → Notes: the writing leaves the scene and lives in the Sessions surface; the importer scans it (background,
@@ -22486,11 +22487,10 @@ function writeAboutFocus(keys, label, ctx){
   state._writeAboutKey = label || fk[0];   // truthy → recap actively asks Notes vs Scene
   state._writeAboutContext = (ctx && ((ctx.notes && ctx.notes.trim()) || (ctx.prose && ctx.prose.trim()))) ? { label: label || '', notes: (ctx.notes || '').trim(), prose: (ctx.prose || '').trim() } : null;   // inherited card context for the prompt + feedback
   try { if (typeof syncFocusToSession === 'function') syncFocusToSession(); } catch(e){}
-  try { if (typeof goMode === 'function') goMode('write'); else if (typeof setWriting === 'function') setWriting(true); } catch(e){}
+  if (typeof flashStatus === 'function') flashStatus(fk.length === 1 ? 'Focused session started — the clock is running.' : ('Writing with ' + fk.length + ' focus elements — the clock is running.'));
+  try { if (typeof enterWriteFullscreen === 'function') enterWriteFullscreen(); else { if (typeof setWriting === 'function') setWriting(true); startWritingSession(true); } } catch(e){}   // full-screen session (starts it once — goMode('write') also routes here)
   try { if (typeof renderFocus === 'function') renderFocus(); } catch(e){}
   try { if (typeof renderConstellation === 'function') renderConstellation(); } catch(e){}
-  if (typeof flashStatus === 'function') flashStatus(fk.length === 1 ? 'Focused session started — the clock is running.' : ('Writing with ' + fk.length + ' focus elements — the clock is running.'));
-  try { startWritingSession(true); } catch(e){}
 }
 window.writeAboutFocus = writeAboutFocus;
 function writeAboutElement(key){ if (!key) return; var ctx = { notes: waNotesFor([key], []), prose: waProseMentions([key]) }; writeAboutFocus([key], key, ctx); }
@@ -23780,7 +23780,7 @@ function openSession(id){
     try {
       var _um = localStorage.getItem('dystoria.uiMode') || '';
       state._bootModeTarget = _um;   // remembered so init() can highlight the matching mode pill once the deskbar is wired
-      if (_um === 'write') setWriting(true);
+      if (_um === 'write'){ if (typeof enterWriteFullscreen === 'function') enterWriteFullscreen(); else setWriting(true); }   // Write is full-screen only — restore into a full-screen session, not the old prep view
       else if (_um === 'refine' && typeof openEditMode === 'function') openEditMode();
       else if (_um === 'read' && typeof openReadMode === 'function') openReadMode();
       else if (_um === 'wiki' && typeof openWiki === 'function') openWiki();
@@ -25235,10 +25235,10 @@ function confirmNotesImport(){
     if (typeof updateStoryLibraryButton === 'function') updateStoryLibraryButton();
     if (!(IMP._bg || IMP._sessionImport) && libbed && typeof openStoryLibrary === 'function') openStoryLibrary();   // surface the library so the user can start adding elements to the map
     saveSession();
-    closeImport();
     if (!(IMP._bg || IMP._sessionImport) && window.openStoryLegend) window.openStoryLegend();   // R33 — the Story Legend opens by default on a notes/Q&A import (skipped when running in the background from a session)
     if (!(IMP._bg || IMP._sessionImport)) flashStatus('Imported — ' + libbed + ' element' + (libbed === 1 ? '' : 's') + ' in your Story Legend' + (pooled ? (' · ' + pooled + ' pool word' + (pooled === 1 ? '' : 's') + ' filed') : '') + (added ? (' · ' + added + ' on the map') : '') + (_props ? (' · +' + _props + ' pool word' + (_props === 1 ? '' : 's')) : '') + (_goals ? (' · ' + _goals + ' goal' + (_goals === 1 ? '' : 's')) : ''));
     if (!(IMP._bg || IMP._sessionImport) && typeof importDoneNotify === 'function') importDoneNotify(libbed + added);   // same confirmation + notepad shortcut for Q&A / notes imports
+    closeImport();   // LAST — its session-import hook (navigate to Refine / Notes) runs only after the guarded reveals above are safely skipped
   } catch (e){ console.warn('notes import error:', e); $('importConfirm').disabled = false; flashStatus('Couldn\u2019t add notes: ' + e.message); }
 }
 
@@ -26524,7 +26524,20 @@ function suppressOverlayAnim(){
 }
 function overlaySwitch(fn){ suppressOverlayAnim(); fn(); }
 // Unified mode switch from the Notepad/Write/Read/Edit pills (deskbar + Read/Edit headers).
+// R37 — Write is ONLY a full-screen session. EVERY entry into Write (the top mode bar, the mode pills inside
+// Refine/Review/Wiki, boot restore) routes through here so none of them fall back to the old prep view.
+function enterWriteFullscreen(){
+  try { if (typeof track === 'function') track('mode_opened', { mode: 'write' }); } catch(e){}
+  try { localStorage.setItem('dystoria.uiMode', 'write'); } catch(e){}   // so a refresh restores into Write (full-screen)
+  try { if (typeof closeWiki === 'function') closeWiki(); } catch(e){}
+  try { if (typeof closeReadMode === 'function') closeReadMode(); } catch(e){}
+  try { if (typeof closeEditMode === 'function') closeEditMode(); } catch(e){}
+  if (!document.body.classList.contains('writing')){ try { setWriting(true); } catch(e){} }   // enter Write (resumes at the last section)
+  if (!document.body.classList.contains('insession')){ try { startWritingSession(true); } catch(e){} }
+}
+window.enterWriteFullscreen = enterWriteFullscreen;
 function goMode(target){
+  if (target === 'write'){ enterWriteFullscreen(); return; }   // never land in the old non-full-screen write view
   track('mode_opened', { mode: target });   // notepad(Map) / write / edit(Refine) / read / wiki
   // Persist the mode IMMEDIATELY (not only on unload) so a refresh reliably lands back in it. Written to the
   // same 'dystoria.uiMode' key that openSession's boot-mode restore reads, mapped to its vocabulary (map/write/refine/read/wiki).
@@ -31899,12 +31912,7 @@ function init(){
   // R37 Phase 2 — Write is the low-friction surface: clicking it drops you STRAIGHT onto the full-screen living
   // page (no prep interstitial), resuming at the section you were last on. Focus/prompt/guides are a top-left ＋
   // reveal (never a gate). Ending a session returns to the normal write view; clicking Write again re-enters.
-  $('writeBtn').addEventListener('click', () => {
-    if (typeof closeReadMode === 'function') closeReadMode();
-    if (typeof closeEditMode === 'function') closeEditMode();
-    if (!document.body.classList.contains('writing')) setWriting(true);   // enter Write mode (state.frameIdx already holds the last section)
-    if (!document.body.classList.contains('insession')){ try { startWritingSession(true); } catch(e){} }
-  });
+  $('writeBtn').addEventListener('click', () => { enterWriteFullscreen(); });
   $('notepad').addEventListener('input', () => { saveNotepad(); if (typeof maybeAccountNudge === 'function') maybeAccountNudge(); });
   document.addEventListener('mousedown', e => { const m = $('npAddMenu'); if (m && !m.hidden && !m.contains(e.target) && !(e.target.closest && e.target.closest('.np-add'))) m.hidden = true; });
   // Highlight the mode pill that matches the view we booted into. On a normal load that's Plan/Notepad; on a
@@ -40875,8 +40883,12 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.143';
+  var APP_VERSION = '2026.07.20.144';
   var APP_CHANGELOG = [
+    { v:'2026.07.20.144', date:'July 28, 2026', notes:[
+      'Fixed entering Write from Refine, Review, or Wiki — it now goes straight to the full-screen session like the main Write button, instead of dropping into the old prep view. (Every path into Write is full-screen now.)',
+      'Fixed the end-of-session sort: choosing Prose now properly leaves Write (its pill no longer stays selected) and opens the section in Refine; choosing Notes now lands you on the session’s pill in the Notepad without a stray Story-Legend pop-up interrupting.'
+    ]},
     { v:'2026.07.20.143', date:'July 28, 2026', notes:[
       'Write is now purely a full-screen space, and every session is its own page — previous sessions are no longer pulled in behind you.',
       'Ending a session brings up the sort card right there in full screen, with both paths one click away: → Prose or → Notes (and a “new section” option that takes the session’s name). Whichever you pick, the writing is scanned in the background for new elements and characteristics, and the results are surfaced for you to approve.',
