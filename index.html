@@ -22326,23 +22326,50 @@ function startWritingSession(fullscreen){
   }
   flashStatus(fullscreen ? 'Full-screen session \u2014 scroll up anytime to revisit earlier sessions.' : 'Session started \u2014 the clock is running. Write.');
 }
-// R27 (Phase 1c) — "Write about this": pin one element as the sole Writing Focus and drop straight into a
-// focused full-screen session about it. The recap card then actively asks whether it lands as a scene or in Notes
-// (via state._writeAboutKey, read in showRecap). Prior section focus is saved and restored when the session ends.
-function writeAboutElement(key){
-  if (!key) return;
+// R27 (Phase 1c) — "Write about this": pin one OR MANY elements as the Writing Focus and drop straight into a
+// focused full-screen session about them. From an element card it's that one element; from a card that carries a
+// set of elements (a plot-grid card, a section card, a thread card) it's ALL of that card's linked elements — the
+// same as if the author had added each of them with "+ focus element". The recap card then actively asks whether
+// the writing lands as a scene or in Notes (via state._writeAboutKey, read in showRecap). Prior section focus is
+// saved and restored when the session ends.
+// Expand any thread:/group: pseudo-keys a card may carry into the real element keys they stand for.
+function expandFocusKeys(rawKeys){
+  var out = [];
+  (rawKeys || []).forEach(function(k){
+    if (!k) return; var s = String(k);
+    if (s.indexOf('thread:') === 0){ var tid = s.slice(7); (typeof threadElements === 'function' ? (threadElements(tid) || []) : []).forEach(function(e){ if (e && e.key) out.push(e.key); }); }
+    else if (s.indexOf('group:') === 0){ var gid = s.slice(6); ((typeof groupKeys === 'function') ? (groupKeys(gid) || []) : []).forEach(function(x){ if (x) out.push(x); }); }
+    else out.push(k);
+  });
+  var seen = {}, res = []; out.forEach(function(k){ if (!seen[k]){ seen[k] = 1; res.push(k); } });
+  return res;
+}
+window.expandFocusKeys = expandFocusKeys;
+function writeAboutFocus(keys, label){
   if (typeof state === 'undefined' || !state) return;
+  var fk = expandFocusKeys(Array.isArray(keys) ? keys : [keys]);
+  if (!fk.length){ if (typeof flashStatus === 'function') flashStatus('No elements on this card yet to write about — link some first.'); return; }
   try { state._writeAboutPrevFocus = Array.isArray(state.focusKeys) ? state.focusKeys.slice() : []; } catch(e){ state._writeAboutPrevFocus = []; }
-  state.focusKeys = [key];
-  state._writeAboutKey = key;
+  state.focusKeys = fk.slice();
+  state._writeAboutKey = label || fk[0];   // truthy → recap actively asks Notes vs Scene
   try { if (typeof syncFocusToSession === 'function') syncFocusToSession(); } catch(e){}
   try { if (typeof goMode === 'function') goMode('write'); else if (typeof setWriting === 'function') setWriting(true); } catch(e){}
   try { if (typeof renderFocus === 'function') renderFocus(); } catch(e){}
   try { if (typeof renderConstellation === 'function') renderConstellation(); } catch(e){}
-  let nm = '';
-  try { const w = (typeof npFindEl === 'function') ? npFindEl(key) : null; if (w) nm = (typeof elDisplayName === 'function') ? elDisplayName(w) : (w.name || w.word || ''); } catch(e){}
-  if (typeof flashStatus === 'function') flashStatus(nm ? ('Writing about ' + nm + ' — the clock is running.') : 'Focused session started.');
+  if (typeof flashStatus === 'function') flashStatus(fk.length === 1 ? 'Focused session started — the clock is running.' : ('Writing with ' + fk.length + ' focus elements — the clock is running.'));
   try { startWritingSession(true); } catch(e){}
+}
+window.writeAboutFocus = writeAboutFocus;
+function writeAboutElement(key){ if (!key) return; writeAboutFocus([key], key); }
+window.writeAboutElement = writeAboutElement;
+// A "✍ Write about this" chip for a notepad card that carries a set of element keys (section / thread cards).
+function npCardWriteAboutBtn(keys, label){
+  keys = (keys || []).filter(Boolean);
+  if (!keys.length) return null;
+  var b = document.createElement('span'); b.className = 'npc-writeabout npc-wa-card'; b.title = 'Write about this — start a focused full-screen session with all these elements as your focus';
+  b.appendChild(document.createTextNode('✍')); var l = document.createElement('span'); l.className = 'npc-wa-lbl'; l.textContent = 'Write about this'; b.appendChild(l);
+  b.addEventListener('click', function(ev){ ev.stopPropagation(); if (typeof writeAboutFocus === 'function') writeAboutFocus(keys, label); });
+  return b;
 }
 function fmtTime(s){ return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }
 function gentleClose(){
@@ -33038,6 +33065,9 @@ document.addEventListener('DOMContentLoaded', init);
   #npCard .npc-writeabout{font-size:12.5px; margin-left:10px; opacity:.5; cursor:pointer; font-style:normal; font-weight:400; display:inline-flex; align-items:center; gap:4px; color:#4a6a8a; border:1px solid var(--line); border-radius:12px; padding:2px 9px; letter-spacing:.06em; text-transform:uppercase}
   #npCard .npc-writeabout .npc-wa-lbl{font-family:var(--sans,system-ui,sans-serif); font-size:8.5px; font-weight:700}
   #npCard .npc-writeabout:hover{opacity:1; color:var(--ink); border-color:var(--gold); background:rgba(196,158,74,.08)}
+  #npCard .npc-wa-row{display:flex; justify-content:flex-start; margin:0 0 10px}
+  #npCard .npc-wa-row .npc-writeabout{margin-left:0}
+  #npCard .npc-wa-card{opacity:.85}
   #npCard .npc-sep{display:inline-block; width:5px; height:5px; border-radius:50%; background:#5c564e; opacity:.9; margin:0 6px; flex:none}
   #npCard .npc-gswatch{display:inline-block; width:12px; height:12px; border-radius:50%; border:1px solid rgba(0,0,0,.3); flex:none}
   #npCard .npc-trait{display:inline-flex; align-items:center; line-height:1.4; font-family:var(--serif); font-size:11px; color:var(--ink); border:1px solid var(--line); border-radius:13px; padding:1px 9px; cursor:pointer; transition:color .12s,border-color .12s,background .12s}
@@ -33958,6 +33988,7 @@ document.addEventListener('DOMContentLoaded', init);
           try{ const nk=key+'||TRAIT||@sectionel:'+e.nkey; const raw=state.session&&state.session.npNotes&&state.session.npNotes[nk]; if(raw && String(raw).replace(/<[^>]*>/g,'').trim()){ const d=document.createElement('span'); d.className='npc-tldot'; d.title='Has notes'; pill.appendChild(d); } }catch(e2){}
           pill.addEventListener('click', ()=>setTrait('@sectionel:'+e.nkey));
           tl.appendChild(pill); });
+        { const _wk=_els.map(e=>e.nkey).filter(Boolean); const _wb=(typeof npCardWriteAboutBtn==='function')?npCardWriteAboutBtn(_wk, (_sl&&(_sl.name||('Section '+_sl.n)))||'this section'):null; if(_wb){ const _r=document.createElement('div'); _r.className='npc-wa-row'; _r.appendChild(_wb); body.insertBefore(_r, body.firstChild); } }   // R27 (Phase 1c) — write about this section's elements
         body.appendChild(tl);
         card.appendChild(body);
         return;
@@ -34049,6 +34080,7 @@ document.addEventListener('DOMContentLoaded', init);
           });
         }
         // (Thread-wide element list removed — a card's elements now live under that card.)
+        { const _wk=(_els||[]).map(e=>e.key).filter(Boolean); const _wb=(typeof npCardWriteAboutBtn==='function')?npCardWriteAboutBtn(_wk, (_th&&_th.name)||'this thread'):null; if(_wb){ const _r=document.createElement('div'); _r.className='npc-wa-row'; _r.appendChild(_wb); body.insertBefore(_r, body.firstChild); } }   // R27 (Phase 1c) — write about this thread's elements
         body.appendChild(tl);
         // (Concepts section removed \u2014 concepts are now added as linked elements on a card.)
         card.appendChild(body);
@@ -40667,8 +40699,11 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.136';
+  var APP_VERSION = '2026.07.20.137';
   var APP_CHANGELOG = [
+    { v:'2026.07.20.137', date:'July 28, 2026', notes:[
+      '“Write about this” now works on cards that hold a set of elements, not just single element cards. Open any card in the plot grid — or a Section or Thread card in the Notepad — and the new ✍ button starts a focused full-screen session with every element linked on that card brought in as your focus, exactly as if you’d added each one with “+ focus element”. When you finish, the recap still asks whether it lands as a scene or in your Notes.'
+    ]},
     { v:'2026.07.20.136', date:'July 28, 2026', notes:[
       'Every element card in the Notepad now has a “✍ Write about this” button. It pins that element as your focus and drops you straight into a full-screen writing session about it — and when you finish, the recap asks whether the writing belongs in a scene or in your Notes. Your section’s previous focus is restored afterward.'
     ]},
@@ -42180,6 +42215,11 @@ body.eink .pl-pcard-ttl{ color:var(--ink); }   /* keep e-ink monochrome */
 .pl-cardpop-kebabwrap{ position:relative; flex:none; }
 .pl-cardpop-kebab{ background:transparent; border:none; font-size:20px; line-height:1; color:var(--ink-faint); cursor:pointer; padding:2px 6px; border-radius:8px; }
 .pl-cardpop-kebab:hover{ color:var(--ink); background:rgba(0,0,0,.05); }
+/* R27 (Phase 1c) — "Write about this card" button in the plot-grid card popup header */
+.pl-cardpop-writeabout{ flex:none; display:inline-flex; align-items:center; gap:5px; font-family:var(--sans,system-ui,sans-serif); font-size:10px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:#4a6a8a; background:transparent; border:1px solid var(--line,#d8d2c4); border-radius:14px; padding:5px 11px; cursor:pointer; white-space:nowrap; }
+.pl-cardpop-writeabout:hover{ color:var(--ink); border-color:var(--gold,#c49e4a); background:rgba(196,158,74,.08); }
+.pl-cardpop-writeabout .pl-wa-lbl{ font-weight:700; }
+@media (max-width:560px){ .pl-cardpop-writeabout .pl-wa-lbl{ display:none; } }
 .pl-cardpop-kebabmenu{ display:none; position:absolute; top:100%; right:0; margin-top:4px; z-index:5; min-width:140px; background:#fffdf8; border:1px solid var(--line,#d8d2c4); border-radius:10px; box-shadow:0 10px 30px rgba(0,0,0,.18); padding:4px; }
 .pl-cardpop-kebabmenu.show{ display:block; }
 .pl-cardpop-kebabitem{ display:block; width:100%; text-align:left; font-family:var(--sans); font-size:12.5px; color:var(--ink); background:transparent; border:none; border-radius:7px; padding:8px 10px; cursor:pointer; }
@@ -45458,6 +45498,22 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     wrap.appendChild(btn); wrap.appendChild(menu);
     return wrap;
   }
+  // R27 (Phase 1c) — "Write about this card": start a focused full-screen session with EVERY element linked on this
+  // card as the Writing Focus (as if the author had added each with "+ focus element"). Reads cardEls at click time,
+  // so links added while the popup is open are included.
+  function cardWriteAbout(i, col){
+    var btn=document.createElement('button'); btn.type='button'; btn.className='pl-cardpop-writeabout'; btn.title='Write about this card — a focused full-screen session with all this card’s elements as your focus';
+    btn.innerHTML='✍ <span class="pl-wa-lbl">Write about this</span>';
+    btn.addEventListener('click', function(e){ e.stopPropagation();
+      var keys=cardEls(i, col).map(function(el){ return el.nkey; }).filter(Boolean);
+      var a=api(); var secName=(a&&a.sectionName&&a.sectionName(i))||('Section '+(i+1));
+      var title=(typeof plotCardTitle==='function'?plotCardTitle(i,col):'')||'';
+      var label=title || (col.id==='main' ? secName : (secName+' · '+col.name));
+      closeCardPopup();
+      if(typeof window.writeAboutFocus==='function') window.writeAboutFocus(keys, label);
+    });
+    return btn;
+  }
   // A clickable map-element icon (setting motif / being token / object icon) for the card's "Map elements" bar.
   function cardMapElIcon(i, el){
     var a=api(); if(!a || !a.elementIcon) return null;
@@ -45512,7 +45568,7 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     if(col.id!=='main'){   // thread card: title + element-link pills (General + linked elements) + note
       var tin0=document.createElement('input'); tin0.className='pl-cardpop-titlein'; tin0.value=plotCardTitle(i, col); tin0.placeholder='Card title…';
       tin0.addEventListener('input', function(){ plotCardTitleSet(i, col, tin0.value); });
-      hd.appendChild(tin0); hd.appendChild(cardKebab(i, col)); panel.appendChild(hd);
+      hd.appendChild(tin0); hd.appendChild(cardWriteAbout(i, col)); hd.appendChild(cardKebab(i, col)); panel.appendChild(hd);
       var sub0=document.createElement('div'); sub0.className='pl-cardpop-sub'; sub0.textContent=secName+'  ·  '+col.name+' thread';
       var pillsRow0=document.createElement('div'); pillsRow0.className='pl-cardpop-pills';
       var ta0=document.createElement('textarea'); ta0.className='pl-cardpop-ta';
@@ -45569,7 +45625,7 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     // MAIN plot card: card title + element-filter pills + description (per-view note, mirrored to the notepad)
     var titleIn=document.createElement('input'); titleIn.className='pl-cardpop-titlein'; titleIn.value=plotCardTitle(i, col); titleIn.placeholder='Card title…';
     titleIn.addEventListener('input', function(){ plotCardTitleSet(i, col, titleIn.value); });
-    hd.appendChild(titleIn); hd.appendChild(cardKebab(i, col)); panel.appendChild(hd);
+    hd.appendChild(titleIn); hd.appendChild(cardWriteAbout(i, col)); hd.appendChild(cardKebab(i, col)); panel.appendChild(hd);
     var sub=document.createElement('div'); sub.className='pl-cardpop-sub'; sub.textContent=secName+'  ·  Main Plot';
 
     var pillsRow=document.createElement('div'); pillsRow.className='pl-cardpop-pills';
