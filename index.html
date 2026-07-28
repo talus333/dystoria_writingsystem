@@ -434,6 +434,15 @@
   #recapBody .rc-route-sec{font-family:var(--serif); font-size:12px; color:var(--ink-soft); background:transparent; border:1px solid var(--line); border-radius:12px; padding:5px 11px; cursor:pointer; max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
   #recapBody .rc-route-sec:hover{border-color:var(--gold); color:var(--ink)}
   #recapBody .rc-route-done{margin-top:9px; font-size:11px; font-style:italic; color:var(--gold)}
+  /* R37 — background notes-import progress pill (bottom-center, appears while the → Notes import runs) */
+  #bgNotesToast{position:fixed; left:50%; bottom:26px; transform:translateX(-50%) translateY(14px); z-index:9600; display:flex; align-items:center; gap:9px; max-width:min(520px,92vw); padding:11px 17px; border-radius:22px; background:#1c1b19; color:#f2ece0; font-family:var(--sans,system-ui,sans-serif); font-size:13px; line-height:1.35; box-shadow:0 14px 40px rgba(0,0,0,.34); border:1px solid rgba(255,255,255,.08); opacity:0; pointer-events:none; transition:opacity .3s ease, transform .3s ease}
+  #bgNotesToast.show{opacity:1; transform:translateX(-50%) translateY(0)}
+  #bgNotesToast.done{background:#22321f; border-color:rgba(196,158,74,.32)}
+  #bgNotesToast.err{background:#3a2320; border-color:rgba(184,85,79,.4)}
+  #bgNotesToast .bgn-mk{color:var(--gold,#c49e4a); font-weight:700}
+  #bgNotesToast .bgn-mk.bgn-err{color:#e0a44a}
+  #bgNotesToast .spin{display:inline-block; width:13px; height:13px; border:2px solid rgba(255,255,255,.25); border-top-color:#f2ece0; border-radius:50%; animation:bgnSpin .7s linear infinite; flex:none}
+  @keyframes bgnSpin{to{transform:rotate(360deg)}}
   #recapCard h3{font-family:var(--ancient); font-size:17px; letter-spacing:.22em; text-transform:uppercase;
     color:var(--ink-soft); margin:0 0 12px; font-weight:600}
   #recapBody{font-family:var(--serif); font-size:15px; line-height:1.9; color:var(--ink)}
@@ -21507,18 +21516,48 @@ function recapRouteNotes(sid){
   if (typeof renderSessionHistory === 'function') renderSessionHistory();
   if (typeof scheduleAutosave === 'function') scheduleAutosave();
   document.body.classList.remove('recap');
-  // open the importer in NOTES mode, preloaded with the passage, targeting THIS story
-  try {
-    if (typeof openImport === 'function'){
-      openImport();
-      const pk = document.querySelector('input[name=impkind][value=notes]'); if (pk){ pk.checked = true; if (typeof importApplyKind === 'function') importApplyKind(); }
-      const tx = $('importText'); if (tx) tx.value = passage;
-      const tt = $('importTitle'); if (tt && e && e.title) tt.value = e.title;
-      const ds = document.querySelector('input[name=impdest][value=section]'); if (ds) ds.checked = true;
-      if (typeof flashStatus === 'function') flashStatus('Sent to Notes — review the elements it found, then Add.');
-    }
-  } catch(err){ if (typeof flashStatus === 'function') flashStatus('Saved to Notes.'); }
+  // R37 — run the notes import in the BACKGROUND (no importer window). A small progress pill shows it working,
+  // then reports what it found; the elements + their notes are built straight into the story.
+  try { runSessionNotesImport(passage, (e && e.title) || ''); } catch(err){ if (typeof flashStatus === 'function') flashStatus('Saved to Notes.'); }
   return true;
+}
+// R37 — a small bottom-center progress pill for the background notes import (working → result).
+function bgNotesToast(msg, opts){
+  opts = opts || {};
+  let t = document.getElementById('bgNotesToast');
+  if (!t){ t = document.createElement('div'); t.id = 'bgNotesToast'; document.body.appendChild(t); }
+  t.className = 'show' + (opts.done ? ' done' : '') + (opts.err ? ' err' : '');
+  t.innerHTML = (opts.done ? '<span class="bgn-mk">✓</span> ' : opts.err ? '<span class="bgn-mk bgn-err">⚠</span> ' : '<span class="spin"></span> ') + esc(msg);
+  clearTimeout(t._h);
+  if (opts.done || opts.err){ t._h = setTimeout(function(){ t.classList.remove('show'); }, opts.err ? 6500 : 5000); }
+}
+// Run the "→ Notes" import in the BACKGROUND: reuse the importer machinery (extractImport → confirmNotesImport)
+// without ever showing the importer card. Suppresses that flow's own UI reveals (Story Legend / library / notify).
+async function runSessionNotesImport(passage, title){
+  passage = (passage || '').trim();
+  if (!passage){ bgNotesToast('Nothing to send to Notes.', { done: true }); return; }
+  if (typeof IMP === 'undefined'){ if (typeof flashStatus === 'function') flashStatus('Saved to Notes.'); return; }
+  // No AI available → keep the passage in the notepad and say so (can't auto-extract elements).
+  if (typeof aiAuthed === 'function' && !aiAuthed()){
+    try { const cur = (state.session && state.session.notepad) || ''; if (state.session) state.session.notepad = (cur ? (cur + '<p><br></p>') : '') + '<p>' + esc(passage).replace(/\n+/g, '</p><p>') + '</p>'; if (typeof scheduleAutosave === 'function') scheduleAutosave(); } catch(e){}
+    bgNotesToast('Saved to your notes — sign in to auto-find its elements.', { done: true });
+    return;
+  }
+  bgNotesToast('Reading your session for elements…');
+  IMP.mode = 'new'; IMP.kind = 'notes'; IMP.qa = false; IMP.proposals = []; IMP.goals = []; IMP._bg = true;
+  try {
+    const tx = $('importText'); if (tx) tx.value = passage;
+    const tt = $('importTitle'); if (tt) tt.value = title || '';
+    const ov = $('importOverview'); if (ov) ov.value = '';
+    const pk = document.querySelector('input[name=impkind][value=notes]'); if (pk) pk.checked = true;
+    if (typeof importApplyKind === 'function') importApplyKind();
+    const ds = document.querySelector('input[name=impdest][value=section]'); if (ds) ds.checked = true;
+    await extractImport();
+    const n = (IMP.elements || []).filter(el => el && el.include !== false).length;
+    if (n){ confirmNotesImport(); bgNotesToast('Added ' + n + ' element' + (n === 1 ? '' : 's') + ' from this session to your Story Legend.', { done: true }); }
+    else { bgNotesToast('No new elements found — the session stays in your Sessions notes.', { done: true }); }
+  } catch(e){ bgNotesToast('Couldn’t finish reading the session (' + ((e && e.message) || 'error') + ').', { err: true }); }
+  finally { IMP._bg = false; }
 }
 function recapShowScenePicker(){
   const pick = $('rcRoutePicker'); if (!pick) return;
@@ -21705,6 +21744,7 @@ async function runSessionSummary(wovenNames){
     const prompt = (_pf ? (_pf + '\n\n') : '') + (gc ? (gc + '\n\n') : '')
       + (goals.length ? ('This session’s focus elements (sparks for the session, not targets to hit): ' + goals.join(', ') + '\n' + (wovenNames && wovenNames.length ? ('Made it onto the page: ' + wovenNames.join(', ') + '\n') : '') + '\n') : 'No focus elements were set — just respond to the writing itself.\n')
       + (traitDossier.length ? ('Background the writer has noted about these elements (context only — do NOT check the prose against it):\n' + traitDossier.join('\n') + '\n\n') : '')
+      + ((state._writeAboutContext && (state._writeAboutContext.notes || state._writeAboutContext.prose)) ? ('The writer opened this session from “' + (state._writeAboutContext.label || 'a card') + '” (context only — background they were working from, NOT a checklist to grade against):\n' + (state._writeAboutContext.notes ? (state._writeAboutContext.notes.slice(0, 1200) + '\n') : '') + (state._writeAboutContext.prose ? ('Prior prose: ' + state._writeAboutContext.prose.slice(0, 900) + '\n') : '') + '\n') : '')   // R37 Phase 2b — inherited card context
       + (guides.length ? ('Writing guides & exercises that were in play (optional sparks, not requirements):\n' + guides.join('\n') + '\n\n') : '')
       + 'Passage:\n\n' + chunk.slice(0, 12000) + '\n\nNow respond in your own voice, as instructed:';
     const text = await aiCall(sys, prompt);
@@ -21859,6 +21899,7 @@ async function generateSessionGoal(hostId){
       + (elemDossier ? ('\nWhat the author has established about the focus elements — their traits and the notes written about each (use these):\n' + elemDossier + '\n') : '')
       + (earlierEls.length ? ('\nEarlier passages in this section focused on DIFFERENT elements (' + earlierEls.join(', ') + ') — do not assume the focus elements above are the same as those.\n') : '')
       + (written ? ('\nExisting writing in this section (background/tone — it may feature other elements, not the focus):\n' + written.slice(-1800) + '\n') : '')
+      + ((state._writeAboutContext && (state._writeAboutContext.notes || state._writeAboutContext.prose)) ? ('\nYou entered this session from “' + (state._writeAboutContext.label || 'a card') + '” — draw on what the author already has about it:\n' + (state._writeAboutContext.notes ? ('Notes:\n' + state._writeAboutContext.notes.slice(0, 1400) + '\n') : '') + (state._writeAboutContext.prose ? ('Prose so far:\n' + state._writeAboutContext.prose.slice(0, 1400) + '\n') : '')) : '')   // R37 Phase 2b — inherited card context
       + (prevPrompts.length ? ('\nAlready generated for this SAME set — take a genuinely DIFFERENT angle (shift which element leads, the kind of question, or the technique); do NOT rephrase these:\n- ' + prevPrompts.join('\n- ') + '\n') : '')
       + (chosenQ ? ('\nThe story wiki raised this open question about a focus element — make THIS session’s spark out of it (reframe it into a short, punchy prompt; don’t quote it verbatim):\n"' + chosenQ + '"\n') : '')
       + '\nWrite the one-line prompt:';
@@ -21903,7 +21944,7 @@ async function endWritingSession(){
   if (wrote){ lockWrittenInSection(); }
   // R27 (Phase 1c) \u2014 a "Write about this" session is over: showRecap has read the flag, so restore the
   // section's prior Writing Focus and clear the flag (clears even when nothing was written).
-  if (state._writeAboutKey){ try { if (Array.isArray(state._writeAboutPrevFocus)){ state.focusKeys = state._writeAboutPrevFocus; if (typeof syncFocusToSession === 'function') syncFocusToSession(); } } catch(e){} state._writeAboutPrevFocus = null; state._writeAboutKey = ''; }
+  if (state._writeAboutKey){ try { if (Array.isArray(state._writeAboutPrevFocus)){ state.focusKeys = state._writeAboutPrevFocus; if (typeof syncFocusToSession === 'function') syncFocusToSession(); } } catch(e){} state._writeAboutPrevFocus = null; state._writeAboutKey = ''; state._writeAboutContext = null; }
   setupTimer();
   updateEndBtn();
   updateInkDock();   // session over \u2192 hide the e-ink dock in Write mode
@@ -22367,13 +22408,51 @@ function expandFocusKeys(rawKeys){
   return res;
 }
 window.expandFocusKeys = expandFocusKeys;
-function writeAboutFocus(keys, label){
+// R37 Phase 2b — card-context inheritance. When you "Write about this" from a card, the session inherits not just
+// the card's focus ELEMENTS but its NOTES and (for a scene/section) its PROSE, so the prompt generator and the
+// end-session feedback can draw on where you came from. Gathered at entry into state._writeAboutContext.
+function waStrip(h){ try { var d = document.createElement('div'); d.innerHTML = h || ''; return (d.textContent || '').replace(/\s+/g, ' ').trim(); } catch(e){ return ''; } }
+// Notes for a set of element keys (general note + each trait/section sub-note), plus any extra note keys/labels.
+function waNotesFor(keys, extraNoteKeys){
+  var NN = (state.session && state.session.npNotes) || {}; var SEP = '||TRAIT||'; var out = [];
+  (extraNoteKeys || []).forEach(function(nk){ var kk = (nk && nk.key !== undefined) ? nk.key : nk; var t = waStrip(NN[kk]); if (t) out.push(((nk && nk.label) ? (nk.label + ': ') : '') + t); });
+  (keys || []).forEach(function(k){
+    var w = (typeof npFindEl === 'function') ? npFindEl(k) : null;
+    var nm = w ? ((typeof elDisplayName === 'function') ? elDisplayName(w) : (w.name || w.word || k)) : k;
+    var parts = []; var gen = waStrip(NN[k]); if (gen) parts.push(gen);
+    Object.keys(NN).forEach(function(nk){ if (nk !== k && nk.indexOf(k + SEP) === 0){ var tv = waStrip(NN[nk]); if (tv){ var tab = nk.slice((k + SEP).length).replace(/^@/, ''); parts.push(tab + ': ' + tv); } } });
+    if (parts.length) out.push(nm + ' — ' + parts.join('; '));
+  });
+  return out.join('\n');
+}
+// The prose text of one section (frame index), dividers excluded.
+function waProseForFrame(frame){
+  try {
+    var nf = (typeof editorNodeFrames === 'function') ? editorNodeFrames() : []; var t = '';
+    nf.forEach(function(o){ if (o.frame !== frame) return; var node = o.node; if (node.nodeType === 1 && (node.tagName === 'H3' || (node.classList && node.classList.contains('sec-mark')))) return; t += ' ' + (node.textContent || ''); });
+    return t.replace(/\s+/g, ' ').trim();
+  } catch(e){ return ''; }
+}
+// A few sentences from the story that mention any of these elements — the "existing prose" for an element/place.
+function waProseMentions(keys){
+  try {
+    var full = (typeof editorText === 'function') ? editorText() : ''; if (!full) return '';
+    var names = (keys || []).map(function(k){ var w = (typeof npFindEl === 'function') ? npFindEl(k) : null; return w ? String(w.name || w.word || '').toLowerCase() : ''; }).filter(Boolean);
+    if (!names.length) return '';
+    var sents = full.split(/([.!?])\s+/).reduce(function(acc, s, i){ if (i % 2 === 0) acc.push(s); else acc[acc.length - 1] += s; return acc; }, []);
+    var hits = sents.filter(function(s){ var ls = s.toLowerCase(); return names.some(function(n){ return ls.indexOf(n) >= 0; }); });
+    return hits.slice(0, 8).join(' ').slice(0, 1600).trim();
+  } catch(e){ return ''; }
+}
+window.waNotesFor = waNotesFor; window.waProseForFrame = waProseForFrame; window.waProseMentions = waProseMentions;
+function writeAboutFocus(keys, label, ctx){
   if (typeof state === 'undefined' || !state) return;
   var fk = expandFocusKeys(Array.isArray(keys) ? keys : [keys]);
   if (!fk.length){ if (typeof flashStatus === 'function') flashStatus('No elements on this card yet to write about — link some first.'); return; }
   try { state._writeAboutPrevFocus = Array.isArray(state.focusKeys) ? state.focusKeys.slice() : []; } catch(e){ state._writeAboutPrevFocus = []; }
   state.focusKeys = fk.slice();
   state._writeAboutKey = label || fk[0];   // truthy → recap actively asks Notes vs Scene
+  state._writeAboutContext = (ctx && ((ctx.notes && ctx.notes.trim()) || (ctx.prose && ctx.prose.trim()))) ? { label: label || '', notes: (ctx.notes || '').trim(), prose: (ctx.prose || '').trim() } : null;   // inherited card context for the prompt + feedback
   try { if (typeof syncFocusToSession === 'function') syncFocusToSession(); } catch(e){}
   try { if (typeof goMode === 'function') goMode('write'); else if (typeof setWriting === 'function') setWriting(true); } catch(e){}
   try { if (typeof renderFocus === 'function') renderFocus(); } catch(e){}
@@ -22382,15 +22461,20 @@ function writeAboutFocus(keys, label){
   try { startWritingSession(true); } catch(e){}
 }
 window.writeAboutFocus = writeAboutFocus;
-function writeAboutElement(key){ if (!key) return; writeAboutFocus([key], key); }
+function writeAboutElement(key){ if (!key) return; var ctx = { notes: waNotesFor([key], []), prose: waProseMentions([key]) }; writeAboutFocus([key], key, ctx); }
 window.writeAboutElement = writeAboutElement;
 // A "✍ Write about this" chip for a notepad card that carries a set of element keys (section / thread cards).
-function npCardWriteAboutBtn(keys, label){
+// ctxOpts (optional): { frame:<section index for prose>, noteKeys:[{key,label}] } → inherits the card's notes + prose.
+function npCardWriteAboutBtn(keys, label, ctxOpts){
   keys = (keys || []).filter(Boolean);
   if (!keys.length) return null;
-  var b = document.createElement('span'); b.className = 'npc-writeabout npc-wa-card'; b.title = 'Write about this — start a focused full-screen session with all these elements as your focus';
+  var b = document.createElement('span'); b.className = 'npc-writeabout npc-wa-card'; b.title = 'Write about this — start a focused full-screen session with all these elements (plus this card’s notes and prose) as your focus';
   b.appendChild(document.createTextNode('✍')); var l = document.createElement('span'); l.className = 'npc-wa-lbl'; l.textContent = 'Write about this'; b.appendChild(l);
-  b.addEventListener('click', function(ev){ ev.stopPropagation(); if (typeof writeAboutFocus === 'function') writeAboutFocus(keys, label); });
+  b.addEventListener('click', function(ev){ ev.stopPropagation();
+    var o = ctxOpts || {};
+    var ctx = { notes: waNotesFor(keys, o.noteKeys || []), prose: (o.frame != null ? waProseForFrame(o.frame) : waProseMentions(keys)) };
+    if (typeof writeAboutFocus === 'function') writeAboutFocus(keys, label, ctx);
+  });
   return b;
 }
 function fmtTime(s){ return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }
@@ -25113,12 +25197,12 @@ function confirmNotesImport(){
     if (added){ $('skyEmpty').style.display = 'none'; layoutConstellation(); }
     renderConstellation(); renderTimeline(); if (typeof renderNpElements === 'function') renderNpElements();
     if (typeof updateStoryLibraryButton === 'function') updateStoryLibraryButton();
-    if (libbed && typeof openStoryLibrary === 'function') openStoryLibrary();   // surface the library so the user can start adding elements to the map
+    if (!IMP._bg && libbed && typeof openStoryLibrary === 'function') openStoryLibrary();   // surface the library so the user can start adding elements to the map
     saveSession();
     closeImport();
-    if (window.openStoryLegend) window.openStoryLegend();   // R33 — the Story Legend opens by default on a notes/Q&A import
-    flashStatus('Imported — ' + libbed + ' element' + (libbed === 1 ? '' : 's') + ' in your Story Legend' + (pooled ? (' · ' + pooled + ' pool word' + (pooled === 1 ? '' : 's') + ' filed') : '') + (added ? (' · ' + added + ' on the map') : '') + (_props ? (' · +' + _props + ' pool word' + (_props === 1 ? '' : 's')) : '') + (_goals ? (' · ' + _goals + ' goal' + (_goals === 1 ? '' : 's')) : ''));
-    if (typeof importDoneNotify === 'function') importDoneNotify(libbed + added);   // same confirmation + notepad shortcut for Q&A / notes imports
+    if (!IMP._bg && window.openStoryLegend) window.openStoryLegend();   // R33 — the Story Legend opens by default on a notes/Q&A import (skipped when running in the background from a session)
+    if (!IMP._bg) flashStatus('Imported — ' + libbed + ' element' + (libbed === 1 ? '' : 's') + ' in your Story Legend' + (pooled ? (' · ' + pooled + ' pool word' + (pooled === 1 ? '' : 's') + ' filed') : '') + (added ? (' · ' + added + ' on the map') : '') + (_props ? (' · +' + _props + ' pool word' + (_props === 1 ? '' : 's')) : '') + (_goals ? (' · ' + _goals + ' goal' + (_goals === 1 ? '' : 's')) : ''));
+    if (!IMP._bg && typeof importDoneNotify === 'function') importDoneNotify(libbed + added);   // same confirmation + notepad shortcut for Q&A / notes imports
   } catch (e){ console.warn('notes import error:', e); $('importConfirm').disabled = false; flashStatus('Couldn\u2019t add notes: ' + e.message); }
 }
 
@@ -34049,7 +34133,7 @@ document.addEventListener('DOMContentLoaded', init);
           try{ const nk=key+'||TRAIT||@sectionel:'+e.nkey; const raw=state.session&&state.session.npNotes&&state.session.npNotes[nk]; if(raw && String(raw).replace(/<[^>]*>/g,'').trim()){ const d=document.createElement('span'); d.className='npc-tldot'; d.title='Has notes'; pill.appendChild(d); } }catch(e2){}
           pill.addEventListener('click', ()=>setTrait('@sectionel:'+e.nkey));
           tl.appendChild(pill); });
-        { const _wk=_els.map(e=>e.nkey).filter(Boolean); const _wb=(typeof npCardWriteAboutBtn==='function')?npCardWriteAboutBtn(_wk, (_sl&&(_sl.name||('Section '+_sl.n)))||'this section'):null; if(_wb){ const _r=document.createElement('div'); _r.className='npc-wa-row'; _r.appendChild(_wb); body.insertBefore(_r, body.firstChild); } }   // R27 (Phase 1c) — write about this section's elements
+        { const _wk=_els.map(e=>e.nkey).filter(Boolean); const _wb=(typeof npCardWriteAboutBtn==='function')?npCardWriteAboutBtn(_wk, (_sl&&(_sl.name||('Section '+_sl.n)))||'this section', { frame:_si, noteKeys:[{key:key, label:'Section notes'}] }):null; if(_wb){ const _r=document.createElement('div'); _r.className='npc-wa-row'; _r.appendChild(_wb); body.insertBefore(_r, body.firstChild); } }   // R27 (Phase 1c) — write about this section's elements + notes + prose
         body.appendChild(tl);
         card.appendChild(body);
         return;
@@ -34141,7 +34225,7 @@ document.addEventListener('DOMContentLoaded', init);
           });
         }
         // (Thread-wide element list removed — a card's elements now live under that card.)
-        { const _wk=(_els||[]).map(e=>e.key).filter(Boolean); const _wb=(typeof npCardWriteAboutBtn==='function')?npCardWriteAboutBtn(_wk, (_th&&_th.name)||'this thread'):null; if(_wb){ const _r=document.createElement('div'); _r.className='npc-wa-row'; _r.appendChild(_wb); body.insertBefore(_r, body.firstChild); } }   // R27 (Phase 1c) — write about this thread's elements
+        { const _wk=(_els||[]).map(e=>e.key).filter(Boolean); const _wb=(typeof npCardWriteAboutBtn==='function')?npCardWriteAboutBtn(_wk, (_th&&_th.name)||'this thread', { noteKeys:[{key:key, label:'Thread notes'}] }):null; if(_wb){ const _r=document.createElement('div'); _r.className='npc-wa-row'; _r.appendChild(_wb); body.insertBefore(_r, body.firstChild); } }   // R27 (Phase 1c) — write about this thread's elements + notes
         body.appendChild(tl);
         // (Concepts section removed \u2014 concepts are now added as linked elements on a card.)
         card.appendChild(body);
@@ -40760,8 +40844,12 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.138';
+  var APP_VERSION = '2026.07.20.139';
   var APP_CHANGELOG = [
+    { v:'2026.07.20.139', date:'July 28, 2026', notes:[
+      '“Write about this” now carries the card’s context, not just its elements: starting a session from a Section, Thread, element or plot-grid card pulls that card’s notes (and, for a scene, its prose) into the prompt and the end-of-session feedback, so both know where you came from.',
+      'Sending a session “→ Notes” no longer pops open the importer. It now runs quietly in the background — a small pill shows it reading your session, then tells you how many elements it added to your Story Legend.'
+    ]},
     { v:'2026.07.20.138', date:'July 28, 2026', notes:[
       'Write mode is now a straight shot to the page. Clicking Write drops you immediately onto the full-screen living page — no setup screen first — resuming at the section you were last on. Everything optional (focus elements, an AI prompt, guides, a word goal, the timer) now lives behind a single ＋ at the top-left of the page, a reveal you open only if you want it. Nothing gates the writing anymore.'
     ]},
@@ -45569,12 +45657,21 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     var btn=document.createElement('button'); btn.type='button'; btn.className='pl-cardpop-writeabout'; btn.title='Write about this card — a focused full-screen session with all this card’s elements as your focus';
     btn.innerHTML='✍ <span class="pl-wa-lbl">Write about this</span>';
     btn.addEventListener('click', function(e){ e.stopPropagation();
-      var keys=cardEls(i, col).map(function(el){ return el.nkey; }).filter(Boolean);
+      var cels=cardEls(i, col);
+      var keys=cels.map(function(el){ return el.nkey; }).filter(Boolean);
       var a=api(); var secName=(a&&a.sectionName&&a.sectionName(i))||('Section '+(i+1));
       var title=(typeof plotCardTitle==='function'?plotCardTitle(i,col):'')||'';
       var label=title || (col.id==='main' ? secName : (secName+' · '+col.name));
+      // Card-context inheritance: the card's own note text + each linked element's note under this card + the elements'
+      // notepad notes; prose = this section's prose.
+      var noteBits=[]; try { var ct=(typeof plotCellText==='function')?String(plotCellText(i,col)||'').trim():''; if(ct) noteBits.push((title||label)+': '+ct); }catch(_){}
+      try { cels.forEach(function(el){ if(typeof plotElGet==='function'){ var en=String(plotElGet(i, col.id, el.nkey)||'').trim(); if(en) noteBits.push((el.label||'element')+' (here): '+en); } }); }catch(_){}
+      var elNotes=''; try { if(typeof window.waNotesFor==='function') elNotes=window.waNotesFor(keys, []); }catch(_){}
+      if(elNotes) noteBits.push(elNotes);
+      var prose=''; try { if(typeof window.waProseForFrame==='function') prose=window.waProseForFrame(i); }catch(_){}
+      var ctx={ notes:noteBits.join('\n'), prose:prose };
       closeCardPopup();
-      if(typeof window.writeAboutFocus==='function') window.writeAboutFocus(keys, label);
+      if(typeof window.writeAboutFocus==='function') window.writeAboutFocus(keys, label, ctx);
     });
     return btn;
   }
