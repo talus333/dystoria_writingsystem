@@ -3083,7 +3083,7 @@
     font-size:11px; letter-spacing:.18em; text-transform:uppercase; color:var(--ink-soft)}
   #newSessionBtn:hover{border-color:var(--ink-faint); color:var(--ink)}
 
-  #aspectMenu{position:fixed; display:none; z-index:70; background:var(--paper);
+  #aspectMenu{position:fixed; display:none; z-index:340; background:var(--paper);
     border:1px solid var(--line); border-radius:9px; box-shadow:var(--shadow);
     padding:5px; min-width:170px; max-height:320px; overflow-y:auto}
   #aspectMenu button{display:block; width:100%; text-align:left; font-size:12.5px;
@@ -23988,6 +23988,7 @@ function buildImportItem(el){
     if (el.traits && el.traits.length) item.attrs = el.traits.map(t => ({ word: t.value, sub: t.sub }));   // object/setting characteristics
   }
   if (typeof FRAME_IDS !== 'undefined' && FRAME_IDS.has(el.cat)){ item.role = 'frame'; if (el.cat === 'theme' || el.cat === 'stakes' || el.cat === 'concept') item.scope = 'story'; }
+  if (item && el.cat === 'setting' && item.settingSize == null) item.settingSize = 1;   // imported settings arrive at 1× size (not the 3× default) so the placed world reads consistently
   if (item && !item.icon){ const ic = bestIconMatch(el.cat, word, sub); if (ic) item.icon = ic; }
   return { item, word };
 }
@@ -24221,6 +24222,8 @@ async function extractImport(){
   const sectionGuideProse = 'Each element’s "section" = the exact title (from sections) of the section where it first / most centrally appears. ';
   const proposalGuide = 'proposals = generic reusable VOCABULARY the source uses that fits a Dystoria pool category but is likely not already a standard option (so it could enrich future generation) — e.g., a genre, a setting-type, an object-type, a being archetype, an adjective, a concept. NOT proper-named story elements (those are elements). Each: {cat ∈ [genre,period,theme,stakes,plot,being,setting,object,event,concept,adjective,relationship,state], word = the generic term (1–3 words), common = true if it is a widely-known term worth offering in ALL stories, false if it is specific to THIS world}. Up to 12; invent nothing. ';
   const goalGuide = 'goals = any clearly-stated authorial GOALS / intentions the source expresses — what the work is about, aims to explore, or wants the reader to feel — ONLY if the source actually states them. Each: {word = a short label (2–6 words), note = the fuller statement in the author’s own words}. Empty [] if none are stated. Do not infer or invent goals. ';
+  // Prose (a finished manuscript) never STATES authorial goals — reading them out of the story is inference, which we don't want. Only author notes define goals.
+  const goalGuideProse = 'goals = [] ALWAYS. A manuscript’s prose does not state the author’s goals — never infer goals from the story itself. Return goals:[]. ';
   const beingTraitInfo = 'traits=[{sub,value}] where sub∈[' + BEING_IMPORT_TRAIT_SUBS.join(',') + '] and value is the exact word or phrase from the text — include ONLY traits explicitly stated, never invent';
   const notesMode = IMP.kind === 'notes';
   let sys, user;
@@ -24239,7 +24242,7 @@ async function extractImport(){
     'Extract the story elements — characters, places, objects, events — and also the narrative frame the text implies: genre, context, concepts (themes), stakes, plot, and in-world concepts/terms. ' + typeGuide + sectionGuideProse + 'summary = ONE short sentence grounded only in the text. ' +
     'For beings: ' + beingTraitInfo + '. Do NOT fill sub for beings. ' +
     'For any non-being type that has one: sub = single best subcategory from: ' + nonBeingSubInfo + (narrSubInfo ? ('; ' + narrSubInfo) : '') + '. ' +
-    'relationships = up to 8 of the clearest bonds between the named elements; from/to are exact element names; type = a short relationship phrase such as "Guardian of","Rivalry","Keeper of","Born of","Betrayal". ' + proposalGuide + goalGuide +
+    'relationships = up to 8 of the clearest bonds between the named elements; from/to are exact element names; type = a short relationship phrase such as "Guardian of","Rivalry","Keeper of","Born of","Betrayal". ' + proposalGuide + goalGuideProse +
     'overview = 2 short sentences. Use names exactly as written. Up to 6 elements of each type. Invent nothing.';
     user = 'Story:\n\n' + prose.slice(0, 300000) + '\n\nReturn the JSON.';
   }
@@ -24327,9 +24330,10 @@ async function extractImport(){
       IMP.proposals.push({ cat: cid, word: word, common: !!p.common, accept: true, sys: !!p.common });   // common → default to all-stories, else this story
     });
   }
-  // goals clearly stated in the source → offer to seed them as the story's goals
+  // goals clearly stated in the source → offer to seed them as the story's goals.
+  // ONLY from author notes (notesMode); a manuscript's prose never states goals, so importing prose seeds no goals (avoids inferring intent).
   { const seenG = {}; IMP.goals = [];
-    goalsRaw.forEach(g => {
+    (notesMode ? goalsRaw : []).forEach(g => {
       if (!g || !g.word) return;
       const word = String(g.word).trim().slice(0, 80); if (!word) return;
       const k = word.toLowerCase(); if (seenG[k]) return; seenG[k] = 1;
@@ -24704,6 +24708,13 @@ async function confirmImport(){
   if (typeof renderNpCard === 'function') renderNpCard();
   if (typeof window.__planRefreshNarrative === 'function') window.__planRefreshNarrative();    // the Plan-mode Elements tab reflects them too
   closeImport();
+  // First view of the imported world = the "wow": centre the map on the main setting and scale so every added element is in view
+  // (instead of the cluster sitting off-screen to the bottom-right). Deferred a frame so the map has laid out.
+  try {
+    const _mainSet = (state.nodes || []).find(nd => nd && nd.cat === 'setting' && isFinite(nd.x) && isFinite(nd.y));
+    const _fitOpts = _mainSet ? { centerOn: { x: _mainSet.x, y: _mainSet.y } } : {};
+    requestAnimationFrame(() => { try { if (typeof fitViewToNodes === 'function') fitViewToNodes(_fitOpts); } catch (e){} });
+  } catch (e){}
   const secMsg = secs.length > 1 ? (' across ' + secs.length + ' sections') : '';
   const propMsg = ((_props + _pooled) ? (' · +' + (_props + _pooled) + ' pool word' + ((_props + _pooled) === 1 ? '' : 's')) : '') + (_goals ? (' · ' + _goals + ' goal' + (_goals === 1 ? '' : 's')) : '');
   flashStatus((asSection ? ('Added ' + added + ' element' + (added === 1 ? '' : 's') + secMsg) : ('Imported — ' + added + ' element' + (added === 1 ? '' : 's') + secMsg)) + (legendOnly ? (' · ' + legendOnly + ' waiting in the Story Legend') : '') + (_cweb ? (' · ' + _cweb + ' concept link' + (_cweb === 1 ? '' : 's')) : '') + propMsg);
@@ -40275,8 +40286,14 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.128';
+  var APP_VERSION = '2026.07.20.129';
   var APP_CHANGELOG = [
+    { v:'2026.07.20.129', date:'July 28, 2026', notes:[
+      'Fixed: editing a character’s Sex, Age or Occupation from the notepad now opens its picker on top — it was appearing hidden beneath the notepad, so the change looked like it did nothing.',
+      'Importing a manuscript no longer invents story goals from the prose — goals are only added when your own author notes actually state them.',
+      'Imported settings now arrive on the map at normal (1×) size instead of oversized.',
+      'After an import, the map now opens centred on your main setting and scaled so every newly-added element is in view — your scattered notes become a connected world at a glance.'
+    ]},
     { v:'2026.07.20.125', date:'July 23, 2026', notes:[
       'The name/category window: the icon frame is now as tall as the name + category fields beside it, on a white background.',
       'Feedback & bug reports can now include a screenshot — “Attach a screenshot” in the feedback window uploads the image and links it to your report so it can be seen.'
