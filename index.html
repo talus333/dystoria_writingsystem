@@ -21879,6 +21879,9 @@ async function endWritingSession(){
   if (wrote) wrapLooseEditorText();   // make the first line a real block before snapshot + lock
   if (wrote) showRecap();             // no words \u2192 no review card
   if (wrote){ lockWrittenInSection(); }
+  // R27 (Phase 1c) \u2014 a "Write about this" session is over: showRecap has read the flag, so restore the
+  // section's prior Writing Focus and clear the flag (clears even when nothing was written).
+  if (state._writeAboutKey){ try { if (Array.isArray(state._writeAboutPrevFocus)){ state.focusKeys = state._writeAboutPrevFocus; if (typeof syncFocusToSession === 'function') syncFocusToSession(); } } catch(e){} state._writeAboutPrevFocus = null; state._writeAboutKey = ''; }
   setupTimer();
   updateEndBtn();
   updateInkDock();   // session over \u2192 hide the e-ink dock in Write mode
@@ -22322,6 +22325,24 @@ function startWritingSession(fullscreen){
     }
   }
   flashStatus(fullscreen ? 'Full-screen session \u2014 scroll up anytime to revisit earlier sessions.' : 'Session started \u2014 the clock is running. Write.');
+}
+// R27 (Phase 1c) — "Write about this": pin one element as the sole Writing Focus and drop straight into a
+// focused full-screen session about it. The recap card then actively asks whether it lands as a scene or in Notes
+// (via state._writeAboutKey, read in showRecap). Prior section focus is saved and restored when the session ends.
+function writeAboutElement(key){
+  if (!key) return;
+  if (typeof state === 'undefined' || !state) return;
+  try { state._writeAboutPrevFocus = Array.isArray(state.focusKeys) ? state.focusKeys.slice() : []; } catch(e){ state._writeAboutPrevFocus = []; }
+  state.focusKeys = [key];
+  state._writeAboutKey = key;
+  try { if (typeof syncFocusToSession === 'function') syncFocusToSession(); } catch(e){}
+  try { if (typeof goMode === 'function') goMode('write'); else if (typeof setWriting === 'function') setWriting(true); } catch(e){}
+  try { if (typeof renderFocus === 'function') renderFocus(); } catch(e){}
+  try { if (typeof renderConstellation === 'function') renderConstellation(); } catch(e){}
+  let nm = '';
+  try { const w = (typeof npFindEl === 'function') ? npFindEl(key) : null; if (w) nm = (typeof elDisplayName === 'function') ? elDisplayName(w) : (w.name || w.word || ''); } catch(e){}
+  if (typeof flashStatus === 'function') flashStatus(nm ? ('Writing about ' + nm + ' — the clock is running.') : 'Focused session started.');
+  try { startWritingSession(true); } catch(e){}
 }
 function fmtTime(s){ return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }
 function gentleClose(){
@@ -33013,6 +33034,10 @@ document.addEventListener('DOMContentLoaded', init);
   #npCard .npc-unnamed{font-family:var(--serif); font-style:italic; font-weight:400; font-size:16px; color:var(--ink-faint); border-bottom:1px dashed var(--line); cursor:pointer}
   #npCard .npc-rename{font-size:12px; margin-left:8px; opacity:.45; cursor:pointer; font-style:normal; font-weight:400; display:inline-block; transform:scaleX(-1)}   /* mirror the ✎ so it points down-left */
   #npCard .npc-rename:hover{opacity:1; color:var(--gold)}
+  /* R27 (Phase 1c) — "Write about this" quill on the element card title */
+  #npCard .npc-writeabout{font-size:12.5px; margin-left:10px; opacity:.5; cursor:pointer; font-style:normal; font-weight:400; display:inline-flex; align-items:center; gap:4px; color:#4a6a8a; border:1px solid var(--line); border-radius:12px; padding:2px 9px; letter-spacing:.06em; text-transform:uppercase}
+  #npCard .npc-writeabout .npc-wa-lbl{font-family:var(--sans,system-ui,sans-serif); font-size:8.5px; font-weight:700}
+  #npCard .npc-writeabout:hover{opacity:1; color:var(--ink); border-color:var(--gold); background:rgba(196,158,74,.08)}
   #npCard .npc-sep{display:inline-block; width:5px; height:5px; border-radius:50%; background:#5c564e; opacity:.9; margin:0 6px; flex:none}
   #npCard .npc-gswatch{display:inline-block; width:12px; height:12px; border-radius:50%; border:1px solid rgba(0,0,0,.3); flex:none}
   #npCard .npc-trait{display:inline-flex; align-items:center; line-height:1.4; font-family:var(--serif); font-size:11px; color:var(--ink); border:1px solid var(--line); border-radius:13px; padding:1px 9px; cursor:pointer; transition:color .12s,border-color .12s,background .12s}
@@ -34270,6 +34295,10 @@ document.addEventListener('DOMContentLoaded', init);
           un.addEventListener('click', ev=>{ ev.stopPropagation(); if(eix0>=0) nameElement(eix0); }); t.appendChild(un); }
         if(w && (w.cat==='object'||w.cat==='setting')){ const ico=document.createElement('span'); ico.className='npc-rename'; ico.textContent='🎨'; ico.title='Change map icon'; ico.addEventListener('click', ev=>{ ev.stopPropagation(); if(eix0>=0 && typeof openIconPicker==='function') openIconPicker(eix0); }); t.appendChild(ico); }
       }
+      // R27 (Phase 1c) — "Write about this": start a focused full-screen session about this element
+      if(w){ const _wk=key; const wb=document.createElement('span'); wb.className='npc-writeabout'; wb.title='Write about this — start a focused full-screen session, then choose where it lands';
+        wb.appendChild(document.createTextNode('✍')); const _wl=document.createElement('span'); _wl.className='npc-wa-lbl'; _wl.textContent='Write about this'; wb.appendChild(_wl);
+        wb.addEventListener('click', ev=>{ ev.stopPropagation(); if(typeof writeAboutElement==='function') writeAboutElement(_wk); }); t.appendChild(wb); }
       let _headcol=null;
       if(w && (w.role==='being' || (w.role==='word' && (w.cat==='setting' || w.cat==='object' || w.cat==='event')) || w.cat==='org' || w.cat==='concept')){ _headcol=document.createElement('div'); _headcol.className='npc-headcol'; _headcol.appendChild(t); }
       else { body.appendChild(t); }
@@ -40638,8 +40667,11 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.135';
+  var APP_VERSION = '2026.07.20.136';
   var APP_CHANGELOG = [
+    { v:'2026.07.20.136', date:'July 28, 2026', notes:[
+      'Every element card in the Notepad now has a “✍ Write about this” button. It pins that element as your focus and drops you straight into a full-screen writing session about it — and when you finish, the recap asks whether the writing belongs in a scene or in your Notes. Your section’s previous focus is restored afterward.'
+    ]},
     { v:'2026.07.20.135', date:'July 28, 2026', notes:[
       'The end-of-session card now asks where your writing belongs. By default it stays in the scene you wrote it in, but a quiet “Move…” lets you send it to a new scene, another existing scene, or into your Notes. Sending to Notes lifts the passage out of the manuscript, keeps it in your Sessions, and opens the importer so the elements it mentions can be added in one step.'
     ]},
