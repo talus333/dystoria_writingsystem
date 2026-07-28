@@ -433,6 +433,10 @@
   #recapBody .rc-route-btn.rc-route-notes:hover{border-color:var(--gold); background:rgba(196,158,74,.07)}
   #recapBody .rc-route-newsec{display:flex; align-items:center; justify-content:center; gap:6px; margin-top:9px; font-family:var(--sans); font-size:10.5px; letter-spacing:.03em; color:var(--ink-soft); cursor:pointer}
   #recapBody .rc-route-newsec input{accent-color:var(--gold,#c49e4a); cursor:pointer}
+  #recapBody .rc-route-dest{margin-top:9px; font-size:11.5px; line-height:1.5; color:var(--ink-soft); text-align:center; padding:7px 12px; border:1px solid rgba(74,106,138,.28); border-radius:9px; background:rgba(74,106,138,.06)}
+  #recapBody .rc-route-dest b{color:#2b3f54; font-weight:800}
+  #recapBody .rc-route-dest.is-new{border-color:rgba(196,158,74,.4); background:rgba(196,158,74,.08)}
+  #recapBody .rc-route-dest.is-new b{color:#8a5a12}
   #recapBody .rc-route-hint{margin-top:8px; font-size:10.5px; font-style:italic; line-height:1.5; color:var(--ink-faint); text-align:center}
   #recapBody .rc-route-btn.on{background:var(--ink); color:#fff; border-color:var(--ink)}
   #recapBody .rc-route-picker{display:flex; flex-wrap:wrap; gap:6px; justify-content:center; margin-top:9px}
@@ -21358,6 +21362,26 @@ function currentSectionHtml(){
   tmp.querySelectorAll('.sess-foot, .sess-focus').forEach(n=>n.remove());
   return tmp.innerHTML;
 }
+// Only the blocks WRITTEN THIS SESSION in the current frame — the "fresh", not-yet-locked prose.
+// Mirrors lockWrittenInSection()'s fresh-block filter; runs at recap time, BEFORE locking, so the
+// prose that already existed (locked prior sessions / refined text) is excluded. This is what the
+// Session record shows and what feedback speaks to — never the whole section.
+function sessionWrittenHtml(){
+  const ed=$('editor'); if(!ed) return '';
+  const k=state.frameIdx||0; const fm=(typeof nodeFrameMap==='function')?nodeFrameMap():null;
+  const tmp=document.createElement('div');
+  Array.from(ed.children).forEach(c=>{
+    if(fm && fm.get(c)!==k) return;
+    if(c.tagName==='H3') return;
+    if(c.classList && c.classList.contains('sec-mark')) return;
+    if(c.classList && c.classList.contains('ph') && !c.textContent.trim()) return;
+    if(!c.textContent.trim()) return;
+    if(c.classList && c.classList.contains('lk')) return;   // already locked = prior prose, not this session
+    const cl=c.cloneNode(true); if(cl.style&&cl.style.display==='none') cl.style.removeProperty('display'); tmp.appendChild(cl);
+  });
+  tmp.querySelectorAll('.sess-foot, .sess-focus').forEach(n=>n.remove());
+  return tmp.innerHTML;
+}
 function restoreFromSnapshotsIfEmpty(){
   const ed=$('editor'); if(!ed) return;
   if(!state.session || state.session.sessionsRestored) return;   // only ever auto-restore once per story
@@ -21716,8 +21740,9 @@ function showRecap(){
        + '<button type="button" class="rc-route-btn rc-route-prose" data-route="prose">\u2192 Prose</button>'
        + '<button type="button" class="rc-route-btn rc-route-notes" data-route="notes">\u2192 Notes</button>'
        + '</div>';
-    h += '<label class="rc-route-newsec"><input type="checkbox" id="rcNewSection"> as a new section</label>';
-    h += '<div class="rc-route-hint">Prose lands at the end of this scene, then opens in Refine \u00b7 Notes lifts it out to your Sessions. Either way, its elements are scanned for you to approve.</div>';
+    h += '<label class="rc-route-newsec"><input type="checkbox" id="rcNewSection"> Start a new section for it</label>';
+    h += '<div class="rc-route-dest" id="rcProseDest"></div>';   // live destination line \u2014 updates with the checkbox (wired below)
+    h += '<div class="rc-route-hint">Notes lifts it out of the draft and into your Sessions instead. Either way, its elements are scanned for you to approve.</div>';
     h += '</div>';
   }
   b.innerHTML = h;
@@ -21737,6 +21762,23 @@ function showRecap(){
       try { if (typeof runWikiAll === 'function') await runWikiAll(); } catch(e){}
       _wb.textContent = '✓ Wiki updated';
     }); }
+  // #5 — spell out exactly WHERE the prose will land, and keep it in sync with the "new section" checkbox.
+  { const _ns = $('rcNewSection'); const _dest = $('rcProseDest');
+    if (_dest){
+      const _cur = state.frameIdx || 0;
+      const _curName = (state.frames && state.frames[_cur] && (state.frames[_cur].stageName || '').trim()) || '';
+      const _curLbl = 'Section ' + (_cur + 1) + (_curName ? ' · “' + esc(_curName) + '”' : '');
+      const _newLbl = 'Section ' + (_cur + 2);
+      const upd = () => {
+        const on = !!(_ns && _ns.checked);
+        _dest.classList.toggle('is-new', on);
+        _dest.innerHTML = on
+          ? ('→ Adds a <b>new ' + _newLbl + '</b>, right after ' + _curLbl + ', and opens it in Refine.')
+          : ('→ Adds to the end of <b>' + _curLbl + '</b> — the section you were just writing in — and opens it in Refine.');
+      };
+      if (_ns) _ns.addEventListener('change', upd);
+      upd();
+    } }
   // R37 — sort-card wiring: one click routes to Prose or Notes
   { const _rt = $('rcRoute'); if (_rt) _rt.addEventListener('click', ev => {
       const btn = ev.target.closest('.rc-route-btn'); if (!btn) return;
@@ -21751,7 +21793,7 @@ function showRecap(){
     const _snapGuides = _gw.filter(w=>w.cat!=='exercise').map(_gl);
     const _snapExercises = _gw.filter(w=>w.cat==='exercise').map(_gl);
     const _snapPrompt = ((($('sessionGoal')&&$('sessionGoal').textContent)||($('prepPromptText')&&$('prepPromptText').textContent)||'')).trim();
-    const _snap = { id:'sess'+Date.now().toString(36)+Math.random().toString(36).slice(2,5), at:new Date().toISOString(), frame:(state.frameIdx||0), words:wrote, html:currentSectionHtml(), review:'', els:_snapEls, guides:_snapGuides, exercises:_snapExercises, focusPrompt:_snapPrompt, title:'', about:(state._writeAboutKey||''), toNotes:false };
+    const _snap = { id:'sess'+Date.now().toString(36)+Math.random().toString(36).slice(2,5), at:new Date().toISOString(), frame:(state.frameIdx||0), words:wrote, html:currentSectionHtml(), sessHtml:sessionWrittenHtml(), review:'', els:_snapEls, guides:_snapGuides, exercises:_snapExercises, focusPrompt:_snapPrompt, title:'', about:(state._writeAboutKey||''), toNotes:false };
     state.session.sessionLog.push(_snap); state._lastSnapId = _snap.id; renderSessionHistory(); scheduleAutosave(800);
   }
   if (wrote){   // R37 — only run the AI reflection when Feedback is on; scanning missed elements is unconditional
@@ -21799,9 +21841,16 @@ async function runSessionSummary(wovenNames){
     wireVoicePicker(wrap, () => runSessionSummary(state._reviewWoven)); }
   const full = editorText();
   const start = (state.sessionStart && state.sessionStart.text) || '';
-  let chunk = full;
-  if (start && full.startsWith(start)) chunk = full.slice(start.length).trim();
+  // The feedback must speak ONLY to what was written this session — never the prose that already
+  // existed. Prefer the snapshot's captured session delta (robust even once blocks are locked);
+  // fall back to the start-prefix diff, then to the full text as a last resort.
+  let chunk = '';
+  try { const _e = ((state.session && state.session.sessionLog) || []).find(x => x.id === state._lastSnapId);
+    if (_e && _e.sessHtml){ const _d = document.createElement('div'); _d.innerHTML = _e.sessHtml; chunk = (_d.textContent || '').replace(/\s+/g,' ').trim(); } } catch(e){}
+  if (!chunk && start && full.startsWith(start)) chunk = full.slice(start.length).trim();
   if (!chunk) chunk = full;
+  // The prose that already existed before the session — passed as comparison context only, never graded.
+  const priorProse = (start && start.trim() && start.trim() !== chunk.trim()) ? start.trim() : '';
   const words = (state.prompt && state.prompt.words) || [];
   const goals = (state.focusKeys || []).map(k => { const w = words.find(x => wordKey(x) === k); return w ? elDisplayName(w) : null; }).filter(Boolean);
   const traitDossier = (state.focusKeys || []).map(k => {
@@ -21829,7 +21878,8 @@ async function runSessionSummary(wovenNames){
       + (traitDossier.length ? ('Background the writer has noted about these elements (context only — do NOT check the prose against it):\n' + traitDossier.join('\n') + '\n\n') : '')
       + ((state._writeAboutContext && (state._writeAboutContext.notes || state._writeAboutContext.prose)) ? ('The writer opened this session from “' + (state._writeAboutContext.label || 'a card') + '” (context only — background they were working from, NOT a checklist to grade against):\n' + (state._writeAboutContext.notes ? (state._writeAboutContext.notes.slice(0, 1200) + '\n') : '') + (state._writeAboutContext.prose ? ('Prior prose: ' + state._writeAboutContext.prose.slice(0, 900) + '\n') : '') + '\n') : '')   // R37 Phase 2b — inherited card context
       + (guides.length ? ('Writing guides & exercises that were in play (optional sparks, not requirements):\n' + guides.join('\n') + '\n\n') : '')
-      + 'Passage:\n\n' + chunk.slice(0, 12000) + '\n\nNow respond in your own voice, as instructed:';
+      + (priorProse ? ('The prose that already existed in this section BEFORE this session began (context to read against and compare with — do NOT critique or grade it; respond only to the new passage below):\n\n' + priorProse.slice(0, 6000) + '\n\n') : '')
+      + 'The passage written THIS session (this — and only this — is what you are responding to):\n\n' + chunk.slice(0, 12000) + '\n\nNow respond in your own voice, as instructed:';
     const text = await aiCall(sys, prompt);
     if (state._reviewToken !== _rtok) return;
     const el = $('rcAi'); if (!el) return;
@@ -22399,6 +22449,14 @@ function lpApplyOn(){ try{ lpPrepCSS(); document.body.classList.toggle('lp-on', 
 /* ===== end Living Page ===== */
 function startWritingSession(fullscreen){
   track('writing_session_started', { fullscreen: !!fullscreen, ink: !!state.inkMode });
+  // A new session opens with a CLEAN Writing Focus — focus elements from the previous session are not
+  // carried over. The only way a session begins with focus pre-set is "Write about this" from an element
+  // or plot card, which sets state._writeAboutKey before entering. (Focus can still be added mid-session
+  // via the full-screen ＋ menu.)
+  if (!state._writeAboutKey && !document.body.classList.contains('insession')){
+    state.focusKeys = [];
+    try { if (typeof syncFocusToSession === 'function') syncFocusToSession(); } catch(e){}
+  }
   try{ markGuideDone('write', $('wmGuide')); var _ds=$('deskStatus'); if(_ds) _ds.textContent=''; }catch(e){}   // Write guide dismissed once a session starts
   if (!document.body.classList.contains('writing')) setWriting(true);
   if (window.prepSummarySync) window.prepSummarySync();   // leave the recap view; the prose editor is what the session writes into
@@ -24450,7 +24508,8 @@ function registerImportWord(el, word){
   else { state.session.customWords = state.session.customWords || {}; state.session.customWords[el.cat] = state.session.customWords[el.cat] || []; if (!state.session.customWords[el.cat].some(e => e.word === word)) state.session.customWords[el.cat].push(entry); }
   if (el.summary){ state.session.wikiAI = state.session.wikiAI || {}; state.session.wikiAI[el.cat + '|' + word] = { text: el.summary, sig: 0 }; }
 }
-function importNoteToNotes(el, item){ if (el.note && el.note.trim()){ const k = wordKey(item); state.session.npNotes = state.session.npNotes || {}; if (!state.session.npNotes[k] || !npPlain(state.session.npNotes[k]).trim()) state.session.npNotes[k] = importNoteHtml(el.note); } }
+function importNoteToNotes(el, item){ if (typeof IMP !== 'undefined' && IMP._sessionImport) return;   // a session→prose import already keeps the writing in the Session record; don't copy the prose into the element's notes
+  if (el.note && el.note.trim()){ const k = wordKey(item); state.session.npNotes = state.session.npNotes || {}; if (!state.session.npNotes[k] || !npPlain(state.session.npNotes[k]).trim()) state.session.npNotes[k] = importNoteHtml(el.note); } }
 // ---- import de-dup: find an element already in the story so we enrich it instead of making a copy ----
 function importNameLc(x){ return String(x || '').trim().toLowerCase(); }
 // normalise for fuzzy matching: strip case, accents, leading articles, possessives and punctuation
@@ -24478,7 +24537,7 @@ function mergeImportDetail(item, el){
   if (!item || !el) return;
   const traits = (el.traits || []).filter(t => t && t.sub && String(t.value || '').trim());
   if (traits.length){ item.attrs = item.attrs || []; const have = {}; item.attrs.forEach(a => { have[a.sub + '|' + importNameLc(a.word)] = 1; }); traits.forEach(t => { const k = t.sub + '|' + importNameLc(t.value); if (!have[k]){ item.attrs.push({ word: t.value, sub: t.sub }); have[k] = 1; } }); }
-  if (el.note && el.note.trim()){
+  if (el.note && el.note.trim() && !(typeof IMP !== 'undefined' && IMP._sessionImport)){   // skip note-writing for session→prose imports — the prose lives in the Session, not the element
     const k = wordKey(item); state.session.npNotes = state.session.npNotes || {};
     const cur = state.session.npNotes[k]; const curPlain = cur ? npPlain(cur).trim() : '';
     if (!curPlain) state.session.npNotes[k] = importNoteHtml(el.note);
@@ -31561,7 +31620,8 @@ function renderNotepad(){
       // Feedback: only when feedback is on (off → the section is hidden entirely).
       if (s.review && (typeof recapFeedbackOn !== 'function' || recapFeedbackOn())) h += '<div class="npsr-review"><div class="npsr-lbl">✦ Feedback</div><div class="npsr-rtext">' + _es(s.review).replace(/\n{2,}/g,'<br><br>').replace(/\n/g,'<br>') + '</div></div>';
       // "What you wrote": always shown (no collapse) — just the prose, with the section divider/title stripped out.
-      if (s.html){ let _ph = s.html; try { const _d = document.createElement('div'); _d.innerHTML = _ph; _d.querySelectorAll('.sec-mark, h3, #firstMark, #sectionTitle').forEach(n => n.remove()); _ph = _d.innerHTML; } catch(e){} if (_ph.replace(/<[^>]*>/g,'').trim()) h += '<div class="npsr-passage npsr-passage-open"><div class="npsr-lbl">What you wrote</div><div class="npsr-prose">' + _ph + '</div></div>'; }
+      { const _src = (s.sessHtml != null ? s.sessHtml : s.html);   // sessHtml = only what was written this session; fall back to full section for pre-.150 snapshots
+        if (_src){ let _ph = _src; try { const _d = document.createElement('div'); _d.innerHTML = _ph; _d.querySelectorAll('.sec-mark, h3, #firstMark, #sectionTitle').forEach(n => n.remove()); _ph = _d.innerHTML; } catch(e){} if (_ph.replace(/<[^>]*>/g,'').trim()) h += '<div class="npsr-passage npsr-passage-open"><div class="npsr-lbl">What you wrote</div><div class="npsr-prose">' + _ph + '</div></div>'; } }
       sp.innerHTML = h; sp.style.display = '';
       const _ti = document.getElementById('npSessTitle'); if (_ti) _ti.addEventListener('input', () => { s.title = _ti.value; if (typeof renderNpElements === 'function') renderNpElements(); scheduleAutosave(1500); });
     } else if (sp){ sp.style.display = 'none'; }
@@ -33073,7 +33133,10 @@ document.addEventListener('DOMContentLoaded', init);
   body.eink #lowerMain.np-sheet > #npCard{background:#fff}   /* e-ink stays pure white */
   body:not(.writing) #lowerMain.np-sheet > #npWrap{grid-area:pad; min-height:0; min-width:0}
   /* R37 — the Session record sits beside the notes in the pad column; cap it at half the width so the notes keep room */
-  body:not(.writing) #lowerMain.np-sheet #npWrap > #npSessionRead{flex:0 1 auto; max-width:50%; min-width:0; align-self:flex-start; max-height:100%; overflow-y:auto; margin:0 12px 0 0}
+  /* Session record sits beside the pad in a flex row. Session keys are never "cardable", so #lowerMain
+     never carries .np-sheet while a session is open — the cap must NOT be qualified by it, or it never applies. */
+  body:not(.writing) #npWrap > #npSessionRead{flex:0 1 auto; max-width:50%; min-width:0; align-self:flex-start; max-height:100%; overflow-y:auto; margin:0 12px 0 0}
+  body:not(.writing) #npWrap:has(> #npSessionRead) > #notepad{flex:1 1 0; min-width:0}
   body:not(.writing) #lowerMain.np-sheet #npWrap > #notepad{flex:1 1 0; min-width:0}
   body:not(.writing) #lowerMain.np-sheet #npCard .npc-img{float:left; width:94px; height:92px; min-height:0; max-height:none; margin:1px 14px 6px 0; align-self:auto}
   body:not(.writing) #lowerMain.np-sheet #npCard .npc-img.npc-img-being{width:94px; height:92px}
@@ -41000,8 +41063,15 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.149';
+  var APP_VERSION = '2026.07.20.150';
   var APP_CHANGELOG = [
+    { v:'2026.07.20.150', date:'July 28, 2026', notes:[
+      'A session’s record and its feedback now reflect ONLY what you wrote that session — prose that was already in the section when you entered write mode is no longer swept into the session or graded by the feedback (it’s passed to the AI as context to compare against instead).',
+      'Turning a session into prose no longer copies the writing into your elements’ notes — the prose already lives in the Session.',
+      'The end-of-session card now spells out exactly where your prose will land: “Adds to the end of Section N” or “Adds a new Section N+1”, updating live as you toggle “Start a new section”.',
+      'A new session starts with a clean Writing Focus — focus elements aren’t carried over from the previous session (they still come in when you use “Write about this” on an element or plot card).',
+      'Fixed the Sessions record in the notepad overflowing past half the width.'
+    ]},
     { v:'2026.07.20.149', date:'July 28, 2026', notes:[
       'An empty writing session now returns to the correct mode you came from (a session started from Plan goes back to Plan, not Wiki).',
       'The Elements filter bar sits tight against the header and no longer lets element rows paint through it while scrolling.'
