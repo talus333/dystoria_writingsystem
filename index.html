@@ -1144,22 +1144,6 @@
   #focusCard .fc-empty{font-family:var(--serif); font-style:italic; font-size:12px; color:var(--ink-faint)}
   /* the story title lives in the header — don't repeat it in the writing area */
   #wmTitleBar{display:none !important}
-  /* Full-screen entry curtain: a paper veil drops to cover the mode swap + the OS fullscreen
-     zoom, then dissolves to reveal the composed writing surface. See fsEnterTransition(). */
-  #fsVeil{position:fixed; inset:0; z-index:9999; background:var(--paper,#f4efe4); opacity:0; pointer-events:none; display:none; transition:opacity .13s ease}
-  #fsVeil.on{opacity:1}
-  #fsVeil.on.lifting{opacity:0; transition:opacity .42s cubic-bezier(.22,.61,.36,1)}
-  body.eink #fsVeil{background:#fff}
-  /* As the veil lifts, the header/clock and the prose ease in rather than snapping into place. */
-  @keyframes fsHdrIn{from{opacity:0; transform:translateY(-9px)} to{opacity:1; transform:none}}
-  @keyframes fsProseIn{from{opacity:0; transform:translateY(6px)} to{opacity:1; transform:none}}
-  body.fs-entering #fsHeader{animation:fsHdrIn .5s ease .04s both}
-  body.fs-entering #editor{animation:fsProseIn .58s cubic-bezier(.22,.61,.36,1) .06s both}
-  body.fs-entering #focusTab{animation:fsHdrIn .5s ease .12s both}
-  @media (prefers-reduced-motion: reduce){
-    #fsVeil, #fsVeil.on, #fsVeil.on.lifting{transition:none}
-    body.fs-entering #fsHeader, body.fs-entering #editor, body.fs-entering #focusTab{animation:none}
-  }
   /* in-session ("Start session" pressed): full-screen, immersive — hide all chrome */
   body.writing.insession header{display:none}
   body.writing.insession #deskbar{display:none}   /* the grey Think/Write/Read/Refine bar + "session in progress" message */
@@ -21633,7 +21617,7 @@ function recapRouteProse(sid, newSec){
     _recapExitFullscreen();
     try { if (typeof setWriting === 'function') setWriting(false); } catch(e){}   // leave Write mode so its pill de-selects (Refine is the active mode now)
     try { if (typeof goMode === 'function') goMode('edit'); } catch(e){}   // Refine mode on the section (persists uiMode='refine')
-  });
+  }, 'prose');   // → Prose: scan the writing through the PROSE import path
 }
 // → Notes: the writing leaves the scene and lives in the Sessions surface; the importer scans it (background,
 // results shown to approve) for elements/traits, then the writer lands on this session's Notepad pill.
@@ -21683,19 +21667,24 @@ function bgNotesToast(msg, opts){
 // Scan the just-written passage for elements/traits IN THE BACKGROUND (progress pill), then SURFACE the
 // importer's review list so the writer approves what gets added. Whether they approve or dismiss the review,
 // `onDone` runs (via closeImport's hook) so the session sorting always completes to its destination.
-async function runSessionImport(passage, title, onDone){
+async function runSessionImport(passage, title, onDone, kind){
   onDone = onDone || function(){};
   passage = (passage || '').trim();
   if (!passage || typeof IMP === 'undefined'){ onDone(); return; }
   if (typeof aiAuthed === 'function' && !aiAuthed()){ bgNotesToast('Signed out — skipped the element scan.', { done: true }); onDone(); return; }
   bgNotesToast('Reading your session for elements…');
-  IMP.mode = 'new'; IMP.kind = 'notes'; IMP.qa = false; IMP.proposals = []; IMP.goals = []; IMP._bg = true; IMP._sessionImport = true; IMP._afterConfirm = null;
+  // The session's writing is PROSE. Route → Prose scans it through the PROSE import path (which never
+  // infers authorial goals from a story); route → Notes uses the notes/worldbuilding path. Either way,
+  // _sessionImport keeps prose out of element notes and out of goal-seeding.
+  const _kind = (kind === 'prose') ? 'prose' : 'notes';
+  IMP.mode = 'new'; IMP.kind = _kind; IMP.qa = false; IMP.proposals = []; IMP.goals = []; IMP._bg = true; IMP._sessionImport = true; IMP._afterConfirm = null;
   try {
     const tx = $('importText'); if (tx) tx.value = passage;
     const tt = $('importTitle'); if (tt) tt.value = title || '';
     const ov = $('importOverview'); if (ov) ov.value = '';
-    const pk = document.querySelector('input[name=impkind][value=notes]'); if (pk) pk.checked = true;
+    const pk = document.querySelector('input[name=impkind][value=' + _kind + ']'); if (pk) pk.checked = true;
     if (typeof importApplyKind === 'function') importApplyKind();
+    IMP.kind = _kind;   // importApplyKind re-reads the radio group; re-assert the kind so the session import is never at the mercy of stale radio state
     const ds = document.querySelector('input[name=impdest][value=section]'); if (ds) ds.checked = true;
     await extractImport();
     const n = (IMP.elements || []).filter(el => el && el.include !== false).length;
@@ -22271,37 +22260,11 @@ async function sendFeedback(){
 // Native browser full-screen for a writing session — hides the browser chrome entirely, not just Dystoria's own UI.
 function enterNativeFS(){
   try{
-    if (state._fsSession || document.fullscreenElement || document.webkitFullscreenElement) return;   // already full-screen (e.g. via the header button, or pre-fired in-gesture by the entry transition) — don't request twice
+    if (document.fullscreenElement || document.webkitFullscreenElement) return;   // already full-screen (e.g. via the header button) — leave it, and don't claim it as the session's
     var el = document.documentElement;
     var req = el.requestFullscreen || el.webkitRequestFullscreen;
     if (req){ state._fsSession = true; var p = req.call(el); if (p && p.catch) p.catch(function(){ state._fsSession = false; }); }
   }catch(e){}
-}
-// Entry curtain: drop an opaque paper veil, run the mode swap + native-FS zoom UNDER it, then
-// dissolve to reveal the composed full-screen surface (header/clock/prose easing in). Keeps the
-// whole transition smooth by hiding every instant chrome swap and the OS fullscreen reflow.
-function fsEnterTransition(doSwap){
-  var reduced = (typeof window.matchMedia === 'function') && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  if (reduced){ try { doSwap(); } catch(e){} return; }
-  var veil = document.getElementById('fsVeil');
-  if (!veil){ veil = document.createElement('div'); veil.id = 'fsVeil'; document.body.appendChild(veil); }
-  veil.classList.remove('on','lifting');
-  veil.style.display = 'block';
-  void veil.offsetWidth;                 // flush styles so the fade-in transition takes hold
-  veil.classList.add('on');              // cover (opacity → 1, ~130ms)
-  var swapped = false;
-  var lift = function(){
-    veil.classList.add('lifting');       // dissolve (opacity → 0, ~420ms)
-    setTimeout(function(){ veil.classList.remove('on','lifting'); veil.style.display = 'none'; document.body.classList.remove('fs-entering'); }, 460);
-  };
-  var runSwap = function(){
-    if (swapped) return; swapped = true;
-    try { doSwap(); } catch(e){}
-    document.body.classList.add('fs-entering');   // header/clock/prose ease-in as the veil clears
-    // let the swap + native-FS reflow settle beneath the opaque veil, then reveal
-    setTimeout(function(){ requestAnimationFrame(lift); }, 190);
-  };
-  setTimeout(runSwap, 150);              // run the swap once the curtain is fully opaque
 }
 function exitNativeFS(){
   try{
@@ -24937,9 +24900,11 @@ async function extractImport(){
     });
   }
   // goals clearly stated in the source → offer to seed them as the story's goals.
-  // ONLY from author notes (notesMode); a manuscript's prose never states goals, so importing prose seeds no goals (avoids inferring intent).
+  // ONLY from author notes (notesMode) that the writer deliberately imported — a manuscript's prose never
+  // states goals, and a SESSION import (_sessionImport) is prose written in a session, not worldbuilding
+  // notes, so it seeds no goals either (never infer authorial intent from the story itself).
   { const seenG = {}; IMP.goals = [];
-    (notesMode ? goalsRaw : []).forEach(g => {
+    ((notesMode && !(typeof IMP !== 'undefined' && IMP._sessionImport)) ? goalsRaw : []).forEach(g => {
       if (!g || !g.word) return;
       const word = String(g.word).trim().slice(0, 80); if (!word) return;
       const k = word.toLowerCase(); if (seenG[k]) return; seenG[k] = 1;
@@ -26697,18 +26662,8 @@ function enterWriteFullscreen(){
   try { if (typeof closeWiki === 'function') closeWiki(); } catch(e){}
   try { if (typeof closeReadMode === 'function') closeReadMode(); } catch(e){}
   try { if (typeof closeEditMode === 'function') closeEditMode(); } catch(e){}
-  var _doSwap = function(){
-    if (!document.body.classList.contains('writing')){ try { setWriting(true); } catch(e){} }   // enter Write (resumes at the last section)
-    if (!document.body.classList.contains('insession')){ try { startWritingSession(true); } catch(e){} }
-  };
-  // Smooth, curtained entry into a NEW full-screen session. Fire the OS fullscreen NOW (we're inside
-  // the click gesture, so requestFullscreen is allowed) — its zoom then runs hidden under the veil.
-  if (!document.body.classList.contains('insession') && typeof fsEnterTransition === 'function'){
-    try { enterNativeFS(); } catch(e){}
-    fsEnterTransition(_doSwap);
-  } else {
-    _doSwap();
-  }
+  if (!document.body.classList.contains('writing')){ try { setWriting(true); } catch(e){} }   // enter Write (resumes at the last section)
+  if (!document.body.classList.contains('insession')){ try { startWritingSession(true); } catch(e){} }
 }
 window.enterWriteFullscreen = enterWriteFullscreen;
 function goMode(target){
@@ -41115,8 +41070,12 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.151';
+  var APP_VERSION = '2026.07.20.152';
   var APP_CHANGELOG = [
+    { v:'2026.07.20.152', date:'July 28, 2026', notes:[
+      'Reverted the experimental full-screen entry animation — it was breaking native fullscreen (the browser went fullscreen, then dropped back out). Entry into a writing session is back to the previous, reliable behavior.',
+      'The end-of-session element scan now matches what it is reading: a session sent to Prose is scanned through the prose import path, and a session sent to Notes through the notes/worldbuilding path. Goals are only ever seeded from deliberately-imported worldbuilding notes — never inferred from your session’s prose (fixes a Goal being created out of the writing).'
+    ]},
     { v:'2026.07.20.151', date:'July 28, 2026', notes:[
       'Entering a full-screen writing session is now a smooth, curtained transition — a soft paper veil covers the mode change and the fullscreen zoom, then dissolves to reveal the writing surface, with the header, clock and prose easing in instead of snapping. (The title-bar fullscreen toggle is unchanged.)'
     ]},
