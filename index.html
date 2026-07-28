@@ -418,6 +418,22 @@
   #recapBody .rc-foot-btn{font-family:var(--sans); font-size:9.5px; letter-spacing:.1em; text-transform:uppercase; color:#4a6a8a; border:1px solid var(--line); border-radius:14px; padding:7px 14px; cursor:pointer; background:transparent}
   #recapBody .rc-foot-btn:hover{border-color:var(--ink-faint); color:var(--ink)}
   #recapBody .rc-npnote{margin-top:10px; font-size:11px; font-style:italic; color:var(--ink-faint)}
+  /* R37 (Phase 1b-2) — "Where does this go?" recap router */
+  #recapBody .rc-route{margin-top:12px; padding-top:11px; border-top:1px solid var(--line)}
+  #recapBody .rc-route-q{font-family:var(--sans); font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--ink-soft); margin-bottom:8px}
+  #recapBody .rc-route-saved{font-size:11px; font-style:italic; color:var(--ink-faint)}
+  #recapBody .rc-route-move{font-family:var(--sans); font-style:normal; font-size:9.5px; letter-spacing:.08em; text-transform:uppercase; color:#4a6a8a; background:transparent; border:none; border-bottom:1px dotted #4a6a8a; padding:0 0 1px; margin-left:4px; cursor:pointer}
+  #recapBody .rc-route-move:hover{color:var(--ink)}
+  #recapBody .rc-route-btns{display:flex; flex-wrap:wrap; gap:7px; justify-content:center; margin-top:9px}
+  #recapBody .rc-route-btn{font-family:var(--sans); font-size:9.5px; letter-spacing:.08em; text-transform:uppercase; color:var(--ink-soft); background:transparent; border:1px solid var(--line); border-radius:14px; padding:7px 13px; cursor:pointer}
+  #recapBody .rc-route-btn:hover{border-color:var(--ink-faint); color:var(--ink)}
+  #recapBody .rc-route-btn.rc-route-notes{color:#b0781d; border-color:rgba(196,158,74,.4)}
+  #recapBody .rc-route-btn.rc-route-notes:hover{border-color:var(--gold); background:rgba(196,158,74,.07)}
+  #recapBody .rc-route-btn.on{background:var(--ink); color:#fff; border-color:var(--ink)}
+  #recapBody .rc-route-picker{display:flex; flex-wrap:wrap; gap:6px; justify-content:center; margin-top:9px}
+  #recapBody .rc-route-sec{font-family:var(--serif); font-size:12px; color:var(--ink-soft); background:transparent; border:1px solid var(--line); border-radius:12px; padding:5px 11px; cursor:pointer; max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+  #recapBody .rc-route-sec:hover{border-color:var(--gold); color:var(--ink)}
+  #recapBody .rc-route-done{margin-top:9px; font-size:11px; font-style:italic; color:var(--gold)}
   #recapCard h3{font-family:var(--ancient); font-size:17px; letter-spacing:.22em; text-transform:uppercase;
     color:var(--ink-soft); margin:0 0 12px; font-weight:600}
   #recapBody{font-family:var(--serif); font-size:15px; line-height:1.9; color:var(--ink)}
@@ -21376,6 +21392,136 @@ function focusAddOpen(anchor){
 // R37 (Phase 1a) — end-session Feedback (STYLE) toggle: whether the recap runs the AI reflection. Persisted per device.
 function recapFeedbackOn(){ try { return localStorage.getItem('dystoria_recap_feedback') !== '0'; } catch(e){ return true; } }
 function setRecapFeedback(on){ try { localStorage.setItem('dystoria_recap_feedback', on ? '1' : '0'); } catch(e){} }
+/* ===== R37 (Phase 1b-2) — recap "Where does this go?" routing ================
+   The just-written session always starts saved in its scene. From the recap card
+   the writer can reroute it: New scene, Another (existing) scene, or → Notes
+   (send the passage to the Notepad Sessions surface AND mine it for elements via
+   the importer in notes mode). Handlers operate on the session's stamped blocks. */
+function _rcRouteDone(msg){
+  const rt = $('rcRoute'); if (rt){ const p = document.createElement('div'); p.className = 'rc-route-done'; p.textContent = msg; rt.innerHTML = ''; rt.appendChild(p); }
+  if (typeof flashStatus === 'function') flashStatus(msg);
+}
+// Move a session's locked blocks out of their current section and into section k (mirrors delete+restore).
+function recapMoveSessionToFrame(sid, k){
+  const ed = $('editor'); if (!ed || sid == null) return false;
+  const blocks = (typeof sessionBlocks === 'function') ? sessionBlocks(sid) : [];
+  if (!blocks.length) return false;
+  const srcK = (state.frameIdx || 0);
+  const tmp = document.createElement('div'); blocks.forEach(b => tmp.appendChild(b.cloneNode(true)));
+  const html = tmp.innerHTML;
+  blocks.forEach(b => b.remove());
+  const fm = (typeof nodeFrameMap === 'function') ? nodeFrameMap() : null;
+  const t2 = document.createElement('div'); t2.innerHTML = html;
+  const nid = 'sess' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+  const newBlocks = Array.from(t2.children);
+  // land after the last real prose block of section k, else just before section (k+1)'s divider, else append
+  let lastRef = null;
+  Array.from(ed.children).forEach(c => {
+    if ((fm ? fm.get(c) : 0) !== k) return;
+    if (c.tagName === 'H3') return;
+    if (c.classList && (c.classList.contains('sec-mark') || c.classList.contains('ph'))) return;
+    if (!(c.textContent || '').trim()) return;
+    lastRef = c;
+  });
+  let insBefore = null;
+  if (!lastRef){ const nH3 = ed.querySelector('h3[data-frame="' + (k + 1) + '"]'); if (nH3){ const pm = nH3.previousElementSibling; insBefore = (pm && pm.classList && pm.classList.contains('sec-mark')) ? pm : nH3; } }
+  newBlocks.forEach((b, j) => {
+    b.classList.add('lk'); b.contentEditable = 'false'; b.dataset.sess = nid;
+    if (j === 0){ b.classList.add('session-start'); b.dataset.sessLabel = 'Session'; }
+    if (lastRef){ if (lastRef.nextSibling) ed.insertBefore(b, lastRef.nextSibling); else ed.appendChild(b); }
+    else if (insBefore){ ed.insertBefore(b, insBefore); }
+    else ed.appendChild(b);
+    lastRef = b;
+  });
+  const log = (state.session && state.session.sessionLog) || [];
+  const e = log.find(x => x.id === sid); if (e){ e.id = nid; e.frame = k; }
+  if (state._lastSnapId === sid) state._lastSnapId = nid;
+  // if the source section is now empty of prose, leave a fresh prompt to write into
+  const fm2 = (typeof nodeFrameMap === 'function') ? nodeFrameMap() : null;
+  const stillHas = Array.from(ed.children).some(c => (fm2 ? fm2.get(c) : 0) === srcK && (c.textContent || '').trim() && !(c.classList && (c.classList.contains('sec-mark'))) && c.tagName !== 'H3');
+  if (!stillHas && (state.frameIdx || 0) === srcK && typeof appendBeginPrompt === 'function') appendBeginPrompt('Begin…');
+  if (typeof renumberSessionLabels === 'function') renumberSessionLabels();
+  if (typeof paintSectionFocus === 'function') paintSectionFocus();
+  if (state.session){ state.session.html = editorHTML(); }
+  if (typeof renderSessionHistory === 'function') renderSessionHistory();
+  if (typeof scheduleAutosave === 'function') scheduleAutosave();
+  return true;
+}
+function recapRouteNewScene(sid){
+  const cur = state.frameIdx || 0;
+  let ni = -1;
+  try { ni = insertBlankSectionAt(cur + 1, { blankMap: true }); } catch(e){ ni = -1; }
+  if (ni < 0) return false;
+  // insertBlankSectionAt seeds the new section with a blank <div><br></div> line — drop it so only the moved prose remains
+  const ok = recapMoveSessionToFrame(sid, ni);
+  try {
+    const ed = $('editor'); const fm = (typeof nodeFrameMap === 'function') ? nodeFrameMap() : null;
+    Array.from(ed.children).forEach(c => { if ((fm ? fm.get(c) : 0) === ni && c.tagName !== 'H3' && !(c.classList && (c.classList.contains('sec-mark') || c.classList.contains('lk'))) && !(c.textContent || '').trim()) c.remove(); });
+    if (state.session){ state.session.html = editorHTML(); }
+  } catch(e){}
+  return ok;
+}
+// Send the just-written passage to Notes: it leaves the scene, stays in the Sessions surface (flagged),
+// and the importer opens in NOTES mode preloaded with the text so its elements can be confirmed in one tap.
+function recapRouteNotes(sid){
+  const ed = $('editor');
+  const blocks = (sid && typeof sessionBlocks === 'function') ? sessionBlocks(sid) : [];
+  let passage = '';
+  if (blocks.length){ const tmp = document.createElement('div'); blocks.forEach(b => tmp.appendChild(b.cloneNode(true))); passage = (tmp.textContent || '').replace(/\n{3,}/g, '\n\n').trim(); }
+  if (!passage && typeof editorText === 'function') passage = editorText().trim();
+  const log = (state.session && state.session.sessionLog) || [];
+  const e = log.find(x => x.id === sid);
+  if (e) e.toNotes = true;
+  // the passage lives in Notes now — pull the blocks out of the scene
+  if (ed && blocks.length){
+    const k = state.frameIdx || 0;
+    blocks.forEach(b => b.remove());
+    const fm = (typeof nodeFrameMap === 'function') ? nodeFrameMap() : null;
+    const stillHas = Array.from(ed.children).some(c => (fm ? fm.get(c) : 0) === k && (c.textContent || '').trim() && !(c.classList && c.classList.contains('sec-mark')) && c.tagName !== 'H3');
+    if (!stillHas && typeof appendBeginPrompt === 'function') appendBeginPrompt('Begin…');
+    if (typeof renumberSessionLabels === 'function') renumberSessionLabels();
+    if (state.session){ state.session.html = editorHTML(); }
+  }
+  if (typeof renderSessionHistory === 'function') renderSessionHistory();
+  if (typeof scheduleAutosave === 'function') scheduleAutosave();
+  document.body.classList.remove('recap');
+  // open the importer in NOTES mode, preloaded with the passage, targeting THIS story
+  try {
+    if (typeof openImport === 'function'){
+      openImport();
+      const pk = document.querySelector('input[name=impkind][value=notes]'); if (pk){ pk.checked = true; if (typeof importApplyKind === 'function') importApplyKind(); }
+      const tx = $('importText'); if (tx) tx.value = passage;
+      const tt = $('importTitle'); if (tt && e && e.title) tt.value = e.title;
+      const ds = document.querySelector('input[name=impdest][value=section]'); if (ds) ds.checked = true;
+      if (typeof flashStatus === 'function') flashStatus('Sent to Notes — review the elements it found, then Add.');
+    }
+  } catch(err){ if (typeof flashStatus === 'function') flashStatus('Saved to Notes.'); }
+  return true;
+}
+function recapShowScenePicker(){
+  const pick = $('rcRoutePicker'); if (!pick) return;
+  const opts = $('rcRouteOpts'); if (opts) opts.style.display = 'none';
+  const cur = state.frameIdx || 0;
+  const nS = (typeof npSectionCount === 'function') ? npSectionCount() : ((state.frames && state.frames.length) || 1);
+  pick.innerHTML = '';
+  for (let i = 0; i < nS; i++){
+    if (i === cur) continue;
+    let nm = '';
+    try { const sl = (typeof npSectionName === 'function') ? npSectionName(i) : null; nm = sl ? ((sl.label || ('Section ' + (i + 1))) + (sl.name ? ' — ' + sl.name : '')) : ('Section ' + (i + 1)); } catch(e){ nm = 'Section ' + (i + 1); }
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'rc-route-sec'; b.textContent = nm;
+    b.addEventListener('click', () => recapRoute('append', i));
+    pick.appendChild(b);
+  }
+  pick.style.display = pick.children.length ? 'flex' : 'none';
+  if (!pick.children.length) _rcRouteDone('No other scene to move to.');
+}
+function recapRoute(route, targetFrame){
+  const sid = state._lastSnapId;
+  if (route === 'scene'){ _rcRouteDone('Kept as a scene.'); return; }
+  if (route === 'notes'){ recapRouteNotes(sid); return; }
+  if (route === 'new'){ const ok = recapRouteNewScene(sid); _rcRouteDone(ok ? 'Moved to a new scene.' : 'Couldn’t move — kept in this scene.'); return; }
+  if (route === 'append'){ const ok = recapMoveSessionToFrame(sid, targetFrame | 0); _rcRouteDone(ok ? 'Moved to that scene.' : 'Couldn’t move — kept in this scene.'); return; }
+}
 function showRecap(){
   const base = state.sessionStart || { words: 0, woven: 0 };
   const t = editorText().trim();
@@ -21406,7 +21552,28 @@ function showRecap(){
     h += '<div id="rcSuggest"></div>';
   }
   h += '<div class="rc-foot"><button type="button" id="rcWikiBtn" class="rc-foot-btn">\u2726 Update Wiki with this session</button><div class="rc-wikilink" id="rcWikiLink">Open the Story Wiki \u2192</div></div>';   // R37 \u2014 explicit Add-to-Wiki (replaces the auto-prompt)
-  if (wrote) h += '<div class="rc-npnote">Saved to this scene \u00b7 in your session notes.</div>';
+  if (wrote){   // R37 (Phase 1b-2) \u2014 "Where does this go?" router (context-aware: Write-About sessions actively ask Notes vs Scene)
+    const _about = !!(state._writeAboutKey);
+    const _nSec = (typeof npSectionCount === 'function') ? npSectionCount() : ((state.frames && state.frames.length) || 1);
+    const _hasOther = _nSec > 1;
+    h += '<div class="rc-route" id="rcRoute">';
+    if (_about){
+      h += '<div class="rc-route-q">Where does this belong?</div>';
+      h += '<div class="rc-route-btns">'
+         + '<button type="button" class="rc-route-btn" data-route="scene">Keep as a scene</button>'
+         + '<button type="button" class="rc-route-btn rc-route-notes" data-route="notes">\u2192 Send to Notes</button>'
+         + '</div>';
+    } else {
+      h += '<div class="rc-route-saved">Saved to this scene<span class="rc-route-savemsg"> \u00b7 in your session notes</span>. <button type="button" class="rc-route-move" id="rcRouteMore">Move\u2026</button></div>';
+      h += '<div class="rc-route-btns" id="rcRouteOpts" style="display:none">'
+         + '<button type="button" class="rc-route-btn" data-route="new">New scene</button>'
+         + (_hasOther ? '<button type="button" class="rc-route-btn" data-route="append">Another scene\u2026</button>' : '')
+         + '<button type="button" class="rc-route-btn rc-route-notes" data-route="notes">\u2192 Notes</button>'
+         + '</div>';
+    }
+    h += '<div class="rc-route-picker" id="rcRoutePicker" style="display:none"></div>';
+    h += '</div>';
+  }
   b.innerHTML = h;
   document.body.classList.add('recap');
   const wl = $('rcWikiLink'); if (wl) wl.addEventListener('click', () => { document.body.classList.remove('recap'); openWiki(); });
@@ -21424,6 +21591,14 @@ function showRecap(){
       try { if (typeof runWikiAll === 'function') await runWikiAll(); } catch(e){}
       _wb.textContent = '✓ Wiki updated';
     }); }
+  // R37 (Phase 1b-2) — router wiring: Move… reveal, route buttons, and the "Another scene" section picker
+  { const _mr = $('rcRouteMore'); if (_mr) _mr.addEventListener('click', () => { const o = $('rcRouteOpts'); if (o) o.style.display = (o.style.display === 'none' ? 'flex' : 'none'); }); }
+  { const _rt = $('rcRoute'); if (_rt) _rt.addEventListener('click', ev => {
+      const btn = ev.target.closest('.rc-route-btn'); if (!btn) return;
+      const route = btn.dataset.route;
+      if (route === 'append'){ recapShowScenePicker(); return; }
+      recapRoute(route);
+    }); }
   if (wrote && state.session){
     state.session.sessionLog = state.session.sessionLog || [];
     const _snapEls = (state.focusKeys||[]).map(k=>{ const w=(state.prompt&&state.prompt.words||[]).find(x=>wordKey(x)===k); return w?elDisplayName(w):null; }).filter(Boolean);
@@ -21432,7 +21607,7 @@ function showRecap(){
     const _snapGuides = _gw.filter(w=>w.cat!=='exercise').map(_gl);
     const _snapExercises = _gw.filter(w=>w.cat==='exercise').map(_gl);
     const _snapPrompt = ((($('sessionGoal')&&$('sessionGoal').textContent)||($('prepPromptText')&&$('prepPromptText').textContent)||'')).trim();
-    const _snap = { id:'sess'+Date.now().toString(36)+Math.random().toString(36).slice(2,5), at:new Date().toISOString(), frame:(state.frameIdx||0), words:wrote, html:currentSectionHtml(), review:'', els:_snapEls, guides:_snapGuides, exercises:_snapExercises, focusPrompt:_snapPrompt, title:'' };
+    const _snap = { id:'sess'+Date.now().toString(36)+Math.random().toString(36).slice(2,5), at:new Date().toISOString(), frame:(state.frameIdx||0), words:wrote, html:currentSectionHtml(), review:'', els:_snapEls, guides:_snapGuides, exercises:_snapExercises, focusPrompt:_snapPrompt, title:'', about:(state._writeAboutKey||''), toNotes:false };
     state.session.sessionLog.push(_snap); state._lastSnapId = _snap.id; renderSessionHistory(); scheduleAutosave(800);
   }
   if (wrote){   // R37 — only run the AI reflection when Feedback is on; scanning missed elements is unconditional
@@ -30818,9 +30993,10 @@ function renderNpElements(){
       const chip = document.createElement('span'); chip.className = 'np-chip np-session' + (key === active ? ' on' : '');
       let when = ''; try { when = new Date(s.at).toLocaleDateString(undefined, { month:'short', day:'numeric' }); } catch(_){}
       const lbl = (s.title && s.title.trim()) ? s.title.trim() : ('Session · ' + when);
-      chip.title = lbl + (s.words ? (' · ' + s.words + 'w') : '');
+      chip.title = lbl + (s.words ? (' · ' + s.words + 'w') : '') + (s.toNotes ? ' · sent to Notes' : '');
       const l = document.createElement('span'); l.className = 'np-label'; l.textContent = lbl; chip.appendChild(l);
-      if (s.words){ const wc = document.createElement('span'); wc.className = 'np-cat'; wc.style.color = 'var(--ink-faint)'; wc.textContent = s.words + 'w'; chip.appendChild(wc); }
+      if (s.toNotes){ const nb = document.createElement('span'); nb.className = 'np-cat'; nb.style.color = 'var(--gold,#c49e4a)'; nb.textContent = '→ Notes'; chip.appendChild(nb); }
+      else if (s.words){ const wc = document.createElement('span'); wc.className = 'np-cat'; wc.style.color = 'var(--ink-faint)'; wc.textContent = s.words + 'w'; chip.appendChild(wc); }
       const ar = document.createElement('span'); ar.className = 'np-arrow'; ar.textContent = '▸'; chip.appendChild(ar);
       chip.addEventListener('click', () => npSelect(key));
       host.appendChild(chip);
@@ -31112,7 +31288,7 @@ function renderNotepad(){
       if (!sp){ sp = document.createElement('div'); sp.id = 'npSessionRead'; _host.insertBefore(sp, _n); }
       const _es = v => String(v == null ? '' : v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
       let when = ''; try { when = new Date(s.at).toLocaleString(undefined, { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' }); } catch(_){}
-      const meta = [when, (s.frame != null ? ('Section ' + ((s.frame|0)+1)) : ''), (s.words != null ? (s.words + ' words') : '')].filter(Boolean).join(' · ');
+      const meta = [when, (s.toNotes ? 'Sent to Notes' : (s.frame != null ? ('Section ' + ((s.frame|0)+1)) : '')), (s.words != null ? (s.words + ' words') : '')].filter(Boolean).join(' · ');
       let h = '<input id="npSessTitle" class="npsr-title" placeholder="Name this session…" value="' + _es(s.title || '') + '">';
       h += '<div class="npsr-meta">' + _es(meta) + '</div>';
       if (s.review) h += '<div class="npsr-review"><div class="npsr-lbl">✦ Feedback</div><div class="npsr-rtext">' + _es(s.review).replace(/\n{2,}/g,'<br><br>').replace(/\n/g,'<br>') + '</div></div>';
@@ -40462,8 +40638,11 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.134';
+  var APP_VERSION = '2026.07.20.135';
   var APP_CHANGELOG = [
+    { v:'2026.07.20.135', date:'July 28, 2026', notes:[
+      'The end-of-session card now asks where your writing belongs. By default it stays in the scene you wrote it in, but a quiet “Move…” lets you send it to a new scene, another existing scene, or into your Notes. Sending to Notes lifts the passage out of the manuscript, keeps it in your Sessions, and opens the importer so the elements it mentions can be added in one step.'
+    ]},
     { v:'2026.07.20.134', date:'July 28, 2026', notes:[
       'Your writing sessions now live in the Notepad under a new “Sessions” tab. Open any session to see its name, when you wrote it, the word count, the AI feedback, and the passage itself — and jot your own notes about it. Rename a session right there.'
     ]},
