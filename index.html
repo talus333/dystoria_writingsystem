@@ -1500,6 +1500,7 @@
   #importClose{font-size:19px; color:var(--ink-faint); background:none; padding:0 4px; cursor:pointer}
   #importTitle{width:100%; box-sizing:border-box; font-family:var(--serif); font-size:16px; color:var(--ink); border:none; border-bottom:1px solid var(--line); background:transparent; padding:7px 2px; margin-bottom:10px; outline:none}
   #importText{width:100%; box-sizing:border-box; font-family:var(--serif); font-size:14px; line-height:1.55; color:var(--ink); border:1px solid var(--line); border-radius:8px; background:var(--bg2); padding:10px; outline:none; resize:vertical}
+  #importText.imp-drag{border-color:var(--gold); box-shadow:0 0 0 2px rgba(250,154,49,.2)}   /* R20 — drag-a-file highlight */
   #importProposals{margin-top:14px; border-top:1px solid var(--line); padding-top:12px}
   #importProposals .ipp-head{font-family:var(--sans); font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--gold); margin-bottom:8px}
   #importProposals .ipp-row{display:flex; align-items:center; gap:9px; padding:5px 0}
@@ -4139,7 +4140,7 @@ body.eink #consentBar #cbAccept{background:#000; color:#fff; border-color:#000}
     <div class="ic-kind"><label><input type="radio" name="impkind" value="prose" checked> Story prose</label><label><input type="radio" name="impkind" value="notes"> Notes &amp; worldbuilding</label></div>
     <input id="importTitle" placeholder="Story title (optional)">
     <textarea id="importText" rows="9" placeholder="Paste your story’s prose here…"></textarea>
-    <div class="ic-row"><label class="ic-file" for="importFile">⇪ Load File</label><input type="file" id="importFile" accept=".txt,.md,text/plain,text/markdown" hidden><span id="importStatus"></span></div>
+    <div class="ic-row"><label class="ic-file" for="importFile">⇪ Load file · .txt · .md · .docx</label><input type="file" id="importFile" accept=".txt,.md,.markdown,.docx,text/plain,text/markdown,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden><span id="importStatus"></span></div>
     <div id="importDestRow" style="display:none">
       <label><input type="radio" name="impdest" value="new" checked> Create a new story</label>
       <label><input type="radio" name="impdest" value="section"> Add to <b id="importDestName"></b><span id="importDestSuffix"> as a new section</span></label>
@@ -24188,6 +24189,57 @@ function openSuggestReview(){
   $('importConfirm').disabled = false;
   $('importBackdrop').classList.add('show'); $('importCard').classList.add('show');
 }
+// R20 — read plain text out of a .docx (a ZIP of XML) fully client-side: locate word/document.xml via the ZIP central directory,
+// inflate it (deflate-raw), then turn the WordprocessingML into text (paragraphs → newlines, <w:t> runs kept).
+async function docxExtractText(buf){
+  const dv = new DataView(buf), u8 = new Uint8Array(buf), td = new TextDecoder();
+  let eocd = -1;
+  for (let i = u8.length - 22; i >= 0 && i >= u8.length - 22 - 65536; i--){ if (dv.getUint32(i, true) === 0x06054b50){ eocd = i; break; } }
+  if (eocd < 0) throw new Error('not a .docx');
+  const cdOffset = dv.getUint32(eocd + 16, true), cdCount = dv.getUint16(eocd + 10, true);
+  let p = cdOffset, localOff = -1, method = 8, compSize = 0;
+  for (let n = 0; n < cdCount; n++){
+    if (dv.getUint32(p, true) !== 0x02014b50) break;
+    const m = dv.getUint16(p + 10, true), csize = dv.getUint32(p + 20, true);
+    const fnLen = dv.getUint16(p + 28, true), exLen = dv.getUint16(p + 30, true), cmLen = dv.getUint16(p + 32, true);
+    const lho = dv.getUint32(p + 42, true);
+    const fn = td.decode(u8.subarray(p + 46, p + 46 + fnLen));
+    if (fn === 'word/document.xml'){ localOff = lho; method = m; compSize = csize; break; }
+    p += 46 + fnLen + exLen + cmLen;
+  }
+  if (localOff < 0) throw new Error('no document body found');
+  const lfnLen = dv.getUint16(localOff + 26, true), lexLen = dv.getUint16(localOff + 28, true);
+  const dataStart = localOff + 30 + lfnLen + lexLen;
+  const comp = u8.subarray(dataStart, dataStart + compSize);
+  let xmlBytes;
+  if (method === 0){ xmlBytes = comp; }
+  else if (method === 8){ const ds = new DecompressionStream('deflate-raw'); xmlBytes = new Uint8Array(await new Response(new Response(comp).body.pipeThrough(ds)).arrayBuffer()); }
+  else throw new Error('unsupported .docx compression');
+  const xml = td.decode(xmlBytes);
+  return xml
+    .replace(/<w:tab[^>]*\/?>/g, '\t')
+    .replace(/<w:br[^>]*\/?>/g, '\n')
+    .replace(/<\/w:p>/g, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'")
+    .replace(/\n{3,}/g, '\n\n').trim();
+}
+// R20 — shared file loader for the import box: .docx via docxExtractText, everything else as plain text. Used by the file picker AND drag-and-drop.
+async function importLoadFile(f){
+  if (!f) return;
+  const nm = f.name || 'file', low = nm.toLowerCase();
+  const base = nm.replace(/\.(txt|md|markdown|docx)$/i, '');
+  const setTitle = () => { const t = document.getElementById('importTitle'); if (t && !t.value.trim()) t.value = base; };
+  const status = document.getElementById('importStatus');
+  try {
+    let txt;
+    if (low.endsWith('.docx')){ if (status) status.textContent = 'Reading ' + nm + '…'; txt = await docxExtractText(await f.arrayBuffer()); }
+    else { txt = await f.text(); }
+    if (!txt || !txt.trim()){ if (status) status.textContent = 'Couldn’t read any text from ' + nm + '.'; return; }
+    const box = document.getElementById('importText'); if (box) box.value = txt;
+    setTitle(); if (status) status.textContent = 'Loaded ' + nm;
+  } catch (e){ if (status) status.textContent = 'Couldn’t read ' + nm + ' (' + (e.message || 'error') + ').'; }
+}
 function openImport(){
   closeLibrary();
   IMP.mode = 'new'; IMP.qa = false; IMP.proposals = []; IMP.goals = []; if (typeof renderImportProposals === 'function') renderImportProposals(); importConfigForMode();
@@ -31860,12 +31912,14 @@ function init(){
   $('importBack').addEventListener('click', () => importShow('entry'));
   $('importClose').addEventListener('click', closeImport);
   $('importBackdrop').addEventListener('click', closeImport);
-  $('importFile').addEventListener('change', () => {
-    const f = $('importFile').files[0]; if (!f) return;
-    const r = new FileReader();
-    r.onload = () => { $('importText').value = r.result || ''; if (!$('importTitle').value.trim()) $('importTitle').value = f.name.replace(/\.(txt|md|markdown)$/i, ''); $('importStatus').textContent = 'Loaded ' + f.name; };
-    r.readAsText(f);
-  });
+  $('importFile').addEventListener('change', () => { const inp = $('importFile'); importLoadFile(inp.files[0]); inp.value = ''; });   // reset so re-picking the same file fires again
+  // R20 — drag-and-drop a .txt / .md / .docx onto the import box
+  { const _iz = $('importText'); if (_iz){
+      const _stop = e => { e.preventDefault(); e.stopPropagation(); };
+      ['dragenter','dragover'].forEach(ev => _iz.addEventListener(ev, e => { _stop(e); _iz.classList.add('imp-drag'); }));
+      ['dragleave','dragend'].forEach(ev => _iz.addEventListener(ev, e => { _stop(e); _iz.classList.remove('imp-drag'); }));
+      _iz.addEventListener('drop', e => { _stop(e); _iz.classList.remove('imp-drag'); const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]; if (f) importLoadFile(f); });
+  } }
   { const wc=$('wikiClose'); if(wc) wc.addEventListener('click', closeWiki); }   // legacy close (removed in mode redesign)
   $('wikiExport').addEventListener('click', exportWikiFiles);
   { const rx = $('rdExportBtn'); if (rx) rx.addEventListener('click', e => { e.stopPropagation(); toggleRdExportMenu(); }); }
@@ -40341,8 +40395,12 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.131';
+  var APP_VERSION = '2026.07.20.132';
   var APP_CHANGELOG = [
+    { v:'2026.07.20.132', date:'July 28, 2026', notes:[
+      'The Elements page (Plan → Elements) now has filter tabs — All, Goals, Narrative Layers, and one for each element category (Characters, Settings, Objects, …) — so you can focus on a single category and hide the rest, plus a search box to find an element by name across the page.',
+      'Import now reads Word (.docx) files as well as plain text and Markdown — and you can drag a file straight onto the import box.'
+    ]},
     { v:'2026.07.20.131', date:'July 28, 2026', notes:[
       'Fixed: the minimized Story Legend pill now sits at the top-left of the map, together with the open Legend, instead of overlapping the toolbar.',
       'Moved the map navigation hint (“Scroll to zoom · drag to pan · Shift-drag to select”) to the bottom-right of the map.'
@@ -41015,6 +41073,21 @@ body.plan-view-arcs #mapTools, body.plan-view-arcs #mapLegend, body.plan-view-ar
 body.ember:not(.eink) .plan-panel{ background:#ffffff; }
 body.eink .plan-panel{ background:#fff; }
 body.plan-view-narrative #planNarrative{ display:block; }
+/* R32 — Plan Elements page filter bar (category tabs + name search), sticky at the top of the scroll */
+#planNarrative .pl-nfilter{ position:sticky; top:0; z-index:6; display:flex; flex-wrap:wrap; align-items:center; gap:6px 7px; padding:12px 0; margin-bottom:8px; background:#fff; border-bottom:1px solid var(--line); }
+#planNarrative .pl-nftab{ font-family:var(--sans); font-size:10px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:var(--ink-soft); background:var(--bg2); border:1px solid var(--line); border-radius:12px; padding:4px 11px; cursor:pointer; transition:background .12s,color .12s,border-color .12s; }
+#planNarrative .pl-nftab:hover{ color:var(--ink); border-color:var(--ink-faint); }
+#planNarrative .pl-nftab.on{ color:var(--paper); background:var(--ink); border-color:var(--ink); font-weight:700; }
+#planNarrative .pl-nfsearch{ margin-left:auto; display:flex; align-items:center; gap:5px; background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:3px 10px; min-width:150px; }
+#planNarrative .pl-nfsearch svg{ width:12px; height:12px; color:var(--ink-faint); flex:none; }
+#planNarrative .pl-nfsearch input{ flex:1; min-width:60px; border:none; background:transparent; outline:none; font-family:var(--sans); font-size:11px; color:var(--ink); }
+#planNarrative .pl-nfsearch input::placeholder{ color:var(--ink-faint); }
+#planNarrative .pl-nfsearch.has-q{ border-color:var(--gold); }
+#planNarrative .pl-nfx{ color:var(--ink-faint); cursor:pointer; font-size:14px; line-height:1; display:none; flex:none; }
+#planNarrative .pl-nfsearch.has-q .pl-nfx{ display:inline; }
+#planNarrative .pl-nfx:hover{ color:var(--gold); }
+#planNarrative .pl-nfnores{ font-family:var(--serif); font-style:italic; font-size:13px; color:var(--ink-faint); padding:14px 4px; }
+body.eink #planNarrative .pl-nfilter{ background:#fff; border-bottom-color:#000; }
 body.plan-view-plot #planPlot{ display:block; }
 body.plan-view-arcs #planArcs{ display:block; }
 
@@ -43952,13 +44025,66 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     return elemRow('Plot','plot', pills, add);
   }
 
+  // R32 — Plan Elements page filter: a top bar of tabs (All / Goals / Narrative Layers / one per element category) that shows ONE category at a
+  // time to cut the clutter of a long stacked page, plus a name search over the element pills. State persists across re-renders.
+  var narrTab='all', narrSearch='';
   function renderNarrative(){
     var host=document.getElementById('planNarrative'); if(!host) return;
     host.innerHTML='';
     var g=gatherElements();
-    host.appendChild(goalsSection());
-    host.appendChild(layersSection(g.byCat));
-    host.appendChild(storyElementsSection(g.byCat, g.threads));
+    host.appendChild(narrFilterBar());
+    var s1=goalsSection(); s1.dataset.sect='goals'; host.appendChild(s1);
+    var s2=layersSection(g.byCat); s2.dataset.sect='layers'; host.appendChild(s2);
+    var s3=storyElementsSection(g.byCat, g.threads); s3.dataset.sect='elements'; host.appendChild(s3);
+    applyNarrFilter();
+  }
+  function narrFilterBar(){
+    var bar=document.createElement('div'); bar.className='pl-nfilter';
+    var tabs=[['all','All'],['goals','Goals'],['layers','Narrative Layers']].concat(STORY_ELEMENT_COLS);
+    tabs.forEach(function(t){
+      var b=document.createElement('button'); b.className='pl-nftab'+(narrTab===t[0]?' on':''); b.textContent=t[1];
+      b.addEventListener('click', function(e){ e.stopPropagation(); narrTab=t[0];
+        Array.prototype.forEach.call(bar.querySelectorAll('.pl-nftab'), function(x){ x.classList.remove('on'); }); b.classList.add('on');
+        applyNarrFilter(); });
+      bar.appendChild(b);
+    });
+    var sb=document.createElement('div'); sb.className='pl-nfsearch'+(narrSearch.trim()?' has-q':'');
+    sb.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>';
+    var si=document.createElement('input'); si.type='text'; si.placeholder='Search elements…'; si.value=narrSearch; si.setAttribute('aria-label','Search story elements');
+    si.addEventListener('click', function(e){ e.stopPropagation(); });
+    si.addEventListener('input', function(){ narrSearch=si.value; sb.classList.toggle('has-q', !!si.value.trim()); applyNarrFilter(); });
+    var sx=document.createElement('span'); sx.className='pl-nfx'; sx.textContent='×'; sx.title='Clear search';
+    sx.addEventListener('click', function(e){ e.stopPropagation(); si.value=''; narrSearch=''; sb.classList.remove('has-q'); applyNarrFilter(); try{ si.focus(); }catch(_){} });
+    sb.appendChild(si); sb.appendChild(sx); bar.appendChild(sb);
+    return bar;
+  }
+  function applyNarrFilter(){
+    var host=document.getElementById('planNarrative'); if(!host) return;
+    var tab=narrTab||'all', q=(narrSearch||'').trim().toLowerCase();
+    Array.prototype.forEach.call(host.querySelectorAll('.pl-sect'), function(sec){
+      var kind=sec.dataset.sect, show=true;
+      if(q) show=(kind==='elements');                       // searching → only the Story Elements section (find an element fast)
+      else if(tab==='goals') show=(kind==='goals');
+      else if(tab==='layers') show=(kind==='layers');
+      else if(tab!=='all') show=(kind==='elements');        // a category tab → only the Story Elements section
+      sec.style.display = show ? '' : 'none';
+    });
+    Array.prototype.forEach.call(host.querySelectorAll('.pl-nrow[data-cat]'), function(row){
+      var show=(tab==='all'||tab==='goals'||tab==='layers')?true:(row.dataset.cat===tab);
+      row.style.display = show ? '' : 'none';
+    });
+    Array.prototype.forEach.call(host.querySelectorAll('.narr-elpill'), function(p){ p.style.display = (!q || (p.dataset.elname||'').indexOf(q)>=0) ? '' : 'none'; });
+    var anyVis=!q;
+    if(q){
+      Array.prototype.forEach.call(host.querySelectorAll('.pl-nrow[data-cat]'), function(row){
+        if(row.style.display==='none') return;
+        var pills=row.querySelectorAll('.narr-elpill');
+        if(pills.length){ var vis=Array.prototype.some.call(pills, function(p){ return p.style.display!=='none'; }); if(!vis) row.style.display='none'; else anyVis=true; }
+      });
+    }
+    var nr=host.querySelector('.pl-nfnores');
+    if(q && !anyVis){ if(!nr){ nr=document.createElement('div'); nr.className='pl-nfnores'; host.appendChild(nr); } nr.textContent='No elements match “'+(narrSearch||'').trim()+'”.'; nr.style.display=''; }
+    else if(nr) nr.style.display='none';
   }
 
   /* --- Section 1: Goals — each goal is a row: header (its kind, or a linked element) + a
@@ -44033,7 +44159,7 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
   function storyElementsSection(byCat, threads){
     var sec=document.createElement('div'); sec.className='pl-sect';
     sec.appendChild(sectHead('Story Elements', null, null));
-    STORY_ELEMENT_COLS.forEach(function(c){ if(c[0]==='thread'){ sec.appendChild(elementCatRow(c[0], c[1], threads||[])); return; } sec.appendChild(elementSetRow(c[0], c[1], byCat[c[0]]||[])); });
+    STORY_ELEMENT_COLS.forEach(function(c){ var row = c[0]==='thread' ? elementCatRow(c[0], c[1], threads||[]) : elementSetRow(c[0], c[1], byCat[c[0]]||[]); if(row&&row.dataset) row.dataset.cat=c[0]; sec.appendChild(row); });   // R32 — tag each row with its category so the filter can show one at a time
     return sec;
   }
   // Which axis best groups a story-element set: characters by narrative role (bucket), everything else by its Type (subcategory).
@@ -44141,7 +44267,7 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     opts=opts||{};
     var isThread = it.kind==='thread';
     var bkt = isThread ? '' : elemBucket(it.key);
-    return selPill({
+    var _pill = selPill({
       label: it.name || it.label,
       open: opts.onOpen,
       brand: isThread ? '' : brandFor(bkt),
@@ -44162,6 +44288,8 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
         refreshElementsSoon();
       })(); }
     });
+    try{ _pill.classList.add('narr-elpill'); _pill.dataset.elname=String(it.name||it.label||'').toLowerCase(); }catch(e){}   // R32 — tag element pills for the search
+    return _pill;
   }
   function typeRow(typeId, label){
     var row=document.createElement('div'); row.className='pl-nrow';
