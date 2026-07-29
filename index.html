@@ -19239,10 +19239,9 @@ function renderConstellation(){
       // notes — first / leftmost
       circ.push({ title: 'Open this element in your notes', on: ev => { ev.stopPropagation(); openElementNotes(wordKey(nd)); },
         ic: () => makeLucide('feather', { cls: 'ctl-ic', color: 'currentColor', x: 0, y: 0, scale: 0.5, sw: 2 }) });
-      // focus
-      const inFocus = (state.focusKeys || []).includes(wordKey(nd));
-      circ.push({ title: inFocus ? 'Remove from the Writing Focus' : 'Add to the Writing Focus', on: ev => { ev.stopPropagation(); addFocusIdx(i); },
-        ic: () => { const t = document.createElementNS(NSx, 'text'); t.setAttribute('class', 'ctl-gly' + (inFocus ? ' infocus' : '')); t.setAttribute('text-anchor', 'middle'); t.setAttribute('y', 4); t.textContent = inFocus ? '◉' : '◎'; return t; } });
+      // explore (replaces add-to-focus) — the diamond opens a full-screen Explore Q&A about this element
+      circ.push({ title: 'Explore this element', on: ev => { ev.stopPropagation(); if (typeof window.openExplore === 'function') window.openExplore([wordKey(nd)], (nd.name || nd.word), 'element'); },
+        ic: () => { const t = document.createElementNS(NSx, 'text'); t.setAttribute('class', 'ctl-gly'); t.setAttribute('text-anchor', 'middle'); t.setAttribute('y', 4); t.textContent = '✦'; return t; } });
       // thread tag retired in this experiment — drag the LINK to a thread's border circle instead
       if (false) circ.push({ title: 'Add to a thread\u2026', on: ev => { ev.stopPropagation(); openThreadMenu(i, ev.clientX || 200, ev.clientY || 200); },
         ic: () => { const _w = state.prompt && state.prompt.words[i]; const ids = (typeof wordThreadIds === 'function') ? wordThreadIds(_w) : []; const col = ids.length ? ((((typeof threadById === 'function') && threadById(ids[0])) ? threadById(ids[0]).color : '#888')) : 'currentColor'; const g2 = document.createElementNS(NSx, 'g'); g2.setAttribute('class', 'ctl-ic'); const p = document.createElementNS(NSx, 'path'); p.setAttribute('d', 'M-6.5 0 Q-3.25 -3.4 0 0 T6.5 0'); p.setAttribute('fill', 'none'); p.setAttribute('stroke', col); p.setAttribute('stroke-width', '1'); p.setAttribute('stroke-linecap', 'round'); g2.appendChild(p); [[-6.5,0],[0,0],[6.5,0]].forEach(k => { const c = document.createElementNS(NSx, 'circle'); c.setAttribute('cx', k[0]); c.setAttribute('cy', k[1]); c.setAttribute('r', '1.3'); c.setAttribute('fill', col); g2.appendChild(c); }); return g2; } });
@@ -40200,15 +40199,14 @@ body.eink #expMenu{background:#fff; border-color:#000}
       qaListFocusEls().forEach(function(w){ mk((w.name || w.word), wordKey(w), w.cat); });
       (typeof threadsList === 'function' ? threadsList() : []).forEach(function(t){ mk(t.name || 'Thread', 'thread:' + t.id, 'thread'); });   // storylines are focusable too
     }
-    function qaSetFocusEls(keys, label){   // Explore: point the conversation at a SET of elements (a plot card's linked elements)
+    function qaSetFocusEls(keys, label, lens){   // Explore: point the conversation at a scoped SET of elements (+ an optional lens/angle)
       qaFocus = null; qaSet = null;
       var seen = {}, els = [];
       (keys || []).forEach(function(k){ if (!k || seen[k]) return; seen[k] = 1; var w = (typeof npFindEl === 'function' && npFindEl(k)) || (qaListFocusEls().filter(function(x){ return wordKey(x) === k; })[0]); if (w) els.push(w); });
       var btn = document.getElementById('qaFocusBtn');
-      if (!els.length){ if (btn) btn.innerHTML = '\u25ce Whole story \u25be'; return; }
-      if (els.length === 1){ qaSetFocus(wordKey(els[0]), true); return; }
-      qaSet = { label: label || 'these elements', raw: els, detail: els.map(exploreDetail) };
-      if (btn) btn.innerHTML = '\u25ce ' + qaSet.label + ' \u25be';
+      if (!lens){ if (!els.length){ if (btn) btn.innerHTML = '\u25ce Whole story \u25be'; return; } if (els.length === 1){ qaSetFocus(wordKey(els[0]), true); return; } }
+      qaSet = { label: label || 'these elements', raw: els, detail: els.map(exploreDetail), lens: lens || 'set' };
+      if (btn) btn.innerHTML = '\u25ce ' + (qaSet.label || 'these elements') + ' \u25be';
     }
     function qaGround(els){   // extra grounding for element/set questions: existing prose + wiki questions + story facts
       var out = '';
@@ -40266,13 +40264,20 @@ body.eink #expMenu{background:#fff; border-color:#000}
         '\nCURRENT SECTION: ' + ctx.sec + ' (on its map: ' + (ctx.curEls.join(', ') || 'nothing yet') + ')' +
         '\n\nCONVERSATION SO FAR:\n' + (convo || '(just beginning \u2014 open warmly with the most interesting question)') +
         '\n\nAsk the next question.';
-      if (ctx.set){   // Explore: deepen a plot card's linked elements through questions (Explore's angle taxonomy, as questions)
-        var setNames = ctx.set.detail.map(function(d){ return d.name; }).join(', ');
-        var setLines = ctx.set.detail.map(function(d){ return '\u2022 ' + d.name + ' [' + d.cat + ']' + (d.traits ? (' \u2014 ' + d.traits) : '') + (d.mot ? (' \u2014 ' + d.mot) : '') + (d.rels ? (' \u2014 connections: ' + d.rels) : '') + (d.note ? ('\n   notes: ' + d.note) : ''); }).join('\n');
-        sys = 'You are a story interviewer helping an author DEEPEN a set of connected story elements from one plot card: ' + setNames + '. Ask exactly ONE short, concrete, curious question (under 30 words) about these elements \u2014 draw on a wound, a secret, a contradiction, a hidden want, a private fear, a lie one embodies, a cost one hides, or how they collide. Ground it in the details, the prose, and the conversation. NEVER propose the answer or a solution \u2014 only ask. No preamble \u2014 output only the question.';
-        user = 'ELEMENTS TO EXPLORE:\n' + setLines + qaGround(ctx.set.raw) +
+      if (ctx.set){   // scoped Explore: deepen a set of elements from a chosen angle (lens). Explore's taxonomy folds in as questions.
+        var _S = ctx.set, _lens = _S.lens || 'set';
+        var setNames = _S.detail.map(function(d){ return d.name; }).join(', ');
+        var setLines = _S.detail.map(function(d){ return '\u2022 ' + d.name + ' [' + d.cat + ']' + (d.traits ? (' \u2014 ' + d.traits) : '') + (d.mot ? (' \u2014 ' + d.mot) : '') + (d.rels ? (' \u2014 connections: ' + d.rels) : '') + (d.note ? ('\n   notes: ' + d.note) : ''); }).join('\n');
+        var _focus;
+        if (_lens.indexOf('category:') === 0) _focus = 'the ' + (_S.label || 'elements') + ' of the story' + (setNames ? ' (' + setNames + ')' : '');
+        else _focus = ({ map: 'the world as it stands on the map \u2014 its elements and how they connect' + (setNames ? ' (' + setNames + ')' : ''), thread: 'this storyline and the elements woven into it' + (setNames ? ' (' + setNames + ')' : ''), plot: 'the story\u2019s PLOT and structure \u2014 its beats, turns, tension, pacing, and what pays off', goals: 'the story\u2019s GOALS and intentions \u2014 what it is really trying to do and what is at stake in that aim', layers: 'the NARRATIVE craft \u2014 genre, point of view/narration, theme, tone, and how the telling serves the story', elements: 'the cast and world broadly \u2014 which elements are thin, which bonds are missing, whose motivation is unclear' })[_lens] || ('this set of connected story elements' + (setNames ? ' (' + setNames + ')' : ''));
+        var _tax = (_lens === 'goals' || _lens === 'plot' || _lens === 'layers') ? '' : ' \u2014 draw on a wound, a secret, a contradiction, a hidden want, a private fear, a lie it embodies, a cost it hides, a tension, or what stays unspoken';
+        sys = 'You are a story interviewer helping an author DEEPEN ' + _focus + _tax + '. Ask exactly ONE short, concrete, curious question (under 30 words). Ground it in the details, the prose, and the conversation. NEVER propose the answer or a solution \u2014 only ask. No preamble \u2014 output only the question.';
+        var _extra = '';
+        if (_lens === 'map'){ if (ctx.conns && ctx.conns.length) _extra += '\nCONNECTIONS: ' + ctx.conns.join('; '); if (ctx.orgs && ctx.orgs.length) _extra += '\nGROUPS: ' + ctx.orgs.join('; '); }
+        user = (setLines ? ('ELEMENTS:\n' + setLines) : '') + _extra + qaGround(_S.raw) +
           '\nSTORY GOALS: ' + (ctx.goals || '(none)') +
-          '\n\nCONVERSATION SO FAR:\n' + (convo || '(just beginning \u2014 open with the most interesting question about how these elements connect)') +
+          '\n\nCONVERSATION SO FAR:\n' + (convo || '(just beginning \u2014 open with the most interesting, specific question)') +
           '\n\nAsk the next question.';
       } else if (ctx.focus && ctx.focus.isThread){   // thread-scoped Q&A: interview about a whole storyline and the elements woven into it
         sys = 'You are a story-planning interviewer helping an author develop ONE storyline/thread of their work-in-progress: ' + ctx.focus.name + '. Ask exactly ONE short, concrete, curious question (under 30 words) ABOUT THIS THREAD \u2014 the tension it carries, how its woven elements connect, what it is building toward, or what stays unresolved. Ground it in the woven elements and the conversation. Never answer for them, no preamble \u2014 output only the question.';
@@ -40366,7 +40371,8 @@ body.eink #expMenu{background:#fff; border-color:#000}
         }
       }
       if (!pairs.length){ if (w2) w2.classList.remove('show'); qaLog = []; if (typeof flashStatus === 'function') flashStatus('Nothing to organize \u2014 conversation closed'); return; }
-      var transcript = 'Planning conversation between the author and an interviewer about this story. The AUTHOR\u2019S ANSWERS are the source of truth \u2014 extract elements, traits and notes from them.\n\n' + pairs.join('\n\n');
+      var _scope = ''; try { if (qaSet && qaSet.label) _scope = ' It is specifically exploring: ' + qaSet.label + '.'; else if (qaFocusThreadId()) _scope = ' It is specifically about a storyline/thread.'; else { var _fe = qaFocusEl(); if (_fe) _scope = ' It is specifically about: ' + (_fe.name || _fe.word) + '.'; } } catch(e){}
+      var transcript = 'Planning conversation between the author and an interviewer about this story.' + _scope + ' The AUTHOR\u2019S ANSWERS are the source of truth \u2014 extract elements, traits and notes from them.\n\n' + pairs.join('\n\n');
       // hand the transcript to the notes-import pipeline: extraction → review card → notes/Legend/traits/pools, into the CURRENT story
       var pk = document.querySelector('input[name=impkind][value=notes]'); if (pk){ pk.checked = true; if (typeof importApplyKind === 'function') importApplyKind(); }
       var pd = document.querySelector('input[name=impdest][value=section]'); if (pd) pd.checked = true;
@@ -40388,7 +40394,7 @@ body.eink #expMenu{background:#fff; border-color:#000}
         } else if (typeof flashStatus === 'function') flashStatus('Nothing clear enough to organize came out of the conversation');
       }).catch(function(){ ing.remove(); if (typeof flashStatus === 'function') flashStatus('Couldn\u2019t organize the conversation \u2014 try again'); });
     }
-    window.openExplore = function(keys, label){   // full-screen element/set Explore Q&A, opened from Element + Plot cards
+    window.openExplore = function(keys, label, lens){   // full-screen scoped Explore Q&A (lens: element/set/map/thread/plot/goals/layers/category)
       if (typeof aiAuthed === 'function' && !aiAuthed()){ if (typeof promptAiSignup === 'function') promptAiSignup(); return; }
       var expanded = [];
       (keys || []).forEach(function(k){ if (!k) return; var st = String(k);
@@ -40402,26 +40408,19 @@ body.eink #expMenu{background:#fff; border-color:#000}
       w2.classList.add('show', 'qa-full');
       var tt = w2.querySelector('.qa-t'); if (tt) tt.textContent = 'Explore';
       qaLog = [];
-      if (uniq.length <= 1){ qaSet = null; qaSetFocus(uniq[0] || null, true); } else { qaSetFocusEls(uniq, label); }
+      var _lens = lens || '';
+      if (_lens && _lens !== 'element'){ qaSetFocusEls(uniq, label, _lens); }
+      else if (uniq.length <= 1){ qaSet = null; qaSetFocus(uniq[0] || null, true); }
+      else { qaSetFocusEls(uniq, label, 'set'); }
       qaAsk();
     };
-    var qaBtn = document.createElement('button'); qaBtn.id = 'qaBtn'; qaBtn.type = 'button'; qaBtn.innerHTML = '<span class="ai-star">\u2726</span> q&a';
-    qaBtn.title = 'Talk your story through \u2014 the AI interviews you, then files your answers into notes, elements and traits';
+    var qaBtn = document.createElement('button'); qaBtn.id = 'qaBtn'; qaBtn.type = 'button'; qaBtn.innerHTML = '<span class="ai-star">\u2726</span> explore';
+    qaBtn.title = 'Explore the elements on this map \u2014 a full-screen Q&A that deepens them and their connections, then files into your notes';
     qaBtn.addEventListener('click', function(e2){
       e2.stopPropagation();
-      if (typeof aiAuthed === 'function' && !aiAuthed()){ if (typeof promptAiSignup === 'function') promptAiSignup(); return; }
-      qaBuildWin();
-      var w2 = document.getElementById('qaWin');
-      var open = !w2.classList.contains('show');
-      w2.classList.toggle('show', open);
-      if (open){ w2.classList.remove('qa-full'); if (typeof sky !== 'undefined' && sky && w2.parentNode !== sky) sky.appendChild(w2); var _qt = w2.querySelector('.qa-t'); if (_qt) _qt.textContent = 'Story Q&A'; }
-      if (open && !qaLog.length){
-        var selW = (state.selNode != null && state.prompt && state.prompt.words) ? state.prompt.words[state.selNode] : null;   // if a map element is selected, start the Q&A about it
-        qaSetFocus((selW && (selW.role === 'being' || selW.role === 'word') && ({ being: 1, setting: 1, object: 1, event: 1 })[selW.cat]) ? wordKey(selW) : null, true);
-        qaAsk();
-      } else if (open){
-        var fb2 = document.getElementById('qaFocusBtn'); if (fb2) qaSetFocus(qaFocus, true);   // keep the label in sync when reopening a live conversation
-      }
+      var mk = ((state.prompt && state.prompt.words) || []).filter(function(w){ return (w.role === 'being' || w.role === 'word') && ({ being:1, setting:1, object:1, event:1, concept:1, org:1 })[w.cat]; }).map(wordKey);
+      var fi = (state.frameIdx || 0); var fr = state.frames && state.frames[fi]; var sn = (fr && fr.stageName) ? fr.stageName : '';
+      if (typeof window.openExplore === 'function') window.openExplore(mk, 'The map \u2014 Section ' + (fi + 1) + (sn ? ' \u00b7 ' + sn : ''), 'map');
     });
     rrow.appendChild(qaBtn);   // sits left of the ⋯ (which is order:99)
     // ---- Explore: pointed possibilities for one element (a wound, a secret, a contradiction) ----
@@ -41416,7 +41415,7 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.173';
+  var APP_VERSION = '2026.07.20.174';
   var APP_CHANGELOG = [
     { v:'2026.07.20.162', date:'July 29, 2026', notes:[
       'Removed the explanatory note under the session review card.',
