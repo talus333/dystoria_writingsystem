@@ -22157,7 +22157,7 @@ function applyFsHeader(){
   // The full-screen prompt is ONLY the one the author generated in the prep board \u2014 never auto-generated here.
   const sg = $('sessionGoal');
   if (sg){
-    const prep = (($('prepPromptText') && $('prepPromptText').textContent) || '').trim();
+    let prep = ''; { const ppt = $('prepPromptText'); if (ppt){ const _c = ppt.cloneNode(true); _c.querySelectorAll('.pp-x').forEach(n => n.remove()); prep = (_c.textContent || '').trim(); } }   // exclude the × remove-button text
     if (fsShow.prompt && prep){ sg.textContent = prep; sg.classList.add('show'); }
     else { sg.textContent = ''; sg.classList.remove('show'); }
   }
@@ -32032,7 +32032,10 @@ function init(){
     if (fab && fam){
       const items = [
         ['◎', 'Focus element', a => { if (typeof openFocusElementPicker === 'function') openFocusElementPicker(a); else if (typeof focusAddOpen === 'function') focusAddOpen(a); }],
-        ['✦', 'Prompt', () => { if (typeof generateSessionGoal === 'function') generateSessionGoal('sessionGoal'); }],
+        // Generate into prepPromptText (the single source applyFsHeader mirrors into the full-screen #sessionGoal),
+        // then refresh the header — so the prompt shows AND survives later header repaints (it used to write straight
+        // to #sessionGoal, which any applyFsHeader() call then wiped, and whose result was dropped once out of session).
+        ['✦', 'Prompt', () => { if (typeof generateSessionGoal !== 'function') return; Promise.resolve(generateSessionGoal('prepPromptText')).then(() => { try { if (document.body.classList.contains('insession') && typeof applyFsHeader === 'function') applyFsHeader(); } catch(e){} }); }],
         ['↦', 'Where next', () => { const w = $('whereNextBtn'); if (w) w.click(); }],
         ['sep'],
         ['✎', 'Guide', a => { if (typeof openFocusAddCard === 'function' && typeof FOCUS_BLOCKS !== 'undefined'){ const r = a.getBoundingClientRect(); openFocusAddCard(FOCUS_BLOCKS[0], r.left, r.bottom + 6, true); } }],
@@ -33019,12 +33022,24 @@ function init(){
     localStorage.setItem(LS_PREFS, JSON.stringify(p));
     if (!state.timer.started) setupTimer();
     else if (!(state.timer.len > 0)){
-      // The session is running but UNTIMED (the default clean-slate state) — adding a clock should start
-      // it counting down NOW, not "next session". Rebuild the timer but keep this session's word baseline.
-      const _ss = state.sessionStart;
-      setupTimer();
-      if (typeof startTimerIfArmed === 'function') startTimerIfArmed();
-      if (_ss) state.sessionStart = _ss;
+      // The session is running but UNTIMED (the default clean-slate state) — adding a clock should start it
+      // counting down NOW, in place, without leaving full-screen. We do NOT call setupTimer() here: it sets
+      // running:false and then calls updateEndBtn(), which tears down the in-session view. Instead update the
+      // timer directly, keeping started/running true (and the word baseline untouched).
+      const mins = parseInt(v, 10) || 0;
+      clearInterval(state.timer.handle);
+      state.timer.len = mins;
+      state.timer.remaining = mins * 60;
+      state.timer.running = mins > 0;
+      state.timer.started = true;
+      state.timer.handle = (mins > 0) ? setInterval(tickTimer, 1000) : null;
+      document.body.classList.toggle('untimed', mins === 0);
+      document.body.classList.remove('notimer');
+      $('timerDisplay').classList.remove('done');
+      $('timerBar').style.width = '0%';
+      $('timerDisplay').textContent = mins ? fmtTime(mins * 60) : '';
+      if (typeof updateClockArc === 'function') updateClockArc();   // mirrors into the full-screen #miniClock
+      if (typeof updateEndBtn === 'function') updateEndBtn();        // running is true now, so this keeps full-screen
     }
     else flashStatus('New length applies to the next session');
   }
@@ -41110,8 +41125,12 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.154';
+  var APP_VERSION = '2026.07.20.155';
   var APP_CHANGELOG = [
+    { v:'2026.07.20.155', date:'July 29, 2026', notes:[
+      'Adding a timer mid-session no longer drops you out of full-screen back to the prep board — the clock now appears at the top of the full-screen view and starts counting in place, keeping your word count.',
+      'The session prompt (✦ from the ＋ menu) now reliably appears at the top of the full-screen session and stays put through the session, instead of silently failing to show.'
+    ]},
     { v:'2026.07.20.154', date:'July 29, 2026', notes:[
       'End-of-session sorting: removed the “Import complete” pop-up on the Prose path — the route into Refine (or the Notes session pill) IS the destination, so the extra confirmation is gone.',
       'Fixed the session’s label leaking into the draft — the “Session · date · N words · Locked” gutter tag no longer shows as text inside your prose in Refine.',
