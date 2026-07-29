@@ -20382,6 +20382,9 @@ function openElementDossier(key){
       var wab=document.createElement('button'); wab.className='dossier-writeabout'; wab.textContent='✍ Write about this'; wab.title='Start a focused full-screen writing session about this element (its notes come along as context)';
       wab.addEventListener('click', function(){ if(bd.parentNode) bd.parentNode.removeChild(bd); if(typeof window.writeAboutElement==='function') window.writeAboutElement(key); });
       foot.appendChild(wab);
+      var exb=document.createElement('button'); exb.className='dossier-writeabout'; exb.textContent='\u2726 Explore'; exb.title='Explore this element \u2014 a full-screen Q&A that deepens it, then files into your notes';
+      exb.addEventListener('click', function(){ if(bd.parentNode) bd.parentNode.removeChild(bd); if(typeof window.openExplore==='function') window.openExplore([key], ''); });
+      foot.appendChild(exb);
       var nb=document.createElement('button'); nb.className='dossier-notesbtn'; nb.textContent='Open in notepad';
       nb.addEventListener('click', function(){
         // Hide (don't destroy) the card, open the notepad, and restore the same card — freshly rendered — when the notepad closes.
@@ -39337,6 +39340,12 @@ body.eink #aisPop{border:2px solid #000; background:#fff}
 .qa-ico:hover{color:#fa9a31}
 .qa-ico.on{color:#fa9a31}
 #qaMic.on{color:#e0564a; animation:qaPulse 1.2s ease-in-out infinite}
+#qaWin.qa-full{position:fixed; inset:0; left:0; right:0; top:0; bottom:0; width:auto; max-width:none; border:none; border-radius:0; z-index:130; background:radial-gradient(120% 90% at 50% -10%,#241f16 0%,#17140f 62%)}
+#qaWin.qa-full #qaHead{max-width:720px; margin:0 auto; width:100%; padding-top:20px}
+#qaWin.qa-full #qaLog{max-width:720px; margin:0 auto; width:100%; padding:22px 18px}
+#qaWin.qa-full #qaBar{max-width:720px; margin:0 auto; width:100%; padding-bottom:20px}
+#qaWin.qa-full .qa-q,#qaWin.qa-full .qa-a{font-size:16px; max-width:92%}
+#qaWin.qa-full #qaFocusMenu{left:50%; margin-left:-130px; top:58px}
 /* Dictate + Auto-punctuate: small round flat icon buttons, side by side, above the writing-focus divider */
 #writeMic{display:none; position:fixed; right:22px; bottom:150px; z-index:120; align-items:center; justify-content:center;
   width:36px; height:36px; font-size:16px; line-height:1;
@@ -40113,6 +40122,7 @@ body.eink #expMenu{background:#fff; border-color:#000}
     // ---- Story Q&A: planning as a conversation (button lives left of the ⋯ menu) ----
     var qaLog = [];   // {role:'q'|'a', text}
     var qaFocus = null;   // wordKey of the element the Q&A is currently about (null = whole story) — switchable mid-session
+    var qaSet = null;   // Explore mode: {label, raw:[els], detail:[exploreDetail]} when exploring a plot card's linked elements (overrides qaFocus)
     function qaStrip(html2){ return String(html2 || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim(); }
     function qaFocusThreadId(){ return (qaFocus && qaFocus.indexOf('thread:') === 0) ? qaFocus.slice(7) : null; }
     function qaFocusEl(){
@@ -40162,7 +40172,7 @@ body.eink #expMenu{background:#fff; border-color:#000}
       return out;
     }
     function qaSetFocus(key, silent){   // switch what the Q&A is about — mid-session is fine, the conversation carries on
-      qaFocus = key || null;
+      qaFocus = key || null; qaSet = null;
       var btn = document.getElementById('qaFocusBtn');
       var el = qaFocusEl();
       var thId = qaFocusThreadId();
@@ -40182,6 +40192,23 @@ body.eink #expMenu{background:#fff; border-color:#000}
       mk('Whole story', null, '');
       qaListFocusEls().forEach(function(w){ mk((w.name || w.word), wordKey(w), w.cat); });
       (typeof threadsList === 'function' ? threadsList() : []).forEach(function(t){ mk(t.name || 'Thread', 'thread:' + t.id, 'thread'); });   // storylines are focusable too
+    }
+    function qaSetFocusEls(keys, label){   // Explore: point the conversation at a SET of elements (a plot card's linked elements)
+      qaFocus = null; qaSet = null;
+      var seen = {}, els = [];
+      (keys || []).forEach(function(k){ if (!k || seen[k]) return; seen[k] = 1; var w = (typeof npFindEl === 'function' && npFindEl(k)) || (qaListFocusEls().filter(function(x){ return wordKey(x) === k; })[0]); if (w) els.push(w); });
+      var btn = document.getElementById('qaFocusBtn');
+      if (!els.length){ if (btn) btn.innerHTML = '\u25ce Whole story \u25be'; return; }
+      if (els.length === 1){ qaSetFocus(wordKey(els[0]), true); return; }
+      qaSet = { label: label || 'these elements', raw: els, detail: els.map(exploreDetail) };
+      if (btn) btn.innerHTML = '\u25ce ' + qaSet.label + ' \u25be';
+    }
+    function qaGround(els){   // extra grounding for element/set questions: existing prose + wiki questions + story facts
+      var out = '';
+      try { var keys = (els || []).map(function(w){ return wordKey(w); }); if (typeof window.waProseMentions === 'function'){ var pr = window.waProseMentions(keys); if (pr) out += '\n\nWHERE THEY APPEAR IN THE PROSE (verbatim \u2014 anchor questions here):\n' + pr; } } catch(e){}
+      try { var wq = []; (els || []).forEach(function(w){ if (w && typeof elementQuestionsFor === 'function'){ (elementQuestionsFor(w) || []).forEach(function(q){ if (wq.length < 8 && wq.indexOf(q) < 0) wq.push(q); }); } }); if (wq.length) out += '\n\nOPEN QUESTIONS ABOUT THEM (from the wiki \u2014 prefer these):\n' + wq.join('\n'); } catch(e){}
+      try { if (typeof storyFacts === 'function'){ var sf = storyFacts({ maxChars: 2200 }); if (sf) out += '\n\nSTORY FACTS (ground truth \u2014 never contradict):\n' + sf; } } catch(e){}
+      return out;
     }
     function qaContext(){
       var goals = ((state.session && state.session.goals) || []).map(function(g){ return (g.word || '') + (g.note ? ' — ' + g.note : ''); }).join('; ');
@@ -40205,7 +40232,7 @@ body.eink #expMenu{background:#fff; border-color:#000}
       var curEls = ((state.prompt && state.prompt.words) || []).filter(function(w){ return (w.role === 'being' || w.role === 'word') && { being: 1, setting: 1, object: 1, event: 1 }[w.cat]; }).map(function(w){ return w.name || w.word; });
       var orgs = (typeof orgsContext === 'function') ? orgsContext() : [];
       var conns = (typeof connectionsContext === 'function') ? connectionsContext() : [];
-      return { goals: goals, questions: qs, els: elLines, sec: (fi + 1) + (secName ? ' — ' + secName : ''), curEls: curEls, orgs: orgs, conns: conns, focus: qaFocusDetail() };
+      return { goals: goals, questions: qs, els: elLines, sec: (fi + 1) + (secName ? ' — ' + secName : ''), curEls: curEls, orgs: orgs, conns: conns, focus: qaFocusDetail(), set: qaSet };
     }
     var qaVoice = false; try{ qaVoice = localStorage.getItem('dystoria.qaVoice') === '1'; }catch(e){}
     function qaSpeak(text){
@@ -40232,7 +40259,15 @@ body.eink #expMenu{background:#fff; border-color:#000}
         '\nCURRENT SECTION: ' + ctx.sec + ' (on its map: ' + (ctx.curEls.join(', ') || 'nothing yet') + ')' +
         '\n\nCONVERSATION SO FAR:\n' + (convo || '(just beginning \u2014 open warmly with the most interesting question)') +
         '\n\nAsk the next question.';
-      if (ctx.focus && ctx.focus.isThread){   // thread-scoped Q&A: interview about a whole storyline and the elements woven into it
+      if (ctx.set){   // Explore: deepen a plot card's linked elements through questions (Explore's angle taxonomy, as questions)
+        var setNames = ctx.set.detail.map(function(d){ return d.name; }).join(', ');
+        var setLines = ctx.set.detail.map(function(d){ return '\u2022 ' + d.name + ' [' + d.cat + ']' + (d.traits ? (' \u2014 ' + d.traits) : '') + (d.mot ? (' \u2014 ' + d.mot) : '') + (d.rels ? (' \u2014 connections: ' + d.rels) : '') + (d.note ? ('\n   notes: ' + d.note) : ''); }).join('\n');
+        sys = 'You are a story interviewer helping an author DEEPEN a set of connected story elements from one plot card: ' + setNames + '. Ask exactly ONE short, concrete, curious question (under 30 words) about these elements \u2014 draw on a wound, a secret, a contradiction, a hidden want, a private fear, a lie one embodies, a cost one hides, or how they collide. Ground it in the details, the prose, and the conversation. NEVER propose the answer or a solution \u2014 only ask. No preamble \u2014 output only the question.';
+        user = 'ELEMENTS TO EXPLORE:\n' + setLines + qaGround(ctx.set.raw) +
+          '\nSTORY GOALS: ' + (ctx.goals || '(none)') +
+          '\n\nCONVERSATION SO FAR:\n' + (convo || '(just beginning \u2014 open with the most interesting question about how these elements connect)') +
+          '\n\nAsk the next question.';
+      } else if (ctx.focus && ctx.focus.isThread){   // thread-scoped Q&A: interview about a whole storyline and the elements woven into it
         sys = 'You are a story-planning interviewer helping an author develop ONE storyline/thread of their work-in-progress: ' + ctx.focus.name + '. Ask exactly ONE short, concrete, curious question (under 30 words) ABOUT THIS THREAD \u2014 the tension it carries, how its woven elements connect, what it is building toward, or what stays unresolved. Ground it in the woven elements and the conversation. Never answer for them, no preamble \u2014 output only the question.';
         user = 'FOCUS THREAD (storyline): ' + ctx.focus.name +
           (ctx.focus.members && ctx.focus.members.length ? '\nWOVEN ELEMENTS: ' + ctx.focus.members.join('; ') : '') +
@@ -40240,12 +40275,13 @@ body.eink #expMenu{background:#fff; border-color:#000}
           '\nSTORY GOALS: ' + (ctx.goals || '(none)') +
           '\n\nCONVERSATION SO FAR:\n' + (convo || '(just beginning \u2014 open with the most interesting question about ' + ctx.focus.name + ')') +
           '\n\nAsk the next question about ' + ctx.focus.name + '.';
-      } else if (ctx.focus){   // element-scoped Q&A: override the whole-story prompt to interview about the chosen element
-        sys = 'You are a story-planning interviewer helping an author develop ONE specific element of their work-in-progress: ' + ctx.focus.name + ' (' + ctx.focus.cat + '). Ask exactly ONE short, concrete, curious question (under 30 words) ABOUT THIS ELEMENT \u2014 its motivations, contradictions, relationships, secrets, or role in the story. Ground it in the details and the conversation. Never answer for them, no preamble \u2014 output only the question.';
+      } else if (ctx.focus){   // element-scoped Explore: deepen ONE element (Explore's angle taxonomy, folded in as questions)
+        sys = 'You are a story interviewer helping an author DEEPEN ONE story element: ' + ctx.focus.name + ' (' + ctx.focus.cat + '). Ask exactly ONE short, concrete, curious question (under 30 words) ABOUT THIS ELEMENT \u2014 draw on a wound, a secret, a contradiction, a hidden want, a private fear, the lie it embodies, a cost it hides, its motivations, or its relationships. Ground it in the details, the prose, and the conversation. NEVER propose the answer or a solution \u2014 only ask. No preamble \u2014 output only the question.';
         user = 'FOCUS ELEMENT: ' + ctx.focus.name + ' [' + ctx.focus.cat + ']' +
           (ctx.focus.traits ? '\nTRAITS: ' + ctx.focus.traits : '') +
           (ctx.focus.mot ? '\nMOTIVATION: ' + ctx.focus.mot : '') +
           (ctx.focus.note ? '\nNOTES SO FAR: ' + ctx.focus.note : '') +
+          qaGround([qaFocusEl()].filter(Boolean)) +
           '\nSTORY GOALS: ' + (ctx.goals || '(none)') +
           '\n\nCONVERSATION SO FAR:\n' + (convo || '(just beginning \u2014 open with the most interesting question about ' + ctx.focus.name + ')') +
           '\n\nAsk the next question about ' + ctx.focus.name + '.';
@@ -40345,6 +40381,23 @@ body.eink #expMenu{background:#fff; border-color:#000}
         } else if (typeof flashStatus === 'function') flashStatus('Nothing clear enough to organize came out of the conversation');
       }).catch(function(){ ing.remove(); if (typeof flashStatus === 'function') flashStatus('Couldn\u2019t organize the conversation \u2014 try again'); });
     }
+    window.openExplore = function(keys, label){   // full-screen element/set Explore Q&A, opened from Element + Plot cards
+      if (typeof aiAuthed === 'function' && !aiAuthed()){ if (typeof promptAiSignup === 'function') promptAiSignup(); return; }
+      var expanded = [];
+      (keys || []).forEach(function(k){ if (!k) return; var st = String(k);
+        if (st.indexOf('thread:') === 0){ qaThreadMembers(st.slice(7)).forEach(function(w){ expanded.push(wordKey(w)); }); }
+        else if (st.indexOf('group:') === 0){ try { (typeof groupMembers === 'function' ? (groupMembers(st.slice(6)) || []) : []).forEach(function(w){ if (w) expanded.push(wordKey(w)); }); } catch(e){} }
+        else expanded.push(st); });
+      var seen = {}, uniq = []; expanded.forEach(function(k){ if (k && !seen[k]){ seen[k] = 1; uniq.push(k); } });
+      qaBuildWin();
+      var w2 = document.getElementById('qaWin'); if (!w2) return;
+      if (w2.parentNode !== document.body) document.body.appendChild(w2);   // full-screen must escape the (maybe-hidden) map container
+      w2.classList.add('show', 'qa-full');
+      var tt = w2.querySelector('.qa-t'); if (tt) tt.textContent = 'Explore';
+      qaLog = [];
+      if (uniq.length <= 1){ qaSet = null; qaSetFocus(uniq[0] || null, true); } else { qaSetFocusEls(uniq, label); }
+      qaAsk();
+    };
     var qaBtn = document.createElement('button'); qaBtn.id = 'qaBtn'; qaBtn.type = 'button'; qaBtn.innerHTML = '<span class="ai-star">\u2726</span> q&a';
     qaBtn.title = 'Talk your story through \u2014 the AI interviews you, then files your answers into notes, elements and traits';
     qaBtn.addEventListener('click', function(e2){
@@ -40354,6 +40407,7 @@ body.eink #expMenu{background:#fff; border-color:#000}
       var w2 = document.getElementById('qaWin');
       var open = !w2.classList.contains('show');
       w2.classList.toggle('show', open);
+      if (open){ w2.classList.remove('qa-full'); if (typeof sky !== 'undefined' && sky && w2.parentNode !== sky) sky.appendChild(w2); var _qt = w2.querySelector('.qa-t'); if (_qt) _qt.textContent = 'Story Q&A'; }
       if (open && !qaLog.length){
         var selW = (state.selNode != null && state.prompt && state.prompt.words) ? state.prompt.words[state.selNode] : null;   // if a map element is selected, start the Q&A about it
         qaSetFocus((selW && (selW.role === 'being' || selW.role === 'word') && ({ being: 1, setting: 1, object: 1, event: 1 })[selW.cat]) ? wordKey(selW) : null, true);
@@ -40470,7 +40524,7 @@ body.eink #expMenu{background:#fff; border-color:#000}
       exploreOpen(pre);
       if (typeof xbSel !== 'undefined' && xbSel && xbSel.side === 'R'){ var _t = (typeof threadById === 'function') ? threadById(xbSel.id) : null; if (_t) exploreThread(_t); }
     });
-    rrow.appendChild(exploreBtn);
+    /* Explore dissolved: its direct-solution proposals are gone; its angle taxonomy now lives in the element/plot Explore Q&A (window.openExplore). Button intentionally not appended. */
     // ---- Write-mode dictation: a mic pill that lives through the session ----
     (function(){
       var SRw = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -41355,7 +41409,7 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.171';
+  var APP_VERSION = '2026.07.20.172';
   var APP_CHANGELOG = [
     { v:'2026.07.20.162', date:'July 29, 2026', notes:[
       'Removed the explanatory note under the session review card.',
@@ -46305,6 +46359,19 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     });
     return btn;
   }
+  function cardExplore(i, col){
+    var btn=document.createElement('button'); btn.type='button'; btn.className='pl-cardpop-writeabout'; btn.title='Explore this card\u2019s elements \u2014 a full-screen Q&A that deepens them, then files into your notes';
+    btn.innerHTML='\u2726 <span class="pl-wa-lbl">Explore</span>';
+    btn.addEventListener('click', function(e){ e.stopPropagation();
+      var cels=cardEls(i, col); var keys=cels.map(function(el){ return el.nkey; }).filter(Boolean);
+      var a=api(); var secName=(a&&a.sectionName&&a.sectionName(i))||('Section '+(i+1));
+      var title=(typeof plotCardTitle==='function'?plotCardTitle(i,col):'')||'';
+      var label=title || (col.id==='main' ? secName : (secName+' \u00b7 '+col.name));
+      closeCardPopup();
+      if(typeof window.openExplore==='function') window.openExplore(keys, label);
+    });
+    return btn;
+  }
   // A clickable map-element icon (setting motif / being token / object icon) for the card's "Map elements" bar.
   function cardMapElIcon(i, el){
     var a=api(); if(!a || !a.elementIcon) return null;
@@ -46359,7 +46426,7 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     if(col.id!=='main'){   // thread card: title + element-link pills (General + linked elements) + note
       var tin0=document.createElement('input'); tin0.className='pl-cardpop-titlein'; tin0.value=plotCardTitle(i, col); tin0.placeholder='Card title…';
       tin0.addEventListener('input', function(){ plotCardTitleSet(i, col, tin0.value); });
-      hd.appendChild(tin0); hd.appendChild(cardWriteAbout(i, col)); hd.appendChild(cardKebab(i, col)); panel.appendChild(hd);
+      hd.appendChild(tin0); hd.appendChild(cardWriteAbout(i, col)); hd.appendChild(cardExplore(i, col)); hd.appendChild(cardKebab(i, col)); panel.appendChild(hd);
       var sub0=document.createElement('div'); sub0.className='pl-cardpop-sub'; sub0.textContent=secName+'  ·  '+col.name+' thread';
       var pillsRow0=document.createElement('div'); pillsRow0.className='pl-cardpop-pills';
       var ta0=document.createElement('textarea'); ta0.className='pl-cardpop-ta';
@@ -46416,7 +46483,7 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     // MAIN plot card: card title + element-filter pills + description (per-view note, mirrored to the notepad)
     var titleIn=document.createElement('input'); titleIn.className='pl-cardpop-titlein'; titleIn.value=plotCardTitle(i, col); titleIn.placeholder='Card title…';
     titleIn.addEventListener('input', function(){ plotCardTitleSet(i, col, titleIn.value); });
-    hd.appendChild(titleIn); hd.appendChild(cardWriteAbout(i, col)); hd.appendChild(cardKebab(i, col)); panel.appendChild(hd);
+    hd.appendChild(titleIn); hd.appendChild(cardWriteAbout(i, col)); hd.appendChild(cardExplore(i, col)); hd.appendChild(cardKebab(i, col)); panel.appendChild(hd);
     var sub=document.createElement('div'); sub.className='pl-cardpop-sub'; sub.textContent=secName+'  ·  Main Plot';
 
     var pillsRow=document.createElement('div'); pillsRow.className='pl-cardpop-pills';
