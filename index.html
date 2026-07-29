@@ -26753,15 +26753,24 @@ function overlaySwitch(fn){ suppressOverlayAnim(); fn(); }
 // Unified mode switch from the Notepad/Write/Read/Edit pills (deskbar + Read/Edit headers).
 // R37 — Write is ONLY a full-screen session. EVERY entry into Write (the top mode bar, the mode pills inside
 // Refine/Review/Wiki, boot restore) routes through here so none of them fall back to the old prep view.
-// Smooth entrance into the full-screen write session: snap a charcoal veil (matching the Living Page
-// surface) over the screen the instant we enter — hiding the mode swap AND the native-fullscreen
-// transition flicker — hold it a beat, then fade it out so the write surface emerges from the charcoal.
-// PURELY VISUAL and layered on top: it never reorders or defers the DOM swap / requestFullscreen (doing
-// that is what broke native full-screen before), so it's safe with the native-FS request in the gesture.
-function playWriteEnterVeil(){
+// Smooth entrance into the full-screen write session, in three phases so nothing jarring is ever seen:
+//   PHASE 1 — fade the CURRENT screen to charcoal (the Living Page surface colour). The mode swap and the
+//             native full-screen request have NOT happened yet, so what fades to charcoal is the screen
+//             you're leaving — a calm dim-out, no flash.
+//   PHASE 2 — once the screen is fully charcoal, run the DOM swap into Write and THEN request native
+//             full-screen. The browser's full-screen transition (on macOS, the window sliding to its own
+//             Space) and any repaint flash all happen here, entirely behind the opaque charcoal → invisible.
+//   PHASE 3 — once full-screen has actually engaged (fullscreenchange) and settled a beat, fade the veil
+//             out so the write surface fades in from the charcoal.
+// This DOES defer the swap + requestFullscreen by ~one fade (~340ms), which Chrome permits within its
+// transient-activation window (~5s from the click). If the Living Page is off or reduced-motion is set we
+// skip the veil and run everything synchronously in the gesture (so native FS still works there).
+function playWriteEnterVeil(runUnderCharcoal){
+  var ran = false;
+  var run = function(){ if (ran) return; ran = true; try { if (runUnderCharcoal) runUnderCharcoal(); } catch(e){} };
   try{
-    if (typeof lpEnabled === 'function' && !lpEnabled()) return;   // only when the write surface is the dark Living Page
-    if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;   // respect reduced-motion
+    if (typeof lpEnabled === 'function' && !lpEnabled()){ run(); return; }   // light write surface → no charcoal veil
+    if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches){ run(); return; }
     if (!document.getElementById('writeEnterVeilCSS')){
       var st = document.createElement('style'); st.id = 'writeEnterVeilCSS';
       st.textContent = '#writeEnterVeil{position:fixed;inset:0;z-index:400;pointer-events:none;opacity:0;display:none;'
@@ -26770,54 +26779,67 @@ function playWriteEnterVeil(){
     }
     var v = document.getElementById('writeEnterVeil');
     if (!v){ v = document.createElement('div'); v.id = 'writeEnterVeil'; document.body.appendChild(v); }
-    clearTimeout(v._tHold); clearTimeout(v._tGone); clearTimeout(v._tFallback);
+    clearTimeout(v._tIn); clearTimeout(v._tHold); clearTimeout(v._tGone); clearTimeout(v._tFallback);
+    // ---- PHASE 1: fade the current screen to charcoal ----
     v.style.display = 'block';
     v.style.transition = 'none';
-    v.style.opacity = '1';      // snap to opaque charcoal — covers the screen in the same frame, BEFORE the FS shift
-    void v.offsetWidth;         // force the opaque state to paint before anything else happens
-    // The native full-screen transition happens NEXT (enterNativeFS runs synchronously later this frame) and
-    // animates over the following ~200–400ms — entirely hidden behind the opaque charcoal. Only once full-screen
-    // has actually engaged (and settled a beat) do we fade the veil out, so the write surface fades in AFTER the
-    // FS shift is complete and the shift itself is never seen. A fallback covers FS-already-on / denied / unsupported.
-    var done = false;
-    var reveal = function(){
-      if (done) return; done = true;
-      document.removeEventListener('fullscreenchange', onFS);
-      document.removeEventListener('webkitfullscreenchange', onFS);
-      clearTimeout(v._tFallback);
-      v._tHold = setTimeout(function(){   // brief settle so the FS animation fully finishes before the reveal
-        v.style.transition = 'opacity .6s ease'; v.style.opacity = '0';
-        v._tGone = setTimeout(function(){ v.style.display = 'none'; }, 650);
-      }, 200);
+    v.style.opacity = '0';
+    void v.offsetWidth;
+    v.style.transition = 'opacity .34s ease';
+    requestAnimationFrame(function(){ v.style.opacity = '1'; });
+    // ---- PHASE 2 + 3: once fully charcoal, swap into Write + go native full-screen (hidden), then reveal ----
+    var entered = false;
+    var enterUnderCharcoal = function(){
+      if (entered) return; entered = true;
+      v.removeEventListener('transitionend', onIn); clearTimeout(v._tIn);
+      run();   // DOM swap into Write, then enterNativeFS() — all behind the opaque charcoal
+      var done = false;
+      var reveal = function(){
+        if (done) return; done = true;
+        document.removeEventListener('fullscreenchange', onFS);
+        document.removeEventListener('webkitfullscreenchange', onFS);
+        clearTimeout(v._tFallback);
+        v._tHold = setTimeout(function(){   // brief settle so the FS animation fully finishes before the reveal
+          v.style.transition = 'opacity .6s ease'; v.style.opacity = '0';
+          v._tGone = setTimeout(function(){ v.style.display = 'none'; }, 650);
+        }, 200);
+      };
+      var onFS = function(){ if (document.fullscreenElement || document.webkitFullscreenElement) reveal(); };
+      document.addEventListener('fullscreenchange', onFS);
+      document.addEventListener('webkitfullscreenchange', onFS);
+      v._tFallback = setTimeout(reveal, 900);   // FS already on, denied, or unsupported → reveal anyway (never stick)
     };
-    var onFS = function(){ if (document.fullscreenElement || document.webkitFullscreenElement) reveal(); };
-    document.addEventListener('fullscreenchange', onFS);
-    document.addEventListener('webkitfullscreenchange', onFS);
-    v._tFallback = setTimeout(reveal, 850);   // FS already on, denied, or unsupported → reveal anyway (never stick)
-  }catch(e){}
+    var onIn = function(e){ if (e && e.propertyName && e.propertyName !== 'opacity') return; enterUnderCharcoal(); };
+    v.addEventListener('transitionend', onIn);
+    v._tIn = setTimeout(enterUnderCharcoal, 440);   // fallback if transitionend doesn't fire
+  }catch(e){ run(); }
 }
 function enterWriteFullscreen(){
-  // Play the charcoal fade-in ONLY on a fresh entry (not when resuming a live session already in Write).
-  if (!document.body.classList.contains('writing')){ try { playWriteEnterVeil(); } catch(e){} }
-  // Remember the mode we came from so an EMPTY session (nothing written) returns there on End.
-  if (!document.body.classList.contains('writing')){
-    let pm = 'notepad';
-    try {
-      // Detect the CURRENT mode by which overlay is actually showing — NOT by [data-mode].on (the overlay mode-pills
-      // hardcode .on on their own mode, so those selectors always match even from Plan).
-      if ($('editMode') && $('editMode').classList.contains('show')) pm = 'edit';
-      else if ($('readMode') && $('readMode').classList.contains('show')) pm = 'read';
-      else if ($('wikiPanel') && $('wikiPanel').classList.contains('show')) pm = 'wiki';
-    } catch(e){}
-    state._preWriteMode = pm;
-  }
-  try { if (typeof track === 'function') track('mode_opened', { mode: 'write' }); } catch(e){}
-  try { localStorage.setItem('dystoria.uiMode', 'write'); } catch(e){}   // so a refresh restores into Write (full-screen)
-  try { if (typeof closeWiki === 'function') closeWiki(); } catch(e){}
-  try { if (typeof closeReadMode === 'function') closeReadMode(); } catch(e){}
-  try { if (typeof closeEditMode === 'function') closeEditMode(); } catch(e){}
-  if (!document.body.classList.contains('writing')){ try { setWriting(true); } catch(e){} }   // enter Write (resumes at the last section)
-  if (!document.body.classList.contains('insession')){ try { startWritingSession(true); } catch(e){} }
+  var fresh = !document.body.classList.contains('writing');
+  var doEnter = function(){
+    // Remember the mode we came from so an EMPTY session (nothing written) returns there on End.
+    if (!document.body.classList.contains('writing')){
+      let pm = 'notepad';
+      try {
+        // Detect the CURRENT mode by which overlay is actually showing — NOT by [data-mode].on (the overlay mode-pills
+        // hardcode .on on their own mode, so those selectors always match even from Plan).
+        if ($('editMode') && $('editMode').classList.contains('show')) pm = 'edit';
+        else if ($('readMode') && $('readMode').classList.contains('show')) pm = 'read';
+        else if ($('wikiPanel') && $('wikiPanel').classList.contains('show')) pm = 'wiki';
+      } catch(e){}
+      state._preWriteMode = pm;
+    }
+    try { if (typeof track === 'function') track('mode_opened', { mode: 'write' }); } catch(e){}
+    try { localStorage.setItem('dystoria.uiMode', 'write'); } catch(e){}   // so a refresh restores into Write (full-screen)
+    try { if (typeof closeWiki === 'function') closeWiki(); } catch(e){}
+    try { if (typeof closeReadMode === 'function') closeReadMode(); } catch(e){}
+    try { if (typeof closeEditMode === 'function') closeEditMode(); } catch(e){}
+    if (!document.body.classList.contains('writing')){ try { setWriting(true); } catch(e){} }   // enter Write (resumes at the last section)
+    if (!document.body.classList.contains('insession')){ try { startWritingSession(true); } catch(e){} }
+  };
+  // Fresh entry → play the charcoal fade, running the swap + native-FS under it. Resuming a live session → just enter.
+  if (fresh) playWriteEnterVeil(doEnter);
+  else doEnter();
 }
 window.enterWriteFullscreen = enterWriteFullscreen;
 function goMode(target){
@@ -41278,7 +41300,7 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.164';
+  var APP_VERSION = '2026.07.20.165';
   var APP_CHANGELOG = [
     { v:'2026.07.20.162', date:'July 29, 2026', notes:[
       'Removed the explanatory note under the session review card.',
