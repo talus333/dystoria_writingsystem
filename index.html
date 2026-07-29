@@ -438,6 +438,8 @@
   #recapBody .rc-route-dest.is-new{border-color:rgba(196,158,74,.4); background:rgba(196,158,74,.08)}
   #recapBody .rc-route-dest.is-new b{color:#8a5a12}
   #recapBody .rc-route-hint{margin-top:8px; font-size:10.5px; font-style:italic; line-height:1.5; color:var(--ink-faint); text-align:center}
+  #recapBody .rc-route-discard{display:block; margin:12px auto 0; font-family:var(--sans); font-size:10px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:var(--ink-faint); background:transparent; border:none; cursor:pointer; padding:4px 8px; border-radius:8px; transition:color .12s, background .12s}
+  #recapBody .rc-route-discard:hover{color:#b3402f; background:rgba(179,64,47,.08)}
   #recapBody .rc-route-btn.on{background:var(--ink); color:#fff; border-color:var(--ink)}
   #recapBody .rc-route-picker{display:flex; flex-wrap:wrap; gap:6px; justify-content:center; margin-top:9px}
   #recapBody .rc-route-sec{font-family:var(--serif); font-size:12px; color:var(--ink-soft); background:transparent; border:1px solid var(--line); border-radius:12px; padding:5px 11px; cursor:pointer; max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
@@ -21498,7 +21500,7 @@ function openFocusElementPicker(anchor){
       src.forEach(e=>{ const b=document.createElement('button'); b.type='button'; b.className='fp-row';
         const l=document.createElement('span'); l.className='fp-nm'; l.textContent=e.label; b.appendChild(l);
         const c=document.createElement('span'); c.className='fp-cat'; c.style.color=(typeof catColor==='function')?catColor(e.cat):'#888'; c.textContent=((typeof getCat==='function'&&getCat(e.cat)&&getCat(e.cat).name)||e.cat||''); b.appendChild(c);
-        b.addEventListener('click',ev=>{ ev.stopPropagation(); state.focusKeys=state.focusKeys||[]; if(state.focusKeys.indexOf(e.key)<0) state.focusKeys.push(e.key); if(typeof syncFocusToSession==='function') syncFocusToSession(); if(typeof renderFocus==='function') renderFocus(); if(document.body.classList.contains('insession') && typeof applyFsHeader==='function'){ try{ applyFsHeader(); }catch(_){} } if(typeof renderConstellation==='function'){ try{ renderConstellation(); }catch(_){} } renderList(); });
+        b.addEventListener('click',ev=>{ ev.stopPropagation(); state.focusKeys=state.focusKeys||[]; if(state.focusKeys.indexOf(e.key)<0) state.focusKeys.push(e.key); if(typeof syncFocusToSession==='function') syncFocusToSession(); if(document.body.classList.contains('insession') && typeof applyFsHeader==='function'){ try{ applyFsHeader(); }catch(_){} } else if(typeof renderFocus==='function'){ renderFocus(); } renderList(); });
         list.appendChild(b); });
     }
     renderList(); setTimeout(()=>{ try{ sb.focus(); }catch(e){} },30);
@@ -21708,6 +21710,33 @@ function recapRoute(route){
   const sid = state._lastSnapId;
   if (route === 'prose'){ const newSec = !!($('rcNewSection') && $('rcNewSection').checked); recapRouteProse(sid, newSec); return; }
   if (route === 'notes'){ recapRouteNotesFlow(sid); return; }
+  if (route === 'discard'){ recapRouteDiscard(sid); return; }
+}
+// → Discard: the session was a throwaway — remove its writing entirely (nothing kept), and leave the section
+// as it was before. Confirmed first, since it can't be undone.
+async function recapRouteDiscard(sid){
+  const ok = await siteConfirm('Discard this session? Its writing will be removed and nothing is kept — this can’t be undone.', 'Discard');
+  if (!ok) return;
+  try {
+    const ed = $('editor');
+    const k = state.frameIdx || 0;
+    const blocks = (sid && typeof sessionBlocks === 'function') ? sessionBlocks(sid) : [];
+    blocks.forEach(b => b.remove());
+    if (state.session && Array.isArray(state.session.sessionLog)) state.session.sessionLog = state.session.sessionLog.filter(x => x.id !== sid);
+    if (state._lastSnapId === sid) state._lastSnapId = null;
+    const fm = (typeof nodeFrameMap === 'function') ? nodeFrameMap() : null;
+    const stillHas = ed && Array.from(ed.children).some(c => (fm ? fm.get(c) : 0) === k && (c.textContent || '').trim() && !(c.classList && c.classList.contains('sec-mark')) && c.tagName !== 'H3');
+    if (!stillHas && typeof appendBeginPrompt === 'function') appendBeginPrompt('Begin…');
+    if (typeof renumberSessionLabels === 'function') renumberSessionLabels();
+    if (typeof paintSectionFocus === 'function') paintSectionFocus();
+    if (state.session){ state.session.html = editorHTML(); }
+    if (typeof renderSessionHistory === 'function') renderSessionHistory();
+    if (typeof scheduleAutosave === 'function') scheduleAutosave();
+  } catch(e){}
+  try { if (state._writeAboutKey){ if (Array.isArray(state._writeAboutPrevFocus)) state.focusKeys = state._writeAboutPrevFocus; state._writeAboutPrevFocus = null; state._writeAboutKey = ''; state._writeAboutContext = null; } } catch(e){}
+  _recapExitFullscreen();
+  try { if (typeof setWriting === 'function') setWriting(true); } catch(e){}   // back to the write view; the discarded session is gone
+  if (typeof flashStatus === 'function') flashStatus('Session discarded.');
 }
 function showRecap(){
   const base = state.sessionStart || { words: 0, woven: 0 };
@@ -21749,6 +21778,7 @@ function showRecap(){
     h += '<label class="rc-route-newsec"><input type="checkbox" id="rcNewSection"> Start a new section for it</label>';
     h += '<div class="rc-route-dest" id="rcProseDest"></div>';   // live destination line \u2014 updates with the checkbox (wired below)
     h += '<div class="rc-route-hint">Notes lifts it out of the draft and into your Sessions instead. Either way, its elements are scanned for you to approve.</div>';
+    h += '<button type="button" class="rc-route-discard" data-route="discard">Discard this session</button>';   // throwaway — keep nothing
     h += '</div>';
   }
   b.innerHTML = h;
@@ -21787,7 +21817,7 @@ function showRecap(){
     } }
   // R37 — sort-card wiring: one click routes to Prose or Notes
   { const _rt = $('rcRoute'); if (_rt) _rt.addEventListener('click', ev => {
-      const btn = ev.target.closest('.rc-route-btn'); if (!btn) return;
+      const btn = ev.target.closest('.rc-route-btn, .rc-route-discard'); if (!btn) return;
       recapRoute(btn.dataset.route);
     }); }
   { const _rc = $('recapClose'); if (_rc) _rc.style.display = wrote ? 'none' : ''; }   // the two route buttons are the exit; no separate Continue when there's writing to sort
@@ -21916,7 +21946,7 @@ async function generateSessionGoal(hostId){
   const words = (state.prompt && state.prompt.words) || [];
   const cf = state.frameIdx || 0;
   // the prompt is built ONLY from what's active in the other two columns:
-  const goals = (state.focusKeys || []).map(k => { const w = words.find(x => wordKey(x) === k); return w ? elDisplayName(w) : null; }).filter(Boolean);
+  const goals = (state.focusKeys || []).map(k => { let w = words.find(x => wordKey(x) === k); if (!w && typeof npFindEl === 'function'){ try { w = npFindEl(k); } catch(_){} } return w ? elDisplayName(w) : null; }).filter(Boolean);   // resolve focus elements from ANY section / the roster, not just this section's words — so added focus is actually seen
   words.forEach(w => { if (w.cat === 'event' && w.role === 'word' && (w.frame == null ? cf === 0 : w.frame === cf)) goals.push(w.name || w.word); });
   words.forEach(w => { if (w.cat === 'stakes' && w.scope === 'frame' && (w.frame == null ? cf === 0 : w.frame === cf)) goals.push(w.name || w.word); });
   const guides = words.filter(isGuideWord).map(w => w.word + (w.sub ? ' (' + w.sub + ')' : '') + (descFor(w) ? ': ' + descFor(w) : ''));
@@ -31645,11 +31675,16 @@ function renderNotepad(){
   } catch(e){}
   // R37 (Phase 1b) — a read-only Session record above the pad when a session is selected; the pad below holds your own notes about it.
   try {
-    const _n = $('notepad'); const _host = _n && _n.parentNode; let sp = document.getElementById('npSessionRead');
+    const _n = $('notepad'); const _wrap = _n && _n.parentNode; const _lm = _wrap && _wrap.parentNode;   // #notepad → #npWrap → #lowerMain
+    let sp = document.getElementById('npSessionRead');
     const mS = /^session:(.+)$/.exec(key); const sid = mS ? mS[1] : null;
     const s = sid ? (((state.session && state.session.sessionLog) || []).find(x => x.id === sid)) : null;
-    if (s && _host){
-      if (!sp){ sp = document.createElement('div'); sp.id = 'npSessionRead'; _host.insertBefore(sp, _n); }
+    if (s && _lm){
+      // The session record is its own CARD COLUMN (a sibling of #npWrap in #lowerMain), so the np-session grid
+      // can lay it out like an element card. np-session ↔ np-sheet are mutually exclusive.
+      if (!sp){ sp = document.createElement('div'); sp.id = 'npSessionRead'; }
+      if (sp.parentNode !== _lm) _lm.insertBefore(sp, _wrap);
+      _lm.classList.add('np-session'); _lm.classList.remove('np-sheet');
       const _es = v => String(v == null ? '' : v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
       let when = ''; try { when = new Date(s.at).toLocaleString(undefined, { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' }); } catch(_){}
       const meta = [when, (s.toNotes ? 'Sent to Notes' : (s.frame != null ? ('Section ' + ((s.frame|0)+1)) : '')), (s.words != null ? (s.words + ' words') : '')].filter(Boolean).join(' · ');
@@ -31662,7 +31697,7 @@ function renderNotepad(){
         if (_src){ let _ph = _src; try { const _d = document.createElement('div'); _d.innerHTML = _ph; _d.querySelectorAll('.sec-mark, h3, #firstMark, #sectionTitle').forEach(n => n.remove()); _ph = _d.innerHTML; } catch(e){} if (_ph.replace(/<[^>]*>/g,'').trim()) h += '<div class="npsr-passage npsr-passage-open"><div class="npsr-lbl">What you wrote</div><div class="npsr-prose">' + _ph + '</div></div>'; } }
       sp.innerHTML = h; sp.style.display = '';
       const _ti = document.getElementById('npSessTitle'); if (_ti) _ti.addEventListener('input', () => { s.title = _ti.value; if (typeof renderNpElements === 'function') renderNpElements(); scheduleAutosave(1500); });
-    } else if (sp){ sp.style.display = 'none'; }
+    } else { if (sp) sp.style.display = 'none'; if (_lm) _lm.classList.remove('np-session'); }
   } catch(e){}
 }
 function saveNotepad(){ if (!state.session) ensureSession(); const k = npActiveKey(); npSetNotes(k, $('notepad').innerHTML); if (k.indexOf('goal:') === 0) refreshGoalTokens(); scheduleAutosave(); }
@@ -33194,12 +33229,19 @@ document.addEventListener('DOMContentLoaded', init);
   body:not(.writing) #lowerMain.np-sheet > #npCard{grid-area:card; display:block !important; border-bottom:none; border-right:1px solid var(--line); overflow-y:auto; min-height:0; padding:14px 16px 16px; background:#faf6ec}   /* light-parchment card column (same parchment as the filter bar) — notes stay white beside it */
   body.eink #lowerMain.np-sheet > #npCard{background:#fff}   /* e-ink stays pure white */
   body:not(.writing) #lowerMain.np-sheet > #npWrap{grid-area:pad; min-height:0; min-width:0}
-  /* R37 — the Session record sits beside the notes in the pad column; cap it at half the width so the notes keep room */
-  /* Session record sits beside the pad in a flex row. Session keys are never "cardable", so #lowerMain
-     never carries .np-sheet while a session is open — the cap must NOT be qualified by it, or it never applies. */
-  body:not(.writing) #npWrap > #npSessionRead{flex:0 1 auto; max-width:50%; min-width:0; align-self:flex-start; max-height:100%; overflow-y:auto; margin:0 12px 0 0}
-  body:not(.writing) #npWrap:has(> #npSessionRead) > #notepad{flex:1 1 0; min-width:0}
   body:not(.writing) #lowerMain.np-sheet #npWrap > #notepad{flex:1 1 0; min-width:0}
+  /* R37 — a selected SESSION gets the SAME two-column sheet as an element card: full-width filter on top,
+     the read-only session record as the left card column (full height), the notes pad on the right.
+     #npSessionRead is moved to be a direct child of #lowerMain (see renderNotepad) so the grid can place it. */
+  body:not(.writing) #lowerMain.np-session{display:grid; grid-template-columns:344px minmax(0,1fr); grid-template-rows:auto minmax(0,1fr); grid-auto-rows:0; grid-template-areas:"els els" "card pad"; min-height:0}
+  body.pad-open #planPadBody #lowerMain.np-session{display:grid !important; grid-template-columns:344px minmax(0,1fr); grid-template-rows:auto minmax(0,1fr); grid-auto-rows:0; grid-template-areas:"els els" "card pad"; min-height:0}
+  body:not(.writing) #lowerMain.np-session > #npElements{grid-area:els}
+  body:not(.writing) #lowerMain.np-session > #npCard{display:none !important}
+  body:not(.writing) #lowerMain.np-session > #npSessionRead{grid-area:card; display:block; margin:0; max-width:none; min-width:0; min-height:0; overflow-y:auto; border-right:1px solid var(--line); border-bottom:none; background:#faf6ec; padding:14px 16px 16px}
+  body.eink #lowerMain.np-session > #npSessionRead{background:#fff}
+  body:not(.writing) #lowerMain.np-session > #npWrap{grid-area:pad; min-height:0; min-width:0}
+  body:not(.writing) #lowerMain.np-session > #npWrap > #notepad{flex:1 1 0; min-width:0}
+  body.writing #npSessionRead{display:none !important}   /* the session record must never bleed into full-screen write mode */
   body:not(.writing) #lowerMain.np-sheet #npCard .npc-img{float:left; width:94px; height:92px; min-height:0; max-height:none; margin:1px 14px 6px 0; align-self:auto}
   body:not(.writing) #lowerMain.np-sheet #npCard .npc-img.npc-img-being{width:94px; height:92px}
   body:not(.writing) #lowerMain.np-sheet #npCard .npc-headcol{display:flex; flex-direction:column; gap:6px; overflow:hidden}
@@ -41125,8 +41167,16 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.155';
+  var APP_VERSION = '2026.07.20.156';
   var APP_CHANGELOG = [
+    { v:'2026.07.20.156', date:'July 29, 2026', notes:[
+      'The Sessions record in the notepad now uses the same two-column layout as an element card: a full-width filter bar on top, the read-only session record as a full-height left column, and your notes on the right. Fixes it wrapping / looking broken when opened from Refine, Review or Wiki, and it no longer bleeds into full-screen write mode.',
+      'The session prompt (✦) now recognises the focus elements you’ve added — from any section, and from a “Write about this” card — instead of insisting you add one first.',
+      'Added “Discard this session” to the end-of-session review, for a throwaway you don’t want to keep (removes the writing entirely).',
+      'Fixed the writing cursor sometimes disappearing after adding several focus elements mid-session (removed heavy re-renders from the add).',
+      'Elements page: category pills are now a uniform charcoal, sorting is fixed to “with label”, and the per-category sort dropdown is hidden for now.',
+      'The Elements filter bar in Plan mode now uses the same light-parchment colour as the Notepad’s filter bar.'
+    ]},
     { v:'2026.07.20.155', date:'July 29, 2026', notes:[
       'Adding a timer mid-session no longer drops you out of full-screen back to the prep board — the clock now appears at the top of the full-screen view and starts counting in place, keeping your word count.',
       'The session prompt (✦ from the ＋ menu) now reliably appears at the top of the full-screen session and stays put through the session, instead of silently failing to show.'
@@ -41897,7 +41947,7 @@ body.writing .plan-panel, body.writing #planPlotBar, body.writing #planTabs{ dis
 body.plan-view-narrative #planNarrative{ display:block; }
 /* R32 — Plan Elements page filter bar (category tabs + name search), sticky at the top of the scroll */
 /* Sticky filter bar: full-bleed over the scroll container's 22px/30px padding so nothing shows above or beside it while scrolling. */
-#planNarrative .pl-nfilter{ position:sticky; top:-22px; z-index:20; display:flex; flex-wrap:wrap; align-items:center; gap:6px 7px; margin:-22px -30px 8px -30px; padding:10px 30px 11px 30px; background:#fff; border-bottom:1px solid var(--line); transform:translateZ(0); }
+#planNarrative .pl-nfilter{ position:sticky; top:-22px; z-index:20; display:flex; flex-wrap:wrap; align-items:center; gap:6px 7px; margin:-22px -30px 8px -30px; padding:10px 30px 11px 30px; background:#faf6ec; border-bottom:1px solid rgba(138,99,32,.20); transform:translateZ(0); }   /* same light-parchment filter-bar colour as the Notepad's filter bar */
   /* top:-22px (not 0) cancels the scroll container's 22px padding-top, so the bar sticks FLUSH under the
      parchment tab header instead of 22px below it — otherwise elements scroll through that gap. */
 /* the sticky bar sits on its own compositing layer (translateZ) so scrolling goal-row textareas can't paint through it, and it stays tight under the header */
@@ -42475,8 +42525,10 @@ body.eink .plot-beat{ border-color:#000; color:#000; }
 }
 .pl-brand{ display:inline-flex; align-items:center; justify-content:center; width:13px; height:13px; flex:none; color:var(--gold,#c49e4a); margin-right:3px; }
 .pl-brand svg{ width:12px; height:12px; }
-.pl-sortsel{ display:block; margin-top:5px; font-family:var(--sans); font-size:9px; color:var(--ink-faint); background:transparent; border:1px solid rgba(120,110,90,.28); border-radius:5px; padding:2px 4px; max-width:104px; cursor:pointer; }
+.pl-sortsel{ display:none !important; margin-top:5px; font-family:var(--sans); font-size:9px; color:var(--ink-faint); background:transparent; border:1px solid rgba(120,110,90,.28); border-radius:5px; padding:2px 4px; max-width:104px; cursor:pointer; }   /* hidden for now — sorting is fixed to "with label" */
 .pl-sortsel:hover{ border-color:rgba(196,158,74,.5); }
+/* J — Elements page: all category pills a uniform charcoal (per-category colours paused for now) */
+body.plan-view-narrative #planNarrative .pl-cat{ background:#413c36 !important; }
 
 /* Narrative type rows (one row per kind: Genre / Context / Theme / Plot / POV) */
 .pl-nrow{ display:flex; align-items:flex-start; gap:16px; padding:12px 2px; border-bottom:1px solid rgba(120,110,90,.14); }
@@ -45022,7 +45074,7 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     return order;
   }
   // sort mode per category: 'label' (grouped lines, default), 'nolabel' (one wrapping block in group order, no headers), 'off' (unsorted flat)
-  function elemSortMode(catId){ try{ return (data.elemSort&&data.elemSort[catId])||'label'; }catch(e){ return 'label'; } }
+  function elemSortMode(catId){ return 'label'; }   // sorting is fixed to "with label" for now (the per-category sort dropdown is hidden)
   function setElemSortMode(catId, m){ try{ data.elemSort=data.elemSort||{}; data.elemSort[catId]=m; save(); }catch(e){} }
   // One row for a story-element set: category badge + a small sort control, then the pills grouped/ordered by the chosen mode.
   function elementSetRow(catId, label, items){
