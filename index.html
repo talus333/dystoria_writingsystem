@@ -438,6 +438,11 @@
   #recapBody .rc-route-btn.rc-route-discardpill:hover{color:#b3402f; border-color:rgba(179,64,47,.42); background:rgba(179,64,47,.07)}
   #recapBody .rc-route-newsec{display:flex; align-items:center; justify-content:center; gap:6px; margin-top:9px; font-family:var(--sans); font-size:10.5px; letter-spacing:.03em; color:var(--ink-soft); cursor:pointer}
   #recapBody .rc-route-newsec input{accent-color:var(--gold,#c49e4a); cursor:pointer}
+  #recapBody .rc-secpick{display:flex; align-items:center; justify-content:center; gap:9px; margin-top:11px}
+  #recapBody .rc-secpick-lbl{font-family:var(--sans); font-size:9px; font-weight:700; letter-spacing:.12em; text-transform:uppercase; color:var(--ink-faint)}
+  #recapBody .rc-secsel{font-family:var(--sans); font-size:12px; color:var(--ink); background:var(--paper); border:1px solid var(--line); border-radius:10px; padding:5px 11px; cursor:pointer; max-width:280px}
+  #recapBody .rc-secsel:hover{border-color:var(--ink-faint)}
+  #recapBody .rc-secsel:focus{outline:none; border-color:var(--gold)}
   #recapBody .rc-route-dest{margin-top:9px; font-size:11.5px; line-height:1.5; color:var(--ink-soft); text-align:center; padding:7px 12px; border:1px solid rgba(74,106,138,.28); border-radius:9px; background:rgba(74,106,138,.06)}
   #recapBody .rc-route-dest b{color:#2b3f54; font-weight:800}
   #recapBody .rc-route-dest.is-new{border-color:rgba(196,158,74,.4); background:rgba(196,158,74,.08)}
@@ -21613,19 +21618,30 @@ function _recapExitFullscreen(){
 // → Prose: the writing stays as prose. Default = at the end of this scene; optionally a NEW section named
 // after the session. Then the importer scans it (in the background, results shown to approve) for any new
 // elements/traits, and the writer lands in Refine on that section.
-function recapRouteProse(sid, newSec){
+// Add-to-section: the session's writing joins the draft. `target` is a section index, or 'new' for a fresh
+// trailing section, or the current section (default). The passage is then scanned (prose path) and the writer
+// lands in Refine on that section. The session also stays as a pill in the Notepad Sessions surface.
+function recapRouteProse(sid, target){
   const passage = _recapSessionPassage(sid);
   const title = _recapSessionTitle(sid);
   document.body.classList.remove('recap');
-  if (newSec){
+  const cur = state.frameIdx || 0;
+  if (target === 'new'){
     const ok = recapRouteNewScene(sid);   // moves this session's prose into a fresh trailing section, switches to it
     if (ok){ try { const k = state.frameIdx || 0; if (state.frames && state.frames[k]){ state.frames[k].stageName = title || state.frames[k].stageName || ''; } if (typeof renumberSections === 'function') renumberSections(); if (typeof renderTimeline === 'function') renderTimeline(); } catch(e){} }
+  } else {
+    const tf = parseInt(target, 10);
+    if (isFinite(tf) && tf !== cur && state.frames && state.frames[tf]){
+      recapMoveSessionToFrame(sid, tf);   // move the session's blocks into the chosen existing section
+      try { state.frameIdx = tf; state.prompt = state.frames[tf].prompt; state.activeSet = 0; } catch(e){}
+    }
+    // else: leave it in the current section
   }
   runSessionImport(passage, title, function(){
     _recapExitFullscreen();
     try { if (typeof setWriting === 'function') setWriting(false); } catch(e){}   // leave Write mode so its pill de-selects (Refine is the active mode now)
     try { if (typeof goMode === 'function') goMode('edit'); } catch(e){}   // Refine mode on the section (persists uiMode='refine')
-  }, 'prose');   // → Prose: scan the writing through the PROSE import path
+  }, 'prose');   // scan the writing through the PROSE import path
 }
 // → Notes: the writing leaves the scene and lives in the Sessions surface; the importer scans it (background,
 // results shown to approve) for elements/traits, then the writer lands on this session's Notepad pill.
@@ -21710,25 +21726,25 @@ async function runSessionImport(passage, title, onDone, kind){
     }
   } catch(e){ IMP._bg = false; IMP._sessionImport = false; bgNotesToast('Couldn’t finish the scan (' + ((e && e.message) || 'error') + ').', { err: true }); onDone(); }
 }
-// The end-session sort card routes to Prose (Refine) or Notes. New-section toggle rides on #rcNewSection.
+// The end-session sort card: Add-to-section (the chosen section, via #rcSecSelect) or Discard.
 function recapRoute(route){
   const sid = state._lastSnapId;
-  if (route === 'prose'){ const newSec = !!($('rcNewSection') && $('rcNewSection').checked); recapRouteProse(sid, newSec); return; }
-  if (route === 'notes'){ recapRouteNotesFlow(sid); return; }
+  if (route === 'prose'){ const sel = $('rcSecSelect'); recapRouteProse(sid, sel ? sel.value : String(state.frameIdx || 0)); return; }
   if (route === 'discard'){ recapRouteDiscard(sid); return; }
 }
-// → Discard: the session was a throwaway — remove its writing entirely (nothing kept), and leave the section
-// as it was before. Confirmed first, since it can't be undone.
+// Discard: the writing does NOT join the draft — but the session is KEPT in the Notepad, marked "discarded",
+// and its elements are NOT scanned into the story facts. Nothing is permanently deleted.
 async function recapRouteDiscard(sid){
-  const ok = await siteConfirm('Discard this session? Its writing will be removed and nothing is kept — this can’t be undone.', 'Discard');
-  if (!ok) return;
   try {
     const ed = $('editor');
     const k = state.frameIdx || 0;
     const blocks = (sid && typeof sessionBlocks === 'function') ? sessionBlocks(sid) : [];
-    blocks.forEach(b => b.remove());
-    if (state.session && Array.isArray(state.session.sessionLog)) state.session.sessionLog = state.session.sessionLog.filter(x => x.id !== sid);
-    if (state._lastSnapId === sid) state._lastSnapId = null;
+    blocks.forEach(b => b.remove());   // lift it out of the draft…
+    // …but keep the record: mark it lifted-to-notes AND discarded (so it shows as a discarded Notepad session).
+    if (state.session && Array.isArray(state.session.sessionLog)){
+      const e = state.session.sessionLog.find(x => x.id === sid);
+      if (e){ e.toNotes = true; e.discarded = true; }
+    }
     const fm = (typeof nodeFrameMap === 'function') ? nodeFrameMap() : null;
     const stillHas = ed && Array.from(ed.children).some(c => (fm ? fm.get(c) : 0) === k && (c.textContent || '').trim() && !(c.classList && c.classList.contains('sec-mark')) && c.tagName !== 'H3');
     if (!stillHas && typeof appendBeginPrompt === 'function') appendBeginPrompt('Begin…');
@@ -21746,7 +21762,7 @@ async function recapRouteDiscard(sid){
     if (_pm && _pm !== 'write' && typeof goMode === 'function') goMode(_pm);   // back to Plan / Refine / Review / Wiki you came from
     else if (typeof setWriting === 'function') setWriting(true);               // came from Write → the write view
   } catch(e){}
-  if (typeof flashStatus === 'function') flashStatus('Session discarded.');
+  if (typeof flashStatus === 'function') flashStatus('Session discarded — kept in your Notepad, out of the story.');
 }
 function showRecap(){
   const base = state.sessionStart || { words: 0, woven: 0 };
@@ -21774,17 +21790,20 @@ function showRecap(){
     h += '<div id="rcSuggest"></div>';
     h += '</div>';
   }
-  if (wrote){
+  let _secOpts = '';
+  { const _cf = state.frameIdx || 0;
+    (state.frames || []).forEach((fr, ii) => { const nm = (fr && fr.stageName ? String(fr.stageName).trim() : ''); const lbl = 'Section ' + (ii + 1) + (nm ? ' · ' + nm : ''); _secOpts += '<option value="' + ii + '"' + (ii === _cf ? ' selected' : '') + '>' + esc(lbl) + '</option>'; });
+    _secOpts += '<option value="new">＋ New section</option>'; }
+  if (wrote){   // Add-to-section (chosen via #rcSecSelect) or Discard. The session becomes a Notepad pill either way.
     h += '<div class="rc-route" id="rcRoute">';
     h += '<div class="rc-route-q">Where does this go?</div>';
+    h += '<div class="rc-secpick"><span class="rc-secpick-lbl">Section</span><select id="rcSecSelect" class="rc-secsel">' + _secOpts + '</select></div>';
     h += '<div class="rc-route-btns">'
-       + '<button type="button" class="rc-route-btn rc-route-prose" data-route="prose">→ Prose</button>'
-       + '<button type="button" class="rc-route-btn rc-route-notes" data-route="notes">→ Notes</button>'
-       + '<button type="button" class="rc-route-btn rc-route-discardpill" data-route="discard" title="Discard this session">✕ Discard</button>'
+       + '<button type="button" class="rc-route-btn rc-route-prose" data-route="prose">→ Add to section</button>'
+       + '<button type="button" class="rc-route-btn rc-route-discardpill" data-route="discard" title="Discard — kept in your Notepad, out of the story">✕ Discard</button>'
        + '</div>';
-    h += '<label class="rc-route-newsec"><input type="checkbox" id="rcNewSection"> Start a new section for it</label>';
     h += '<div class="rc-route-dest" id="rcProseDest"></div>';
-    h += '<div class="rc-route-hint">Notes lifts it out of the draft and into your Sessions instead. Either way, its elements are scanned for you to approve.</div>';
+    h += '<div class="rc-route-hint">Discard keeps this as a discarded session in your Notepad — out of the draft and out of the story facts.</div>';
     h += '</div>';
   }
   b.innerHTML = h;
@@ -21797,21 +21816,17 @@ function showRecap(){
       _ft.innerHTML = 'Feedback ✦ <b>' + (turningOn ? 'on' : 'off') + '</b>';
       if (turningOn){ const ai = $('rcAi'); if (ai && !ai.dataset.ran){ ai.dataset.ran = '1'; state._reviewPromise = runSessionSummary(state._reviewWoven || []); } }
     }); }
-  // #5 — spell out exactly WHERE the prose will land, and keep it in sync with the "new section" checkbox.
-  { const _ns = $('rcNewSection'); const _dest = $('rcProseDest');
+  // Spell out exactly WHERE the writing will land, kept in sync with the section picker.
+  { const _sel = $('rcSecSelect'); const _dest = $('rcProseDest');
     if (_dest){
-      const _cur = state.frameIdx || 0;
-      const _curName = (state.frames && state.frames[_cur] && (state.frames[_cur].stageName || '').trim()) || '';
-      const _curLbl = 'Section ' + (_cur + 1) + (_curName ? ' · “' + esc(_curName) + '”' : '');
-      const _newLbl = 'Section ' + (_cur + 2);
       const upd = () => {
-        const on = !!(_ns && _ns.checked);
-        _dest.classList.toggle('is-new', on);
-        _dest.innerHTML = on
-          ? ('→ Adds a <b>new ' + _newLbl + '</b>, right after ' + _curLbl + ', and opens it in Refine.')
-          : ('→ Adds to the end of <b>' + _curLbl + '</b> — the section you were just writing in — and opens it in Refine.');
+        const v = _sel ? _sel.value : String(state.frameIdx || 0);
+        const isNew = (v === 'new');
+        _dest.classList.toggle('is-new', isNew);
+        if (isNew){ const _cf = state.frameIdx || 0; _dest.innerHTML = '→ Creates a <b>new Section ' + (_cf + 2) + '</b> right after Section ' + (_cf + 1) + ', and opens it in Refine.'; }
+        else { const _i = parseInt(v, 10) || 0; const _nm = (state.frames && state.frames[_i] && (state.frames[_i].stageName || '').trim()) || ''; const _lbl = 'Section ' + (_i + 1) + (_nm ? ' · “' + esc(_nm) + '”' : ''); _dest.innerHTML = '→ Adds to the end of <b>' + _lbl + '</b>, and opens it in Refine.'; }
       };
-      if (_ns) _ns.addEventListener('change', upd);
+      if (_sel) _sel.addEventListener('change', upd);
       upd();
     } }
   // R37 — sort-card wiring: one click routes to Prose or Notes
@@ -31704,7 +31719,7 @@ function renderNotepad(){
       _lm.classList.add('np-session'); _lm.classList.remove('np-sheet');
       const _es = v => String(v == null ? '' : v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
       let when = ''; try { when = new Date(s.at).toLocaleString(undefined, { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' }); } catch(_){}
-      const meta = [when, (s.toNotes ? 'Sent to Notes' : (s.frame != null ? ('Section ' + ((s.frame|0)+1)) : '')), (s.words != null ? (s.words + ' words') : '')].filter(Boolean).join(' · ');
+      const meta = [when, (s.discarded ? 'Discarded' : (s.toNotes ? 'Sent to Notes' : (s.frame != null ? ('Section ' + ((s.frame|0)+1)) : ''))), (s.words != null ? (s.words + ' words') : '')].filter(Boolean).join(' · ');
       let h = '<input id="npSessTitle" class="npsr-title" placeholder="Name this session…" value="' + _es(s.title || '') + '">';
       h += '<div class="npsr-meta">' + _es(meta) + '</div>';
       // Feedback: only when feedback is on (off → the section is hidden entirely).
@@ -41202,8 +41217,14 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.160';
+  var APP_VERSION = '2026.07.20.161';
   var APP_CHANGELOG = [
+    { v:'2026.07.20.161', date:'July 29, 2026', notes:[
+      'Reworked where a finished session goes. “→ Prose” is now “→ Add to section”, with a section picker — the section you were writing in is selected by default, and you can switch to any other section or “＋ New section”.',
+      'Removed the separate “Notes” path (writing mode is for writing, not note-taking).',
+      'Discard no longer deletes the session — it keeps it in your Notepad marked “Discarded”, out of the draft and out of the story facts (its elements aren’t scanned in).',
+      'Every session — added to a section or discarded — now appears as a pill in the Notepad Sessions surface.'
+    ]},
     { v:'2026.07.20.160', date:'July 29, 2026', notes:[
       'FIXED: writing sessions disappearing from the notepad. The local save was stripping the session records as if they were a throwaway AI cache — they’re your data (and for Notes-routed sessions, the only copy of the writing), so they’re now kept. New sessions persist across reloads; any still in the cloud will come back on next sync.',
       'Adding a timer mid-session now pushes the writing down so “Continue…” stays visible — the header grows when the clock appears, and the editor now follows it.',
