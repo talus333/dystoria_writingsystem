@@ -21739,11 +21739,28 @@ async function recapRouteDiscard(sid){
     const ed = $('editor');
     const k = state.frameIdx || 0;
     const blocks = (sid && typeof sessionBlocks === 'function') ? sessionBlocks(sid) : [];
+    // Capture exactly the prose we're about to remove, so the Notepad card's "What you wrote" is guaranteed
+    // to show it — even if the session-delta snapshot came up empty for any reason.
+    let _discardedHtml = '';
+    try {
+      const _tmp = document.createElement('div');
+      blocks.forEach(b => { if (b && (b.textContent || '').trim()) _tmp.appendChild(b.cloneNode(true)); });
+      _tmp.querySelectorAll('.sess-foot, .sess-focus, .sec-mark, h3, #firstMark, #sectionTitle').forEach(n => n.remove());
+      // strip the in-editor session-lock markers so the record reads like a clean session-delta snapshot
+      _tmp.querySelectorAll('[data-sess], [data-sess-label]').forEach(n => { n.removeAttribute('data-sess'); n.removeAttribute('data-sess-label'); n.classList.remove('lk', 'session-start'); n.removeAttribute('contenteditable'); });
+      _discardedHtml = _tmp.innerHTML;
+    } catch(e){}
     blocks.forEach(b => b.remove());   // lift it out of the draft…
     // …but keep the record: mark it lifted-to-notes AND discarded (so it shows as a discarded Notepad session).
     if (state.session && Array.isArray(state.session.sessionLog)){
       const e = state.session.sessionLog.find(x => x.id === sid);
-      if (e){ e.toNotes = true; e.discarded = true; }
+      if (e){
+        e.toNotes = true; e.discarded = true;
+        // Preserve the written prose on the record. Prefer an existing non-empty session-delta snapshot;
+        // otherwise fall back to the exact blocks we just discarded, so the words are never lost.
+        const _hasSess = e.sessHtml && e.sessHtml.replace(/<[^>]*>/g, '').trim();
+        if (!_hasSess && _discardedHtml.replace(/<[^>]*>/g, '').trim()) e.sessHtml = _discardedHtml;
+      }
     }
     const fm = (typeof nodeFrameMap === 'function') ? nodeFrameMap() : null;
     const stillHas = ed && Array.from(ed.children).some(c => (fm ? fm.get(c) : 0) === k && (c.textContent || '').trim() && !(c.classList && c.classList.contains('sec-mark')) && c.tagName !== 'H3');
@@ -21797,7 +21814,7 @@ function showRecap(){
   if (wrote){   // Add-to-section (chosen via #rcSecSelect) or Discard. The session becomes a Notepad pill either way.
     h += '<div class="rc-route" id="rcRoute">';
     h += '<div class="rc-route-q">Where does this go?</div>';
-    h += '<div class="rc-secpick"><span class="rc-secpick-lbl">Section</span><select id="rcSecSelect" class="rc-secsel">' + _secOpts + '</select></div>';
+    h += '<div class="rc-secpick"><select id="rcSecSelect" class="rc-secsel">' + _secOpts + '</select></div>';
     h += '<div class="rc-route-btns">'
        + '<button type="button" class="rc-route-btn rc-route-prose" data-route="prose">→ Add to section</button>'
        + '<button type="button" class="rc-route-btn rc-route-discardpill" data-route="discard" title="Discard — kept in your Notepad, out of the story">✕ Discard</button>'
@@ -41216,7 +41233,7 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.162';
+  var APP_VERSION = '2026.07.20.163';
   var APP_CHANGELOG = [
     { v:'2026.07.20.162', date:'July 29, 2026', notes:[
       'Removed the explanatory note under the session review card.',
