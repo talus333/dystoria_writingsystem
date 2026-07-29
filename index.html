@@ -1125,7 +1125,7 @@
   /* session info now lives UNDER each session: label + Focus bottom-left, locked note bottom-right */
   body.writing #editor .session-start::before{display:none}
   body.writing #editor .session-start[data-refined]::after{display:none}
-  #editor .sess-foot{display:none}
+  .sess-foot{display:none}   /* the session gutter footer (label + Locked) is write-mode-editor ONLY — never in Refine/Read (#editBody/#readBody), where it would show as inline text */
   body.writing #editor .sess-foot{display:flex; align-items:baseline; justify-content:space-between; gap:14px; margin:9px 0 3px; padding-top:5px; border-top:1px solid var(--line-soft);
     font-family:var(--sans); font-size:8px; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-faint); user-select:none; text-indent:0}
   body.writing #editor .sess-foot .sf-left{display:flex; align-items:baseline; gap:13px; min-width:0}
@@ -21498,7 +21498,7 @@ function openFocusElementPicker(anchor){
       src.forEach(e=>{ const b=document.createElement('button'); b.type='button'; b.className='fp-row';
         const l=document.createElement('span'); l.className='fp-nm'; l.textContent=e.label; b.appendChild(l);
         const c=document.createElement('span'); c.className='fp-cat'; c.style.color=(typeof catColor==='function')?catColor(e.cat):'#888'; c.textContent=((typeof getCat==='function'&&getCat(e.cat)&&getCat(e.cat).name)||e.cat||''); b.appendChild(c);
-        b.addEventListener('click',ev=>{ ev.stopPropagation(); state.focusKeys=state.focusKeys||[]; if(state.focusKeys.indexOf(e.key)<0) state.focusKeys.push(e.key); if(typeof syncFocusToSession==='function') syncFocusToSession(); if(typeof renderFocus==='function') renderFocus(); renderList(); });
+        b.addEventListener('click',ev=>{ ev.stopPropagation(); state.focusKeys=state.focusKeys||[]; if(state.focusKeys.indexOf(e.key)<0) state.focusKeys.push(e.key); if(typeof syncFocusToSession==='function') syncFocusToSession(); if(typeof renderFocus==='function') renderFocus(); if(document.body.classList.contains('insession') && typeof applyFsHeader==='function'){ try{ applyFsHeader(); }catch(_){} } if(typeof renderConstellation==='function'){ try{ renderConstellation(); }catch(_){} } renderList(); });
         list.appendChild(b); });
     }
     renderList(); setTimeout(()=>{ try{ sb.focus(); }catch(e){} },30);
@@ -21529,6 +21529,7 @@ function recapMoveSessionToFrame(sid, k){
   if (!blocks.length) return false;
   const srcK = (state.frameIdx || 0);
   const tmp = document.createElement('div'); blocks.forEach(b => tmp.appendChild(b.cloneNode(true)));
+  tmp.querySelectorAll('.sess-foot, .sess-focus').forEach(n => n.remove());   // the gutter footer (Session label + Locked) is injected into the last block; never carry it into the moved prose
   const html = tmp.innerHTML;
   blocks.forEach(b => b.remove());
   const fm = (typeof nodeFrameMap === 'function') ? nodeFrameMap() : null;
@@ -21586,7 +21587,7 @@ function recapRouteNewScene(sid){
 function _recapSessionPassage(sid){
   const blocks = (sid && typeof sessionBlocks === 'function') ? sessionBlocks(sid) : [];
   let passage = '';
-  if (blocks.length){ const tmp = document.createElement('div'); blocks.forEach(b => tmp.appendChild(b.cloneNode(true))); passage = (tmp.textContent || '').replace(/\n{3,}/g, '\n\n').trim(); }
+  if (blocks.length){ const tmp = document.createElement('div'); blocks.forEach(b => tmp.appendChild(b.cloneNode(true))); tmp.querySelectorAll('.sess-foot, .sess-focus').forEach(n => n.remove()); passage = (tmp.textContent || '').replace(/\n{3,}/g, '\n\n').trim(); }
   if (!passage && typeof editorText === 'function') passage = editorText().trim();
   return passage;
 }
@@ -22125,7 +22126,7 @@ function applyFsHeader(){
       // Only the elements the writer actually added (focusKeys) — events/stakes added via "+ focus element" already
       // live in focusKeys, so we do NOT auto-add section events/stakes here (that left removed items lingering in the
       // session and out of sync with the prep board's focus list).
-      (state.focusKeys || []).forEach(k => { const w = words.find(x => wordKey(x) === k); if (w) pills.push({ text: elDisplayName(w) }); });
+      (state.focusKeys || []).forEach(k => { let w = words.find(x => wordKey(x) === k); if (!w && typeof npFindEl === 'function'){ try { w = npFindEl(k); } catch(_){} } if (w) pills.push({ text: elDisplayName(w) }); });   // find the element anywhere in the story (a "Write about this" card or a story-wide element may not live in THIS section's words)
     }
     if (fsShow.guides || _phone500()){ words.filter(isGuideWord).forEach(w => pills.push({ text: w.word, guide: true, sub: w.sub || '' })); }   // guide/exercise pills in full-screen too (subcategory rides on hover)
     pills.forEach(p => { const s = document.createElement('span'); s.className = 'fs-pill' + (p.guide ? ' guide' : ''); s.textContent = p.text; if (p.guide && p.sub) s.title = p.sub; fsW.appendChild(s); });
@@ -22465,6 +22466,17 @@ function startWritingSession(fullscreen){
       state.focusKeys = [];
       try { if (typeof syncFocusToSession === 'function') syncFocusToSession(); } catch(e){}
     }
+    // Guides & exercises are per-session sparks too — clear them so they don't linger into the next session.
+    try {
+      if (state.prompt && Array.isArray(state.prompt.words) && typeof isGuideWord === 'function'){
+        const _before = state.prompt.words.length;
+        state.prompt.words = state.prompt.words.filter(w => !isGuideWord(w));
+        if (state.prompt.words.length !== _before){
+          if (typeof renderConstellation === 'function') renderConstellation();
+          if (typeof syncFramesToSession === 'function') syncFramesToSession();
+        }
+      }
+    } catch(e){}
     try {
       const _p = getPrefs(); let _ch = false;
       if (_p.timerAdded){ _p.timerAdded = false; _ch = true; }        // no clock until the writer adds one this session
@@ -25175,6 +25187,10 @@ function npAppendSectionNotes(i, notes){
 async function confirmImport(){
   if (IMP.mode === 'suggest'){ confirmSuggest(); return; }
   if (IMP.kind === 'notes'){ confirmNotesImport(); return; }
+  // An end-of-session scan ONLY registers the elements it found — it must never rebuild the prose or add
+  // a section (the just-written passage already lives in the editor; re-inserting it duplicates the session).
+  // The notes-import confirm registers elements into the roster without touching the prose, so reuse it.
+  if (IMP._sessionImport){ confirmNotesImport(); return; }
   IMP.overview = $('importOverview').value.trim();
   IMP.title = $('importTitle').value.trim();
   const dest = (document.querySelector('input[name=impdest]:checked') || {}).value || 'new';
@@ -25305,7 +25321,7 @@ async function confirmImport(){
   const secMsg = secs.length > 1 ? (' across ' + secs.length + ' sections') : '';
   const propMsg = ((_props + _pooled) ? (' · +' + (_props + _pooled) + ' pool word' + ((_props + _pooled) === 1 ? '' : 's')) : '') + (_goals ? (' · ' + _goals + ' goal' + (_goals === 1 ? '' : 's')) : '');
   flashStatus((asSection ? ('Added ' + added + ' element' + (added === 1 ? '' : 's') + secMsg) : ('Imported — ' + added + ' element' + (added === 1 ? '' : 's') + secMsg)) + (legendOnly ? (' · ' + legendOnly + ' waiting in the Story Legend') : '') + (_cweb ? (' · ' + _cweb + ' concept link' + (_cweb === 1 ? '' : 's')) : '') + propMsg);
-  importDoneNotify(added + legendOnly);   // confirm to the writer, with a one-click jump into the notepad
+  if (!(IMP._bg || IMP._sessionImport)) importDoneNotify(added + legendOnly);   // confirm to the writer — but NEVER for an end-of-session scan (its route to Refine/Notes is already the destination)
   } catch (e){ console.warn('import build error:', e); $('importConfirm').disabled = false; flashStatus('Couldn’t build: ' + e.message); }
 }
 // Import-complete pop-up: reassures the writer their elements + notes are in the notepad, and jumps there on request.
@@ -33001,7 +33017,16 @@ function init(){
     $('timerLen').value = String(v);
     const p = getPrefs(); p.timerLen = String(v); p.timerAdded = true;   // picking a length adds the clock
     localStorage.setItem(LS_PREFS, JSON.stringify(p));
-    if (!state.timer.started) setupTimer(); else flashStatus('New length applies to the next session');
+    if (!state.timer.started) setupTimer();
+    else if (!(state.timer.len > 0)){
+      // The session is running but UNTIMED (the default clean-slate state) — adding a clock should start
+      // it counting down NOW, not "next session". Rebuild the timer but keep this session's word baseline.
+      const _ss = state.sessionStart;
+      setupTimer();
+      if (typeof startTimerIfArmed === 'function') startTimerIfArmed();
+      if (_ss) state.sessionStart = _ss;
+    }
+    else flashStatus('New length applies to the next session');
   }
   // Open the time picker anchored to a button. dir 'down' opens below-and-right-aligned (top-bar + Focus tool);
   // otherwise it opens upward from the pencil.
@@ -41085,8 +41110,16 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.153';
+  var APP_VERSION = '2026.07.20.154';
   var APP_CHANGELOG = [
+    { v:'2026.07.20.154', date:'July 29, 2026', notes:[
+      'End-of-session sorting: removed the “Import complete” pop-up on the Prose path — the route into Refine (or the Notes session pill) IS the destination, so the extra confirmation is gone.',
+      'Fixed the session’s label leaking into the draft — the “Session · date · N words · Locked” gutter tag no longer shows as text inside your prose in Refine.',
+      'Fixed the just-written passage being duplicated (with a stray extra section) when you chose “new section”. The end-of-session scan now only registers the elements it finds; it never re-inserts your prose.',
+      'A new session now also clears guides & exercises (alongside focus, clock, goal and prompt) — a true clean slate every time.',
+      'Adding a timer mid-session now starts the clock immediately instead of quietly deferring to “next session”.',
+      'Focus element pills now appear in the full-screen header for every focused element — those brought in by “Write about this”, elements from other sections, and ones you add via the ＋ menu (which now show instantly).'
+    ]},
     { v:'2026.07.20.153', date:'July 29, 2026', notes:[
       'Every new writing session now starts with a clean slate — the clock, the word goal, and the prompt / “where next” beat are no longer carried over from the previous session. Add a timer, goal, or prompt fresh each session (via the ＋ menu). The only thing brought in is the element(s) you pinned with “Write about this” from an element or plot card.',
       'Fixed the Elements filter bar (All / Goals / Characters …) floating below the parchment tab header — it now sticks flush against it, so element rows no longer show through the gap while scrolling.'
