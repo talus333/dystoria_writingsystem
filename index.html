@@ -22454,13 +22454,28 @@ function lpApplyOn(){ try{ lpPrepCSS(); document.body.classList.toggle('lp-on', 
 /* ===== end Living Page ===== */
 function startWritingSession(fullscreen){
   track('writing_session_started', { fullscreen: !!fullscreen, ink: !!state.inkMode });
-  // A new session opens with a CLEAN Writing Focus — focus elements from the previous session are not
-  // carried over. The only way a session begins with focus pre-set is "Write about this" from an element
-  // or plot card, which sets state._writeAboutKey before entering. (Focus can still be added mid-session
-  // via the full-screen ＋ menu.)
-  if (!state._writeAboutKey && !document.body.classList.contains('insession')){
-    state.focusKeys = [];
-    try { if (typeof syncFocusToSession === 'function') syncFocusToSession(); } catch(e){}
+  // Every NEW session starts with a CLEAN SLATE — nothing is carried over from the previous session:
+  // no focus elements, no clock, no word goal, and no prompt / "where next" beat. The one exception is
+  // "Write about this" from an element or plot card, which pins that card's element(s) as the focus
+  // (via state._writeAboutKey, set before entering). Everything can be set again per-session, and focus
+  // can also be added mid-session via the full-screen ＋ menu. Guard on !insession so RESUMING a live
+  // session (re-entering Write while already in a session) leaves it untouched.
+  if (!document.body.classList.contains('insession')){
+    if (!state._writeAboutKey){
+      state.focusKeys = [];
+      try { if (typeof syncFocusToSession === 'function') syncFocusToSession(); } catch(e){}
+    }
+    try {
+      const _p = getPrefs(); let _ch = false;
+      if (_p.timerAdded){ _p.timerAdded = false; _ch = true; }        // no clock until the writer adds one this session
+      if (_p.wordGoal != null){ delete _p.wordGoal; _ch = true; }     // no word goal carried over
+      if (_ch) localStorage.setItem(LS_PREFS, JSON.stringify(_p));
+      if (typeof setupTimer === 'function') setupTimer();             // rebuild the clock display as hidden/clean
+      if (typeof updateWordCount === 'function') updateWordCount();   // drop the "/ goal" from the counter
+    } catch(e){}
+    try { if (state.session) state.session.whereNext = ''; } catch(e){}   // drop the previous "where next" beat
+    // clear any generated prompt (prep board + full-screen surface) so the writing space is clean
+    ['prepPromptText','sessionGoal','sessionNext'].forEach(function(id){ const el = $(id); if (el){ el.textContent = ''; try { el.innerHTML = ''; } catch(_){}; el.classList.remove('show','loading'); el._sig = ''; el._prev = []; } });
   }
   try{ markGuideDone('write', $('wmGuide')); var _ds=$('deskStatus'); if(_ds) _ds.textContent=''; }catch(e){}   // Write guide dismissed once a session starts
   if (!document.body.classList.contains('writing')) setWriting(true);
@@ -41070,8 +41085,12 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.152';
+  var APP_VERSION = '2026.07.20.153';
   var APP_CHANGELOG = [
+    { v:'2026.07.20.153', date:'July 29, 2026', notes:[
+      'Every new writing session now starts with a clean slate — the clock, the word goal, and the prompt / “where next” beat are no longer carried over from the previous session. Add a timer, goal, or prompt fresh each session (via the ＋ menu). The only thing brought in is the element(s) you pinned with “Write about this” from an element or plot card.',
+      'Fixed the Elements filter bar (All / Goals / Characters …) floating below the parchment tab header — it now sticks flush against it, so element rows no longer show through the gap while scrolling.'
+    ]},
     { v:'2026.07.20.152', date:'July 28, 2026', notes:[
       'Reverted the experimental full-screen entry animation — it was breaking native fullscreen (the browser went fullscreen, then dropped back out). Entry into a writing session is back to the previous, reliable behavior.',
       'The end-of-session element scan now matches what it is reading: a session sent to Prose is scanned through the prose import path, and a session sent to Notes through the notes/worldbuilding path. Goals are only ever seeded from deliberately-imported worldbuilding notes — never inferred from your session’s prose (fixes a Goal being created out of the writing).'
@@ -41826,7 +41845,9 @@ body.writing .plan-panel, body.writing #planPlotBar, body.writing #planTabs{ dis
 body.plan-view-narrative #planNarrative{ display:block; }
 /* R32 — Plan Elements page filter bar (category tabs + name search), sticky at the top of the scroll */
 /* Sticky filter bar: full-bleed over the scroll container's 22px/30px padding so nothing shows above or beside it while scrolling. */
-#planNarrative .pl-nfilter{ position:sticky; top:0; z-index:20; display:flex; flex-wrap:wrap; align-items:center; gap:6px 7px; margin:-22px -30px 8px -30px; padding:10px 30px 11px 30px; background:#fff; border-bottom:1px solid var(--line); transform:translateZ(0); }
+#planNarrative .pl-nfilter{ position:sticky; top:-22px; z-index:20; display:flex; flex-wrap:wrap; align-items:center; gap:6px 7px; margin:-22px -30px 8px -30px; padding:10px 30px 11px 30px; background:#fff; border-bottom:1px solid var(--line); transform:translateZ(0); }
+  /* top:-22px (not 0) cancels the scroll container's 22px padding-top, so the bar sticks FLUSH under the
+     parchment tab header instead of 22px below it — otherwise elements scroll through that gap. */
 /* the sticky bar sits on its own compositing layer (translateZ) so scrolling goal-row textareas can't paint through it, and it stays tight under the header */
 #planNarrative .pl-nftab{ font-family:var(--sans); font-size:10px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:var(--ink-soft); background:var(--bg2); border:1px solid var(--line); border-radius:12px; padding:4px 11px; cursor:pointer; transition:background .12s,color .12s,border-color .12s; }
 #planNarrative .pl-nftab:hover{ color:var(--ink); border-color:var(--ink-faint); }
