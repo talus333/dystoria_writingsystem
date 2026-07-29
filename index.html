@@ -21735,7 +21735,12 @@ async function recapRouteDiscard(sid){
   } catch(e){}
   try { if (state._writeAboutKey){ if (Array.isArray(state._writeAboutPrevFocus)) state.focusKeys = state._writeAboutPrevFocus; state._writeAboutPrevFocus = null; state._writeAboutKey = ''; state._writeAboutContext = null; } } catch(e){}
   _recapExitFullscreen();
-  try { if (typeof setWriting === 'function') setWriting(true); } catch(e){}   // back to the write view; the discarded session is gone
+  // Return to wherever you were before entering write mode — same as an empty (nothing-written) session.
+  const _pm = state._preWriteMode; state._preWriteMode = null;
+  try {
+    if (_pm && _pm !== 'write' && typeof goMode === 'function') goMode(_pm);   // back to Plan / Refine / Review / Wiki you came from
+    else if (typeof setWriting === 'function') setWriting(true);               // came from Write → the write view
+  } catch(e){}
   if (typeof flashStatus === 'function') flashStatus('Session discarded.');
 }
 function showRecap(){
@@ -22206,7 +22211,20 @@ function applyFsHeader(){
   // so the active prompt (prior sessions are hidden in full-screen) sits right below the header with no scroll needed.
   {
     const ew = $('editorWrap'), fh = $('fsHeader');
-    if (ew && fh) requestAnimationFrame(() => { try { ew.style.paddingTop = (fh.offsetHeight + 14) + 'px'; } catch (e){} });
+    if (ew && fh) requestAnimationFrame(() => { try {
+      const hh = fh.offsetHeight;
+      ew.style.paddingTop = (hh + 14) + 'px';
+      // When the header height CHANGES (e.g. focus pills added), re-seat the active writing line just below
+      // it — otherwise "Continue…" slides up behind the now-taller header and can disappear.
+      const prev = applyFsHeader._lastHH; applyFsHeader._lastHH = hh;
+      if (prev != null && prev !== hh){
+        const ed = $('editor'); if (!ed) return;
+        const k = state.frameIdx || 0; const fm = (typeof nodeFrameMap === 'function') ? nodeFrameMap() : null;
+        let target = Array.from(ed.children).reverse().find(c => c.classList && c.classList.contains('ph') && (fm ? fm.get(c) : 0) === k);
+        if (!target){ const rows = Array.from(ed.children).filter(c => (fm ? fm.get(c) : 0) === k && (c.textContent || '').trim() && c.tagName !== 'H3' && !(c.classList && c.classList.contains('sec-mark'))); target = rows[rows.length - 1] || null; }
+        if (target){ const pr = target.getBoundingClientRect(), wr = ew.getBoundingClientRect(); const delta = (pr.top - wr.top) - (hh + 14); if (Math.abs(delta) > 1) ew.scrollTop += delta; }
+      }
+    } catch (e){} });
   }
   if (typeof layoutSessionGutters === 'function') layoutSessionGutters();   // re-place the focus images (the Hide/Show-images toggle routes through here)
   if (typeof updateWordCount === 'function') updateWordCount();   // keep the in-session word-goal progress in sync when the header rebuilds
@@ -37753,6 +37771,15 @@ body.ember:not(.eink) #npElements .np-search.has-q{ border-color:var(--gold,#c87
 body.ember:not(.eink) #npElements .np-search svg{ color:#8a6a3a !important; }
 body.ember:not(.eink) #npElements .np-search input{ color:#2b2926 !important; }
 body.ember:not(.eink) #npElements .np-search input::placeholder{ color:#9a8a6a !important; }
+/* Plan → Elements filter bar: same ember treatment as the Notepad's filter bar (light pills, not grey) */
+body.ember:not(.eink) #planNarrative .pl-nftab{ background:rgba(255,255,255,.55) !important; border-color:rgba(138,99,32,.28) !important; color:#5a4a2a !important; }
+body.ember:not(.eink) #planNarrative .pl-nftab:hover{ color:#2b2926 !important; border-color:rgba(138,99,32,.5) !important; }
+body.ember:not(.eink) #planNarrative .pl-nftab.on{ background:#2b2926 !important; color:#f5efe1 !important; border-color:#2b2926 !important; }
+body.ember:not(.eink) #planNarrative .pl-nfsearch{ background:#fbfaf6 !important; border-color:rgba(138,99,32,.28) !important; }
+body.ember:not(.eink) #planNarrative .pl-nfsearch.has-q{ border-color:var(--gold,#c8791f) !important; }
+body.ember:not(.eink) #planNarrative .pl-nfsearch svg{ color:#8a6a3a !important; }
+body.ember:not(.eink) #planNarrative .pl-nfsearch input{ color:#2b2926 !important; }
+body.ember:not(.eink) #planNarrative .pl-nfsearch input::placeholder{ color:#9a8a6a !important; }
 body.ember:not(.eink) .fs-pill{ background:#2b2926 !important; color:#fff !important; border-color:#2b2926 !important; }
 body.ember:not(.eink) .fs-pill.guide{ background:#fff !important; color:#2b2926 !important; border:1px solid rgba(43,41,38,.18) !important; }   /* guides/exercises: white pill, charcoal text — distinct from the charcoal element pills */
 </style>
@@ -41167,8 +41194,13 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.156';
+  var APP_VERSION = '2026.07.20.157';
   var APP_CHANGELOG = [
+    { v:'2026.07.20.157', date:'July 29, 2026', notes:[
+      'In a full-screen session, the “Continue…” line now shifts down with the header as you add focus elements, so it stays visible instead of sliding behind the (growing) header and disappearing.',
+      'Discarding a session now returns you to the mode you were in before entering Write (Plan / Refine / Review / Wiki), exactly like ending an empty session — no more landing on the old write-prep board.',
+      'The Elements filter-bar pills now use the same light parchment colour as the Notepad’s pills (they were falling back to grey under the theme).'
+    ]},
     { v:'2026.07.20.156', date:'July 29, 2026', notes:[
       'The Sessions record in the notepad now uses the same two-column layout as an element card: a full-width filter bar on top, the read-only session record as a full-height left column, and your notes on the right. Fixes it wrapping / looking broken when opened from Refine, Review or Wiki, and it no longer bleeds into full-screen write mode.',
       'The session prompt (✦) now recognises the focus elements you’ve added — from any section, and from a “Write about this” card — instead of insisting you add one first.',
