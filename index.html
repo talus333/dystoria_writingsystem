@@ -42642,8 +42642,12 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.210';
+  var APP_VERSION = '2026.07.20.211';
   var APP_CHANGELOG = [
+    { v:'2026.07.20.211', date:'July 30, 2026', notes:[
+      'Scene cards are now full cards — no different from a section card. Every scene (a ~ break) has its own title, linked elements with per-element notes, stake notes, and description, opened in the same card editor. A section with one scene is just a section with one card. (Scene cards store their data on the scene’s own stable id, so they follow the scene through merges, splits and reordering.)',
+      'The section diamond now lines up with the first card in its row instead of floating in the middle of a tall scene stack. Extra stacked scenes below get no second diamond — the timeline simply continues down past them.'
+    ]},
     { v:'2026.07.20.210', date:'July 30, 2026', notes:[
       'Fixed the Plot grid section labels drifting into the wrong column (a section could jump to the far-right timeline gutter). Each row now spans the full grid — label, every thread column, and the +thread column — so section headings stay in the left column and every row lines up.'
     ]},
@@ -44185,7 +44189,7 @@ body.ember:not(.eink) .plan-stakepick .lp-row-tag.stk{ color:#e6968d; background
 .pl-addthread:hover{ color:var(--ink); border-color:var(--gold); }
 .pl-tcolname{ font-family:'Cinzel','Cormorant SC',serif; font-size:11px; font-weight:600; letter-spacing:.13em; text-transform:uppercase; color:#2b2926; background:transparent; border:none; border-bottom:1px dashed transparent; text-align:center; white-space:pre-wrap; word-break:break-word; resize:none; overflow:hidden; line-height:1.3; padding:0; max-height:29px; box-sizing:border-box; }
 .pl-tcolname:focus{ outline:none; border-bottom-color:var(--gold,#c49e4a); }
-.pl-scell2{ display:flex; flex-direction:column; align-items:center; justify-content:center; }
+.pl-scell2{ display:flex; flex-direction:column; align-items:center; justify-content:flex-start; }   /* diamond aligns with the FIRST card row (a JS pass sets padding-top to center it on that card); the spine ::before still spans the full height so it continues down past any stacked scene cards without another diamond */
 .pl-spill{ display:inline-flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; gap:8px; max-width:100%; padding:7px 12px; border-radius:14px; border:1px solid transparent; cursor:pointer; }
 .pl-spill:hover{ background:rgba(120,110,90,.07); }
 .pl-spill.selon{ background:#fffdf8; border-color:var(--gold,#c49e4a); }
@@ -44214,6 +44218,10 @@ body.ember:not(.eink) .plan-stakepick .lp-row-tag.stk{ color:#e6968d; background
 .pl-scenecard-empty{ border-style:dashed; background:transparent; opacity:.8; }
 .pl-scenecard-lbl{ font-family:var(--sans); font-size:9px; font-weight:700; letter-spacing:.06em; color:var(--gold-deep,#9a7b1e); font-style:italic; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .pl-scenecard-body{ font-family:var(--serif); font-size:11.5px; line-height:1.4; color:var(--ink); margin-top:3px; }
+/* full scene card (same look as a section card) — the ~ label tag rides at its top */
+.pl-scenepcard .pl-scenetag{ font-family:var(--sans); font-size:8.5px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:var(--gold-deep,#9a7b1e); font-style:italic; margin-bottom:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.pl-scenepcard.pl-scenepcard-empty{ background:transparent; border-style:dashed; border-color:rgba(140,124,94,.3); }
+.pl-scenepcard.pl-scenepcard-empty .pl-scenetag{ opacity:.75; }
 .pl-scene-add{ align-self:center; font-family:var(--sans); font-size:8.5px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:rgba(140,124,94,.6); background:transparent; border:1px dashed rgba(140,124,94,.3); border-radius:999px; padding:2px 9px; cursor:pointer; }
 .pl-scene-add:hover{ color:var(--gold,#c49e4a); border-color:var(--gold,#c49e4a); border-style:solid; }
 .pl-scenepop{ padding:14px 16px; }
@@ -47239,8 +47247,36 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
         });
       }catch(e){}
     };
-    if(typeof requestAnimationFrame==='function') requestAnimationFrame(_layoutPartLines); else _layoutPartLines();
-    window.__dystLayoutPartLines=_layoutPartLines;   // re-run on demand (e.g. after the plot view becomes visible)
+    // Align each section's diamond with the FIRST card in its row (the section card / scene 0), rather than the
+    // vertical middle of a tall scene-stack. Extra stacked scene cards below get no diamond — the spine just
+    // continues past them. Pure padding-top nudge (never negative) so the diamond centers on that first card.
+    var _layoutSectionDiamonds=function(){
+      try{
+        var cells=grid.querySelectorAll('.pl-pcell');
+        grid.querySelectorAll('.pl-scell2').forEach(function(sc){
+          var pill=sc.querySelector('.pl-spill'); if(!pill) return;
+          sc.style.paddingTop='';                                   // reset so we measure the natural position
+          var scr=sc.getBoundingClientRect(); if(scr.height<=1) return;   // not laid out yet
+          var firstCard=null, bestLeft=Infinity;
+          cells.forEach(function(pc){
+            if(pc.classList.contains('pl-rowend')) return;
+            var r=pc.getBoundingClientRect();
+            if(Math.abs(r.top-scr.top)>4) return;                   // same grid row as this section label
+            var card=pc.querySelector(':scope > .pl-pcard, :scope > .pl-cardadd');
+            if(card && r.left<bestLeft){ bestLeft=r.left; firstCard=card; }
+          });
+          if(!firstCard) return;
+          var cr=firstCard.getBoundingClientRect();
+          var cardMid=(cr.top+cr.height/2)-scr.top;                 // where the diamond should sit (card centre)
+          var pr=pill.getBoundingClientRect(); var pillCenter=(pr.top+pr.height/2)-scr.top;
+          var delta=Math.round(cardMid-pillCenter);
+          if(delta>0) sc.style.paddingTop=delta+'px';
+        });
+      }catch(e){}
+    };
+    var _layoutPlot=function(){ _layoutPartLines(); _layoutSectionDiamonds(); };
+    if(typeof requestAnimationFrame==='function') requestAnimationFrame(_layoutPlot); else _layoutPlot();
+    window.__dystLayoutPartLines=_layoutPlot;   // re-run on demand (e.g. after the plot view becomes visible)
   }
   // A small "later"-style time-span pill that sits ABOVE a section's diamond (the elapsed time before section i).
   function gapPill(i){
@@ -47597,16 +47633,24 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
       card.addEventListener('click', function(e){ e.stopPropagation(); openCardPopup(i, col); });
       cell.appendChild(card);
     }
-    // ---- stacked scenes (s≥1): one note-card per `~` scene, keyed by the mark's stable id (col|sid) ----
+    // ---- stacked scenes (s≥1): one FULL card per `~` scene (same capabilities as the section card), keyed by the
+    // mark's stable id (col|sid). A scene card has a title, linked elements + notes, and a description — no different
+    // from the section card; it just lives on a stable sid so it survives section merge/reorder/split untouched.
     try {
       var _scenes = (typeof window.orgSectionScenes === 'function') ? window.orgSectionScenes(i) : [];
       _scenes.forEach(function(scn){
-        var snote = (sceneCardNote(col, scn.sid) || '').trim();
-        var scard = document.createElement('div'); scard.className = 'pl-scenecard' + (snote ? '' : ' pl-scenecard-empty');
-        var slbl = document.createElement('div'); slbl.className = 'pl-scenecard-lbl'; slbl.textContent = '~ ' + (scn.label || 'scene'); scard.appendChild(slbl);
-        if (snote){ var sb = document.createElement('div'); sb.className = 'pl-scenecard-body'; sb.textContent = snote; scard.appendChild(sb); }
-        scard.title = 'Scene — click to write what happens here';
-        scard.addEventListener('click', function(e){ e.stopPropagation(); openScenePopup(i, col, scn.sid, scn.label); });
+        var sttl = scnTitle(col, scn.sid);
+        var sprev = (sceneCardPreview(col, scn.sid) || '').trim();
+        var sels = scnEls(col, scn.sid);
+        var filled = !!(sttl || sprev || (sels && sels.length));
+        var scard = document.createElement('div'); scard.className = 'pl-pcard pl-scenepcard' + (filled ? '' : ' pl-scenepcard-empty');
+        var tag = document.createElement('div'); tag.className = 'pl-scenetag'; tag.textContent = '~ ' + (scn.label || 'scene'); scard.appendChild(tag);
+        if (sttl){ var st = document.createElement('div'); st.className = 'pl-pcard-ttl'; st.textContent = sttl; scard.appendChild(st); }
+        var sbody = document.createElement('div'); sbody.className = 'pl-pcard-body';
+        if (sprev){ var sg = document.createElement('div'); sg.className = 'pl-pcard-gen'; sg.textContent = sprev; sbody.appendChild(sg); }
+        scard.appendChild(sbody);
+        scard.title = 'Scene card — click to open (title, linked elements, notes)';
+        scard.addEventListener('click', function(e){ e.stopPropagation(); openCardPopup(i, col, scn.sid, scn.label); });
         cell.appendChild(scard);
       });
       var addsc = document.createElement('button'); addsc.className = 'pl-scene-add'; addsc.innerHTML = '＋ scene'; addsc.title = 'Add a scene to this section (a ~ break) — it appears in every column';
@@ -47616,8 +47660,31 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     wireCardDrop(cell, i, col);   // both empty and filled cells accept a dropped card
     return cell;
   }
-  function sceneCardNote(col, sid){ if(!data.sceneCards) return ''; return data.sceneCards[(col&&col.id?col.id:col)+'|'+sid] || ''; }
-  function sceneCardSet(col, sid, text){ if(!data.sceneCards) data.sceneCards={}; var k=(col&&col.id?col.id:col)+'|'+sid; if(text && String(text).trim()) data.sceneCards[k]=text; else delete data.sceneCards[k]; save(); }
+  // ---- Full scene-card data (sid-keyed, isolated from section reindexing — the ~ mark's sid is stable) ----
+  // A scene card has the SAME capabilities as a section card: title, description, linked elements + per-element
+  // notes, and stake notes. Keyed by (col.id | sid) so it survives section merge / reorder / split / insert
+  // untouched (no reindex hook needed). Legacy note-only `data.sceneCards[col|sid]` strings migrate into `.text`.
+  function _scnKey(col, sid){ return (col&&col.id?col.id:col)+'|'+sid; }
+  function _scnGet(col, sid){ if(!data.sceneData){ if(data.sceneCards){ var t0=data.sceneCards[_scnKey(col,sid)]; if(t0) return {title:'',text:t0,els:[],elNotes:{},stakeNotes:{}}; } return null; }
+    var r=data.sceneData[_scnKey(col,sid)]; if(r) return r;
+    if(data.sceneCards){ var t=data.sceneCards[_scnKey(col,sid)]; if(t) return {title:'',text:t,els:[],elNotes:{},stakeNotes:{}}; }
+    return null; }
+  function _scnEnsure(col, sid){ data.sceneData=data.sceneData||{}; var k=_scnKey(col,sid); var r=data.sceneData[k]; if(!r){ r={title:'',text:'',els:[],elNotes:{},stakeNotes:{}}; if(data.sceneCards&&data.sceneCards[k]){ r.text=data.sceneCards[k]; delete data.sceneCards[k]; } data.sceneData[k]=r; } return r; }
+  function scnTitle(col, sid){ var r=_scnGet(col,sid); return r?(r.title||''):''; }
+  function scnTitleSet(col, sid, v){ var r=_scnEnsure(col,sid); r.title=(v&&v.trim())?v:''; save(); }
+  function scnText(col, sid){ var r=_scnGet(col,sid); return r?(r.text||''):''; }
+  function scnTextSet(col, sid, v){ var r=_scnEnsure(col,sid); r.text=v||''; save(); }
+  function scnEls(col, sid){ var r=_scnGet(col,sid); return (r&&Array.isArray(r.els))?r.els:[]; }
+  function scnElsSet(col, sid, list){ var r=_scnEnsure(col,sid); r.els=(list&&list.length)?list.slice():[]; save(); }
+  function scnElNote(col, sid, elKey){ var r=_scnGet(col,sid); return (r&&r.elNotes&&r.elNotes[elKey])||''; }
+  function scnElNoteSet(col, sid, elKey, v){ var r=_scnEnsure(col,sid); r.elNotes=r.elNotes||{}; if(v&&v.trim()) r.elNotes[elKey]=v; else delete r.elNotes[elKey]; save(); }
+  function scnStakeNote(col, sid, which){ var r=_scnGet(col,sid); return (r&&r.stakeNotes&&r.stakeNotes[which])||''; }
+  function scnStakeNoteSet(col, sid, which, v){ var r=_scnEnsure(col,sid); r.stakeNotes=r.stakeNotes||{}; if(v&&v.trim()) r.stakeNotes[which]=v; else delete r.stakeNotes[which]; save(); }
+  function scnDelete(col, sid){ var k=_scnKey(col,sid); if(data.sceneData) delete data.sceneData[k]; if(data.sceneCards) delete data.sceneCards[k]; save(); }
+  // closed scene-card preview (mirrors plotCardPreview): general text first, then each linked element + its note
+  function sceneCardPreview(col, sid){ var r=_scnGet(col,sid); if(!r) return ''; var parts=[]; var g=(r.text||'').trim(); if(g) parts.push(g); (r.els||[]).forEach(function(el){ var n=((r.elNotes&&r.elNotes[el.nkey])||'').trim(); parts.push(n?(el.label+': '+n):el.label); }); return parts.join('\n'); }
+  function sceneCardNote(col, sid){ return scnText(col, sid); }   // back-compat shim
+  function sceneCardSet(col, sid, text){ scnTextSet(col, sid, text); }
   function openScenePopup(i, col, sid, label){
     closeCardPopup();
     var bd=document.createElement('div'); bd.id='planCardPop'; bd.className='pl-cardpop-bd';
@@ -47646,18 +47713,21 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
   function closeCardPopup(){ var p=document.getElementById('planCardPop'); if(p) p.remove(); }
   function wireCardBd(bd){ bd.addEventListener('mousedown', function(e){ if(e.target===bd){ if(menuJustClosed) return; done(); } }); }
   function done(){ closeCardPopup(); renderPlot(); }
-  function deleteCard(i, col){ (async function(){
+  function deleteCard(i, col, sid){ (async function(){
     if(typeof siteConfirm==='function' && !(await siteConfirm('Delete this card? This can’t be undone.', 'Delete card'))) return;
-    try{ if(typeof plotCellSet==='function') plotCellSet(i, col, ''); if(typeof plotCardTitleSet==='function') plotCardTitleSet(i, col, ''); if(col && col.id==='main'){ if(data && data.plotElems) delete data.plotElems[i]; } else if(col){ if(data && data.plotThreadElems) delete data.plotThreadElems[col.id+'|'+i]; if(data && data.plotCardsMade) delete data.plotCardsMade[col.id+'|'+i]; } if(typeof save==='function') save(); }catch(e){}
+    try{
+      if(sid){ scnDelete(col, sid); }   // a scene card clears only its own sid-keyed data (the ~ break stays in the prose)
+      else { if(typeof plotCellSet==='function') plotCellSet(i, col, ''); if(typeof plotCardTitleSet==='function') plotCardTitleSet(i, col, ''); if(col && col.id==='main'){ if(data && data.plotElems) delete data.plotElems[i]; } else if(col){ if(data && data.plotThreadElems) delete data.plotThreadElems[col.id+'|'+i]; if(data && data.plotCardsMade) delete data.plotCardsMade[col.id+'|'+i]; } if(typeof save==='function') save(); }
+    }catch(e){}
     done();
   })(); }
   // ⋯ menu in the card header — holds Delete card (replaces the old × close; clicking outside still closes the card)
-  function cardKebab(i, col){
+  function cardKebab(i, col, sid){
     var wrap=document.createElement('div'); wrap.className='pl-cardpop-kebabwrap';
     var btn=document.createElement('button'); btn.type='button'; btn.className='pl-cardpop-kebab'; btn.title='More'; btn.innerHTML='⋯';
     var menu=document.createElement('div'); menu.className='pl-cardpop-kebabmenu';
     var del=document.createElement('button'); del.type='button'; del.className='pl-cardpop-kebabitem pl-kebab-del'; del.textContent='Delete card';
-    del.addEventListener('click', function(e){ e.stopPropagation(); menu.classList.remove('show'); deleteCard(i, col); });
+    del.addEventListener('click', function(e){ e.stopPropagation(); menu.classList.remove('show'); deleteCard(i, col, sid); });
     menu.appendChild(del);
     btn.addEventListener('click', function(e){ e.stopPropagation(); var open=menu.classList.toggle('show'); if(open){ var _h=function(ev){ if(!wrap.contains(ev.target)){ menu.classList.remove('show'); document.removeEventListener('mousedown', _h, true); } }; document.addEventListener('mousedown', _h, true); } });
     wrap.appendChild(btn); wrap.appendChild(menu);
@@ -47744,31 +47814,48 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
       bar.appendChild(chip);
     });
   }
-  function openCardPopup(i, col){
+  function openCardPopup(i, col, sid, sceneLabel){
     closeCardPopup(); var a=api();
+    var _sid = sid || null;   // when set → this is a SCENE card (full-featured, sid-keyed) rather than the section card
     var _stype=(a&&a.secTypeOfSection)?a.secTypeOfSection(i):null;   // prologue / epilogue: custom name if given, else the type label (never "Section N")
     var secName=(a&&a.sectionName(i)) || (_stype ? (_stype.charAt(0).toUpperCase()+_stype.slice(1)) : ('Section '+(i+1)));
+    if(_sid) secName = secName + '  ·  ~ ' + (sceneLabel || 'scene');   // header shows which scene within the section
+    // Storage routers — a scene card reads/writes its own sid-keyed stores; a section card keeps its existing keys.
+    // Map/thread propagation (linkThreadEl) and the notepad-feather passthroughs stay at the section level (i).
+    var _title   = _sid ? function(){ return scnTitle(col,_sid); }       : function(){ return plotCardTitle(i,col); };
+    var _titleSet= _sid ? function(v){ scnTitleSet(col,_sid,v); }         : function(v){ plotCardTitleSet(i,col,v); };
+    var _text    = _sid ? function(){ return scnText(col,_sid); }         : function(){ return plotCellText(i,col); };
+    var _textSet = _sid ? function(v){ scnTextSet(col,_sid,v); }          : function(v){ plotCellSet(i,col,v); };
+    var _els     = _sid ? function(){ return scnEls(col,_sid); }          : function(){ return cardEls(i,col); };
+    var _elsSet  = _sid ? function(l){ scnElsSet(col,_sid,l); }           : function(l){ cardElsSet(i,col,l); };
+    var _elGet   = _sid ? function(k){ return scnElNote(col,_sid,k); }    : function(k){ return plotElGet(i,col.id,k); };
+    var _elSet   = _sid ? function(k,v){ scnElNoteSet(col,_sid,k,v); }    : function(k,v){ plotElSet(i,col.id,k,v); };
+    var _stkGet  = _sid ? function(w){ return scnStakeNote(col,_sid,w); } : function(w){ return cardStakeNoteGet(i,col.id,w); };
+    var _stkSet  = _sid ? function(w,v){ scnStakeNoteSet(col,_sid,w,v); } : function(w,v){ cardStakeNoteSet(i,col.id,w,v); };
+    // main-column linked-element list (the main branch uses data.plotElems[i] directly)
+    var _mainEls    = _sid ? function(){ return scnEls(col,_sid); } : function(){ return (data.plotElems&&data.plotElems[i])||[]; };
+    var _mainElsSet = _sid ? function(l){ scnElsSet(col,_sid,l); } : function(l){ data.plotElems=data.plotElems||{}; if(l&&l.length) data.plotElems[i]=l; else delete data.plotElems[i]; save(); };
     var bd=document.createElement('div'); bd.id='planCardPop'; bd.className='pl-cardpop-bd';
     var panel=document.createElement('div'); panel.className='pl-cardpop';
     var hd=document.createElement('div'); hd.className='pl-cardpop-hd';
 
     if(col.id!=='main'){   // thread card: title + element-link pills (General + linked elements) + note
-      var tin0=document.createElement('input'); tin0.className='pl-cardpop-titlein'; tin0.value=plotCardTitle(i, col); tin0.placeholder='Card title…';
-      tin0.addEventListener('input', function(){ plotCardTitleSet(i, col, tin0.value); });
-      hd.appendChild(tin0); hd.appendChild(cardWriteAbout(i, col)); hd.appendChild(cardExplore(i, col)); hd.appendChild(cardKebab(i, col)); panel.appendChild(hd);
+      var tin0=document.createElement('input'); tin0.className='pl-cardpop-titlein'; tin0.value=_title(); tin0.placeholder='Card title…';
+      tin0.addEventListener('input', function(){ _titleSet(tin0.value); });
+      hd.appendChild(tin0); hd.appendChild(cardWriteAbout(i, col)); hd.appendChild(cardExplore(i, col)); hd.appendChild(cardKebab(i, col, _sid)); panel.appendChild(hd);
       var sub0=document.createElement('div'); sub0.className='pl-cardpop-sub'; sub0.textContent=secName+'  ·  '+col.name+' thread';
       var pillsRow0=document.createElement('div'); pillsRow0.className='pl-cardpop-pills';
       var ta0=document.createElement('textarea'); ta0.className='pl-cardpop-ta';
       var active0={ key:null, stake:null };
-      function loadNote0(){ if(active0.stake){ ta0.value = cardStakeNoteGet(i, col.id, active0.stake); ta0.placeholder='How this card addresses the '+(active0.stake==='thread'?'thread':'story')+' stake…'; } else if(active0.key){ ta0.value = plotElGet(i, col.id, active0.key); ta0.placeholder='Notes for this element within this thread card…'; } else { ta0.value = plotCellText(i, col); ta0.placeholder='Write the '+col.name+' thread for this section…'; } }
-      ta0.addEventListener('input', function(){ if(active0.stake){ cardStakeNoteSet(i, col.id, active0.stake, ta0.value); } else if(active0.key){ plotElSet(i, col.id, active0.key, ta0.value); } else { plotCellSet(i, col, ta0.value); } });
+      function loadNote0(){ if(active0.stake){ ta0.value = _stkGet(active0.stake); ta0.placeholder='How this card addresses the '+(active0.stake==='thread'?'thread':'story')+' stake…'; } else if(active0.key){ ta0.value = _elGet(active0.key); ta0.placeholder='Notes for this element within this thread card…'; } else { ta0.value = _text(); ta0.placeholder='Write the '+col.name+' thread for this '+(_sid?'scene':'section')+'…'; } }
+      ta0.addEventListener('input', function(){ if(active0.stake){ _stkSet(active0.stake, ta0.value); } else if(active0.key){ _elSet(active0.key, ta0.value); } else { _textSet(ta0.value); } });
       function mkChip0(label, on, sel, extraCls){ var c=document.createElement('span'); c.className='pl-cardpop-pill'+(extraCls?(' '+extraCls):'')+(on?' on':''); var s=document.createElement('span'); s.className='pl-cpn'; s.textContent=label; c.appendChild(s); c.addEventListener('click', function(e){ if(e.target.closest && e.target.closest('.pl-cpx, .pl-cpf')) return; sel(); }); return c; }
       function renderPills0(){
         pillsRow0.innerHTML='';
         var gc0=mkChip0('General', active0.key===null && !active0.stake, function(){ active0.key=null; active0.stake=null; loadNote0(); renderPills0(); });
         { var gf0=document.createElement('span'); gf0.className='pl-cpf'; gf0.innerHTML=ICONS.feather; gf0.title='Open this section’s general notes in the notepad'; gf0.addEventListener('click', function(e){ e.stopPropagation(); if(a && a.notesForKey) a.notesForKey('section:'+i); }); gc0.appendChild(gf0); }
         pillsRow0.appendChild(gc0);
-        var list=cardEls(i, col);
+        var list=_els();
         var _isEv=function(el){ return (((el&&(el.cat||el.kind))||'')+'').toLowerCase()==='event'; };
         function _elChip(el){
           var c=mkChip0(el.label, active0.key===el.nkey, function(){ active0.stake=null; active0.key=el.nkey; loadNote0(); renderPills0(); }, _isEv(el)?'evt':null);
@@ -47776,7 +47863,7 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
           ft.addEventListener('click', function(e){ e.stopPropagation(); closeCardPopup(); if(a) a.threadCardElNote(col.id, i, el.nkey); });
           c.appendChild(ft);
           var x=document.createElement('span'); x.className='pl-cpx'; x.textContent='×'; x.title='Unlink from this thread';
-          x.addEventListener('click', function(e){ e.stopPropagation(); cardElsSet(i, col, list.filter(function(q){return q.nkey!==el.nkey;})); if(a) a.linkThreadEl(col.id, el.nkey, false, i); if(active0.key===el.nkey){ active0.key=null; loadNote0(); } renderPills0(); if(typeof window.renderNpCard==='function'){ try{ window.renderNpCard(); }catch(_){} } });
+          x.addEventListener('click', function(e){ e.stopPropagation(); _elsSet(list.filter(function(q){return q.nkey!==el.nkey;})); if(a) a.linkThreadEl(col.id, el.nkey, false, i); if(active0.key===el.nkey){ active0.key=null; loadNote0(); } renderPills0(); if(typeof window.renderNpCard==='function'){ try{ window.renderNpCard(); }catch(_){} } });
           c.appendChild(x); pillsRow0.appendChild(c);
         }
         // stake pills FIRST (labelled with the actual stake name, shown only when that stake exists), then the
@@ -47793,7 +47880,7 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
         list.filter(_isEv).forEach(_elChip);
         list.filter(function(el){ return !_isEv(el); }).forEach(_elChip);
         var addb=document.createElement('button'); addb.className='pl-cardpop-linkb'; addb.textContent='+ link element';
-        addb.addEventListener('click', function(e){ e.stopPropagation(); openCardLinkPicker(addb, i, col, function(pick){ if(!pick) return; var nkey=pick.kind==='thread'?('thread:'+pick.id):pick.kind==='group'?('group:'+pick.id):(pick.key||pick.id); var cur=cardEls(i, col); if(!cur.some(function(q){return q.nkey===nkey;})){ cur=cur.concat([{ nkey:nkey, label:pick.label, cat:pick.cat, kind:pick.kind }]); cardElsSet(i, col, cur); } if(a) a.linkThreadEl(col.id, nkey, true, i); active0.key=nkey; loadNote0(); renderPills0(); if(typeof window.renderNpCard==='function'){ try{ window.renderNpCard(); }catch(_){} } }); });
+        addb.addEventListener('click', function(e){ e.stopPropagation(); openCardLinkPicker(addb, i, col, function(pick){ if(!pick) return; var nkey=pick.kind==='thread'?('thread:'+pick.id):pick.kind==='group'?('group:'+pick.id):(pick.key||pick.id); var cur=_els(); if(!cur.some(function(q){return q.nkey===nkey;})){ cur=cur.concat([{ nkey:nkey, label:pick.label, cat:pick.cat, kind:pick.kind }]); _elsSet(cur); } if(a) a.linkThreadEl(col.id, nkey, true, i); active0.key=nkey; loadNote0(); renderPills0(); if(typeof window.renderNpCard==='function'){ try{ window.renderNpCard(); }catch(_){} } }); });
         pillsRow0.appendChild(addb);
         refreshFoot0();   // keep the Map-elements bar in sync as links are added/removed
         renderCardTraitBar(traitBar0, i, col, active0.key);   // show the selected element's traits to add
@@ -47806,13 +47893,13 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
       var main0=document.createElement('div'); main0.className='pl-cardpop-main'; main0.appendChild(ta0);
       var body0=document.createElement('div'); body0.className='pl-cardpop-body'; body0.appendChild(main0); body0.appendChild(railEl0);
       panel.appendChild(body0); bd.appendChild(panel); wireCardBd(bd); document.body.appendChild(bd);
-      setTimeout(function(){ try{ (plotCardTitle(i,col)?ta0:tin0).focus(); }catch(e){} }, 30); return;
+      setTimeout(function(){ try{ (_title()?ta0:tin0).focus(); }catch(e){} }, 30); return;
     }
 
     // MAIN plot card: card title + element-filter pills + description (per-view note, mirrored to the notepad)
-    var titleIn=document.createElement('input'); titleIn.className='pl-cardpop-titlein'; titleIn.value=plotCardTitle(i, col); titleIn.placeholder='Card title…';
-    titleIn.addEventListener('input', function(){ plotCardTitleSet(i, col, titleIn.value); });
-    hd.appendChild(titleIn); hd.appendChild(cardWriteAbout(i, col)); hd.appendChild(cardExplore(i, col)); hd.appendChild(cardKebab(i, col)); panel.appendChild(hd);
+    var titleIn=document.createElement('input'); titleIn.className='pl-cardpop-titlein'; titleIn.value=_title(); titleIn.placeholder='Card title…';
+    titleIn.addEventListener('input', function(){ _titleSet(titleIn.value); });
+    hd.appendChild(titleIn); hd.appendChild(cardWriteAbout(i, col)); hd.appendChild(cardExplore(i, col)); hd.appendChild(cardKebab(i, col, _sid)); panel.appendChild(hd);
     var sub=document.createElement('div'); sub.className='pl-cardpop-sub'; sub.textContent=secName+'  ·  Main Plot';
 
     var pillsRow=document.createElement('div'); pillsRow.className='pl-cardpop-pills';
@@ -47820,26 +47907,26 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     var active={ key:null };
     // element notes are scoped to THIS section (a new note under the section), not the element's own notepad
     function nk(){ return active.key ? ('section:'+i+'||TRAIT||@sectionel:'+active.key) : ('section:'+i); }
-    function loadNote(){ ta.value = a ? a.getPlainNote(nk()) : ''; ta.placeholder = active.key ? 'Notes for this element within this section…' : 'General notes for this section’s plot (mirrors the notepad)…'; }
-    ta.addEventListener('input', function(){ if(a) a.setPlainNote(nk(), ta.value); });
+    function loadNote(){ if(_sid){ ta.value = active.key ? _elGet(active.key) : _text(); } else { ta.value = a ? a.getPlainNote(nk()) : ''; } ta.placeholder = active.key ? 'Notes for this element within this '+(_sid?'scene':'section')+'…' : ('General notes for this '+(_sid?'scene':'section’s plot (mirrors the notepad)')+'…'); }
+    ta.addEventListener('input', function(){ if(_sid){ if(active.key) _elSet(active.key, ta.value); else _textSet(ta.value); } else if(a) a.setPlainNote(nk(), ta.value); });
     function mkChip(label, on, sel){ var c=document.createElement('span'); c.className='pl-cardpop-pill'+(on?' on':''); var s=document.createElement('span'); s.className='pl-cpn'; s.textContent=label; c.appendChild(s); c.addEventListener('click', function(e){ if(e.target.closest && e.target.closest('.pl-cpx, .pl-cpf')) return; sel(); }); return c; }
     function renderPills(){
       pillsRow.innerHTML='';
       var gc=mkChip('General', active.key===null, function(){ active.key=null; loadNote(); renderPills(); });
       { var gf=document.createElement('span'); gf.className='pl-cpf'; gf.innerHTML=ICONS.feather; gf.title='Open this section’s general notes in the notepad'; gf.addEventListener('click', function(e){ e.stopPropagation(); if(a && a.notesForKey) a.notesForKey('section:'+i); }); gc.appendChild(gf); }
       pillsRow.appendChild(gc);
-      var list=(data.plotElems&&data.plotElems[i])||[];
+      var list=_mainEls();
       list.forEach(function(el){
         var c=mkChip(el.label, active.key===el.nkey, function(){ active.key=el.nkey; loadNote(); renderPills(); });
         var ft=document.createElement('span'); ft.className='pl-cpf'; ft.innerHTML=ICONS.feather; ft.title='Open this element’s notes for this section';
         ft.addEventListener('click', function(e){ e.stopPropagation(); if(a) a.sectionElNote(i, el.nkey); });
         c.appendChild(ft);
         var x=document.createElement('span'); x.className='pl-cpx'; x.textContent='×'; x.title='Unlink from this card';
-        x.addEventListener('click', function(e){ e.stopPropagation(); data.plotElems[i]=list.filter(function(q){return q.nkey!==el.nkey;}); save(); if(active.key===el.nkey){ active.key=null; loadNote(); } renderPills(); if(typeof window.renderNpCard==='function'){ try{ window.renderNpCard(); }catch(_){} } });
+        x.addEventListener('click', function(e){ e.stopPropagation(); _mainElsSet(list.filter(function(q){return q.nkey!==el.nkey;})); if(active.key===el.nkey){ active.key=null; loadNote(); } renderPills(); if(typeof window.renderNpCard==='function'){ try{ window.renderNpCard(); }catch(_){} } });
         c.appendChild(x); pillsRow.appendChild(c);
       });
       var addb=document.createElement('button'); addb.className='pl-cardpop-linkb'; addb.textContent='+ link element';
-      addb.addEventListener('click', function(e){ e.stopPropagation(); openCardLinkPicker(addb, i, col, function(pick){ if(!pick) return; data.plotElems[i]=data.plotElems[i]||[]; var nkey=pick.kind==='thread'?('thread:'+pick.id):pick.kind==='group'?('group:'+pick.id):(pick.key||pick.id); if(!data.plotElems[i].some(function(q){return q.nkey===nkey;})) data.plotElems[i].push({ nkey:nkey, label:pick.label, cat:pick.cat, kind:pick.kind }); save(); active.key=nkey; loadNote(); renderPills(); if(typeof window.renderNpCard==='function'){ try{ window.renderNpCard(); }catch(_){} } }); });
+      addb.addEventListener('click', function(e){ e.stopPropagation(); openCardLinkPicker(addb, i, col, function(pick){ if(!pick) return; var nkey=pick.kind==='thread'?('thread:'+pick.id):pick.kind==='group'?('group:'+pick.id):(pick.key||pick.id); var cur=_mainEls().slice(); if(!cur.some(function(q){return q.nkey===nkey;})){ cur.push({ nkey:nkey, label:pick.label, cat:pick.cat, kind:pick.kind }); _mainElsSet(cur); } active.key=nkey; loadNote(); renderPills(); if(typeof window.renderNpCard==='function'){ try{ window.renderNpCard(); }catch(_){} } }); });
       pillsRow.appendChild(addb);
       refreshFoot();   // keep the Map-elements bar in sync as links are added/removed
       renderCardTraitBar(traitBar, i, col, active.key);   // show the selected element's traits to add
@@ -47853,7 +47940,7 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     var bodyC=document.createElement('div'); bodyC.className='pl-cardpop-body'; bodyC.appendChild(mainC); bodyC.appendChild(railEl);
     panel.appendChild(bodyC);
     bd.appendChild(panel); wireCardBd(bd); document.body.appendChild(bd);
-    setTimeout(function(){ try{ (plotCardTitle(i,col)?ta:titleIn).focus(); }catch(e){} }, 30);
+    setTimeout(function(){ try{ (_title()?ta:titleIn).focus(); }catch(e){} }, 30);
   }
 
   /* ---------- universal notepad drawer ---------- */
