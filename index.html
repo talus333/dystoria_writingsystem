@@ -894,6 +894,8 @@
   .org-sec .org-wc{font-family:var(--sans); font-size:9px; color:var(--ink-faint); opacity:.8}
   .org-scene{display:flex; align-items:center; gap:7px; margin-left:34px; padding:3px 8px; border-radius:7px; cursor:pointer}
   .org-scene:hover{background:rgba(120,92,40,.05)}
+  .org-scene .org-scenecheck{flex:none; margin:0 1px 0 0; width:12px; height:12px; cursor:pointer; accent-color:var(--gold,#c8961f)}
+  .org-scene.sel{background:rgba(200,150,31,.12)}
   .org-scene .org-scnum{flex:none; font-family:var(--sans); font-size:9px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:var(--gold,#c8961f)}
   .org-scene .org-scnum:before{content:'~ '; opacity:.6}
   .org-scene .org-scttl{flex:1; min-width:0; font-family:var(--serif); font-style:italic; font-size:11.5px; color:var(--ink-soft); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
@@ -28073,6 +28075,7 @@ function updateEditTop(){ const es = $('editScroll'), bt = $('editTop'); if (es 
 var _orgCollapsed = {};   // partId → true when that Part is collapsed in the drawer
 var _orgSel = {};         // sectionIndex → true when checked for a merge/delete
 var _orgDragFrom = null;   // section index being drag-reordered
+var _orgSceneSel = {};     // "frame:scene" → true when a scene is checked (scene-merge selection)
 function _orgLoadCollapsed(){ try { var v = JSON.parse(localStorage.getItem('dystoria.orgCollapsed') || '{}'); if (v && typeof v === 'object') _orgCollapsed = v; } catch(e){} }
 function _orgSaveCollapsed(){ try { localStorage.setItem('dystoria.orgCollapsed', JSON.stringify(_orgCollapsed)); } catch(e){} }
 function ensureOrgDrawer(){
@@ -28120,14 +28123,15 @@ function renderOrgTree(){
     var scs = scenesByFrame[i] || [];
     if (scs.length > 1 && !collapsed){
       scs.forEach(function(sc, si){
-        html += '<div class="org-scene" data-frame="' + i + '" data-scene="' + si + '"><span class="org-scnum">' + (si + 1) + '</span><span class="org-scttl">' + esc(sc.label || ('Scene ' + (si + 1))) + '</span></div>';
+        html += '<div class="org-scene' + (_orgSceneSel[i + ':' + si] ? ' sel' : '') + '" data-frame="' + i + '" data-scene="' + si + '"><input type="checkbox" class="org-scenecheck" data-frame="' + i + '" data-scene="' + si + '"' + (_orgSceneSel[i + ':' + si] ? ' checked' : '') + '><span class="org-scnum">' + (si + 1) + '</span><span class="org-scttl">' + esc(sc.label || ('Scene ' + (si + 1))) + '</span></div>';
       });
     }
   }
   list.innerHTML = html;
-  Array.prototype.forEach.call(list.querySelectorAll('.org-scene'), function(r){ r.addEventListener('click', function(){ orgJumpScene(+r.getAttribute('data-frame'), +r.getAttribute('data-scene')); }); });
+  Array.prototype.forEach.call(list.querySelectorAll('.org-scene'), function(r){ r.addEventListener('click', function(e){ if (e.target && e.target.classList && e.target.classList.contains('org-scenecheck')) return; orgJumpScene(+r.getAttribute('data-frame'), +r.getAttribute('data-scene')); }); });
+  Array.prototype.forEach.call(list.querySelectorAll('.org-scenecheck'), function(cb){ cb.addEventListener('click', function(e){ e.stopPropagation(); }); cb.addEventListener('change', function(){ var key = cb.getAttribute('data-frame') + ':' + cb.getAttribute('data-scene'); if (cb.checked){ _orgSel = {}; _orgSceneSel[key] = true; } else delete _orgSceneSel[key]; renderOrgTree(); }); });
   Array.prototype.forEach.call(list.querySelectorAll('.org-sec'), function(r){ r.addEventListener('click', function(e){ if (e.target && e.target.classList && e.target.classList.contains('org-check')) return; orgJumpTo(+r.getAttribute('data-i')); }); });
-  Array.prototype.forEach.call(list.querySelectorAll('.org-check'), function(cb){ cb.addEventListener('click', function(e){ e.stopPropagation(); }); cb.addEventListener('change', function(){ var i = +cb.getAttribute('data-i'); if (cb.checked) _orgSel[i] = true; else delete _orgSel[i]; var row = cb.closest('.org-sec'); if (row) row.classList.toggle('sel', cb.checked); orgUpdateActions(); }); });
+  Array.prototype.forEach.call(list.querySelectorAll('.org-check'), function(cb){ cb.addEventListener('click', function(e){ e.stopPropagation(); }); cb.addEventListener('change', function(){ var i = +cb.getAttribute('data-i'); if (cb.checked){ _orgSceneSel = {}; _orgSel[i] = true; } else delete _orgSel[i]; renderOrgTree(); }); });
   Array.prototype.forEach.call(list.querySelectorAll('.org-part'), function(p){ p.addEventListener('click', function(){ var pid = p.getAttribute('data-pid'); if (!pid) return; _orgCollapsed[pid] = !_orgCollapsed[pid]; _orgSaveCollapsed(); renderOrgTree(); }); });
   // drag to reorder sections
   var clearDrop = function(){ Array.prototype.forEach.call(list.querySelectorAll('.org-sec'), function(r){ r.classList.remove('drop-before', 'drop-after'); }); };
@@ -28142,8 +28146,26 @@ function renderOrgTree(){
   orgUpdateActions();
 }
 function orgSelIndices(){ var n = (typeof msSecCount === 'function') ? msSecCount() : ((state.frames && state.frames.length) || 1); return Object.keys(_orgSel).filter(function(k){ return _orgSel[k]; }).map(Number).filter(function(i){ return i >= 0 && i < n; }).sort(function(a, b){ return a - b; }); }
+function orgSceneSelList(){ return Object.keys(_orgSceneSel).filter(function(k){ return _orgSceneSel[k]; }).map(function(k){ var p = k.split(':'); return { frame: +p[0], scene: +p[1] }; }); }
 function orgUpdateActions(){
   var bar = document.getElementById('edOrgActions'); if (!bar) return;
+  // scene-merge mode takes priority when scenes are checked
+  var scSel = orgSceneSelList();
+  if (scSel.length){
+    bar.classList.add('show');
+    var frames = {}; scSel.forEach(function(x){ frames[x.frame] = 1; });
+    var sameFrame = Object.keys(frames).length === 1;
+    var scIdx = scSel.map(function(x){ return x.scene; }).sort(function(a, b){ return a - b; });
+    var contig = scIdx.length >= 2 && (scIdx[scIdx.length - 1] - scIdx[0] === scIdx.length - 1);
+    var canMergeScenes = sameFrame && contig;
+    bar.innerHTML = '<div class="oa-count">' + scSel.length + ' scene' + (scSel.length === 1 ? '' : 's') + ' selected</div><div class="oa-btns">'
+      + '<button type="button" class="oa-btn oa-merge" ' + (canMergeScenes ? '' : 'disabled') + ' title="' + (scSel.length < 2 ? 'Select 2+ adjacent scenes in one section' : (canMergeScenes ? 'Merge into one scene (removes the ~ breaks between them)' : 'Scenes must be adjacent and in the same section')) + '">Merge scenes</button>'
+      + '<button type="button" class="oa-btn oa-clear">Clear</button></div>'
+      + (scSel.length >= 2 && !canMergeScenes ? '<div class="oa-note">Pick adjacent scenes within one section.</div>' : '');
+    var mb = bar.querySelector('.oa-merge'); if (mb && canMergeScenes) mb.addEventListener('click', function(){ orgMergeScenes(scIdx[0] != null ? scSel[0].frame : 0, scIdx); });
+    var cb3 = bar.querySelector('.oa-clear'); if (cb3) cb3.addEventListener('click', function(){ _orgSceneSel = {}; renderOrgTree(); });
+    return;
+  }
   var sel = orgSelIndices();
   var n = (typeof msSecCount === 'function') ? msSecCount() : ((state.frames && state.frames.length) || 1);
   if (!sel.length){ bar.innerHTML = ''; bar.classList.remove('show'); return; }
@@ -28331,6 +28353,46 @@ function orgJumpScene(frame, sceneIdx){
     var es = document.getElementById('editScroll');
     if (es && sc.el.getBoundingClientRect){ es.scrollTop = Math.max(0, sc.el.getBoundingClientRect().top - es.getBoundingClientRect().top + es.scrollTop - 20); }
   } catch(e){}
+}
+// Merge adjacent scenes [a..b] within one section: remove the `~` breaks between them (their prose joins), and fold
+// any per-scene notes into the survivor. No frame/section change — purely within-section.
+function _orgMergeSceneNotes(frame, a, b){
+  try {
+    if (!state.session || !state.session.npNotes) return;
+    var span = b - a, nn = state.session.npNotes, out = {}, groups = {};
+    var mapScene = function(s){ if (s < a) return s; if (s <= b) return a; return s - span; };
+    var reSc = new RegExp('^section:' + frame + '\\|scene:(\\d+)$');
+    var reBase = new RegExp('^section:' + frame + '$');
+    Object.keys(nn).forEach(function(key){
+      var s = null, m = reSc.exec(key); if (m) s = +m[1]; else if (reBase.exec(key)) s = 0;
+      if (s == null){ out[key] = nn[key]; return; }
+      var ns = mapScene(s), nk = ns === 0 ? ('section:' + frame) : ('section:' + frame + '|scene:' + ns);
+      (groups[nk] = groups[nk] || []).push({ oi: s, body: nn[key] });
+    });
+    Object.keys(groups).forEach(function(nk){ var arr = groups[nk].sort(function(x, y){ return x.oi - y.oi; }); out[nk] = arr.length > 1 ? _orgConcatNotes(arr) : arr[0].body; });
+    state.session.npNotes = out;
+  } catch(e){}
+}
+function orgMergeScenes(frame, sceneIdxs){
+  try {
+    sceneIdxs = (sceneIdxs || []).slice().sort(function(a, b){ return a - b; }).filter(function(v, i, a){ return i === 0 || a[i - 1] !== v; });
+    if (sceneIdxs.length < 2) return false;
+    var a = sceneIdxs[0], b = sceneIdxs[sceneIdxs.length - 1];
+    if (b - a !== sceneIdxs.length - 1) return false;   // contiguous only
+    if (typeof pushUndo === 'function') pushUndo();
+    var ed = $('editor'); if (!ed) return false;
+    var fm = nodeFrameMap(); var marks = [];
+    Array.prototype.forEach.call(ed.children, function(c){ if (fm.get(c) === frame && c.classList && c.classList.contains('scene-mark')) marks.push(c); });
+    for (var s = b; s >= a + 1; s--){ var mk = marks[s - 1]; if (mk && mk.parentNode) mk.remove(); }   // scene s begins at marks[s-1]; drop the breaks that start a+1..b
+    _orgMergeSceneNotes(frame, a, b);
+    if (state.session){ try { state.session.html = editorHTML(); state.session.text = editorText(); } catch(e){} }
+    if (typeof buildEditMode === 'function') buildEditMode();
+    if (typeof scheduleAutosave === 'function') scheduleAutosave(200);
+    _orgSceneSel = {};
+    _orgRefreshViews();
+    if (typeof flashStatus === 'function') flashStatus((b - a + 1) + ' scenes merged');
+    return true;
+  } catch(e){ try { console.warn('org scene merge error:', e); } catch(_){} return false; }
 }
 function orgJumpTo(i){ try { if (typeof msScrollTo === 'function') msScrollTo('edit', i); state.frameIdx = i; if (typeof syncModeSecNav === 'function') syncModeSecNav('edit'); orgUpdateCurrent(); } catch(e){} }
 /* ---- Section Organizer — Phase 2 engine: unified section-index reindex + lossless Merge + Delete. ----
@@ -42562,7 +42624,7 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.204';
+  var APP_VERSION = '2026.07.20.206';
   var APP_CHANGELOG = [
     { v:'2026.07.20.162', date:'July 29, 2026', notes:[
       'Removed the explanatory note under the session review card.',
@@ -44117,7 +44179,10 @@ body.ember:not(.eink) .plan-stakepick .lp-row-tag.stk{ color:#e6968d; background
 .pl-insrow{ display:flex; align-items:center; padding:0; }
 .pl-plus{ width:26px; height:20px; display:inline-flex; align-items:center; justify-content:center; font-size:14px; line-height:1; color:rgba(140,124,94,.4); background:transparent; border:1px dashed rgba(140,124,94,.2); border-radius:999px; cursor:pointer; transition:color .14s, border-color .14s; }
 .pl-plus:hover{ color:var(--gold,#c49e4a); border-color:var(--gold,#c49e4a); border-style:solid; }
-.pl-insadd{ margin-left:92px; }   /* + section: centered under the 210px section column */
+.pl-insadd{ margin-left:92px; width:auto; min-width:0; gap:4px; padding:0 11px; font-family:var(--sans); font-size:9px; font-weight:700; letter-spacing:.09em; text-transform:uppercase; }   /* ＋ scene: one-click insert, centered under the section column */
+.pl-insmore{ margin-left:5px; }
+.pl-insrow{ position:relative; }
+.pl-insrow:hover::before{ content:''; position:absolute; left:0; right:0; top:50%; transform:translateY(-50%); border-top:1px dashed rgba(200,150,31,.45); pointer-events:none; z-index:1; }   /* the insert line spans the columns, so the scene reads as slotting in between the cards */
 .pl-dia[draggable="true"]{ cursor:grab; }
 .pl-dia[draggable="true"]:active{ cursor:grabbing; }
 .pl-scell2.pl-dragging{ opacity:.45; }
@@ -47337,16 +47402,18 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
   }
   function insertRow(i){
     var row=document.createElement('div'); row.className='pl-insrow'; row.style.gridColumn='1 / -1';
-    var add=document.createElement('button'); add.className='pl-plus pl-insadd'; add.textContent='+'; add.title='Insert a section or plot here';
-    add.addEventListener('click', function(e){ e.stopPropagation(); openInsertMenu(add, i); });
-    row.appendChild(add);
+    var add=document.createElement('button'); add.className='pl-plus pl-insadd'; add.innerHTML='＋ scene'; add.title='Insert a new scene here — it joins this Part and syncs to your manuscript (Refine)';
+    add.addEventListener('click', function(e){ e.stopPropagation(); var a=api(); if(a && a.insertSectionAfter) a.insertSectionAfter(i); closeMenus(); scheduleReplot(); });   // one click: a real scene (section) inserted at this spot, into the Part, synced everywhere
+    var more=document.createElement('button'); more.className='pl-plus pl-insmore'; more.textContent='⋯'; more.title='More — add a Part, a prologue/epilogue, or a scene break inside the section above';
+    more.addEventListener('click', function(e){ e.stopPropagation(); openInsertMenu(more, i); });
+    row.appendChild(add); row.appendChild(more);
     return row;
   }
   function openInsertMenu(anchor, afterIdx){
     closeMenus(); var a=api();
     var m=document.createElement('div'); m.className='plan-menu'; m.style.maxHeight='360px'; m.style.overflow='auto'; m.style.minWidth='220px';
-    var b0=document.createElement('button'); b0.textContent='＋ Add a section'; b0.title='A single section (joins the Part it sits within)'; b0.addEventListener('click', function(e){ e.stopPropagation(); if(a) a.insertSectionAfter(afterIdx); closeMenus(); scheduleReplot(); }); m.appendChild(b0);
-    var bSc=document.createElement('button'); bSc.textContent='＋ Add a scene'; bSc.title='Add a scene (a ~ break) inside the section above — sections hold one or more scenes'; bSc.addEventListener('click', function(e){ e.stopPropagation(); try { if(typeof window.orgAddSceneToSection==='function') window.orgAddSceneToSection(afterIdx); } catch(_){} closeMenus(); scheduleReplot(); }); m.appendChild(bSc);
+    var b0=document.createElement('button'); b0.textContent='＋ Add a scene'; b0.title='A new scene (section) here — joins the Part it sits within, synced to your manuscript'; b0.addEventListener('click', function(e){ e.stopPropagation(); if(a) a.insertSectionAfter(afterIdx); closeMenus(); scheduleReplot(); }); m.appendChild(b0);
+    var bSc=document.createElement('button'); bSc.textContent='＋ Scene break (~) in the section above'; bSc.title='Divide the section above into scenes with a ~ break — no new row, just a scene boundary in the prose'; bSc.addEventListener('click', function(e){ e.stopPropagation(); try { if(typeof window.orgAddSceneToSection==='function') window.orgAddSceneToSection(afterIdx); } catch(_){} closeMenus(); scheduleReplot(); }); m.appendChild(bSc);
     var bP=document.createElement('button'); bP.textContent='＋ Add a part'; bP.title='A named Part divider with one section — group sections under it';
     bP.addEventListener('click', function(e){ e.stopPropagation(); (async function(){ var nm=(typeof sitePrompt==='function')?await sitePrompt('Name this part',''):'Part'; if(nm===null) return; if(a) a.insertPart(afterIdx, nm); closeMenus(); scheduleReplot(); })(); }); m.appendChild(bP);
     var hasPro=a?a.hasSectionType('prologue'):false, hasEpi=a?a.hasSectionType('epilogue'):false;
