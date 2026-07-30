@@ -1088,7 +1088,11 @@
   #elNamePop .elnp-row.elnp-noicon .elnp-col{margin-left:0}
   #elNamePop .elnp-icon{position:relative; flex:none; align-self:stretch; width:86px; min-height:0; box-sizing:border-box; border:1px solid var(--line); border-radius:10px; cursor:pointer; background:#fff; overflow:hidden}
   #elNamePop .elnp-icon svg{position:absolute; inset:11px; width:calc(100% - 22px); height:calc(100% - 22px)}
-  #elNamePop .elnp-col{flex:1 1 0; min-width:0; display:flex; flex-direction:column; gap:7px}
+  #elNamePop .elnp-col{flex:1 1 0; min-width:0; display:flex; flex-direction:column; gap:4px; justify-content:center}
+  #elNamePop .elnp-flbl{font-family:var(--sans); font-size:9.5px; font-weight:700; letter-spacing:.13em; text-transform:uppercase; color:var(--ink-faint)}
+  #elNamePop .elnp-tiers{display:flex; flex-direction:column; gap:3px; margin-top:14px}
+  #elNamePop .elnp-tiers .elnp-flbl{margin-bottom:2px}
+  #elNamePop .elnp-tiers .elnp-flbl:not(:first-child){margin-top:9px}
   #elNamePop .elnp-name{flex:none; height:48px; box-sizing:border-box; width:100%; font-family:var(--serif); font-size:15.5px; line-height:1.4; color:var(--ink); background:var(--paper); border:1px solid var(--line); border-radius:9px; padding:7px 10px; resize:none}
   #elNamePop .elnp-name:focus{outline:none; border-color:var(--ink-faint)}
   #elNamePop .elnp-cat{flex:none; display:flex; align-items:center; justify-content:space-between; gap:8px; width:100%; box-sizing:border-box; font-family:var(--sans); font-size:12px; color:var(--ink); background:var(--paper); border:1px solid var(--line); border-radius:9px; padding:7px 10px; cursor:pointer; text-align:left}
@@ -5814,17 +5818,101 @@ function applyElemNameAndSub(key, i, name, sub){
   try{ if(typeof renderNarrative==='function') renderNarrative(); }catch(e){}
   try{ if(typeof window.__planRefreshElements==='function') window.__planRefreshElements(); }catch(e){}
 }
-// The unified name/category popup — icon (left) + stacked name field & category picker (right). Used by map naming AND the edit pencil.
+// The specific words (types) under a category's subcategory — for the Type picker.
+function subWords(cat, sub){
+  var c=getCat(cat); if(!c) return [];
+  var sb=(c.subcategories||[]).find(function(s){ return s.name===sub; });
+  if(!sb||!Array.isArray(sb.words)) return [];
+  return sb.words.map(function(x){ return (typeof x==='string')?x:(x&&x.w); }).filter(Boolean);
+}
+// Position a floating picker menu just under its anchor (shared by the category/word pickers).
+function _placePickMenu(m, anchorEl, z){
+  var r=anchorEl?anchorEl.getBoundingClientRect():{left:200,bottom:180,width:120};
+  m.style.position='fixed'; m.style.zIndex=String(z||4300);
+  var mw=m.offsetWidth||190, mh=m.offsetHeight||220;
+  var left=Math.max(8, Math.min(Math.round(r.left), window.innerWidth-mw-8));
+  var top=Math.round((r.bottom||180)+4); if(top+mh>window.innerHeight-8) top=Math.max(8, Math.round((r.top||180)-mh-4));
+  m.style.left=left+'px'; m.style.top=top+'px';
+  setTimeout(function(){ document.addEventListener('mousedown', function h(ev){ if(!m.contains(ev.target)){ m.remove(); document.removeEventListener('mousedown', h, true); } }, true); }, 0);
+}
+// Top-level category picker (Being / Setting / Object / Event / …) — reclassify what KIND of element this is.
+function openCatPickerMenu(curCat, anchorEl, onPick){
+  var old=document.getElementById('catPickMenu'); if(old) old.remove();
+  var m=document.createElement('div'); m.id='catPickMenu'; m.className='plan-menu pl-editmenu';
+  var t=document.createElement('div'); t.className='pm-lbl pm-sub'; t.textContent='Category'; m.appendChild(t);
+  var choices=['being','setting','object','event','org'].filter(function(id){ return !!getCat(id); });
+  if(getCat(curCat) && choices.indexOf(curCat)<0) choices.unshift(curCat);
+  choices.forEach(function(id){
+    var b=document.createElement('button'); b.type='button'; b.textContent=((getCat(id)||{}).name)||id; if(id===curCat) b.classList.add('pm-on');
+    b.addEventListener('click', function(e){ e.stopPropagation(); m.remove(); if(onPick) onPick(id); }); m.appendChild(b); });
+  document.body.appendChild(m); _placePickMenu(m, anchorEl, 4300);
+}
+// Specific-type (word) picker — the words under the chosen category+subcategory, plus a free-type option.
+function openWordPicker(cat, sub, cur, anchorEl, onPick){
+  var old=document.getElementById('wordPickMenu'); if(old) old.remove();
+  var m=document.createElement('div'); m.id='wordPickMenu'; m.className='plan-menu pl-editmenu';
+  var t=document.createElement('div'); t.className='pm-lbl pm-sub'; t.textContent='Type'; m.appendChild(t);
+  var words=subWords(cat, sub);
+  if(cur && words.map(function(x){return x.toLowerCase();}).indexOf(cur.toLowerCase())<0) words.unshift(cur);   // keep a custom-typed value visible/selected
+  if(!words.length){ var none=document.createElement('div'); none.className='pm-lbl'; none.style.cssText='opacity:.6;font-style:italic'; none.textContent='No preset types — type your own below'; m.appendChild(none); }
+  words.forEach(function(wd){
+    var b=document.createElement('button'); b.type='button'; b.textContent=wd; if(cur && wd.toLowerCase()===cur.toLowerCase()) b.classList.add('pm-on');
+    b.addEventListener('click', function(e){ e.stopPropagation(); m.remove(); if(onPick) onPick(wd); }); m.appendChild(b); });
+  var sep=document.createElement('div'); sep.className='pm-sep'; m.appendChild(sep);
+  var nb=document.createElement('button'); nb.type='button'; nb.className='pm-lib'; nb.textContent='＋ Type your own…';
+  nb.addEventListener('click', function(e){ e.stopPropagation(); m.remove(); (async function(){
+    var nm=(typeof sitePrompt==='function')?await sitePrompt('Specific type for this '+(((getCat(cat)||{}).name||'element').toLowerCase()), cur||''):null;
+    if(nm==null) return; nm=(nm||'').trim(); if(!nm) return; if(onPick) onPick(nm);
+  })(); });
+  m.appendChild(nb);
+  document.body.appendChild(m); _placePickMenu(m, anchorEl, 4300);
+}
+// Apply an edit across every tier (name, category, subcategory, type) to every store npFindEl reads, migrating
+// key-indexed data (notes, connections, arcs…) whenever the category or type change re-keys the element.
+function applyElemEdit(key, i, opts){
+  var w0=(typeof npFindEl==='function')?npFindEl(key):null;
+  if(!w0){ applyElemNameAndSub(key, i, opts.name, opts.sub); return; }
+  if(typeof pushUndo==='function') pushUndo();
+  var oldKey=key;
+  var newCat=opts.cat||w0.cat, newSub=(opts.sub!=null?opts.sub:(w0.sub||'')), newWord=(opts.word!=null?opts.word:(w0.word||''));
+  var trimmed=(opts.name||'').trim();
+  var applyW=function(w){ if(w && wordKey(w)===oldKey){
+    w.cat=newCat; w.sub=newSub; w.word=newWord;
+    if(trimmed) w.name=trimmed; else delete w.name;
+    if(w.identity) w.identity=[{ word:newWord, sub:newSub }];
+    if(newCat==='being'){ w.role='being'; if(!w.identity) w.identity=[{ word:newWord, sub:newSub }]; }
+    else if(w.role==='being'){ w.role='word'; }
+  }};
+  ((state&&state.prompt&&state.prompt.words)||[]).forEach(applyW);
+  ((state&&state.frames)||[]).forEach(function(fr){ ((fr&&fr.prompt&&fr.prompt.words)||[]).forEach(applyW); });
+  if(state&&state.session&&Array.isArray(state.session.elemLibrary)){ state.session.elemLibrary.forEach(function(r){ if(r&&r.item) applyW(r.item); }); }
+  if(i>=0 && state.nodes && state.nodes[i]){ var nd=state.nodes[i]; nd.name=(trimmed||undefined); nd.word=newWord; nd.sub=newSub; nd.cat=newCat; }
+  var newKey=wordKey({ set:(w0.set||0), cat:newCat, word:newWord, iid:w0.iid });
+  if(oldKey!==newKey && typeof migrateElementKey==='function') migrateElementKey(oldKey, newKey);
+  if(trimmed && i>=0 && window.cascadeForward) window.cascadeForward(i, 'Name');
+  if(typeof syncFramesToSession==='function') try{ syncFramesToSession(); }catch(e){}
+  if(typeof scheduleAutosave==='function') scheduleAutosave();
+  try{ if(typeof renderConstellation==='function') renderConstellation(); }catch(e){}
+  try{ if(typeof renderNpCard==='function') renderNpCard(); }catch(e){}
+  try{ if(typeof renderNpElements==='function') renderNpElements(); }catch(e){}
+  try{ if(typeof renderNarrative==='function') renderNarrative(); }catch(e){}
+  try{ if(typeof window.__planRefreshElements==='function') window.__planRefreshElements(); }catch(e){}
+}
+// The unified edit popup — icon (left) + name, and the full tier stack (Category · Sub-category · Type). Used by map naming AND the edit pencil.
 function openElemNamePopup(key){
   var w=(typeof npFindEl==='function')?npFindEl(key):null; if(!w) return;
   var i=-1; try{ ((state.prompt&&state.prompt.words)||[]).forEach(function(x,ix){ if(wordKey(x)===key) i=ix; }); }catch(e){}
-  var catName=((getCat(w.cat)||{}).name)||'element';
-  var showIcon=(w.role==='being' || w.cat==='object' || w.cat==='setting' || w.cat==='being');
   var old=document.getElementById('elNamePop'); if(old) old.remove();
+  var chosen={ cat:(w.cat||'setting'), sub:(w.sub||''), word:(w.word||'') };
   var bd=document.createElement('div'); bd.id='elNamePop'; bd.className='elnp-bd';
   var card=document.createElement('div'); card.className='elnp-card';
-  var lbl=document.createElement('div'); lbl.className='elnp-lbl'; lbl.textContent='Name this '+catName;
+  var lbl=document.createElement('div'); lbl.className='elnp-lbl';
+  var setHdr=function(){ lbl.textContent='Edit this '+((((getCat(chosen.cat)||{}).name)||'element')); };
+  setHdr();
+  function fieldLabel(txt){ var l=document.createElement('div'); l.className='elnp-flbl'; l.textContent=txt; return l; }
+  // top row — icon + name
   var row=document.createElement('div'); row.className='elnp-row';
+  var showIcon=(w.role==='being' || chosen.cat==='object' || chosen.cat==='setting' || chosen.cat==='being');
   if(showIcon){
     var ic=document.createElement('div'); ic.className='elnp-icon'; ic.title='Click to choose an icon or load an image';
     var art=(typeof elIconArt==='function')?elIconArt(w):null;
@@ -5833,21 +5921,31 @@ function openElemNamePopup(key){
     else ic.style.cursor='default';
     row.appendChild(ic);
   } else { row.classList.add('elnp-noicon'); }
-  var col=document.createElement('div'); col.className='elnp-col';
-  var ta=document.createElement('textarea'); ta.className='elnp-name'; ta.rows=1; ta.spellcheck=false; ta.value=w.name||''; ta.placeholder='Name…';
-  var chosen={ sub:(w.sub||'') };
+  var namecol=document.createElement('div'); namecol.className='elnp-col';
+  namecol.appendChild(fieldLabel('Name'));
+  var ta=document.createElement('textarea'); ta.className='elnp-name'; ta.rows=1; ta.spellcheck=false; ta.value=w.name||''; ta.placeholder='A name for this one…';
+  namecol.appendChild(ta); row.appendChild(namecol);
+  // tier stack — Category · Sub-category · Type
+  var tiers=document.createElement('div'); tiers.className='elnp-tiers';
   var catBtn=document.createElement('button'); catBtn.type='button'; catBtn.className='elnp-cat';
-  var setCatLabel=function(){ catBtn.innerHTML='<span class="elnp-cat-v'+(chosen.sub?'':' elnp-cat-empty')+'">'+(chosen.sub?_elnpEsc(chosen.sub):'Set a category')+'</span><span class="elnp-cat-car">▾</span>'; };
-  setCatLabel();
-  catBtn.addEventListener('click', function(e){ e.stopPropagation(); openSubcatPicker(w.cat, chosen.sub, catBtn, function(sname){ chosen.sub=sname; setCatLabel(); }); });
-  col.appendChild(ta); col.appendChild(catBtn); row.appendChild(col);
+  var subBtn=document.createElement('button'); subBtn.type='button'; subBtn.className='elnp-cat';
+  var wordBtn=document.createElement('button'); wordBtn.type='button'; wordBtn.className='elnp-cat';
+  var setBtn=function(btn, val, empty){ btn.innerHTML='<span class="elnp-cat-v'+(val?'':' elnp-cat-empty')+'">'+(val?_elnpEsc(val):empty)+'</span><span class="elnp-cat-car">▾</span>'; };
+  var refresh=function(){ setBtn(catBtn, ((getCat(chosen.cat)||{}).name)||'', 'Set a category'); setBtn(subBtn, chosen.sub, 'Set a sub-category'); setBtn(wordBtn, chosen.word, 'Set a type'); setHdr(); };
+  catBtn.addEventListener('click', function(e){ e.stopPropagation(); openCatPickerMenu(chosen.cat, catBtn, function(cid){ if(cid===chosen.cat) return; chosen.cat=cid; var subs=allSubNames(cid,{beingIdentity:true}); chosen.sub=(subs&&subs.length)?subs[0]:''; refresh(); }); });
+  subBtn.addEventListener('click', function(e){ e.stopPropagation(); openSubcatPicker(chosen.cat, chosen.sub, subBtn, function(sname){ chosen.sub=sname; refresh(); }); });
+  wordBtn.addEventListener('click', function(e){ e.stopPropagation(); openWordPicker(chosen.cat, chosen.sub, chosen.word, wordBtn, function(wd){ chosen.word=wd; refresh(); }); });
+  tiers.appendChild(fieldLabel('Category')); tiers.appendChild(catBtn);
+  tiers.appendChild(fieldLabel('Sub-category')); tiers.appendChild(subBtn);
+  tiers.appendChild(fieldLabel('Type')); tiers.appendChild(wordBtn);
+  refresh();
   var acts=document.createElement('div'); acts.className='elnp-acts';
   var cancel=document.createElement('button'); cancel.type='button'; cancel.className='elnp-cancel'; cancel.textContent='Cancel';
   var save=document.createElement('button'); save.type='button'; save.className='elnp-save'; save.textContent='Save';
   cancel.addEventListener('click', function(){ bd.remove(); });
-  save.addEventListener('click', function(){ applyElemNameAndSub(key, i, ta.value, chosen.sub); bd.remove(); });
+  save.addEventListener('click', function(){ applyElemEdit(key, i, { name:ta.value, cat:chosen.cat, sub:chosen.sub, word:chosen.word }); bd.remove(); });
   acts.appendChild(cancel); acts.appendChild(save);
-  card.appendChild(lbl); card.appendChild(row); card.appendChild(acts);
+  card.appendChild(lbl); card.appendChild(row); card.appendChild(tiers); card.appendChild(acts);
   bd.appendChild(card); document.body.appendChild(bd);
   bd.addEventListener('mousedown', function(e){ if(e.target===bd) bd.remove(); });
   ta.addEventListener('keydown', function(e){ if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); save.click(); } });
@@ -25529,7 +25627,7 @@ async function confirmImport(){
   const secMsg = secs.length > 1 ? (' across ' + secs.length + ' sections') : '';
   const propMsg = ((_props + _pooled) ? (' · +' + (_props + _pooled) + ' pool word' + ((_props + _pooled) === 1 ? '' : 's')) : '') + (_goals ? (' · ' + _goals + ' goal' + (_goals === 1 ? '' : 's')) : '');
   flashStatus((asSection ? ('Added ' + added + ' element' + (added === 1 ? '' : 's') + secMsg) : ('Imported — ' + added + ' element' + (added === 1 ? '' : 's') + secMsg)) + (legendOnly ? (' · ' + legendOnly + ' waiting in the Story Legend') : '') + (_cweb ? (' · ' + _cweb + ' concept link' + (_cweb === 1 ? '' : 's')) : '') + propMsg);
-  if (!(IMP._bg || IMP._sessionImport)) importDoneNotify(added + legendOnly);   // confirm to the writer — but NEVER for an end-of-session scan (its route to Refine/Notes is already the destination)
+  if (!(IMP._bg || IMP._sessionImport || IMP.qa)) importDoneNotify(added + legendOnly);   // confirm to the writer — but NEVER for an end-of-session scan or an Explore organize (those route themselves)
   } catch (e){ console.warn('import build error:', e); $('importConfirm').disabled = false; flashStatus('Couldn’t build: ' + e.message); }
 }
 // Import-complete pop-up: reassures the writer their elements + notes are in the notepad, and jumps there on request.
@@ -25546,6 +25644,9 @@ async function importDoneNotify(n){
 }
 
 function confirmNotesImport(){
+  const _qaFlow = !!IMP.qa;                              // this import came from an Explore → End & organize
+  const _qaEntryLens = window.__qaEntryLens || '';       // 'interview' = the new-story "Find an Idea" pathway
+  const _qaEntryMode = window.__qaEntryMode || 'map';    // the mode Explore was launched from
   IMP.overview = $('importOverview').value.trim();
   IMP.title = $('importTitle').value.trim();
   const dest = (document.querySelector('input[name=impdest]:checked') || {}).value || 'new';
@@ -25594,8 +25695,22 @@ function confirmNotesImport(){
     saveSession();
     if (!(IMP._bg || IMP._sessionImport) && window.openStoryLegend) window.openStoryLegend();   // R33 — the Story Legend opens by default on a notes/Q&A import (skipped when running in the background from a session)
     if (!(IMP._bg || IMP._sessionImport)) flashStatus('Imported — ' + libbed + ' element' + (libbed === 1 ? '' : 's') + ' in your Story Legend' + (pooled ? (' · ' + pooled + ' pool word' + (pooled === 1 ? '' : 's') + ' filed') : '') + (added ? (' · ' + added + ' on the map') : '') + (_props ? (' · +' + _props + ' pool word' + (_props === 1 ? '' : 's')) : '') + (_goals ? (' · ' + _goals + ' goal' + (_goals === 1 ? '' : 's')) : ''));
-    if (!(IMP._bg || IMP._sessionImport) && typeof importDoneNotify === 'function') importDoneNotify(libbed + added);   // same confirmation + notepad shortcut for Q&A / notes imports
+    if (!(IMP._bg || IMP._sessionImport) && !_qaFlow && typeof importDoneNotify === 'function') importDoneNotify(libbed + added);   // notepad-shortcut confirmation — skipped for the Explore flow (it just returns you to where you started)
     closeImport();   // LAST — its session-import hook (navigate to Refine / Notes) runs only after the guarded reveals above are safely skipped
+    // Explore → End & organize: no confirmation pop-up. Return to the mode Explore was launched from; the new-story
+    // "Find an Idea" pathway lands on the Map with every element placed and in view.
+    if (_qaFlow){ try {
+      if (_qaEntryLens === 'interview'){
+        var _prevAP = state.autoPlace; state.autoPlace = true;   // drop them straight onto the map, no click-to-place
+        try { ['being','setting','object','event'].forEach(function(c){ if (typeof libAddAll === 'function') libAddAll(c); }); } catch(e){}
+        state.autoPlace = _prevAP;
+        if (typeof goMode === 'function') goMode('notepad');
+        requestAnimationFrame(function(){ try { if (typeof fitViewToNodes === 'function') fitViewToNodes(); } catch(e){} });
+      } else {
+        var _mm = { map:'notepad', write:'write', refine:'edit', read:'read', wiki:'wiki' };
+        if (typeof goMode === 'function') goMode(_mm[_qaEntryMode] || 'notepad');
+      }
+    } catch(e){} }
   } catch (e){ console.warn('notes import error:', e); $('importConfirm').disabled = false; flashStatus('Couldn\u2019t add notes: ' + e.message); }
 }
 
@@ -40909,6 +41024,7 @@ body.eink #expMenu{background:#fff; border-color:#000}
     }
     window.openExplore = function(keys, label, lens){   // full-screen scoped Explore Q&A (lens: element/set/map/thread/plot/goals/layers/category)
       if (typeof aiAuthed === 'function' && !aiAuthed()){ if (typeof promptAiSignup === 'function') promptAiSignup(); return; }
+      try { window.__qaEntryLens = lens || ''; window.__qaEntryMode = (function(){ try { return localStorage.getItem('dystoria.uiMode') || 'map'; } catch(e){ return 'map'; } })(); } catch(e){}   // remember where Explore was launched from, to return there after End & organize
       var expanded = [];
       (keys || []).forEach(function(k){ if (!k) return; var st = String(k);
         if (st.indexOf('thread:') === 0){ qaThreadMembers(st.slice(7)).forEach(function(w){ expanded.push(wordKey(w)); }); }
@@ -41931,7 +42047,7 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.196';
+  var APP_VERSION = '2026.07.20.197';
   var APP_CHANGELOG = [
     { v:'2026.07.20.162', date:'July 29, 2026', notes:[
       'Removed the explanatory note under the session review card.',
