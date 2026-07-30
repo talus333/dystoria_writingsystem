@@ -864,6 +864,34 @@
   /* AI rephrase suggestions — left sidebar, mirrors the notes panel on the right */
   #aiSugPanel{position:absolute; top:0; right:calc(50% + 384px); height:100%; width:272px; overflow:hidden; background:var(--paper); display:none}
   #editMode.show-aisug #aiSugPanel{display:block}
+  /* ---- Organize drawer (Refine): folder tree of Parts → Sections, slide-out from the left ---- */
+  #edOrgPanel{position:absolute; top:0; left:0; height:100%; width:300px; box-sizing:border-box; background:var(--paper); border-right:1px solid var(--line); box-shadow:6px 0 26px -14px rgba(60,45,20,.4); transform:translateX(-101%); transition:transform .22s ease; z-index:60; display:flex; flex-direction:column; overflow:hidden}
+  #editCols.org-open #edOrgPanel{transform:none}
+  #edOrgTab{position:absolute; left:0; top:16px; z-index:61; display:flex; align-items:center; background:var(--paper); color:var(--ink-soft); border:1px solid var(--line); border-left:none; border-radius:0 10px 10px 0; padding:13px 5px; cursor:pointer; writing-mode:vertical-rl; font-family:var(--sans); font-size:10px; font-weight:700; letter-spacing:.15em; text-transform:uppercase; transition:left .22s ease}
+  #edOrgTab:hover{color:var(--ink); border-color:var(--ink-faint)}
+  #editCols.org-open #edOrgTab{left:300px}
+  #edOrgHead{padding:14px 14px 10px; border-bottom:1px solid var(--line)}
+  #edOrgHead .eo-h{font-family:var(--sans); font-size:11px; font-weight:700; letter-spacing:.16em; text-transform:uppercase; color:var(--ink-faint)}
+  #edOrgHead .eo-sub{display:block; margin-top:3px; font-family:var(--serif); font-style:italic; font-size:12.5px; color:var(--ink-soft)}
+  #edOrgList{flex:1; overflow-y:auto; padding:6px 6px 18px}
+  #edOrgFoot{padding:9px 14px; border-top:1px solid var(--line); font-family:var(--sans); font-size:10px; font-style:italic; color:var(--ink-faint); line-height:1.45}
+  .org-part{display:flex; align-items:center; gap:6px; padding:8px 6px 4px; cursor:pointer; user-select:none}
+  .org-part .org-caret{font-size:9px; color:var(--ink-faint); transition:transform .15s; display:inline-block}
+  .org-part.collapsed .org-caret{transform:rotate(-90deg)}
+  .org-part .org-pname{font-family:var(--sans); font-size:10px; font-weight:700; letter-spacing:.12em; text-transform:uppercase; color:var(--gold)}
+  .org-sec{display:flex; align-items:center; gap:8px; padding:6px 8px; border-radius:8px; cursor:pointer}
+  .org-sec.indented{margin-left:14px}
+  .org-sec.hidden{display:none}
+  .org-sec:hover{background:rgba(120,92,40,.06)}
+  .org-sec.on{background:rgba(200,150,31,.14); box-shadow:inset 2px 0 0 var(--gold)}
+  .org-sec .org-num{flex:none; min-width:16px; text-align:right; font-family:var(--sans); font-size:11px; font-weight:700; color:var(--ink-faint)}
+  .org-sec .org-ttl{flex:1; min-width:0; font-family:var(--serif); font-size:13px; color:var(--ink); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+  .org-sec .org-meta{flex:none; display:flex; align-items:center; gap:5px}
+  .org-sec .org-dot{width:6px; height:6px; border-radius:50%; background:var(--gold)}
+  .org-sec .org-el{font-family:var(--sans); font-size:9px; color:var(--ink-faint)}
+  .org-sec .org-wc{font-family:var(--sans); font-size:9px; color:var(--ink-faint); opacity:.8}
+  body.ember:not(.eink) #edOrgPanel, body.ember:not(.eink) #edOrgTab{background:#f5efe1}
+  @media (max-width:1000px){ #editMode #edOrgPanel{width:82%; max-width:300px} }
   .ais-close{float:right; cursor:pointer; color:var(--ink-faint); font-size:14px; line-height:1}
   .ais-close:hover{color:var(--gold)}
   #aiSugList{padding:0 14px 24px; overflow-y:auto; height:calc(100% - 40px)}
@@ -27991,6 +28019,56 @@ function editScrollToCurrent(){
   updateEditTop();
 }
 function updateEditTop(){ const es = $('editScroll'), bt = $('editTop'); if (es && bt) bt.classList.toggle('show', es.scrollTop > 220); }
+/* ---- Organize drawer (Refine): read-only folder tree of Parts → Sections, jump-to-section, live renumber.
+   Phase 1: navigation only (merge/split/reorder come later). Reuses msSecLabel / partHeaderBeforeSection /
+   editGutterSectionData / msScrollTo so numbers, titles, part grouping and note indicators stay in sync. ---- */
+var _orgCollapsed = {};   // partId → true when that Part is collapsed in the drawer
+function _orgLoadCollapsed(){ try { var v = JSON.parse(localStorage.getItem('dystoria.orgCollapsed') || '{}'); if (v && typeof v === 'object') _orgCollapsed = v; } catch(e){} }
+function _orgSaveCollapsed(){ try { localStorage.setItem('dystoria.orgCollapsed', JSON.stringify(_orgCollapsed)); } catch(e){} }
+function ensureOrgDrawer(){
+  var cols = document.getElementById('editCols'); if (!cols) return;
+  if (document.getElementById('edOrgPanel')) return;
+  _orgLoadCollapsed();
+  var panel = document.createElement('div'); panel.id = 'edOrgPanel';
+  panel.innerHTML = '<div id="edOrgHead"><span class="eo-h">Organize</span><span class="eo-sub">Click a section to jump to it</span></div><div id="edOrgList"></div><div id="edOrgFoot">Reading view — merge, split &amp; reorder are coming next.</div>';
+  var tab = document.createElement('button'); tab.id = 'edOrgTab'; tab.type = 'button'; tab.title = 'Organize sections & parts'; tab.textContent = 'Organize';
+  cols.appendChild(panel); cols.appendChild(tab);
+  tab.addEventListener('click', function(e){ e.stopPropagation(); var open = cols.classList.toggle('org-open'); if (open) renderOrgTree(); });
+  var es = document.getElementById('editScroll');
+  if (es && !es._orgScrollWired){ es._orgScrollWired = 1; es.addEventListener('scroll', function(){ if (cols.classList.contains('org-open')) orgUpdateCurrent(); }, { passive: true }); }
+  window.__orgRefresh = function(){ try { if (cols.classList.contains('org-open')) renderOrgTree(); } catch(e){} };
+}
+function orgCurrentSection(){ try { return (typeof msCurrentFromScroll === 'function') ? msCurrentFromScroll('edit') : (state.frameIdx || 0); } catch(e){ return state.frameIdx || 0; } }
+function orgUpdateCurrent(){ var cur = orgCurrentSection(); var list = document.getElementById('edOrgList'); if (!list) return; Array.prototype.forEach.call(list.querySelectorAll('.org-sec'), function(r){ r.classList.toggle('on', (+r.getAttribute('data-i')) === cur); }); }
+function orgSectionWords(){ var counts = {}; try { var eb = document.getElementById('editBody'); if (!eb) return counts; var cur = 0; Array.prototype.forEach.call(eb.children, function(c){ var hh = (c.matches && c.matches('h3[data-frame]')) ? c : (c.querySelector ? c.querySelector('h3[data-frame]') : null); if (hh){ var f = parseInt(hh.getAttribute('data-frame'), 10); if (!isNaN(f)) cur = f; } var t = (c.textContent || '').trim(); if (t) counts[cur] = (counts[cur] || 0) + t.split(/\s+/).length; }); } catch(e){} return counts; }
+function renderOrgTree(){
+  var list = document.getElementById('edOrgList'); if (!list) return;
+  var n = (typeof msSecCount === 'function') ? msSecCount() : ((state.frames && state.frames.length) || 1);
+  var words = orgSectionWords();
+  var cur = orgCurrentSection();
+  var esc = function(s){ return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); };
+  var html = '';
+  for (var i = 0; i < n; i++){
+    var ph = (typeof partHeaderBeforeSection === 'function') ? partHeaderBeforeSection(i) : null;
+    var underPid = (typeof framePartId === 'function') ? framePartId(i) : null;
+    if (ph){ html += '<div class="org-part' + (underPid && _orgCollapsed[underPid] ? ' collapsed' : '') + '" data-pid="' + esc(underPid || '') + '"><span class="org-caret">▾</span><span class="org-pname">' + esc(ph) + '</span></div>'; }
+    var collapsed = underPid && _orgCollapsed[underPid];
+    var lab = (typeof msSecLabel === 'function') ? msSecLabel(i) : { n: i + 1, title: '' };
+    var d = {}; try { d = (typeof editGutterSectionData === 'function') ? editGutterSectionData(i) : {}; } catch(e){ d = {}; }
+    var els = d.els || [];
+    var hasNote = !!(d.gen || d.partNote || els.some(function(e){ return e.note; }));
+    var elc = els.length, wc = words[i] || 0;
+    html += '<div class="org-sec' + (underPid ? ' indented' : '') + (i === cur ? ' on' : '') + (collapsed ? ' hidden' : '') + '" data-i="' + i + '">'
+      + '<span class="org-num">' + lab.n + '</span>'
+      + '<span class="org-ttl">' + esc(lab.title || ('Section ' + (i + 1))) + '</span>'
+      + '<span class="org-meta">' + (hasNote ? '<span class="org-dot" title="Has notes"></span>' : '') + (elc ? '<span class="org-el" title="' + elc + ' element' + (elc === 1 ? '' : 's') + '">◆' + elc + '</span>' : '') + (wc ? '<span class="org-wc">' + wc + 'w</span>' : '') + '</span>'
+      + '</div>';
+  }
+  list.innerHTML = html;
+  Array.prototype.forEach.call(list.querySelectorAll('.org-sec'), function(r){ r.addEventListener('click', function(){ orgJumpTo(+r.getAttribute('data-i')); }); });
+  Array.prototype.forEach.call(list.querySelectorAll('.org-part'), function(p){ p.addEventListener('click', function(){ var pid = p.getAttribute('data-pid'); if (!pid) return; _orgCollapsed[pid] = !_orgCollapsed[pid]; _orgSaveCollapsed(); renderOrgTree(); }); });
+}
+function orgJumpTo(i){ try { if (typeof msScrollTo === 'function') msScrollTo('edit', i); state.frameIdx = i; if (typeof syncModeSecNav === 'function') syncModeSecNav('edit'); orgUpdateCurrent(); } catch(e){} }
 /* ---- centred section selector in the Refine/Read parchment bands: a shortcut that scrolls to a section (no long scrolling) ---- */
 function msSecCount(){ return (state.frames && state.frames.length) ? state.frames.length : 1; }
 function msSecLabel(fi){
@@ -28146,6 +28224,7 @@ function openEditMode(){
   buildEditMode();
   $('editMode').classList.add('show');
   try { buildModeSecNav('edit'); } catch(e){}
+  try { ensureOrgDrawer(); if (document.getElementById('editCols').classList.contains('org-open')) renderOrgTree(); } catch(e){}
   const _es = $('editScroll');
   const _anchor = _ovAnchor || _lastProseAnchor;
   const _reapply = () => { try { if (!(_anchor && ovApplyAnchor(_es, _anchor))) editScrollToCurrent(); updateEditTop(); } catch(e){} };
@@ -42086,7 +42165,7 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.198';
+  var APP_VERSION = '2026.07.20.199';
   var APP_CHANGELOG = [
     { v:'2026.07.20.162', date:'July 29, 2026', notes:[
       'Removed the explanatory note under the session review card.',
