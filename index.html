@@ -24991,6 +24991,15 @@ function wordExistsSystem(cat, word){
   const inPool = ecPoolWords(cat).some(p => p.word.toLowerCase() === lc);
   return inPool && !injected;   // a built-in word (not one injected by a story)
 }
+// Force an imported characteristic down to a 1–2 word value (an adjective/short descriptor); a longer phrase
+// keeps only its first word — the fuller wording lives in the element's note, not in a trait chip.
+function shortCharVal(v){
+  v = String(v || '').trim().replace(/^(a |an |the )/i, '').replace(/[.;,]+$/, '').trim();
+  if (!v) return '';
+  const toks = v.split(/\s+/);
+  if (toks.length > 2 || v.length > 24) return toks[0].replace(/[.;,]+$/, '');
+  return v.slice(0, 40);
+}
 async function extractImport(){
   const prose = $('importText').value.trim();
   if (!prose){ $('importStatus').textContent = 'Paste some prose first.'; return; }
@@ -25006,7 +25015,7 @@ async function extractImport(){
   const goalGuide = 'goals = any clearly-stated authorial GOALS / intentions the source expresses — what the work is about, aims to explore, or wants the reader to feel — ONLY if the source actually states them. Each: {word = a short label (2–6 words), note = the fuller statement in the author’s own words}. Empty [] if none are stated. Do not infer or invent goals. ';
   // Prose (a finished manuscript) never STATES authorial goals — reading them out of the story is inference, which we don't want. Only author notes define goals.
   const goalGuideProse = 'goals = [] ALWAYS. A manuscript’s prose does not state the author’s goals — never infer goals from the story itself. Return goals:[]. ';
-  const beingTraitInfo = 'traits=[{sub,value}] where sub∈[' + BEING_IMPORT_TRAIT_SUBS.join(',') + '] and value is the exact word or phrase from the text — include ONLY traits explicitly stated, never invent';
+  const beingTraitInfo = 'traits=[{sub,value}] where sub∈[' + BEING_IMPORT_TRAIT_SUBS.join(',') + '] and value is a SHORT 1–2 word characteristic (an adjective or brief descriptor) — never a sentence or long phrase; collapse several overlapping descriptions into a SINGLE characteristic word and put any fuller explanation in the element’s note, not in a trait. Include ONLY characteristics explicitly stated, never invent';
   const notesMode = IMP.kind === 'notes';
   // Narrative-FRAME extraction is deliberately conservative: genre/context/theme/stakes/plot are high-level and
   // easily over-read from a sentence or two. Story elements (beings/places/objects/events/terms) stay loose.
@@ -25077,7 +25086,7 @@ async function extractImport(){
       const aiSum = String(el.summary || '').trim(), aiNote = String(el.note || '').trim();
       const summary = notesMode ? (aiSum || aiNote) : aiSum;
       const elTraits = cat === 'being'
-        ? (Array.isArray(el.traits) ? el.traits : []).filter(t => t && BEING_IMPORT_TRAIT_SUBS.includes(t.sub) && String(t.value || '').trim()).map(t => ({ sub: t.sub, value: String(t.value).trim().slice(0, 60) }))
+        ? (Array.isArray(el.traits) ? el.traits : []).filter(t => t && BEING_IMPORT_TRAIT_SUBS.includes(t.sub) && String(t.value || '').trim()).map(t => ({ sub: t.sub, value: shortCharVal(t.value) })).filter(t => t.value)
         : [];
       const key = cat + '|' + importNorm(name);
       const ex = seenEl[key] || IMP.elements.find(r => r.cat === cat && importNameMatch(r.name, name));   // fuzzy: "The Woodcutter" == "Woodcutter", minor typos
@@ -39495,6 +39504,11 @@ body.eink #aisPop{border:2px solid #000; background:#fff}
 @keyframes qcElHot{ 0%{ background:rgba(255,214,120,.55) } 100%{ background:rgba(120,92,40,.05) } }
 #qaCtx .qc-traits{display:flex; flex-wrap:wrap; gap:4px; padding-left:15px}
 #qaCtx .qc-trait{font-family:var(--sans,sans-serif); font-size:10.5px; color:#7a6534; padding:2px 8px; border-radius:999px; border:1px solid rgba(120,92,40,.24); background:rgba(255,255,255,.35)}
+#qaCtx .qc-chars{display:flex; flex-direction:column; gap:5px; padding-left:15px; width:100%}
+#qaCtx .qc-char{display:flex; flex-direction:column; gap:2px; align-items:flex-start}
+#qaCtx .qc-tnotes{display:flex; flex-direction:column; gap:1px; padding-left:9px; margin-top:1px}
+#qaCtx .qc-tnote{font-family:var(--sans,sans-serif); font-size:9.5px; line-height:1.35; color:#8f7c4e; opacity:.9}
+#qaCtx .qc-tnote:before{content:'\2013\00a0'; opacity:.55}
 #qaCtx .qc-addh2{margin-top:9px; padding-top:9px; border-top:1px solid rgba(120,92,40,.16)}
 @keyframes qcPop{ from{ transform:scale(.85); opacity:0 } to{ transform:scale(1); opacity:1 } }
 #qaCtxTab.qc-flash{animation:qcTabFlash 1.1s ease 2}
@@ -40498,7 +40512,7 @@ body.eink #expMenu{background:#fff; border-color:#000}
         api2.addElement(catId, x, y);
       } catch(e){}
     }
-    async function qaExtractFromAnswer(text){   // re-derive the whole element+trait+rename picture from ALL answers so far (mirrors End & organize, which is why renames + characteristics surface reliably); text is unused but kept for the call signature
+    async function qaExtractFromAnswer(text){   // re-derive the whole element+characteristic picture from ALL answers (mirrors End & organize); characteristics come back as {word,notes[]} so a redundant sentence becomes a sub-note under one short word, not its own pill
       try {
         if (typeof aiAuthed === 'function' && !aiAuthed()) return;
         var answers = [];
@@ -40506,9 +40520,9 @@ body.eink #expMenu{background:#fff; border-color:#000}
         if (!answers.length) return;
         var scopeEls = qaScopeElements();
         var scopeNames = scopeEls.map(function(x){ return x.name || ''; }).filter(Boolean);
-        var sys = 'You read an author\u2019s answers from a story-planning chat and return ONLY minified JSON: {"elements":[{"name":"","cat":"","traits":[""]}]}. elements = the concrete NAMEABLE things the author has introduced across ALL the answers \u2014 characters, places, objects, events, groups, in-world concepts/terms (cat in [being,setting,object,event,org,concept]); AND, only where clearly stated, the narrative layers (a genre, the time/place context, a theme, the stakes, a plot shape, or the point of view; cat in [genre,period,theme,stakes,plot,narration]). CRITICAL: if the author first mentioned something generically ("a wanderer") and later gave it a proper NAME ("Mara"), return ONE element under the NAME (name:"Mara") with the earlier generic word folded into its traits (["wanderer", ...]) \u2014 never list both the generic word and the name as separate elements. traits = short characteristic words the answers attach to that element (its qualities, roles, descriptors). Merge everything about the same thing into a single element. Use the author\u2019s own words. Skip vague mood talk and the author themselves. Empty array if nothing concrete.';
-        var user = 'The author\u2019s answers, in order:\n\n' + answers.map(function(a, n){ return (n + 1) + '. ' + String(a).slice(0, 500).replace(/"/g, "'"); }).join('\n') + (scopeNames.length ? ('\n\nAlready pinned in this exploration (fold new traits into these; do NOT re-list them as new elements): ' + scopeNames.join(', ')) : '') + '\n\nReturn the JSON object only.';
-        var out = await aiCall(sys, user, { maxTokens: 800, json: true });
+        var sys = 'You read an author\u2019s answers from a story-planning chat and return ONLY minified JSON: {"elements":[{"name":"","cat":"","traits":[{"word":"","notes":[""]}]}]}. elements = the concrete NAMEABLE things the author introduced across ALL the answers \u2014 characters, places, objects, events, groups, in-world concepts/terms (cat in [being,setting,object,event,org,concept]); AND, only where clearly stated, the narrative layers (a genre, the time/place context, a theme, the stakes, a plot shape, or the point of view; cat in [genre,period,theme,stakes,plot,narration]). If the author first mentioned something generically ("a wanderer") and later NAMED it ("Mara"), return ONE element under the NAME with the generic word folded into traits \u2014 never both as separate elements. traits = that element\u2019s CHARACTERISTICS, each ONE canonical characteristic. word = a 1\u20132 word characteristic \u2014 an adjective or short descriptor that fits a real characteristic category (a psychological / physical / social / moral trait, a state, a mood, a role, a material, an atmosphere, a condition, \u2026) \u2014 NEVER a sentence or long phrase. notes = the fuller phrases/sentences from the answers that support that characteristic (each a short clause), or []. CRITICAL \u2014 collapse hard: several overlapping descriptions ("dedicated for over a decade", "works the case", "only one who cares", "visits persistently") must become ONE characteristic word ("dedicated") with those phrases moved into its notes \u2014 do NOT emit each phrase as its own characteristic. Aim for a FEW strong characteristic words per element, each carrying its supporting phrases as notes; merge synonyms. Use the author\u2019s own words for notes. Skip vague mood talk and the author themselves. Empty traits [] if nothing concrete.';
+        var user = 'The author\u2019s answers, in order:\n\n' + answers.map(function(a, n){ return (n + 1) + '. ' + String(a).slice(0, 500).replace(/"/g, "'"); }).join('\n') + (scopeNames.length ? ('\n\nAlready pinned in this exploration (fold new characteristics into these; do NOT re-list them as new elements): ' + scopeNames.join(', ')) : '') + '\n\nReturn the JSON object only.';
+        var out = await aiCall(sys, user, { maxTokens: 900, json: true });
         var obj = null; try { obj = JSON.parse(out); } catch(e){ if (typeof parseJsonLoose === 'function'){ try { obj = parseJsonLoose(out); } catch(_){} } }
         if (!obj || !Array.isArray(obj.elements)) return;
         var arr = obj.elements;
@@ -40516,34 +40530,59 @@ body.eink #expMenu{background:#fff; border-color:#000}
         var okCats = { being:1, setting:1, object:1, event:1, org:1, concept:1, genre:1, period:1, theme:1, stakes:1, plot:1, narration:1 };
         var excludedLc = {}; qaExcluded.forEach(function(x){ excludedLc[String(x).toLowerCase()] = 1; });
         var scopeLc = {}; scopeEls.forEach(function(x){ scopeLc[(x.name || '').toLowerCase()] = 1; });
-        var prevProv = {}; qaProvisional.forEach(function(pp){ prevProv[pp.name.toLowerCase()] = (pp.traits || []).slice(); });
-        var newProv = [], newHot = {}, seenName = {};
+        // normalize one raw trait (string OR {word,notes}) \u2192 {word,notes[]}, forcing a 1\u20132 word characteristic and demoting any long phrase into its own note
+        function normTrait(t){
+          var word = '', notes = [];
+          if (typeof t === 'string'){ word = t; }
+          else if (t && typeof t === 'object'){ word = t.word || ''; if (Array.isArray(t.notes)) notes = t.notes.slice(); }
+          word = String(word).trim().replace(/^(a |an |the )/i, '').replace(/[.;,]+$/, '').trim();
+          if (!word) return null;
+          var toks = word.split(/\s+/);
+          if (toks.length > 2 || word.length > 22){ notes.unshift(word); word = toks[0].replace(/[.;,]+$/, ''); }   // too long to be a characteristic word \u2192 keep first word, phrase becomes a note
+          notes = notes.map(function(n){ return String(n).trim().replace(/^(a |an |the )/i, '').replace(/\s+/g, ' ').replace(/[.;,]+$/, '').slice(0, 90); }).filter(Boolean);
+          return { word: word, notes: notes };
+        }
+        function mergeTrait(list, t){
+          var to = normTrait(t); if (!to) return false;
+          var lc = to.word.toLowerCase(); if (!lc || excludedLc[lc]) return false;
+          var ex = list.filter(function(x){ return x.word.toLowerCase() === lc; })[0];
+          var changed = false;
+          if (!ex){ ex = { word: to.word, notes: [] }; list.push(ex); changed = true; }
+          to.notes.forEach(function(n){ var nl = n.toLowerCase(); if (nl === lc) return; if (!ex.notes.some(function(m){ return m.toLowerCase() === nl; })){ ex.notes.push(n); changed = true; } });
+          if (ex.notes.length > 5) ex.notes = ex.notes.slice(0, 5);
+          return changed;
+        }
+        function traitWords(list){ return (list || []).map(function(t){ return (t && t.word ? t.word : String(t)).toLowerCase(); }); }
+        var prevProv = {}; qaProvisional.forEach(function(pp){ prevProv[pp.name.toLowerCase()] = traitWords(pp.traits); });
+        var newProv = [], newTraits = {}, newHot = {}, seenName = {};
         arr.forEach(function(it){
           if (!it || !it.name) return;
           var nm = String(it.name).trim(); if (!nm || nm.length > 60) return;
           var lc = nm.toLowerCase(); if (seenName[lc]) return; seenName[lc] = 1;
-          if (excludedLc[lc]) return;   // author removed this one
+          if (excludedLc[lc] || lc === 'story' || lc === 'the story') return;
           var cat = okCats[it.cat] ? it.cat : 'concept';
-          var rawT = Array.isArray(it.traits) ? it.traits : [];
-          var seenT = {}, cleanT = [];
-          rawT.forEach(function(v){ var w = String(v).trim(); if (!w || w.length > 40) return; var wl = w.toLowerCase(); if (wl === lc || seenT[wl] || excludedLc[wl]) return; seenT[wl] = 1; cleanT.push(w); });
-          if (scopeLc[lc]){   // a real, already-pinned element \u2014 route its traits to qaTraits, don't make a provisional pill
-            var cur = qaTraits[lc] = qaTraits[lc] || [];
-            cleanT.forEach(function(v){ if (!cur.some(function(y){ return y.toLowerCase() === v.toLowerCase(); })){ cur.push(v); newHot[lc] = 1; } });
+          var traitList = [];
+          (Array.isArray(it.traits) ? it.traits : []).forEach(function(t){ mergeTrait(traitList, t); });
+          traitList = traitList.slice(0, 8);
+          if (scopeLc[lc]){   // a real, already-pinned element \u2192 characteristics route to qaTraits, no provisional pill
+            var cur = newTraits[lc] = newTraits[lc] || [];
+            var before = traitWords(cur).join('|');
+            traitList.forEach(function(t){ mergeTrait(cur, t); });
+            if (traitWords(cur).join('|') !== before) newHot[lc] = 1;
             return;
           }
-          newProv.push({ name: nm, cat: cat, traits: cleanT });
-          var prev = prevProv[lc];
-          if (!prev){ newHot[lc] = 1; }   // brand-new pill
-          else if (cleanT.length !== prev.length || cleanT.some(function(v){ return !prev.some(function(y){ return y.toLowerCase() === v.toLowerCase(); }); })){ newHot[lc] = 1; }   // trait set grew/changed
+          newProv.push({ name: nm, cat: cat, traits: traitList });
+          var prev = prevProv[lc], now = traitWords(traitList);
+          if (!prev){ newHot[lc] = 1; }
+          else if (now.length !== prev.length || now.some(function(w){ return prev.indexOf(w) < 0; })){ newHot[lc] = 1; }
         });
-        // a rename shows up as an old provisional name disappearing and reappearing as a trait of a surviving pill \u2014 highlight the survivor
+        // a rename shows up as an old provisional name gone and reappearing as a characteristic of a surviving pill \u2192 highlight the survivor
         Object.keys(prevProv).forEach(function(oldLc){
           if (newProv.some(function(pv){ return pv.name.toLowerCase() === oldLc; })) return;
-          var carrier = newProv.filter(function(pv){ return (pv.traits || []).some(function(t){ return t.toLowerCase() === oldLc; }); })[0];
+          var carrier = newProv.filter(function(pv){ return traitWords(pv.traits).indexOf(oldLc) >= 0; })[0];
           if (carrier) newHot[carrier.name.toLowerCase()] = 1;
         });
-        qaProvisional = newProv;
+        qaProvisional = newProv; qaTraits = newTraits;
         Object.keys(newHot).forEach(function(k){ qaHot[k] = 1; });
         qaBuildCtx();
         if (Object.keys(newHot).length){ qaFlashCtx(); qaProvIntro(); }
@@ -40568,7 +40607,7 @@ body.eink #expMenu{background:#fff; border-color:#000}
       var els = qaScopeElements();
       var scopeLabel = ''; try { if (qaSet && qaSet.label) scopeLabel = qaSet.label; else { var fe = (typeof qaFocusEl === 'function') ? qaFocusEl() : null; if (fe) scopeLabel = (fe.name || fe.word); } } catch(e){}
       var canRemove = !!(qaSet && qaSet.raw);
-      function chips(arr){ if (!arr || !arr.length) return ''; return '<span class="qc-traits">' + arr.map(function(tr){ return '<span class="qc-trait">' + String(tr).replace(/</g, '&lt;') + '</span>'; }).join('') + '</span>'; }
+      function chips(arr){ if (!arr || !arr.length) return ''; return '<div class="qc-chars">' + arr.map(function(tr){ var word = (tr && typeof tr === 'object') ? (tr.word || '') : String(tr); var notes = (tr && typeof tr === 'object' && Array.isArray(tr.notes)) ? tr.notes : []; var h = '<div class="qc-char"><span class="qc-trait">' + String(word).replace(/</g, '&lt;') + '</span>'; if (notes.length){ h += '<div class="qc-tnotes">' + notes.map(function(n){ return '<div class="qc-tnote">' + String(n).replace(/</g, '&lt;') + '</div>'; }).join('') + '</div>'; } return h + '</div>'; }).join('') + '</div>'; }
       function elBlock(name, cat, o){ var col = (typeof catColor === 'function' && cat) ? catColor(cat) : '#c8961f'; var hot = qaHot[(name || '').toLowerCase()]; var tr = o.traits || [];
         var h = '<div class="qc-el' + (hot ? ' qc-hl' : '') + (tr.length ? ' qc-hastraits' : '') + '">';
         h += '<span class="qc-pill' + (o.prov ? ' qc-prov' : '') + '" title="' + String(name).replace(/"/g, '&quot;') + (cat ? (' \u00b7 ' + cat) : '') + (o.prov ? ' (kept only if you keep it at End & organize)' : '') + '"><span class="qc-dot" style="background:' + col + '"></span>' + name + (o.prov ? ('<span class="qc-x" data-prov="' + String(name).replace(/"/g, '&quot;') + '" title="Not this one">\u00d7</span>') : (canRemove && o.key ? ('<span class="qc-x" data-k="' + o.key + '" title="Remove from this exploration">\u00d7</span>') : '')) + '</span>';
@@ -41892,7 +41931,7 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.195';
+  var APP_VERSION = '2026.07.20.196';
   var APP_CHANGELOG = [
     { v:'2026.07.20.162', date:'July 29, 2026', notes:[
       'Removed the explanatory note under the session review card.',
