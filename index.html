@@ -39483,12 +39483,19 @@ body.eink #aisPop{border:2px solid #000; background:#fff}
 #qaWin.qa-full.qc-open #qaCtx{transform:translateX(0)}
 #qaCtx .qc-h{font-family:var(--sans,sans-serif); font-size:10.5px; letter-spacing:.16em; text-transform:uppercase; color:#b1791f}
 #qaCtx .qc-scope{font-family:var(--serif,Georgia,serif); font-size:15px; font-weight:600; color:#463b26; line-height:1.3; margin-top:-3px}
-#qaCtx .qc-pills{display:flex; flex-wrap:wrap; gap:6px}
+#qaCtx .qc-pills{display:flex; flex-direction:column; gap:7px; align-items:stretch}
 #qaCtx .qc-pill{display:inline-flex; align-items:center; gap:6px; font-family:var(--sans,sans-serif); font-size:12px; color:#5a4b30; padding:5px 11px; border-radius:999px; border:1px solid rgba(120,92,40,.30); background:rgba(120,92,40,.05)}
 #qaCtx .qc-dot{width:8px; height:8px; border-radius:50%; flex:none; box-shadow:0 0 0 1px rgba(0,0,0,.06)}
 #qaCtx .qc-pill .qc-x{margin-left:1px; margin-right:-3px; width:15px; height:15px; display:inline-flex; align-items:center; justify-content:center; border-radius:50%; font-size:13px; line-height:1; color:#a8895a; cursor:pointer}
 #qaCtx .qc-pill .qc-x:hover{background:rgba(120,92,40,.16); color:#463b26}
 #qaCtx .qc-pill.qc-prov{border-style:dashed; border-color:rgba(180,140,60,.5); background:rgba(200,150,31,.07); animation:qcPop .28s ease}
+#qaCtx .qc-el{display:flex; flex-direction:column; gap:4px; align-items:flex-start; padding:3px 4px; margin:-3px -4px; border-radius:10px}
+#qaCtx .qc-el.qc-hastraits{background:rgba(120,92,40,.05); box-shadow:inset 2px 0 0 rgba(200,150,31,.5)}
+#qaCtx .qc-el.qc-hl{animation:qcElHot 1.3s ease 1}
+@keyframes qcElHot{ 0%{ background:rgba(255,214,120,.55) } 100%{ background:rgba(120,92,40,.05) } }
+#qaCtx .qc-traits{display:flex; flex-wrap:wrap; gap:4px; padding-left:15px}
+#qaCtx .qc-trait{font-family:var(--sans,sans-serif); font-size:10.5px; color:#7a6534; padding:2px 8px; border-radius:999px; border:1px solid rgba(120,92,40,.24); background:rgba(255,255,255,.35)}
+#qaCtx .qc-addh2{margin-top:9px; padding-top:9px; border-top:1px solid rgba(120,92,40,.16)}
 @keyframes qcPop{ from{ transform:scale(.85); opacity:0 } to{ transform:scale(1); opacity:1 } }
 #qaCtxTab.qc-flash{animation:qcTabFlash 1.1s ease 2}
 @keyframes qcTabFlash{ 0%,100%{ background:linear-gradient(180deg,#f6f0de 0%,#efe6cd 100%) } 50%{ background:linear-gradient(180deg,#ffe6ad 0%,#f4cf82 100%) } }
@@ -40286,6 +40293,8 @@ body.eink #expMenu{background:#fff; border-color:#000}
     var qaSet = null;   // Explore mode: {label, raw:[els], detail:[exploreDetail]} when exploring a plot card's linked elements (overrides qaFocus)
     var qaProvisional = [];   // {name,cat} discovered from answers \u2014 provisional context, finalised at End & organize
     var qaExcluded = [];   // provisional names the author removed with \u00d7
+    var qaTraits = {};   // {lcName:[trait strings]} \u2014 characteristics gathered for a REAL scope element
+    var qaHot = {};   // {lcName:1} freshly-changed this update \u2014 a one-shot pill highlight
     var qaLevers = { depth:1, stance:0, angle:'', grounding:1, range:'all', rangeKey:null, rangeName:null };   // full-screen Explore levers: shape the NEXT question
     function qaStrip(html2){ return String(html2 || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim(); }
     function qaFocusThreadId(){ return (qaFocus && qaFocus.indexOf('thread:') === 0) ? qaFocus.slice(7) : null; }
@@ -40452,6 +40461,7 @@ body.eink #expMenu{background:#fff; border-color:#000}
       qaAsk();
     }
     var QC_CATS = [['being','Characters','character'],['setting','Settings','place'],['object','Objects','object'],['event','Events','event'],['concept','Concepts','concept'],['org','Groups','group']];
+    var QC_NARR = [['genre','Genre','genre'],['period','Context','context'],['theme','Theme','theme'],['stakes','Stakes','stakes'],['plot','Plot','plot'],['narration','POV','point of view']];
     function qaRandomWord(catId){
       try { var c = (typeof getCat === 'function') ? getCat(catId) : null; if (!c || !c.subcategories) return null;
         var pool = []; c.subcategories.forEach(function(sub){ if (sub.retired) return; (sub.words || []).forEach(function(x){ pool.push({ word:(typeof x === 'string') ? x : x.w, sub:sub.name }); }); });
@@ -40488,24 +40498,55 @@ body.eink #expMenu{background:#fff; border-color:#000}
         api2.addElement(catId, x, y);
       } catch(e){}
     }
-    async function qaExtractFromAnswer(text){   // quietly gather concrete elements the author names, as provisional context
+    async function qaExtractFromAnswer(text){   // re-derive the whole element+trait+rename picture from ALL answers so far (mirrors End & organize, which is why renames + characteristics surface reliably); text is unused but kept for the call signature
       try {
-        if (!text || text.trim().length < 4 || text.indexOf('(skipped') === 0) return;
         if (typeof aiAuthed === 'function' && !aiAuthed()) return;
-        var sys = 'From ONE line an author just said in a planning chat, extract only NEW, concrete, NAMEABLE story elements it introduces \u2014 characters, places, objects, events, groups, or in-world concepts/terms. Return ONLY a minified JSON array like [{"name":"Mara","cat":"being"}] with cat in [being,setting,object,event,org,concept]. Use their exact name/word. Skip vague talk, feelings, genres, the author themselves, and anything that is not a concrete nameable thing. Return [] if nothing concrete.';
-        var user = 'Line: "' + text.slice(0, 600).replace(/"/g, "'") + '"\nReturn the JSON array only.';
-        var out = await aiCall(sys, user, { maxTokens: 220, json: true });
-        var arr = []; try { arr = JSON.parse(out); } catch(e){ if (typeof parseJsonLoose === 'function'){ try { arr = parseJsonLoose(out); } catch(_){} } }
-        if (!Array.isArray(arr) || !arr.length) return;
-        var okCats = { being:1, setting:1, object:1, event:1, org:1, concept:1 }, added = 0;
-        var inScope = qaScopeElements().map(function(x){ return (x.name || '').toLowerCase(); });
-        arr.forEach(function(it){ if (!it || !it.name) return; var nm = String(it.name).trim(); if (!nm || nm.length > 60) return; var cat = okCats[it.cat] ? it.cat : 'concept'; var lc = nm.toLowerCase();
-          if (qaExcluded.some(function(x){ return x.toLowerCase() === lc; })) return;
-          if (qaProvisional.some(function(x){ return x.name.toLowerCase() === lc; })) return;
-          if (inScope.indexOf(lc) >= 0) return;
-          qaProvisional.push({ name: nm, cat: cat }); added++;
+        var answers = [];
+        for (var i = 0; i < qaLog.length; i++){ var e = qaLog[i]; if (e && e.role === 'a' && e.text && e.text.indexOf('(skipped') !== 0) answers.push(e.text); }
+        if (!answers.length) return;
+        var scopeEls = qaScopeElements();
+        var scopeNames = scopeEls.map(function(x){ return x.name || ''; }).filter(Boolean);
+        var sys = 'You read an author\u2019s answers from a story-planning chat and return ONLY minified JSON: {"elements":[{"name":"","cat":"","traits":[""]}]}. elements = the concrete NAMEABLE things the author has introduced across ALL the answers \u2014 characters, places, objects, events, groups, in-world concepts/terms (cat in [being,setting,object,event,org,concept]); AND, only where clearly stated, the narrative layers (a genre, the time/place context, a theme, the stakes, a plot shape, or the point of view; cat in [genre,period,theme,stakes,plot,narration]). CRITICAL: if the author first mentioned something generically ("a wanderer") and later gave it a proper NAME ("Mara"), return ONE element under the NAME (name:"Mara") with the earlier generic word folded into its traits (["wanderer", ...]) \u2014 never list both the generic word and the name as separate elements. traits = short characteristic words the answers attach to that element (its qualities, roles, descriptors). Merge everything about the same thing into a single element. Use the author\u2019s own words. Skip vague mood talk and the author themselves. Empty array if nothing concrete.';
+        var user = 'The author\u2019s answers, in order:\n\n' + answers.map(function(a, n){ return (n + 1) + '. ' + String(a).slice(0, 500).replace(/"/g, "'"); }).join('\n') + (scopeNames.length ? ('\n\nAlready pinned in this exploration (fold new traits into these; do NOT re-list them as new elements): ' + scopeNames.join(', ')) : '') + '\n\nReturn the JSON object only.';
+        var out = await aiCall(sys, user, { maxTokens: 800, json: true });
+        var obj = null; try { obj = JSON.parse(out); } catch(e){ if (typeof parseJsonLoose === 'function'){ try { obj = parseJsonLoose(out); } catch(_){} } }
+        if (!obj || !Array.isArray(obj.elements)) return;
+        var arr = obj.elements;
+        if (!arr.length) return;   // never wipe existing pills on an empty/failed read
+        var okCats = { being:1, setting:1, object:1, event:1, org:1, concept:1, genre:1, period:1, theme:1, stakes:1, plot:1, narration:1 };
+        var excludedLc = {}; qaExcluded.forEach(function(x){ excludedLc[String(x).toLowerCase()] = 1; });
+        var scopeLc = {}; scopeEls.forEach(function(x){ scopeLc[(x.name || '').toLowerCase()] = 1; });
+        var prevProv = {}; qaProvisional.forEach(function(pp){ prevProv[pp.name.toLowerCase()] = (pp.traits || []).slice(); });
+        var newProv = [], newHot = {}, seenName = {};
+        arr.forEach(function(it){
+          if (!it || !it.name) return;
+          var nm = String(it.name).trim(); if (!nm || nm.length > 60) return;
+          var lc = nm.toLowerCase(); if (seenName[lc]) return; seenName[lc] = 1;
+          if (excludedLc[lc]) return;   // author removed this one
+          var cat = okCats[it.cat] ? it.cat : 'concept';
+          var rawT = Array.isArray(it.traits) ? it.traits : [];
+          var seenT = {}, cleanT = [];
+          rawT.forEach(function(v){ var w = String(v).trim(); if (!w || w.length > 40) return; var wl = w.toLowerCase(); if (wl === lc || seenT[wl] || excludedLc[wl]) return; seenT[wl] = 1; cleanT.push(w); });
+          if (scopeLc[lc]){   // a real, already-pinned element \u2014 route its traits to qaTraits, don't make a provisional pill
+            var cur = qaTraits[lc] = qaTraits[lc] || [];
+            cleanT.forEach(function(v){ if (!cur.some(function(y){ return y.toLowerCase() === v.toLowerCase(); })){ cur.push(v); newHot[lc] = 1; } });
+            return;
+          }
+          newProv.push({ name: nm, cat: cat, traits: cleanT });
+          var prev = prevProv[lc];
+          if (!prev){ newHot[lc] = 1; }   // brand-new pill
+          else if (cleanT.length !== prev.length || cleanT.some(function(v){ return !prev.some(function(y){ return y.toLowerCase() === v.toLowerCase(); }); })){ newHot[lc] = 1; }   // trait set grew/changed
         });
-        if (added){ qaBuildCtx(); qaFlashCtx(); qaProvIntro(); }
+        // a rename shows up as an old provisional name disappearing and reappearing as a trait of a surviving pill \u2014 highlight the survivor
+        Object.keys(prevProv).forEach(function(oldLc){
+          if (newProv.some(function(pv){ return pv.name.toLowerCase() === oldLc; })) return;
+          var carrier = newProv.filter(function(pv){ return (pv.traits || []).some(function(t){ return t.toLowerCase() === oldLc; }); })[0];
+          if (carrier) newHot[carrier.name.toLowerCase()] = 1;
+        });
+        qaProvisional = newProv;
+        Object.keys(newHot).forEach(function(k){ qaHot[k] = 1; });
+        qaBuildCtx();
+        if (Object.keys(newHot).length){ qaFlashCtx(); qaProvIntro(); }
       } catch(e){}
     }
     function qaFlashCtx(){ try { var t = document.getElementById('qaCtxTab'); if (t){ t.classList.remove('qc-flash'); void t.offsetWidth; t.classList.add('qc-flash'); } } catch(e){} }
@@ -40527,20 +40568,29 @@ body.eink #expMenu{background:#fff; border-color:#000}
       var els = qaScopeElements();
       var scopeLabel = ''; try { if (qaSet && qaSet.label) scopeLabel = qaSet.label; else { var fe = (typeof qaFocusEl === 'function') ? qaFocusEl() : null; if (fe) scopeLabel = (fe.name || fe.word); } } catch(e){}
       var canRemove = !!(qaSet && qaSet.raw);
+      function chips(arr){ if (!arr || !arr.length) return ''; return '<span class="qc-traits">' + arr.map(function(tr){ return '<span class="qc-trait">' + String(tr).replace(/</g, '&lt;') + '</span>'; }).join('') + '</span>'; }
+      function elBlock(name, cat, o){ var col = (typeof catColor === 'function' && cat) ? catColor(cat) : '#c8961f'; var hot = qaHot[(name || '').toLowerCase()]; var tr = o.traits || [];
+        var h = '<div class="qc-el' + (hot ? ' qc-hl' : '') + (tr.length ? ' qc-hastraits' : '') + '">';
+        h += '<span class="qc-pill' + (o.prov ? ' qc-prov' : '') + '" title="' + String(name).replace(/"/g, '&quot;') + (cat ? (' \u00b7 ' + cat) : '') + (o.prov ? ' (kept only if you keep it at End & organize)' : '') + '"><span class="qc-dot" style="background:' + col + '"></span>' + name + (o.prov ? ('<span class="qc-x" data-prov="' + String(name).replace(/"/g, '&quot;') + '" title="Not this one">\u00d7</span>') : (canRemove && o.key ? ('<span class="qc-x" data-k="' + o.key + '" title="Remove from this exploration">\u00d7</span>') : '')) + '</span>';
+        h += chips(tr); h += '</div>'; return h;
+      }
       var html = '<div class="qc-h">In this exploration</div>';
       if (scopeLabel) html += '<div class="qc-scope">' + scopeLabel + '</div>';
       if (els.length || qaProvisional.length){
         html += '<div class="qc-pills">';
-        els.forEach(function(e){ var col = (typeof catColor === 'function' && e.cat) ? catColor(e.cat) : '#c8961f'; html += '<span class="qc-pill" title="' + String(e.name).replace(/"/g, '&quot;') + (e.cat ? (' \u00b7 ' + e.cat) : '') + '"><span class="qc-dot" style="background:' + col + '"></span>' + e.name + (canRemove ? ('<span class="qc-x" data-k="' + e.key + '" title="Remove from this exploration">\u00d7</span>') : '') + '</span>'; });
-        qaProvisional.forEach(function(pv){ var col = (typeof catColor === 'function') ? catColor(pv.cat) : '#c8961f'; html += '<span class="qc-pill qc-prov" title="Gathered from your answers \u2014 ' + String(pv.name).replace(/"/g, '&quot;') + ' \u00b7 ' + pv.cat + ' (kept only if you keep it at End & organize)"><span class="qc-dot" style="background:' + col + '"></span>' + pv.name + '<span class="qc-x" data-prov="' + String(pv.name).replace(/"/g, '&quot;') + '" title="Not this one">\u00d7</span></span>'; });
+        els.forEach(function(e){ html += elBlock(e.name, e.cat, { key: e.key, traits: qaTraits[(e.name || '').toLowerCase()] }); });
+        qaProvisional.forEach(function(pv){ html += elBlock(pv.name, pv.cat, { prov: true, traits: pv.traits }); });
         html += '</div>';
       } else {
         html += '<div class="qc-empty">Nothing woven in yet \u2014 as you talk I\u2019ll gather the characters, places and ideas you mention here, or add some yourself below.</div>';
       }
       html += '<div class="qc-add"><div class="qc-addh">Bring in an element</div>';
       QC_CATS.forEach(function(c){ html += '<div class="qc-catrow"><span class="qc-catname">' + c[1] + '</span><span class="qc-catbtns"><button type="button" class="qc-choose" data-cat="' + c[0] + '" data-nn="' + c[2] + '">choose</button><button type="button" class="qc-roll" data-cat="' + c[0] + '">roll</button></span></div>'; });
+      html += '<div class="qc-addh qc-addh2">Narrative layers</div>';
+      QC_NARR.forEach(function(c){ html += '<div class="qc-catrow"><span class="qc-catname">' + c[1] + '</span><span class="qc-catbtns"><button type="button" class="qc-choose" data-cat="' + c[0] + '" data-nn="' + c[2] + '">choose</button><button type="button" class="qc-roll" data-cat="' + c[0] + '">roll</button></span></div>'; });
       html += '</div>';
       g.innerHTML = html;
+      qaHot = {};
       Array.prototype.forEach.call(g.querySelectorAll('.qc-roll'), function(b){ b.addEventListener('click', function(){ qaAddElement(b.getAttribute('data-cat'), null); }); });
       Array.prototype.forEach.call(g.querySelectorAll('.qc-choose'), function(b){ b.addEventListener('click', function(){ qaChooseElement(b.getAttribute('data-cat'), b); }); });
       Array.prototype.forEach.call(g.querySelectorAll('.qc-x[data-k]'), function(b){ b.addEventListener('click', function(e){ e.stopPropagation(); var k = b.getAttribute('data-k'); if (qaSet && qaSet.raw){ qaSet.raw = qaSet.raw.filter(function(w){ return wordKey(w) !== k; }); qaSet.detail = qaSet.raw.map(exploreDetail); } qaBuildCtx(); }); });
@@ -40804,7 +40854,7 @@ body.eink #expMenu{background:#fff; border-color:#000}
       var it2 = document.getElementById('importText'); if (it2) it2.value = transcript;
       var tt2 = document.getElementById('importTitle'); if (tt2) tt2.value = '';
       if (typeof IMP !== 'undefined'){ IMP.kind = 'notes'; IMP.mode = 'new'; IMP.qa = true; try { if (qaSet){ IMP.qaScope = { lens: qaSet.lens || 'set', label: qaSet.label || '', names: (qaSet.detail || []).map(function(d){ return d.name; }).filter(Boolean) }; } else { var _ftS = qaFocusThreadId(); var _feS = qaFocusEl(); if (_ftS){ var _fdS = qaFocusDetail(); IMP.qaScope = { lens:'thread', label:(_fdS && _fdS.name) || '', names:[] }; } else if (_feS){ IMP.qaScope = { lens:'element', label:(_feS.name || _feS.word), names:[_feS.name || _feS.word] }; } else IMP.qaScope = null; } } catch(e){ IMP.qaScope = null; } }   // Q&A transcript — notes come from the ANSWERS, cleaned, never verbatim
-      qaLog = []; qaFocus = null; qaClearDraft(); qaProvisional = []; qaExcluded = [];   // Explore stays open behind the organize step; closed when it finishes
+      qaLog = []; qaFocus = null; qaClearDraft(); qaProvisional = []; qaExcluded = []; qaTraits = {}; qaHot = {};   // Explore stays open behind the organize step; closed when it finishes
       var ing = document.createElement('div'); ing.id = 'qaIngest'; ing.innerHTML = '\u2726 Organizing your conversation\u2026';
       document.body.appendChild(ing);
       Promise.resolve(typeof extractImport === 'function' ? extractImport() : null).then(function(){
@@ -40831,7 +40881,7 @@ body.eink #expMenu{background:#fff; border-color:#000}
       if (w2.parentNode !== document.body) document.body.appendChild(w2);   // full-screen must escape the (maybe-hidden) map container
       w2.classList.add('show', 'qa-full');
       var tt = w2.querySelector('.qa-t'); if (tt) tt.textContent = 'Explore';
-      qaLog = []; qaClearDraft(); qaProvisional = []; qaExcluded = []; { var _qlg = document.getElementById('qaLog'); if (_qlg) _qlg.innerHTML = ''; }   // clear the previous conversation's question/answer bubbles
+      qaLog = []; qaClearDraft(); qaProvisional = []; qaExcluded = []; qaTraits = {}; qaHot = {}; { var _qlg = document.getElementById('qaLog'); if (_qlg) _qlg.innerHTML = ''; }   // clear the previous conversation's question/answer bubbles
       var _lens = lens || '';
       if (_lens && _lens !== 'element'){ qaSetFocusEls(uniq, label, _lens); }
       else if (uniq.length <= 1){ qaSet = null; qaSetFocus(uniq[0] || null, true); }
@@ -41842,7 +41892,7 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.193';
+  var APP_VERSION = '2026.07.20.195';
   var APP_CHANGELOG = [
     { v:'2026.07.20.162', date:'July 29, 2026', notes:[
       'Removed the explanatory note under the session review card.',
