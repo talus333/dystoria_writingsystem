@@ -893,6 +893,12 @@
   .org-sec .org-dot{width:6px; height:6px; border-radius:50%; background:var(--gold)}
   .org-sec .org-el{font-family:var(--sans); font-size:9px; color:var(--ink-faint)}
   .org-sec .org-wc{font-family:var(--sans); font-size:9px; color:var(--ink-faint); opacity:.8}
+  .org-scene{display:flex; align-items:center; gap:7px; margin-left:30px; padding:3px 8px; border-radius:7px; cursor:pointer}
+  .org-scene.indented{margin-left:44px}
+  .org-scene:hover{background:rgba(120,92,40,.05)}
+  .org-scene .org-scnum{flex:none; font-family:var(--sans); font-size:9px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:var(--gold,#c8961f)}
+  .org-scene .org-scnum:before{content:'~ '; opacity:.6}
+  .org-scene .org-scttl{flex:1; min-width:0; font-family:var(--serif); font-style:italic; font-size:11.5px; color:var(--ink-soft); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
   .org-sec.sel{background:rgba(200,150,31,.12)}
   .org-sec[draggable]{cursor:grab}
   .org-sec.org-dragging{opacity:.45}
@@ -28073,11 +28079,11 @@ function ensureOrgDrawer(){
   if (document.getElementById('edOrgPanel')) return;
   _orgLoadCollapsed();
   var panel = document.createElement('div'); panel.id = 'edOrgPanel';
-  panel.innerHTML = '<div id="edOrgHead"><span class="eo-h">Organize</span><span class="eo-sub">Click a section to jump · check to merge or delete</span></div><div id="edOrgList"></div><div id="edOrgActions"></div><div id="edOrgCreate"><button type="button" class="oc-btn" data-oc="section">＋ Section</button><button type="button" class="oc-btn" data-oc="part">＋ Part</button><button type="button" class="oc-btn" data-oc="split" title="Split the current section at your cursor in the manuscript">Split at cursor</button></div><div id="edOrgFoot">Drag-reorder &amp; scenes are coming next.</div>';
+  panel.innerHTML = '<div id="edOrgHead"><span class="eo-h">Organize</span><span class="eo-sub">Click a section to jump · check to merge or delete</span></div><div id="edOrgList"></div><div id="edOrgActions"></div><div id="edOrgCreate"><button type="button" class="oc-btn" data-oc="section">＋ Section</button><button type="button" class="oc-btn" data-oc="part">＋ Part</button><button type="button" class="oc-btn" data-oc="scene" title="Add a scene break (~) at your cursor in the manuscript — divides a section into scenes">＋ Scene</button><button type="button" class="oc-btn" data-oc="split" title="Split the current section into two at your cursor">Split at cursor</button></div><div id="edOrgFoot">Drag a section to reorder · check to merge/delete.</div>';
   var tab = document.createElement('button'); tab.id = 'edOrgTab'; tab.type = 'button'; tab.title = 'Organize sections & parts'; tab.textContent = 'Organize';
   cols.appendChild(panel); cols.appendChild(tab);
   tab.addEventListener('click', function(e){ e.stopPropagation(); var open = cols.classList.toggle('org-open'); if (open) renderOrgTree(); });
-  Array.prototype.forEach.call(panel.querySelectorAll('#edOrgCreate .oc-btn'), function(b){ b.addEventListener('click', function(e){ e.stopPropagation(); var oc = b.getAttribute('data-oc'); if (oc === 'section') orgNewSection(); else if (oc === 'part') orgNewPart(); else if (oc === 'split') orgSplitAtCursor(); }); });
+  Array.prototype.forEach.call(panel.querySelectorAll('#edOrgCreate .oc-btn'), function(b){ b.addEventListener('click', function(e){ e.stopPropagation(); var oc = b.getAttribute('data-oc'); if (oc === 'section') orgNewSection(); else if (oc === 'part') orgNewPart(); else if (oc === 'scene') orgAddSceneBreak(); else if (oc === 'split') orgSplitAtCursor(); }); });
   var es = document.getElementById('editScroll');
   if (es && !es._orgScrollWired){ es._orgScrollWired = 1; es.addEventListener('scroll', function(){ if (cols.classList.contains('org-open')) orgUpdateCurrent(); }, { passive: true }); }
   window.__orgRefresh = function(){ try { if (cols.classList.contains('org-open')) renderOrgTree(); } catch(e){} };
@@ -28089,6 +28095,7 @@ function renderOrgTree(){
   var list = document.getElementById('edOrgList'); if (!list) return;
   var n = (typeof msSecCount === 'function') ? msSecCount() : ((state.frames && state.frames.length) || 1);
   var words = orgSectionWords();
+  var scenesByFrame = orgAllScenes();
   var cur = orgCurrentSection();
   var esc = function(s){ return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); };
   var html = '';
@@ -28108,8 +28115,16 @@ function renderOrgTree(){
       + '<span class="org-ttl">' + esc(lab.title || ('Section ' + (i + 1))) + '</span>'
       + '<span class="org-meta">' + (hasNote ? '<span class="org-dot" title="Has notes"></span>' : '') + (elc ? '<span class="org-el" title="' + elc + ' element' + (elc === 1 ? '' : 's') + '">◆' + elc + '</span>' : '') + (wc ? '<span class="org-wc">' + wc + 'w</span>' : '') + '</span>'
       + '</div>';
+    // scenes within this section (only when it actually has scene breaks)
+    var scs = scenesByFrame[i] || [];
+    if (scs.length > 1 && !collapsed){
+      scs.forEach(function(sc, si){
+        html += '<div class="org-scene' + (underPid ? ' indented' : '') + '" data-frame="' + i + '" data-scene="' + si + '"><span class="org-scnum">' + (si + 1) + '</span><span class="org-scttl">' + esc(sc.label || ('Scene ' + (si + 1))) + '</span></div>';
+      });
+    }
   }
   list.innerHTML = html;
+  Array.prototype.forEach.call(list.querySelectorAll('.org-scene'), function(r){ r.addEventListener('click', function(){ orgJumpScene(+r.getAttribute('data-frame'), +r.getAttribute('data-scene')); }); });
   Array.prototype.forEach.call(list.querySelectorAll('.org-sec'), function(r){ r.addEventListener('click', function(e){ if (e.target && e.target.classList && e.target.classList.contains('org-check')) return; orgJumpTo(+r.getAttribute('data-i')); }); });
   Array.prototype.forEach.call(list.querySelectorAll('.org-check'), function(cb){ cb.addEventListener('click', function(e){ e.stopPropagation(); }); cb.addEventListener('change', function(){ var i = +cb.getAttribute('data-i'); if (cb.checked) _orgSel[i] = true; else delete _orgSel[i]; var row = cb.closest('.org-sec'); if (row) row.classList.toggle('sel', cb.checked); orgUpdateActions(); }); });
   Array.prototype.forEach.call(list.querySelectorAll('.org-part'), function(p){ p.addEventListener('click', function(){ var pid = p.getAttribute('data-pid'); if (!pid) return; _orgCollapsed[pid] = !_orgCollapsed[pid]; _orgSaveCollapsed(); renderOrgTree(); }); });
@@ -28242,6 +28257,79 @@ function orgReorder(from, to){
     if (typeof scheduleAutosave === 'function') scheduleAutosave(200);
     _orgRefreshViews();
   } catch(e){ try { console.warn('org reorder error:', e); } catch(_){} }
+}
+/* ---- Scenes: a scene is a `~`-delimited span WITHIN a section (a .scene-mark divider), not a frame. Adding a scene
+   break just inserts a divider into the prose — no frame/index changes. Scenes show indented under their section. ---- */
+function _orgMakeSceneMark(){ var sm = document.createElement('div'); sm.className = 'scene-mark'; sm.contentEditable = 'false'; sm.textContent = '~'; return sm; }
+// Insert a scene break at the manuscript caret (prose above stays; a new scene begins below).
+function orgAddSceneBreak(){
+  try {
+    var eb = $('editBody'); if (!eb) return false;
+    var sel = window.getSelection(); if (!sel || !sel.rangeCount){ if (typeof flashStatus === 'function') flashStatus('Click in the manuscript where the scene should break'); return false; }
+    var rng = sel.getRangeAt(0); if (!eb.contains(rng.startContainer)){ if (typeof flashStatus === 'function') flashStatus('Click into the manuscript first'); return false; }
+    var block = rng.startContainer; if (block === eb){ block = eb.childNodes[rng.startOffset] || null; } else { while (block && block.parentNode !== eb) block = block.parentNode; }
+    if (!block || block.parentNode !== eb) return false;
+    if (typeof pushUndo === 'function') pushUndo();
+    var sm = _orgMakeSceneMark();
+    if (block.tagName !== 'H3' && !(block.classList && block.classList.contains('sec-mark')) && !(block.classList && block.classList.contains('scene-mark'))){
+      var tail = document.createRange(); tail.setStart(rng.startContainer, rng.startOffset); tail.setEndAfter(block.lastChild || block);
+      var frag = tail.extractContents(); var below = document.createElement(block.tagName || 'DIV'); below.appendChild(frag);
+      if (!below.textContent.trim() && !below.querySelector('img,br')) below.innerHTML = '<br>';
+      if (!block.textContent.trim() && !block.querySelector('img,br')) block.innerHTML = '<br>';
+      block.parentNode.insertBefore(sm, block.nextSibling); sm.parentNode.insertBefore(below, sm.nextSibling);
+    } else { eb.insertBefore(sm, block.nextSibling || null); }
+    var ed = $('editor'); if (ed) ed.innerHTML = eb.innerHTML;   // push into the canonical editor (mirrors refineSplitInsertSection)
+    if (state.session){ try { state.session.html = editorHTML(); state.session.text = editorText(); } catch(e){} }
+    if (typeof buildEditMode === 'function') buildEditMode();
+    if (typeof scheduleAutosave === 'function') scheduleAutosave(200);
+    _orgRefreshViews();
+    if (typeof flashStatus === 'function') flashStatus('Scene break added');
+    return true;
+  } catch(e){ return false; }
+}
+// Append a fresh scene to section k (a scene break + a blank line at the end of its prose) — used from the plot grid.
+function orgAddSceneToSection(k){
+  try {
+    var ed = $('editor'); if (!ed) return false;
+    if (typeof pushUndo === 'function') pushUndo();
+    var fm = nodeFrameMap(); var lastNode = null;
+    Array.prototype.forEach.call(ed.children, function(cn){ if (fm.get(cn) === k && !(cn.tagName === 'H3' || (cn.classList && cn.classList.contains('sec-mark')))) lastNode = cn; });
+    var sm = _orgMakeSceneMark(); var blank = document.createElement('div'); blank.innerHTML = '<br>';
+    if (lastNode){ lastNode.parentNode.insertBefore(sm, lastNode.nextSibling); sm.parentNode.insertBefore(blank, sm.nextSibling); }
+    else { var h3 = ed.querySelector('h3[data-frame="' + k + '"]'); if (h3){ h3.parentNode.insertBefore(sm, h3.nextSibling); sm.parentNode.insertBefore(blank, sm.nextSibling); } else { ed.appendChild(sm); ed.appendChild(blank); } }
+    if (state.session){ try { state.session.html = editorHTML(); state.session.text = editorText(); } catch(e){} }
+    if (typeof buildEditMode === 'function') buildEditMode();
+    if (typeof scheduleAutosave === 'function') scheduleAutosave(200);
+    _orgRefreshViews();
+    if (typeof flashStatus === 'function') flashStatus('Scene added to section ' + (k + 1));
+    return true;
+  } catch(e){ return false; }
+}
+// Parse the rendered manuscript into scenes per frame: { frameIdx: [ {label, el} ] } (scene 0's el is null = section start).
+function orgAllScenes(){
+  var out = { 0: [{ label: '', el: null }] };
+  try {
+    var eb = document.getElementById('editBody'); if (!eb) return out;
+    var cur = 0;
+    Array.prototype.forEach.call(eb.children, function(node){
+      if (node.tagName === 'H3' && node.dataset && node.dataset.frame != null){ cur = parseInt(node.dataset.frame, 10) || 0; if (!out[cur]) out[cur] = [{ label: '', el: null }]; return; }
+      if (node.classList && node.classList.contains('sec-mark')) return;
+      if (!out[cur]) out[cur] = [{ label: '', el: null }];
+      if (node.classList && node.classList.contains('scene-mark')){ out[cur].push({ label: '', el: node }); return; }
+      var scenes = out[cur], last = scenes[scenes.length - 1]; if (last && !last.label){ var t = (node.textContent || '').trim(); if (t) last.label = t.slice(0, 42); }
+    });
+  } catch(e){}
+  return out;
+}
+try { window.orgAddSceneToSection = orgAddSceneToSection; } catch(e){}
+function orgJumpScene(frame, sceneIdx){
+  try {
+    var scenes = orgAllScenes()[frame] || [];
+    var sc = scenes[sceneIdx];
+    if (!sc || !sc.el){ orgJumpTo(frame); return; }
+    var es = document.getElementById('editScroll');
+    if (es && sc.el.getBoundingClientRect){ es.scrollTop = Math.max(0, sc.el.getBoundingClientRect().top - es.getBoundingClientRect().top + es.scrollTop - 20); }
+  } catch(e){}
 }
 function orgJumpTo(i){ try { if (typeof msScrollTo === 'function') msScrollTo('edit', i); state.frameIdx = i; if (typeof syncModeSecNav === 'function') syncModeSecNav('edit'); orgUpdateCurrent(); } catch(e){} }
 /* ---- Section Organizer — Phase 2 engine: unified section-index reindex + lossless Merge + Delete. ----
@@ -35210,7 +35298,7 @@ document.addEventListener('DOMContentLoaded', init);
         // with the ELEMENTS linked to each card nested beneath it. Selecting a card edits its note; selecting a linked
         // element edits that element's note UNDER this card — the very note the grid's card popup shows (synced both ways).
         const _hasNote2 = nk => { try{ const raw=state.session&&state.session.npNotes&&state.session.npNotes[nk]; return !!(raw && String(raw).replace(/<[^>]*>/g,'').trim()); }catch(e){ return false; } };
-        if(!_tcSecs.length){ const e=document.createElement('span'); e.className='npc-plotempty'; e.textContent='No cards in this thread yet — add one in the plot grid.'; tl.appendChild(e); }
+        if(!_tcSecs.length){ const e=document.createElement('span'); e.className='npc-plotempty'; e.textContent='No scenes in this thread yet — add one in the plot grid.'; tl.appendChild(e); }
         else {
           _tcSecs.forEach(k=>{
             // (Part headers intentionally omitted in the thread card — it shows only Card pills + their linked elements)
@@ -35253,7 +35341,7 @@ document.addEventListener('DOMContentLoaded', init);
             _cels.filter(_isEv).forEach(el=>_mkCardEl(el, true));              // then events (green)
             _cels.filter(el=>!_isEv(el)).forEach(el=>_mkCardEl(el, false));    // then the regular linked elements
             if(_erow.childNodes.length) tl.appendChild(_erow);
-            else { const em=document.createElement('span'); em.className='npc-plotempty npc-cardempty'; em.textContent='No elements linked — link them on this card in the plot grid.'; tl.appendChild(em); }
+            else { const em=document.createElement('span'); em.className='npc-plotempty npc-cardempty'; em.textContent='No elements linked — link them on this scene in the plot grid.'; tl.appendChild(em); }
           });
         }
         // (Thread-wide element list removed — a card's elements now live under that card.)
@@ -42473,7 +42561,7 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.202';
+  var APP_VERSION = '2026.07.20.203';
   var APP_CHANGELOG = [
     { v:'2026.07.20.162', date:'July 29, 2026', notes:[
       'Removed the explanatory note under the session review card.',
@@ -46710,7 +46798,7 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     var row=document.createElement('div'); row.className='pl-cardpop-stakerow';
     var lbl=document.createElement('span'); lbl.className='pl-cardpop-stakelbl'; lbl.textContent='Stakes'; row.appendChild(lbl);
     var refresh=function(){ if(row.parentNode) row.parentNode.replaceChild(buildCardStakeRow(i, col), row); };
-    var edit=function(_an){ editStake(_an, cardStake(i, col), 'What’s at risk in this card?', function(v){ cardStakeSet(i, col, v); refresh(); scheduleReplot(); }); };
+    var edit=function(_an){ editStake(_an, cardStake(i, col), 'What’s at risk in this scene?', function(v){ cardStakeSet(i, col, v); refresh(); scheduleReplot(); }); };
     var own=cardStake(i, col);
     if(own){ row.appendChild(stakePill(own, { own:true, onEdit:edit, onClear:function(){ cardStakeSet(i, col, ''); refresh(); scheduleReplot(); } })); }
     else { var r=resolveCardStake(i, col); if(r){ row.appendChild(stakePill(r.text, { own:false, level:r.level, onEdit:edit })); } else { row.appendChild(stakeAdd(edit)); } }
@@ -47257,6 +47345,7 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     closeMenus(); var a=api();
     var m=document.createElement('div'); m.className='plan-menu'; m.style.maxHeight='360px'; m.style.overflow='auto'; m.style.minWidth='220px';
     var b0=document.createElement('button'); b0.textContent='＋ Add a section'; b0.title='A single section (joins the Part it sits within)'; b0.addEventListener('click', function(e){ e.stopPropagation(); if(a) a.insertSectionAfter(afterIdx); closeMenus(); scheduleReplot(); }); m.appendChild(b0);
+    var bSc=document.createElement('button'); bSc.textContent='＋ Add a scene'; bSc.title='Add a scene (a ~ break) inside the section above — sections hold one or more scenes'; bSc.addEventListener('click', function(e){ e.stopPropagation(); try { if(typeof window.orgAddSceneToSection==='function') window.orgAddSceneToSection(afterIdx); } catch(_){} closeMenus(); scheduleReplot(); }); m.appendChild(bSc);
     var bP=document.createElement('button'); bP.textContent='＋ Add a part'; bP.title='A named Part divider with one section — group sections under it';
     bP.addEventListener('click', function(e){ e.stopPropagation(); (async function(){ var nm=(typeof sitePrompt==='function')?await sitePrompt('Name this part',''):'Part'; if(nm===null) return; if(a) a.insertPart(afterIdx, nm); closeMenus(); scheduleReplot(); })(); }); m.appendChild(bP);
     var hasPro=a?a.hasSectionType('prologue'):false, hasEpi=a?a.hasSectionType('epilogue'):false;
