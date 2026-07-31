@@ -28433,8 +28433,14 @@ function orgMergeScenes(frame, sceneIdxs){
     var ed = $('editor'); if (!ed) return false;
     var fm = nodeFrameMap(); var marks = [];
     Array.prototype.forEach.call(ed.children, function(c){ if (fm.get(c) === frame && c.classList && c.classList.contains('scene-mark')) marks.push(c); });
-    for (var s = b; s >= a + 1; s--){ var mk = marks[s - 1]; if (mk && mk.parentNode) mk.remove(); }   // scene s begins at marks[s-1]; drop the breaks that start a+1..b
+    // capture the stable sids so the plot-grid scene cards fold to match: the survivor is scene a (the section card
+    // if a===0, else the ~ mark that starts scene a), and scenes a+1..b are removed.
+    var _ensureSid = function(mk){ if(!mk) return null; var sd=mk.getAttribute('data-sid'); if(!sd){ sd=(typeof _orgSid==='function')?_orgSid():('sc'+(marks.length)); mk.setAttribute('data-sid', sd); } return sd; };
+    var _survSid = (a >= 1 && marks[a - 1]) ? _ensureSid(marks[a - 1]) : null;
+    var _removedSids = [];
+    for (var s = b; s >= a + 1; s--){ var mk = marks[s - 1]; if (mk){ var _sd=_ensureSid(mk); if(_sd) _removedSids.push(_sd); if(mk.parentNode) mk.remove(); } }   // scene s begins at marks[s-1]; drop the breaks that start a+1..b
     _orgMergeSceneNotes(frame, a, b);
+    try { if (typeof window.__planMergeSceneCards === 'function') window.__planMergeSceneCards(frame, _survSid, _removedSids); } catch(e){}
     if (state.session){ try { state.session.html = editorHTML(); state.session.text = editorText(); } catch(e){} }
     if (typeof buildEditMode === 'function') buildEditMode();
     if (typeof scheduleAutosave === 'function') scheduleAutosave(200);
@@ -42674,8 +42680,11 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.216';
+  var APP_VERSION = '2026.07.20.217';
   var APP_CHANGELOG = [
+    { v:'2026.07.20.217', date:'July 31, 2026', notes:[
+      'The Plot grid and the Organize panel (Revise mode) now stay in sync: merging scenes in Organize also merges their cards in the Plot grid — the removed scenes’ cards fold losslessly into the survivor, in every column.'
+    ]},
     { v:'2026.07.20.216', date:'July 31, 2026', notes:[
       'Plot cards. Above the sections, each column now has a Plot card that defines that column’s overall plot — its Stake, Motivation, Intention, Obstacle, Description, and linked elements. The closed card shows those as pills plus the description, in a warm parchment with a gold top edge.',
       'The stake that used to sit in the column headers now lives inside these Plot cards. The first column is now a thread called “Main Plot” (the whole grid is the Plot); its Plot card is the story’s main plot — it feeds the story facts so the AI can track progress against it, without forcing any structure on you.',
@@ -47245,6 +47254,34 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     if(!_slotEmpty(dstC)) _slotWrite(src, dstC);   // occupied target → swap
     save(); if(typeof window.renderNpCard==='function'){ try{ window.renderNpCard(); }catch(_){} } scheduleReplot();
   }
+  // Fold the plot-grid scene CARDS when scenes are merged in the Organize sidebar (Revise mode). Each removed scene's
+  // card (in EVERY column) folds into the survivor — the section card if scene 0 is the survivor, otherwise the
+  // surviving ~ scene. Keeps the plot grid in lockstep with the manuscript's scene structure.
+  window.__planMergeSceneCards = function(frame, survivorSid, removedSids){
+    try{
+      if(typeof data==='undefined' || !data){ if(typeof load==='function') load(); }
+      if(!removedSids || !removedSids.length) return;
+      plotColumns().forEach(function(col){
+        var survivor={ i:frame, col:col, sid:survivorSid||null };
+        var combined=_slotRead(survivor); var touched=false;
+        removedSids.forEach(function(sid){
+          if(!sid) return; var rs={ i:frame, col:col, sid:sid }; var rc=_slotRead(rs);
+          if(_slotEmpty(rc)){ _slotClear(rs); return; }
+          touched=true;
+          // lossless: if the survivor has no title, adopt the removed scene's; otherwise fold its title+text into text
+          var rT=(rc.title||'').trim(), rTx=(rc.text||'').trim(), ct=(combined.text||'').trim();
+          if(!(combined.title||'').trim()){ combined.title=rT; combined.text=(ct&&rTx)?(ct+'\n'+rTx):(ct||rTx); }
+          else { var chunk=[rT,rTx].filter(Boolean).join('\n'); combined.text=(ct&&chunk)?(ct+'\n'+chunk):(ct||chunk); }
+          (rc.els||[]).forEach(function(el){ if(!combined.els.some(function(q){return q.nkey===el.nkey;})) combined.els.push(el); });
+          Object.keys(rc.elNotes||{}).forEach(function(k){ var ex=(combined.elNotes[k]||'').trim(), nv=(rc.elNotes[k]||'').trim(); combined.elNotes[k]=(ex&&nv)?(ex+'\n'+nv):(ex||nv); });
+          ['story','thread'].forEach(function(w){ if((rc.stakeNotes[w]||'').trim() && !(combined.stakeNotes[w]||'').trim()) combined.stakeNotes[w]=rc.stakeNotes[w]; });
+          _slotClear(rs);
+        });
+        if(touched && !_slotEmpty(combined)) _slotWrite(survivor, combined);
+      });
+      save();
+    }catch(e){ try{ console.warn('plan merge scene cards error:', e); }catch(_){} }
+  };
   // make a card grabbable
   function _wireSlotDrag(el, i, col, sid){
     el.setAttribute('draggable','true');
