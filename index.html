@@ -5938,6 +5938,55 @@ function openWordPicker(cat, sub, cur, anchorEl, onPick){
   m.appendChild(nb);
   document.body.appendChild(m); _placePickMenu(m, anchorEl, 4300);
 }
+// Unified "add system" picker — one searchable, scrollable menu with the sets grouped under headers, and an inline
+// "＋ Use …" row so you name a new value right here without a separate naming window. Replaces the old long single-set
+// list + sitePrompt flow for the Category / Sub-category / Type tiers.
+//   opts: { title, anchorEl, searchPlaceholder, current, allowCustom, groups:[{label, items:[{value,label,sub?}]}], onPick(value,item) }
+function openAddPicker(opts){
+  opts=opts||{};
+  var esc=function(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); };
+  var old=document.getElementById('addPickMenu'); if(old) old.remove();
+  var m=document.createElement('div'); m.id='addPickMenu'; m.className='ap-menu';   /* own class only — the shared .plan-menu button styling would flatten the pills into full-width rows */
+  var head=document.createElement('div'); head.className='ap-head';
+  var t=document.createElement('div'); t.className='ap-title'; t.textContent=opts.title||''; head.appendChild(t);
+  var xb=document.createElement('button'); xb.type='button'; xb.className='ap-x'; xb.innerHTML='×'; xb.title='Close';
+  xb.addEventListener('click', function(e){ e.stopPropagation(); m.remove(); }); head.appendChild(xb);
+  m.appendChild(head);
+  var search=document.createElement('input'); search.type='text'; search.className='ap-search'; search.autocomplete='off'; search.placeholder=opts.searchPlaceholder||'Filter…';
+  m.appendChild(search);
+  var list=document.createElement('div'); list.className='ap-list'; m.appendChild(list);
+  var curNorm=(opts.current==null?'':String(opts.current)).toLowerCase();
+  function commit(value, item){ m.remove(); if(opts.onPick) opts.onPick(value, item||null); }
+  function render(){
+    var q=(search.value||'').trim().toLowerCase(); list.innerHTML=''; var anyShown=false, exact=false;
+    (opts.groups||[]).forEach(function(g){
+      var items=(g.items||[]).filter(function(it){ return !q || String(it.label||it.value).toLowerCase().indexOf(q)>=0; });
+      if(!items.length) return;
+      if(g.label){ var h=document.createElement('div'); h.className='ap-grouphd'; h.textContent=g.label; list.appendChild(h); }
+      var wrap=document.createElement('div'); wrap.className='ap-pills';
+      items.forEach(function(it){ var val=it.value, lab=it.label||val;
+        if(String(val).toLowerCase()===q) exact=true;
+        var b=document.createElement('button'); b.type='button'; b.className='ap-pill'+((curNorm && String(val).toLowerCase()===curNorm)?' on':''); b.textContent=lab;
+        b.addEventListener('click', function(e){ e.stopPropagation(); commit(val, it); }); wrap.appendChild(b); anyShown=true; });
+      list.appendChild(wrap);
+    });
+    if(!anyShown && !(opts.allowCustom && q)){ var none=document.createElement('div'); none.className='ap-empty'; none.textContent='No matches'; list.appendChild(none); }
+    if(opts.allowCustom && q && !exact){
+      var add=document.createElement('button'); add.type='button'; add.className='ap-add'; add.innerHTML='＋ Use “'+esc(search.value.trim())+'”';
+      add.addEventListener('click', function(e){ e.stopPropagation(); commit(search.value.trim(), {custom:true}); }); list.appendChild(add);
+    }
+  }
+  search.addEventListener('input', render);
+  search.addEventListener('keydown', function(e){ e.stopPropagation();
+    if(e.key==='Escape'){ m.remove(); return; }
+    if(e.key==='Enter'){ e.preventDefault(); var q=(search.value||'').trim(); if(!q){ var fp0=list.querySelector('.ap-pill'); if(fp0) fp0.click(); return; }
+      var exactPill=Array.prototype.filter.call(list.querySelectorAll('.ap-pill'), function(p){ return p.textContent.toLowerCase()===q.toLowerCase(); })[0];
+      if(exactPill){ exactPill.click(); } else if(opts.allowCustom){ commit(q, {custom:true}); } else { var fp=list.querySelector('.ap-pill'); if(fp) fp.click(); } }
+  });
+  document.body.appendChild(m); render();   // render BEFORE placing so _placePickMenu knows the true height and can flip up / fit the viewport
+  _placePickMenu(m, opts.anchorEl, 4300);
+  setTimeout(function(){ try{ search.focus(); }catch(_){} }, 30);
+}
 // Apply an edit across every tier (name, category, subcategory, type) to every store npFindEl reads, migrating
 // key-indexed data (notes, connections, arcs…) whenever the category or type change re-keys the element.
 function applyElemEdit(key, i, opts){
@@ -6003,9 +6052,28 @@ function openElemNamePopup(key){
   var wordBtn=document.createElement('button'); wordBtn.type='button'; wordBtn.className='elnp-cat';
   var setBtn=function(btn, val, empty){ btn.innerHTML='<span class="elnp-cat-v'+(val?'':' elnp-cat-empty')+'">'+(val?_elnpEsc(val):empty)+'</span><span class="elnp-cat-car">▾</span>'; };
   var refresh=function(){ setBtn(catBtn, ((getCat(chosen.cat)||{}).name)||'', 'Set a category'); setBtn(subBtn, chosen.sub, 'Set a sub-category'); setBtn(wordBtn, chosen.word, 'Set a type'); setHdr(); };
-  catBtn.addEventListener('click', function(e){ e.stopPropagation(); openCatPickerMenu(chosen.cat, catBtn, function(cid){ if(cid===chosen.cat) return; chosen.cat=cid; var subs=allSubNames(cid,{beingIdentity:true}); chosen.sub=(subs&&subs.length)?subs[0]:''; refresh(); }); });
-  subBtn.addEventListener('click', function(e){ e.stopPropagation(); openSubcatPicker(chosen.cat, chosen.sub, subBtn, function(sname){ chosen.sub=sname; refresh(); }); });
-  wordBtn.addEventListener('click', function(e){ e.stopPropagation(); openWordPicker(chosen.cat, chosen.sub, chosen.word, wordBtn, function(wd){ chosen.word=wd; refresh(); }); });
+  catBtn.addEventListener('click', function(e){ e.stopPropagation();
+    var kinds=['being','setting','object','event','org'].filter(function(id){ return !!getCat(id); });
+    if(getCat(chosen.cat) && kinds.indexOf(chosen.cat)<0) kinds.unshift(chosen.cat);
+    openAddPicker({ title:'Category', anchorEl:catBtn, searchPlaceholder:'Filter categories…', allowCustom:false, current:chosen.cat,
+      groups:[{ label:'', items:kinds.map(function(id){ return { value:id, label:((getCat(id)||{}).name)||id }; }) }],
+      onPick:function(cid){ if(cid===chosen.cat) return; chosen.cat=cid; var subs=allSubNames(cid,{beingIdentity:true}); chosen.sub=(subs&&subs.length)?subs[0]:''; refresh(); } });
+  });
+  subBtn.addEventListener('click', function(e){ e.stopPropagation();
+    var subs=allSubNames(chosen.cat,{beingIdentity:true});
+    openAddPicker({ title:'Sub-category', anchorEl:subBtn, searchPlaceholder:'Filter or name a set…', allowCustom:true, current:chosen.sub,
+      groups:[{ label:'', items:(subs||[]).map(function(s){ return { value:s, label:s }; }) }],
+      onPick:function(sname, item){ if(item && item.custom && typeof addCustomSubcat==='function') addCustomSubcat(chosen.cat, sname); chosen.sub=sname; refresh(); } });
+  });
+  wordBtn.addEventListener('click', function(e){ e.stopPropagation();
+    var subs=allSubNames(chosen.cat,{beingIdentity:true});
+    var groups=(subs||[]).map(function(s){ return { label:s, items:subWords(chosen.cat,s).map(function(wd){ return { value:wd, label:wd, sub:s }; }) }; }).filter(function(g){ return g.items.length; });
+    var haveCur=chosen.word && groups.some(function(g){ return g.items.some(function(it){ return String(it.value).toLowerCase()===String(chosen.word).toLowerCase(); }); });
+    if(chosen.word && !haveCur){ groups.unshift({ label:'Current', items:[{ value:chosen.word, label:chosen.word, sub:chosen.sub }] }); }
+    openAddPicker({ title:'Type', anchorEl:wordBtn, searchPlaceholder:'Search all sets or name your own…', allowCustom:true, current:chosen.word,
+      groups:groups,
+      onPick:function(wd, item){ chosen.word=wd; if(item && item.sub) chosen.sub=item.sub; refresh(); } });
+  });
   tiers.appendChild(fieldLabel('Category')); tiers.appendChild(catBtn);
   tiers.appendChild(fieldLabel('Sub-category')); tiers.appendChild(subBtn);
   tiers.appendChild(fieldLabel('Type')); tiers.appendChild(wordBtn);
@@ -30634,7 +30702,7 @@ function flowOpenSettings(anchor){
 }
 try{ window.flowSettle=flowSettle; window.flowOpenSettings=flowOpenSettings; }catch(e){}
 function rfInjectCSS(){ if(document.getElementById('rfCSS')) return; var st=document.createElement('style'); st.id='rfCSS';
-  st.textContent='#rfOverlay{white-space:pre-wrap;overflow-wrap:break-word;outline:none;cursor:default}.rf-style{border-radius:2px;cursor:pointer;text-decoration:underline;text-decoration-style:wavy;text-underline-offset:3px;text-decoration-thickness:1.5px}.rf-passive{text-decoration-color:#2e8b8b}.rf-adverb{text-decoration-color:#8a5cd6}.rf-filler{text-decoration-color:#b0863c}.rf-repeat{text-decoration-color:#3a7bd5}.rf-style:hover{background:rgba(0,0,0,.07)}.rf-long{background:rgba(224,122,63,.15);border-radius:2px;box-shadow:0 1px 0 rgba(224,122,63,.55)}.rf-sw-passive{background:#2e8b8b}.rf-sw-adverb{background:#8a5cd6}.rf-sw-filler{background:#b0863c}.rf-sw-repeat{background:#3a7bd5}.rf-sw-long{background:#e07a3f}#rfPanel{position:fixed;top:calc(var(--hH,58px) + 50px);left:20px;z-index:9400;display:none;flex-direction:column;width:214px;max-height:calc(100vh - var(--hH,58px) - 80px);background:var(--paper,#f7f3ea);color:var(--ink,#2b2720);border:1px solid var(--line,#d8d0bf);border-radius:15px;box-shadow:0 18px 46px -16px rgba(80,60,25,.42);font-family:var(--sans,system-ui,sans-serif);overflow:hidden}#rfPanel.show{display:flex}#rfPanel .rfp-hd{display:flex;align-items:center;justify-content:space-between;padding:14px 15px 3px}#rfPanel .rfp-title{font-weight:700;font-size:14px;letter-spacing:.02em;color:#b0781d}#rfPanel .rfp-x{border:none;background:none;font-size:20px;line-height:1;color:var(--ink-faint,#8a8271);cursor:pointer;opacity:.85;padding:0 2px}#rfPanel .rfp-x:hover{opacity:1;color:var(--ink,#2b2720)}#rfPanel .rfp-sub{font-size:10px;letter-spacing:.02em;color:var(--ink-faint,#8a8271);font-style:italic;padding:0 15px 9px}#rfPanel .rfp-body{display:flex;flex-direction:column;gap:2px;padding:2px 8px 12px;overflow:auto}#rfPanel .rfp-cat{display:flex;flex-direction:column;align-items:stretch;gap:4px;width:100%;box-sizing:border-box;padding:9px 11px;border:none;border-radius:9px;background:transparent;cursor:pointer;text-align:left;transition:background .12s}#rfPanel .rfp-cat:hover{background:rgba(0,0,0,.05)}#rfPanel .rfp-top{display:flex;align-items:center;gap:9px}#rfPanel .rfp-sw-color{width:10px;height:10px;border-radius:2px;flex:none}#rfPanel .rfp-cat:not(.on) .rfp-sw-color{filter:grayscale(.85);opacity:.5}#rfPanel .rfp-name{flex:1;font-size:13.5px;font-weight:600;color:var(--ink-soft,#5a5854)}#rfPanel .rfp-cat.on .rfp-name,#rfPanel .rfp-cat:hover .rfp-name{color:var(--ink,#2b2720)}#rfPanel .rfp-count{font-size:12px;font-weight:700;color:var(--ink-faint,#8a8271);min-width:18px;text-align:right}#rfPanel .rfp-cat.on .rfp-count{color:#b0781d}#rfPanel .rfp-desc{font-size:11px;line-height:1.36;color:var(--ink-faint,#8a8271);font-style:italic;padding-left:19px}#rfPanel .rfp-cat:not(.on) .rfp-desc{opacity:.55}#rfPanel .dy-sw{background:#d6d4cf}#rfPanel .dy-sw::after{background:#e2dfd8}#rfPanel .dy-sw.on{background:#c9c3b6}#rfPanel .dy-sw.on::after{background:var(--gold,#c8791f)}body.eink #rfPanel{background:#fff;color:#000;border:2px solid #000}body.eink #rfPanel .rfp-title,body.eink #rfPanel .rfp-name,body.eink #rfPanel .rfp-cat.on .rfp-name{color:#000}#rfPop{position:fixed;z-index:9500;background:radial-gradient(130% 130% at 50% 0%,#2f2417,#211a12 60%,#19140f);color:#e9dcc4;border:1px solid rgba(250,154,49,.22);border-radius:10px;box-shadow:0 14px 34px -8px rgba(0,0,0,.55);padding:8px 11px;display:none;font:13px var(--sans,system-ui,sans-serif)}#rfPop button{margin-left:11px;padding:4px 12px;border:0;border-radius:999px;background:var(--gold,#fa9a31);color:#1a140d;font-weight:600;cursor:pointer}#rfPop button:hover{background:#ffad4d}#edStyleBtn{color:var(--ink-faint,#9a9486);font-weight:600}#edStyleBtn.on{color:var(--gold,#c8791f)}.rf-sent{border-radius:3px;box-decoration-break:clone;-webkit-box-decoration-break:clone;padding:.5px 0}.rf-smooth-hi{background:rgba(58,123,213,.12)}.rf-smooth-lo{background:rgba(224,122,63,.13)}.rf-mono{background:rgba(200,141,31,.15);box-shadow:inset 0 -1px 0 rgba(200,141,31,.4)}.rf-punch{background:rgba(74,155,94,.18);box-shadow:inset 0 -1px 0 rgba(74,155,94,.5)}.rf-sw-rhythm{background:linear-gradient(135deg,#4a9b5e 0 50%,#c88d1f 50% 100%)}.rf-sw-sound{background:linear-gradient(135deg,#3a7bd5 0 50%,#e07a3f 50% 100%)}#rfPanel .rfp-lenshd{font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-faint,#9a9486);padding:9px 11px 3px;margin-top:4px;border-top:1px solid var(--line,#e2dccb)}#rfPanel .rfp-strip{display:flex;align-items:flex-end;gap:2px;height:20px;padding:4px 12px 0;overflow:hidden}#rfPanel .rfp-bar{flex:1 1 0;min-width:1px;max-width:7px;background:rgba(138,130,113,.42);border-radius:1px}#rfPanel .rfp-bar-m{background:#c88d1f}#rfPanel .rfp-bar-p{background:#4a9b5e}#rfPanel .rfp-stripcap{font-size:9.5px;font-style:italic;color:var(--ink-faint,#9a9486);padding:3px 12px 4px}body.eink .rf-smooth-hi,body.eink .rf-smooth-lo,body.eink .rf-mono,body.eink .rf-punch{background:none;box-shadow:none;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px}';
+  st.textContent='#rfOverlay{white-space:pre-wrap;overflow-wrap:break-word;outline:none;cursor:default}.rf-style{border-radius:2px;cursor:pointer;text-decoration:underline;text-decoration-style:wavy;text-underline-offset:3px;text-decoration-thickness:1.5px}.rf-passive{text-decoration-color:#2e8b8b}.rf-adverb{text-decoration-color:#8a5cd6}.rf-filler{text-decoration-color:#b0863c}.rf-repeat{text-decoration-color:#3a7bd5}.rf-style:hover{background:rgba(0,0,0,.07)}.rf-long{background:rgba(224,122,63,.15);border-radius:2px;box-shadow:0 1px 0 rgba(224,122,63,.55)}.rf-sw-passive{background:#2e8b8b}.rf-sw-adverb{background:#8a5cd6}.rf-sw-filler{background:#b0863c}.rf-sw-repeat{background:#3a7bd5}.rf-sw-long{background:#e07a3f}#rfPanel{position:fixed;top:calc(var(--hH,58px) + 50px);right:20px;z-index:9400;display:none;flex-direction:column;width:214px;max-height:calc(100vh - var(--hH,58px) - 80px);background:var(--paper,#f7f3ea);color:var(--ink,#2b2720);border:1px solid var(--line,#d8d0bf);border-radius:15px;box-shadow:0 18px 46px -16px rgba(80,60,25,.42);font-family:var(--sans,system-ui,sans-serif);overflow:hidden}#rfPanel.show{display:flex}#rfPanel .rfp-hd{display:flex;align-items:center;justify-content:space-between;padding:14px 15px 3px}#rfPanel .rfp-title{font-weight:700;font-size:14px;letter-spacing:.02em;color:#b0781d}#rfPanel .rfp-x{border:none;background:none;font-size:20px;line-height:1;color:var(--ink-faint,#8a8271);cursor:pointer;opacity:.85;padding:0 2px}#rfPanel .rfp-x:hover{opacity:1;color:var(--ink,#2b2720)}#rfPanel .rfp-sub{font-size:10px;letter-spacing:.02em;color:var(--ink-faint,#8a8271);font-style:italic;padding:0 15px 9px}#rfPanel .rfp-body{display:flex;flex-direction:column;gap:2px;padding:2px 8px 12px;overflow:auto}#rfPanel .rfp-cat{display:flex;flex-direction:column;align-items:stretch;gap:4px;width:100%;box-sizing:border-box;padding:9px 11px;border:none;border-radius:9px;background:transparent;cursor:pointer;text-align:left;transition:background .12s}#rfPanel .rfp-cat:hover{background:rgba(0,0,0,.05)}#rfPanel .rfp-top{display:flex;align-items:center;gap:9px}#rfPanel .rfp-sw-color{width:10px;height:10px;border-radius:2px;flex:none}#rfPanel .rfp-cat:not(.on) .rfp-sw-color{filter:grayscale(.85);opacity:.5}#rfPanel .rfp-name{flex:1;font-size:13.5px;font-weight:600;color:var(--ink-soft,#5a5854)}#rfPanel .rfp-cat.on .rfp-name,#rfPanel .rfp-cat:hover .rfp-name{color:var(--ink,#2b2720)}#rfPanel .rfp-count{font-size:12px;font-weight:700;color:var(--ink-faint,#8a8271);min-width:18px;text-align:right}#rfPanel .rfp-cat.on .rfp-count{color:#b0781d}#rfPanel .rfp-desc{font-size:11px;line-height:1.36;color:var(--ink-faint,#8a8271);font-style:italic;padding-left:19px}#rfPanel .rfp-cat:not(.on) .rfp-desc{opacity:.55}#rfPanel .dy-sw{background:#d6d4cf}#rfPanel .dy-sw::after{background:#e2dfd8}#rfPanel .dy-sw.on{background:#c9c3b6}#rfPanel .dy-sw.on::after{background:var(--gold,#c8791f)}body.eink #rfPanel{background:#fff;color:#000;border:2px solid #000}body.eink #rfPanel .rfp-title,body.eink #rfPanel .rfp-name,body.eink #rfPanel .rfp-cat.on .rfp-name{color:#000}#rfPop{position:fixed;z-index:9500;background:radial-gradient(130% 130% at 50% 0%,#2f2417,#211a12 60%,#19140f);color:#e9dcc4;border:1px solid rgba(250,154,49,.22);border-radius:10px;box-shadow:0 14px 34px -8px rgba(0,0,0,.55);padding:8px 11px;display:none;font:13px var(--sans,system-ui,sans-serif)}#rfPop button{margin-left:11px;padding:4px 12px;border:0;border-radius:999px;background:var(--gold,#fa9a31);color:#1a140d;font-weight:600;cursor:pointer}#rfPop button:hover{background:#ffad4d}#edStyleBtn{color:var(--ink-faint,#9a9486);font-weight:600}#edStyleBtn.on{color:var(--gold,#c8791f)}.rf-sent{border-radius:3px;box-decoration-break:clone;-webkit-box-decoration-break:clone;padding:.5px 0}.rf-smooth-hi{background:rgba(58,123,213,.12)}.rf-smooth-lo{background:rgba(224,122,63,.13)}.rf-mono{background:rgba(200,141,31,.15);box-shadow:inset 0 -1px 0 rgba(200,141,31,.4)}.rf-punch{background:rgba(74,155,94,.18);box-shadow:inset 0 -1px 0 rgba(74,155,94,.5)}.rf-sw-rhythm{background:linear-gradient(135deg,#4a9b5e 0 50%,#c88d1f 50% 100%)}.rf-sw-sound{background:linear-gradient(135deg,#3a7bd5 0 50%,#e07a3f 50% 100%)}#rfPanel .rfp-lenshd{font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-faint,#9a9486);padding:9px 11px 3px;margin-top:4px;border-top:1px solid var(--line,#e2dccb)}#rfPanel .rfp-strip{display:flex;align-items:flex-end;gap:2px;height:20px;padding:4px 12px 0;overflow:hidden}#rfPanel .rfp-bar{flex:1 1 0;min-width:1px;max-width:7px;background:rgba(138,130,113,.42);border-radius:1px}#rfPanel .rfp-bar-m{background:#c88d1f}#rfPanel .rfp-bar-p{background:#4a9b5e}#rfPanel .rfp-stripcap{font-size:9.5px;font-style:italic;color:var(--ink-faint,#9a9486);padding:3px 12px 4px}body.eink .rf-smooth-hi,body.eink .rf-smooth-lo,body.eink .rf-mono,body.eink .rf-punch{background:none;box-shadow:none;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px}';
   document.head.appendChild(st); }
 function rfShowLegend(c, rc){ var p=document.getElementById('rfPanel');
   if(!p){ p=document.createElement('div'); p.id='rfPanel';
@@ -34480,6 +34548,25 @@ document.addEventListener('DOMContentLoaded', init);
   #npCard .npc-add{border-style:dashed; color:var(--ink-faint)}
   #npCard .npc-add:hover{color:var(--gold); border-color:var(--gold); background:none}
   /* searchable trait picker (mirrors the element ADD card) */
+  /* Unified "add system" picker for the element tiers (Category / Sub-category / Type) — mirrors the trait picker */
+  .ap-menu{ position:fixed; z-index:4300; width:266px; max-width:92vw; max-height:70vh; display:flex; flex-direction:column; box-sizing:border-box; background:var(--paper); border:1px solid var(--line); border-radius:13px; box-shadow:0 18px 60px rgba(0,0,0,.28); padding:12px 13px; }
+  body.eink .ap-menu{ border:2px solid #000; }
+  .ap-head{ display:flex; align-items:center; justify-content:space-between; margin-bottom:6px; }
+  .ap-title{ font-family:var(--sans); font-size:10px; font-weight:700; letter-spacing:.18em; text-transform:uppercase; color:var(--ink-faint); }
+  .ap-x{ font-size:16px; line-height:1; color:var(--ink-faint); background:none; border:none; cursor:pointer; padding:0 3px; }
+  .ap-x:hover{ color:var(--ink); }
+  .ap-search{ width:100%; box-sizing:border-box; font-family:var(--serif); font-size:15px; color:var(--ink); border:none; border-bottom:1px solid var(--line); background:transparent; outline:none; padding:4px 2px; margin-bottom:2px; }
+  .ap-list{ overflow-y:auto; scrollbar-width:thin; margin-top:6px; }
+  .ap-grouphd{ font-family:var(--sans); font-size:7.5px; letter-spacing:.16em; text-transform:uppercase; color:var(--ink-faint); margin:9px 2px 4px; }
+  .ap-grouphd:first-child{ margin-top:2px; }
+  .ap-pills{ display:flex; flex-wrap:wrap; gap:5px; margin-bottom:2px; }
+  .ap-pill{ font-family:var(--sans); font-size:11px; letter-spacing:.02em; padding:4px 10px; border:1px solid var(--line); border-radius:12px; background:transparent; color:var(--ink-soft); cursor:pointer; white-space:nowrap; }
+  .ap-pill:hover{ color:var(--ink); border-color:var(--ink-faint); }
+  .ap-pill.on{ background:var(--ink); color:var(--paper); border-color:var(--ink); }
+  body.eink .ap-pill.on{ background:#000; color:#fff; }
+  .ap-add{ display:block; width:100%; text-align:left; box-sizing:border-box; margin-top:9px; font-family:var(--serif); font-size:14px; font-style:italic; color:var(--gold-deep,#9a7b1e); background:transparent; border:none; border-top:1px solid var(--line); padding:9px 2px 2px; cursor:pointer; }
+  .ap-add:hover{ color:var(--ink); }
+  .ap-empty{ font-family:var(--serif); font-size:13px; font-style:italic; color:var(--ink-faint); padding:6px 2px; }
   #traitPicker{position:fixed; z-index:320; display:none; width:268px; max-width:92vw; background:var(--paper); border:1px solid var(--line); border-radius:13px; box-shadow:0 18px 60px rgba(0,0,0,.28); padding:13px 14px}
   #traitPicker.show{display:block}
   body.eink #traitPicker{border:2px solid #000}
@@ -42690,8 +42777,14 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.229';
+  var APP_VERSION = '2026.07.20.231';
   var APP_CHANGELOG = [
+    { v:'2026.07.20.231', date:'July 31, 2026', notes:[
+      'The Style Check panel now opens in the right gutter instead of the left, so you can have the Organize drawer (left) and Style Check (right) open at the same time — handy for jumping around while working a style pass.'
+    ]},
+    { v:'2026.07.20.230', date:'July 31, 2026', notes:[
+      'Changing an element’s Category, Sub-category or Type now uses one “add system” picker instead of the long dropdown: a search box at the top, every set laid out and grouped under headers so you can scroll them all at once, and an inline “＋ Use …” to name your own — no separate naming window. Picking a Type from any set also sets its sub-category automatically.'
+    ]},
     { v:'2026.07.20.229', date:'July 31, 2026', notes:[
       'The Write mode button’s corner brackets are now tucked tight inside the circle’s footprint (so Write no longer reads bigger than the other mode icons), and on hover/active they grow just to the circle’s size like the other medallions.'
     ]},
