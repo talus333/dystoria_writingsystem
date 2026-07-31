@@ -30947,7 +30947,7 @@ function patRenderTension(){
   var body=document.getElementById('patBody'); if(!body) return; body.innerHTML=''; patClearParaHL();
   var roll=document.getElementById('patRollup'); if(roll) roll.innerHTML='';
   var sc=document.createElement('div'); sc.className='pt-scope';
-  [['story','Whole story'],['section','This section'],['scene','Scene by scene'],['paragraph','Paragraph by paragraph']].forEach(function(s){ var b=document.createElement('button'); b.type='button'; b.textContent=s[1]; if(PAT.tScope===s[0]) b.classList.add('on'); b.addEventListener('click', function(e){ e.stopPropagation(); if(PAT.tScope!==s[0]){ PAT.tScope=s[0]; patRenderTension(); } }); sc.appendChild(b); });
+  [['story','Whole story'],['section','This section'],['scene','By Scene'],['paragraph','By Paragraph']].forEach(function(s){ var b=document.createElement('button'); b.type='button'; b.textContent=s[1]; if(PAT.tScope===s[0]) b.classList.add('on'); b.addEventListener('click', function(e){ e.stopPropagation(); if(PAT.tScope!==s[0]){ PAT.tScope=s[0]; patRenderTension(); } }); sc.appendChild(b); });
   body.appendChild(sc);
   var run=document.createElement('button'); run.type='button'; run.className='pt-run'; run.innerHTML='✦ Analyse tension';
   run.addEventListener('click', function(e){ e.stopPropagation(); patRunTension(); });
@@ -30958,7 +30958,30 @@ function patRenderTension(){
   if(PAT.tData && PAT.tKey===cacheKey){ patRenderTensionResult(PAT.tData); }
   else { var em=document.createElement('div'); em.className='pt-empty'; em.textContent = PAT.tScope==='paragraph' ? 'Analyse walks this section paragraph by paragraph and shows what each one does to the tension — opens a new question, deepens one, repeats a beat, resolves, or holds — so you can see where the tension builds or circles.' : PAT.tScope==='scene' ? 'Analyse walks this section scene by scene and shows what each scene does to the tension — opens a new question, deepens one, repeats a beat, resolves, or holds — so you can see how the tension moves across the scenes. (Needs at least two scenes — split with the ～ divider.)' : ('Analyse names the explicit and implicit questions this '+(PAT.tScope==='story'?'story':'section')+' raises in the reader, and whether each resolves. It reflects the text back — it never answers the questions for you.'); body.appendChild(em); }
 }
-function patParseJSON(s){ try{ return JSON.parse(s); }catch(e){} try{ var m=String(s).match(/\{[\s\S]*\}/); if(m) return JSON.parse(m[0]); }catch(e){} return null; }
+function patParseJSON(s){
+  try{ return JSON.parse(s); }catch(e){}
+  try{ var m=String(s).match(/\{[\s\S]*\}/); if(m) return JSON.parse(m[0]); }catch(e){}
+  // Salvage a truncated {"paras":[ {...}, {...}, … ]} response — the walk scopes (By Paragraph / By Scene) emit one
+  // object per unit, so a long section can overrun the token budget and cut the JSON off mid-array. Recover every
+  // COMPLETE object we can, so a partial read still shows most of the walk instead of failing outright.
+  try{
+    var t=String(s); var pi=t.indexOf('"paras"'); if(pi<0) return null;
+    var arrStart=t.indexOf('[', pi); if(arrStart<0) return null;
+    var objs=[], depth=0, cur='', inStr=false, esc=false, started=false;
+    for(var i=arrStart+1;i<t.length;i++){ var ch=t[i];
+      if(inStr){ cur+=ch; if(esc){ esc=false; } else if(ch==='\\'){ esc=true; } else if(ch==='"'){ inStr=false; } continue; }
+      if(ch==='"'){ inStr=true; cur+=ch; continue; }
+      if(ch==='{'){ depth++; started=true; cur+=ch; continue; }
+      if(ch==='}'){ depth--; cur+=ch; if(depth===0 && started){ try{ objs.push(JSON.parse(cur)); }catch(e){} cur=''; started=false; } continue; }
+      if(ch===']' && depth===0) break;
+      if(depth>0) cur+=ch;
+    }
+    if(!objs.length) return null;
+    var sum=''; var sm=t.match(/"summary"\s*:\s*"((?:[^"\\]|\\.)*)"/); if(sm){ try{ sum=JSON.parse('"'+sm[1]+'"'); }catch(e){ sum=sm[1]; } }
+    return { paras:objs, summary:sum, _partial:true };
+  }catch(e){}
+  return null;
+}
 async function patRunTension(){
   if(typeof aiAuthed==='function' && !aiAuthed()){ if(typeof promptAiSignup==='function') promptAiSignup(); return; }
   var scope=PAT.tScope; var isPara=(scope==='paragraph'); var isScene=(scope==='scene'); var isWalk=(isPara||isScene); var txt=patTensionText(isWalk?'section':scope);
@@ -30977,13 +31000,13 @@ async function patRunTension(){
   if(isWalk){
     var unit=isScene?'scene':'paragraph';
     sys='You are a fiction editor reflecting a draft back to its author. The passage is already NUMBERED by '+unit+'. For EACH numbered '+unit+', name the QUESTION or tension it raises or carries in the reader, and classify its ROLE in the section’s tension as exactly one of: "opens" (raises a NEW question), "deepens" (explores an existing question from a fresh angle), "repeats" (restates a beat already made, adding no new angle), "resolves" (answers or closes a question), or "holds" (no tension movement — a transition or texture). Use the SAME numbers as the passage. Do NOT rewrite or answer anything — only name what each '+unit+' is doing to the tension. Be concrete and specific. Return ONLY JSON.';
-    ask=txt.slice(0,14000)+'\n\nReturn ONLY this JSON (no prose around it), one entry per numbered '+unit+':\n{"paras":[{"n":1,"tension":"the question or tension this '+unit+' carries (short)","role":"opens|deepens|repeats|resolves|holds","note":"optional one-line note, or empty string"}],"summary":"one or two sentences: how does the tension move across the '+unit+'s — where does it build, vary, or circle the same beat?"}';
+    ask=txt.slice(0,14000)+'\n\nReturn ONLY this JSON (no prose around it), one entry per numbered '+unit+'. Keep "tension" under ~14 words and "note" under ~12 (or ""), so the whole reply stays compact:\n{"paras":[{"n":1,"tension":"the question or tension this '+unit+' carries (short)","role":"opens|deepens|repeats|resolves|holds","note":"optional one-line note, or empty string"}],"summary":"one or two sentences: how does the tension move across the '+unit+'s — where does it build, vary, or circle the same beat?"}';
   } else {
     sys='You are a fiction editor reflecting a draft back to its author. Read the passage and name the QUESTIONS it raises in a reader’s mind — the engine of narrative tension. Separate EXPLICIT questions (asked or set up openly on the page) from IMPLICIT questions (raised beneath the surface: a withheld motive, an unexplained absence, a tension the prose implies, a promise it makes). For each question, decide whether the SAME passage later RESOLVES it, and if so briefly where. Do NOT answer or rewrite anything — only name what the text is already asking. Be concrete and specific to this passage. Return ONLY JSON.';
     ask=txt.slice(0,12000)+'\n\nReturn ONLY this JSON shape (no prose around it):\n{"explicit":[{"q":"the question the text openly raises","resolved":true,"where":"where/how it resolves, or empty string"}],"implicit":[{"q":"a question raised beneath the surface","resolved":false,"where":""}],"alignment":"one sentence: do the explicit and implicit questions pull the same way, or different ways?","paragraphs":"one sentence: do the paragraphs explore these questions in varied ways, or repeat one beat?"}';
   }
   var data=null;
-  try{ var out=await aiCall(sys, ask, { json:true, maxTokens:(isWalk?1500:1200), temperature:0.2 }); data=patParseJSON(out); }catch(e){ data=null; }
+  try{ var out=await aiCall(sys, ask, { json:true, maxTokens:(isWalk?3000:1200), temperature:0.2 }); data=patParseJSON(out); }catch(e){ data=null; }
   PAT.tRunning=false;
   var ok = isWalk ? !!(data && data.paras && data.paras.length) : !!(data && ((data.explicit&&data.explicit.length) || (data.implicit&&data.implicit.length)));
   if(!ok){ PAT.tData=null; patRenderTension(); var b1=document.getElementById('patBody'); if(b1){ var er=document.createElement('div'); er.className='pt-empty'; er.textContent='Couldn’t read the tension just now — please try again.'; b1.appendChild(er); } return; }
@@ -43073,8 +43096,12 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.242';
+  var APP_VERSION = '2026.07.20.243';
   var APP_CHANGELOG = [
+    { v:'2026.07.20.243', date:'July 31, 2026', notes:[
+      'Fixed “Couldn’t read the tension” on the by-paragraph (and by-scene) walk: a long section could overrun the reply budget and cut the result off mid-way. The budget is bigger now, and a salvage step recovers every complete paragraph/scene even from a truncated reply, so the walk shows rather than fails.',
+      'Renamed the two walk scopes to “By Scene” and “By Paragraph” for a cleaner picker.'
+    ]},
     { v:'2026.07.20.242', date:'July 31, 2026', notes:[
       'Tension gains its fourth scope — “Scene by scene” — completing the Whole story · Section · Scene · Paragraph set. It walks the current section one scene at a time (split on the ～ divider), tagging what each scene does to the tension — Opens · Deepens · Repeats · Resolves · Holds — with the same ◂ / ▸ stepper that lights up the whole scene in the manuscript. A section with just one scene points you to add a break or use “This section”.'
     ]},
