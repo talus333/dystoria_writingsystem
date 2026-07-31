@@ -3611,8 +3611,10 @@
   .gcimp-btn.on .gcimp-sw{box-shadow:inset 0 0 0 2px rgba(0,0,0,.28)}
   .gcimp-or{display:flex; align-items:center; text-align:center; gap:8px; margin:11px 0 8px; font-family:var(--sans,system-ui); font-size:10px; letter-spacing:.09em; text-transform:uppercase; color:var(--ink-faint,#a8a08f)}
   .gcimp-or::before,.gcimp-or::after{content:''; flex:1; height:1px; background:var(--line,#e3ded3)}
-  /* author: heat-map paint over the Revise manuscript + legend */
-  #editBody .imp-heat{border-radius:5px; padding:2px 6px; margin:0 -6px; transition:background .2s; cursor:help}
+  /* author: heat-map paint over the Revise manuscript + legend (passages highlighted via the Custom Highlight API;
+     .imp-heat is only a fallback tint for browsers without it) */
+  #editBody .imp-heat{border-radius:4px; box-decoration-break:clone}
+  ::highlight(imp-fallback){background:rgba(232,196,40,.3)}
   #impLegend{position:fixed; left:18px; bottom:18px; z-index:130; max-width:280px; background:var(--paper,#fbfaf8); border:1px solid var(--line,#d8d2c4); border-radius:12px; box-shadow:0 14px 40px rgba(0,0,0,.22); padding:11px 13px; font-family:var(--sans,system-ui)}
   #impLegend .impl-h{font-size:11px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; color:var(--ink,#2b2926); margin-bottom:8px}
   #impLegend .impl-legend{display:flex; flex-direction:column; gap:5px}
@@ -24017,6 +24019,7 @@ async function pubBootGuest(tok){
   $('readMode').classList.add('show');
   pubBuildGuestUI();
   await pubLoadComments(story.id); pubSubscribe(story.id); pubSubscribeStory(_pubToken);
+  try{ pubImpPaintReader(); }catch(e){}   // restore my earlier impression highlights on this link
   requestAnimationFrame(()=>{ $('readBody').scrollTop=0; });
 }
 // Sanitize story HTML from ANOTHER user (public share) before it touches innerHTML — a whitelist pass in an
@@ -24399,26 +24402,85 @@ function pubImpBlend(counts){
   var alpha=Math.round((0.11 + strength*0.42)*1000)/1000;               // 1 reader → very light (~.19); caps ~.53
   return { rgb:[Math.round(r/w),Math.round(g/w),Math.round(b/w)], alpha:alpha, total:t };
 }
-function pubImpRGBA(counts){ var x=pubImpBlend(counts); return x?('rgba('+x.rgb[0]+','+x.rgb[1]+','+x.rgb[2]+','+x.alpha+')'):''; }
+// rgba for a passage. `strong` (reader's own view) uses a fixed, clearly-visible alpha; the author heat-map scales alpha by count.
+function pubImpRGBA(counts, strong){ var x=pubImpBlend(counts); if(!x) return ''; var a=strong?0.42:x.alpha; return 'rgba('+x.rgb[0]+','+x.rgb[1]+','+x.rgb[2]+','+a+')'; }
 function _impCountLabel(c){ var parts=[]; IMP_KINDS.forEach(function(K){ if(c[K.k]) parts.push(c[K.k]+' '+K.short); }); return parts.join(' · '); }
+// ---- non-destructive text-range highlighting (Custom Highlight API) ----
+// Build a whitespace-normalised index of a root's text so a stored quote (also normalised) maps back to a live Range —
+// highlighting the EXACT passage, not the whole block (a section can be one block, which is why block-tint looked wrong).
+function _impBuildIndex(root){
+  var host=(root && root.querySelector && (root.querySelector('.rd-prose')||root))||root;
+  var norm='', map=[]; if(!host) return { norm:norm, map:map };
+  var w=document.createTreeWalker(host, NodeFilter.SHOW_TEXT, null), n, prevSpace=false;
+  while(n=w.nextNode()){
+    var pe=n.parentElement;
+    if(pe && pe.closest && pe.closest('.sec-mark,.scene-mark,.dia,.rf-panel,#impLegend')) continue;   // skip decorations
+    var t=n.nodeValue||'';
+    for(var i=0;i<t.length;i++){ var ch=t.charCodeAt(i);
+      var isWs=(ch===32||ch===9||ch===10||ch===13||ch===12||ch===160);
+      if(isWs){ if(prevSpace) continue; prevSpace=true; norm+=' '; map.push([n,i]); }
+      else { prevSpace=false; norm+=t[i]; map.push([n,i]); }
+    }
+  }
+  return { norm:norm, map:map };
+}
+function _impFindRange(idx, key){
+  var K=String(key||'').replace(/\s+/g,' ').trim(); if(K.length<4) return null;
+  var norm=idx.norm, map=idx.map, at=norm.indexOf(K);
+  if(at<0){ var lens=[48,32,20,12]; for(var j=0;j<lens.length;j++){ var pre=K.slice(0,lens[j]); if(pre.length<8) break; at=norm.indexOf(pre); if(at>=0){ K=pre; break; } } }
+  if(at<0) return null;
+  var s=map[at], e=map[at+K.length-1]; if(!s||!e) return null;
+  try{ var r=document.createRange(); r.setStart(s[0], s[1]); r.setEnd(e[0], e[1]+1); return r; }catch(err){ return null; }
+}
+var _impStyleEl=null;
+function _impClearHighlights(){
+  try{ if(window.CSS && CSS.highlights){ Array.from(CSS.highlights.keys()).forEach(function(nm){ if(String(nm).indexOf('imp-')===0) CSS.highlights.delete(nm); }); } }catch(e){}
+  if(_impStyleEl){ try{ _impStyleEl.remove(); }catch(e){} _impStyleEl=null; }
+}
+// paint a set of {rgba: [ranges]} groups; falls back to leaf-block background tint if the Highlight API is unavailable
+function _impApplyGroups(groups){
+  _impClearHighlights();
+  var rgbas=Object.keys(groups); if(!rgbas.length) return 0;
+  if(window.CSS && CSS.highlights && typeof window.Highlight!=='undefined'){
+    var css=''; var i=0;
+    rgbas.forEach(function(rgba){ var name='imp-'+(i++); var hl=new Highlight();
+      groups[rgba].forEach(function(r){ try{ hl.add(r); }catch(e){} });
+      try{ CSS.highlights.set(name, hl); }catch(e){}
+      css+='::highlight('+name+'){ background-color:'+rgba+'; border-radius:3px; }\n';
+    });
+    _impStyleEl=document.createElement('style'); _impStyleEl.id='impHlStyle'; _impStyleEl.textContent=css; document.head.appendChild(_impStyleEl);
+  } else {
+    // fallback: tint the smallest enclosing block of each range
+    rgbas.forEach(function(rgba){ groups[rgba].forEach(function(r){ var el=r.startContainer; el=(el.nodeType===1?el:el.parentElement); if(el){ el.classList.add('imp-heat'); el.style.background=rgba; } }); });
+  }
+  return rgbas.length;
+}
 // ---- author heat-map over the Revise manuscript ----
 function pubImpClear(){
+  _impClearHighlights();
   var eb=document.getElementById('editBody');
-  if(eb) Array.prototype.forEach.call(eb.querySelectorAll('.imp-heat'), function(x){ x.classList.remove('imp-heat'); x.style.background=''; if(x.getAttribute('data-imp-t')!=null){ x.removeAttribute('title'); x.removeAttribute('data-imp-t'); } });
+  if(eb) Array.prototype.forEach.call(eb.querySelectorAll('.imp-heat'), function(x){ x.classList.remove('imp-heat'); x.style.background=''; });
   document.body.classList.remove('imp-on');
   var lg=document.getElementById('impLegend'); if(lg) lg.remove();
 }
 function pubImpPaint(){
   var eb=document.getElementById('editBody'); if(!eb) return; pubImpClear();
-  var agg=pubImpAgg(_pubImpRows); var keys=Object.keys(agg); var painted=0;
-  keys.forEach(function(key){ var block=pubBlockFor(eb, key); if(!block) return;
-    var rgba=pubImpRGBA(agg[key]); if(!rgba) return;
-    block.classList.add('imp-heat'); block.style.background=rgba;
-    if(!block.getAttribute('title')){ block.setAttribute('title', _impCountLabel(agg[key])); block.setAttribute('data-imp-t','1'); }
-    painted++;
-  });
+  var agg=pubImpAgg(_pubImpRows); var keys=Object.keys(agg);
+  var idx=_impBuildIndex(eb); var groups={}; var found=0;
+  keys.forEach(function(key){ var r=_impFindRange(idx, key); if(!r) return; var rgba=pubImpRGBA(agg[key]); if(!rgba) return; (groups[rgba]||(groups[rgba]=[])).push(r); found++; });
+  _impApplyGroups(groups);
   document.body.classList.add('imp-on');
-  pubImpLegend(painted, keys.length);
+  pubImpLegend(found, keys.length);
+}
+// ---- reader's own marks, painted on their reading view so a mark is visibly confirmed and persists ----
+function pubImpPaintReader(){
+  var rb=document.getElementById('readBody'); if(!rb) return; _impClearHighlights();
+  var mine={};
+  Object.keys(_pubImpMine||{}).forEach(function(mk){ if(!_pubImpMine[mk]) return; var sp=String(mk).split(IMP_SEP); var a=sp[0], k=sp[1]; if(!a||!_impKind(k)) return;
+    var o=mine[a]||(mine[a]={ like:0,dislike:0,confused:0,total:0 }); o[k]++; o.total++; });
+  var idx=_impBuildIndex(rb); var groups={};
+  Object.keys(mine).forEach(function(a){ var r=_impFindRange(idx, a); if(!r) return; var rgba=pubImpRGBA(mine[a], true); (groups[rgba]||(groups[rgba]=[])).push(r); });
+  _impApplyGroups(groups);
 }
 function pubImpLegend(painted, total){
   var old=document.getElementById('impLegend'); if(old) old.remove();
@@ -24452,6 +24514,7 @@ async function pubImpMark(kind){
     if(typeof flashStatus==='function') flashStatus(had?'Impression removed':'Thanks — noted');
     pubHideCommentPop();
     var s=window.getSelection&&window.getSelection(); if(s&&s.removeAllRanges) s.removeAllRanges();
+    try{ pubImpPaintReader(); }catch(_e){}   // paint my own mark so it's visibly confirmed and persists
   }catch(e){ if(typeof pubCommentErr==='function') pubCommentErr('Couldn’t save that just now — please try again.'); }
 }
 // load per-link settings for a guest (defaults to both-on if the RPC isn't present yet)
@@ -28313,6 +28376,7 @@ function buildEditMode(){
   closeSgPop();
   edResetHistory();
   if (typeof renderEditGutter === 'function') requestAnimationFrame(renderEditGutter);   // margin notes ride alongside each section
+  try{ if(_pubImpOn && typeof pubImpPaint==='function') pubImpPaint(); }catch(e){}   // re-apply the reader-impressions heat-map after a re-render
 }
 // ---- Refine left margin: each section's notes (general + element pills, like a Plot card) beside the prose ----
 function editGutterOn(){ try { return localStorage.getItem('dystoria.edGutter') === '1'; } catch(e){ return false; } }
@@ -43266,8 +43330,11 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.244';
+  var APP_VERSION = '2026.07.20.245';
   var APP_CHANGELOG = [
+    { v:'2026.07.20.245', date:'July 31, 2026', notes:[
+      'Reader Impressions now highlight the exact passage, not the whole block. Readers see their own marks light up (and persist) on the page as they tap a feeling; the author heat-map in Revise tints only the marked words — fixing the “whole section turns dull yellow” problem on sections written as a single block. Uses the browser’s native highlight layer, so nothing is written into your manuscript.'
+    ]},
     { v:'2026.07.20.244', date:'July 31, 2026', notes:[
       'New — Reader Impressions: a wordless feedback layer for shared links. A reader highlights a passage and marks how it landed — Liked it (green) · Didn’t like it (red) · Confused (yellow) — no account, no writing. In Revise, Notes ▾ → “Reader Impressions” paints the manuscript with the aggregate: a passage deepens in colour as more readers feel the same, and two feelings on one passage blend into a new hue (like+dislike → an ambivalent brown, like+confused → a cautiously-optimistic lime, dislike+confused → an apprehensive orange). The share panel now has per-link toggles for comments and for impressions, independently. (Requires a one-time Supabase migration — see the delivered .sql.)'
     ]},
