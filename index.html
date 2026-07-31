@@ -42682,8 +42682,12 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.222';
+  var APP_VERSION = '2026.07.20.223';
   var APP_CHANGELOG = [
+    { v:'2026.07.20.223', date:'July 31, 2026', notes:[
+      '“Write about this” and “Explore” on scene cards now pull in the full context of the card: the scene’s own linked elements plus the section card’s and the thread’s plot elements (deduped), along with the card/scene notes and the thread’s plot description and stake. A scene that hasn’t linked anything of its own still starts from the card’s elements instead of coming up empty.',
+      'Fixed the thread column charcoal pills getting clipped at their ends — the gold hover outline now shows fully around the whole pill.'
+    ]},
     { v:'2026.07.20.222', date:'July 31, 2026', notes:[
       'Thread (plot) popup reworked to match the scene cards: the thread title is now an editable header you rename inline — no separate Name box. Stakes and Key Elements are merged into one “Key Elements this thread is about” section, and cards added to a thread inherit those linked elements as a starting point (then add their own).',
       '“Write about this” and “Explore” on scene cards now use the active scene’s own linked elements again (regression fix — they had reverted to the section’s elements).',
@@ -44548,7 +44552,7 @@ body.eink.pl-vover.pl-hover #planPlot .pl-pcorner{ box-shadow:0 7px 0 -6px #000,
    the titles land on one row and the two stakes land on the row beneath — no drift from differing text heights. */
 .pl-pcorner, .pl-pcolhd{ justify-content:flex-start; gap:0; }
 .pl-pcorner .pl-cornertitle{ height:30px; display:flex; align-items:center; justify-content:center; max-width:100%; overflow:hidden; white-space:nowrap; }
-.pl-pcolhd.pl-thcol .pl-thead{ height:30px; overflow:hidden; align-items:center; }   /* fixed-height title band: a 2-line thread name is vertically centred within it and never pushes the controls/stake down, so every stake lands on the same row */
+.pl-pcolhd.pl-thcol .pl-thead{ height:30px; overflow:visible; align-items:center; padding:0 3px; }   /* fixed-height title band; overflow visible so the pill's hover ring isn't clipped on its ends (the pill is single-line/ellipsis, so no 2-line overflow to hide) */
 .pl-pcorner::after{ display:none; }                            /* replaced by a real .pl-cornerctrlsp spacer so the stake can sit below the controls band */
 .pl-pcorner .pl-cornerctrlsp{ flex:none; height:21px; }        /* == the thread controls band (.pl-thctrls 20px + 1px margin) */
 .pl-pcorner .pl-cornerstake, .pl-pcolhd .pl-threadstake{ flex:none; align-self:center; max-width:100%; margin-top:2px; text-transform:lowercase; }
@@ -48119,23 +48123,46 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
   // R27 (Phase 1c) — "Write about this card": start a focused full-screen session with EVERY element linked on this
   // card as the Writing Focus (as if the author had added each with "+ focus element"). Reads cardEls at click time,
   // so links added while the popup is open are included.
+  // The full focus for a scene/section card = the scene's own linked elements + the section card's linked elements
+  // + the thread's plot elements, deduped. Guarantees "Write about this" and "Explore" always carry the card's
+  // context and its linked elements, even when an individual scene hasn't linked anything of its own yet.
+  function _cardFocusEls(i, col, sid){
+    var out=[], seen={};
+    var add=function(list){ (list||[]).forEach(function(el){ if(el && el.nkey && !seen[el.nkey]){ seen[el.nkey]=1; out.push(el); } }); };
+    if(sid){ try{ add(scnEls(col, sid)); }catch(_){} }
+    try{ add(cardEls(i, col)); }catch(_){}
+    try{ add(plotDefEls(col.id)); }catch(_){}
+    return out;
+  }
+  // Card/plot text context folded into one notes blob: the card's (or scene's) general note, each element's note here,
+  // and the thread's plot description + stake — so the write-about prompt starts from the card's context.
+  function _cardFocusNotes(i, col, sid, cels, headLabel){
+    var bits=[];
+    try { var ct=String((sid?scnText(col,sid):plotCellText(i,col))||'').trim(); if(ct) bits.push((headLabel||'This card')+': '+ct); }catch(_){}
+    try { (cels||[]).forEach(function(el){
+      var en='';
+      if(sid){ try{ en=String(scnElNote(col,sid,el.nkey)||'').trim(); }catch(_){} }
+      if(!en){ try{ en=String(plotElGet(i, col.id, el.nkey)||'').trim(); }catch(_){} }
+      if(!en){ try{ en=String(plotDefElNote(col.id, el.nkey)||'').trim(); }catch(_){} }
+      if(en) bits.push((el.label||'element')+' (here): '+en);
+    }); }catch(_){}
+    try { var pdesc=String(plotDefField(col.id,'description')||'').trim(); if(pdesc) bits.push((col.name||'Thread')+' — plot: '+pdesc); }catch(_){}
+    try { var stk=String(plotDefStake(col)||'').trim(); if(stk) bits.push((col.name||'Thread')+' — stake: '+stk); }catch(_){}
+    var keys=(cels||[]).map(function(el){ return el.nkey; }).filter(Boolean);
+    try { var elNotes=(typeof window.waNotesFor==='function')?window.waNotesFor(keys, []):''; if(elNotes) bits.push(elNotes); }catch(_){}
+    return bits.join('\n');
+  }
   function cardWriteAbout(i, col, sid){
-    var btn=document.createElement('button'); btn.type='button'; btn.className='pl-cardpop-writeabout'; btn.title='Write about this card — a focused full-screen session with all this card’s elements as your focus';
+    var btn=document.createElement('button'); btn.type='button'; btn.className='pl-cardpop-writeabout'; btn.title='Write about this card — a focused full-screen session with this card’s context and all its linked elements as your focus';
     btn.innerHTML='✍ <span class="pl-wa-lbl">Write about this</span>';
     btn.addEventListener('click', function(e){ e.stopPropagation();
-      var cels=sid?scnEls(col,sid):cardEls(i, col);
+      var cels=_cardFocusEls(i, col, sid);
       var keys=cels.map(function(el){ return el.nkey; }).filter(Boolean);
       var a=api(); var secName=(a&&a.sectionName&&a.sectionName(i))||('Section '+(i+1));
       var title=(typeof plotCardTitle==='function'?plotCardTitle(i,col):'')||'';
       var label=title || (col.id==='main' ? secName : (secName+' · '+col.name));
-      // Card-context inheritance: the card's own note text + each linked element's note under this card + the elements'
-      // notepad notes; prose = this section's prose.
-      var noteBits=[]; try { var ct=String((sid?scnText(col,sid):plotCellText(i,col))||'').trim(); if(ct) noteBits.push((title||label)+': '+ct); }catch(_){}
-      try { cels.forEach(function(el){ var en=String((sid?scnElNote(col,sid,el.nkey):plotElGet(i, col.id, el.nkey))||'').trim(); if(en) noteBits.push((el.label||'element')+' (here): '+en); }); }catch(_){}
-      var elNotes=''; try { if(typeof window.waNotesFor==='function') elNotes=window.waNotesFor(keys, []); }catch(_){}
-      if(elNotes) noteBits.push(elNotes);
       var prose=''; try { if(typeof window.waProseForFrame==='function') prose=window.waProseForFrame(i); }catch(_){}
-      var ctx={ notes:noteBits.join('\n'), prose:prose };
+      var ctx={ notes:_cardFocusNotes(i, col, sid, cels, (title||label)), prose:prose };
       closeCardPopup();
       if(typeof window.writeAboutFocus==='function') window.writeAboutFocus(keys, label, ctx);
     });
@@ -48145,12 +48172,12 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     var btn=document.createElement('button'); btn.type='button'; btn.className='pl-cardpop-writeabout'; btn.title='Explore this card\u2019s elements \u2014 a full-screen Q&A that deepens them, then files into your notes';
     btn.innerHTML='\u2726 <span class="pl-wa-lbl">Explore</span>';
     btn.addEventListener('click', function(e){ e.stopPropagation();
-      var cels=sid?scnEls(col,sid):cardEls(i, col); var keys=cels.map(function(el){ return el.nkey; }).filter(Boolean);
+      var cels=_cardFocusEls(i, col, sid); var keys=cels.map(function(el){ return el.nkey; }).filter(Boolean);
       var a=api(); var secName=(a&&a.sectionName&&a.sectionName(i))||('Section '+(i+1));
       var title=(typeof plotCardTitle==='function'?plotCardTitle(i,col):'')||'';
       var label=title || (col.id==='main' ? secName : (secName+' \u00b7 '+col.name));
       closeCardPopup();
-      if(typeof window.openExplore==='function') window.openExplore(keys, label);
+      if(typeof window.openExplore==='function') window.openExplore(keys.length?keys:['thread:'+col.id], label, keys.length>1?'set':'');
     });
     return btn;
   }
