@@ -9345,7 +9345,7 @@ function seedRandomLocked(minutes){
   if (bs.length && ss.length) starterBond(bs[0], ss[0]);
   if (bs.length > 1 && os.length) starterBond(bs[1], os[0]);
   finalizeSeed({ lock: true });
-  if (minutes > 0){ $('timerLen').value = String(minutes); { const _p=getPrefs(); _p.timerLen=String(minutes); _p.timerAdded=true; localStorage.setItem(LS_PREFS, JSON.stringify(_p)); } setupTimer(); startTimerIfArmed(); flashStatus('Locked set — ' + minutes + ' min on the clock. Write!'); }
+  if (minutes > 0){ $('timerLen').value = String(minutes); { const _p=getPrefs(); _p.timerLen=String(minutes); localStorage.setItem(LS_PREFS, JSON.stringify(_p)); } try{ state._timerAddedSession=true; }catch(e){} setupTimer(); startTimerIfArmed(); flashStatus('Locked set — ' + minutes + ' min on the clock. Write!'); }
   else flashStatus('Locked starting set ready');
 }
 /* Goal-informed starter set: roll a cast (already biased toward the goal via pickWeighted),
@@ -21402,7 +21402,7 @@ function setSessionMinutes(m){
     if (!placed) sel.appendChild(opt);
   }
   sel.value = String(m);
-  const p = getPrefs(); p.timerLen = String(m); p.timerAdded = true; localStorage.setItem(LS_PREFS, JSON.stringify(p));
+  const p = getPrefs(); p.timerLen = String(m); localStorage.setItem(LS_PREFS, JSON.stringify(p)); try{ state._timerAddedSession=true; }catch(e){}
   if (!state.timer || !state.timer.started) setupTimer();
 }
 function isGuideWord(w){ return !!(w && w.role === 'constraint' && (w.cat === 'exercise' || GUIDE_IDS.has(w.cat))); }
@@ -21414,12 +21414,14 @@ function bumpTimerForGuideWord(w){ /* intentionally a no-op — elements never a
 function dropTimerForGuideWord(w){ /* intentionally a no-op — elements never auto-remove time */ }
 // The clock is opt-in: it stays hidden (and sessions run untimed) until the writer adds a timer —
 // via the "+ Focus → Timer" picker or a guide/exercise that suggests a length.
-function timerAdded(){ try { return getPrefs().timerAdded === true; } catch(e){ return false; } }
+// A timer is PER SESSION: it exists only if the writer added one THIS session (via the ＋ menu). It never carries
+// over — a new session always starts with no clock. (Was a persisted pref, which is why a 2-min clock kept coming back.)
+function timerAdded(){ try { return !!(state && state._timerAddedSession); } catch(e){ return false; } }
 function setupTimer(){
   clearInterval((state.timer || {}).handle);
   const added = timerAdded() || gameOn();
   const raw = gameOn() ? 2 : parseInt($('timerLen').value, 10);
-  const mins = !added ? 0 : ((raw === 0) ? 0 : (raw > 0 ? raw : 2));   // 0 = Unlimited or no-timer-added (no countdown, clock hidden)
+  const mins = !added ? 0 : ((raw === 0) ? 0 : (raw > 0 ? raw : 0));   // 0 = Unlimited or no-timer-added (no countdown, clock hidden); never an implicit 2-min base
   state.timer = { len: mins, remaining: mins * 60, running: false, started: false, handle: null };
   document.body.classList.toggle('untimed', mins === 0);
   document.body.classList.toggle('notimer', !added);   // no timer added yet → hide the clock entirely (just the Start button shows)
@@ -22787,8 +22789,9 @@ function startWritingSession(fullscreen){
       }
     } catch(e){}
     try {
+      try{ state._timerAddedSession = false; }catch(e){}              // no clock until the writer adds one THIS session
       const _p = getPrefs(); let _ch = false;
-      if (_p.timerAdded){ _p.timerAdded = false; _ch = true; }        // no clock until the writer adds one this session
+      if (_p.timerAdded){ _p.timerAdded = false; _ch = true; }        // scrub any legacy persisted flag too
       if (_p.wordGoal != null){ delete _p.wordGoal; _ch = true; }     // no word goal carried over
       if (_ch) localStorage.setItem(LS_PREFS, JSON.stringify(_p));
       if (typeof setupTimer === 'function') setupTimer();             // rebuild the clock display as hidden/clean
@@ -34008,8 +34011,7 @@ function init(){
   { const _tl = parseInt(getPrefs().timerLen, 10); $('timerLen').value = (_tl > 0) ? String(_tl) : '2'; }   // default to 2 min when unset or 0
   function setSessionLen(v){
     $('timerLen').value = String(v);
-    const p = getPrefs(); p.timerLen = String(v); p.timerAdded = true;   // picking a length adds the clock
-    localStorage.setItem(LS_PREFS, JSON.stringify(p));
+    const p = getPrefs(); p.timerLen = String(v); localStorage.setItem(LS_PREFS, JSON.stringify(p)); try{ state._timerAddedSession=true; }catch(e){}   // picking a length adds the clock (this session only)
     if (!state.timer.started) setupTimer();
     else if (!(state.timer.len > 0)){
       // The session is running but UNTIMED (the default clean-slate state) — adding a clock should start it
@@ -34065,7 +34067,7 @@ function init(){
   }
   window.__openClockMenu = openClockMenu;
   $('clockEdit').addEventListener('click', ev => { ev.stopPropagation(); openClockMenu($('clockEdit'), 'up'); });
-  { const cr = $('clockRemove'); if (cr) cr.addEventListener('click', ev => { ev.stopPropagation(); const p = getPrefs(); p.timerAdded = false; localStorage.setItem(LS_PREFS, JSON.stringify(p)); const m = $('clockMenu'); if (m) m.classList.remove('show'); setupTimer(); }); }
+  { const cr = $('clockRemove'); if (cr) cr.addEventListener('click', ev => { ev.stopPropagation(); try{ state._timerAddedSession=false; }catch(e){} const p = getPrefs(); p.timerAdded = false; localStorage.setItem(LS_PREFS, JSON.stringify(p)); const m = $('clockMenu'); if (m) m.classList.remove('show'); setupTimer(); }); }
   document.addEventListener('mousedown', ev => {
     const m = $('clockMenu');
     if (m.classList.contains('show') && !m.contains(ev.target) && ev.target.id !== 'clockEdit') m.classList.remove('show');
@@ -42680,8 +42682,17 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.220';
+  var APP_VERSION = '2026.07.20.222';
   var APP_CHANGELOG = [
+    { v:'2026.07.20.222', date:'July 31, 2026', notes:[
+      'Thread (plot) popup reworked to match the scene cards: the thread title is now an editable header you rename inline — no separate Name box. Stakes and Key Elements are merged into one “Key Elements this thread is about” section, and cards added to a thread inherit those linked elements as a starting point (then add their own).',
+      '“Write about this” and “Explore” on scene cards now use the active scene’s own linked elements again (regression fix — they had reverted to the section’s elements).',
+      'New writing sessions no longer start with a 2-minute timer. There is no timer by default; you add one from the +focus element menu, and it always clears between sessions.'
+    ]},
+    { v:'2026.07.20.221', date:'July 31, 2026', notes:[
+      'The timeline ＋ menu no longer lists “Add a scene row” — scenes are added from inside the open card.',
+      'The column title pills (Main Plot, threads) are now clean with no persistent border; they show a gold outline only on hover.'
+    ]},
     { v:'2026.07.20.220', date:'July 31, 2026', notes:[
       'Scene cards reworked. The closed card now shows the card title once at the top, then every scene stacked one after another (scrolling) with its number in front of its lead line — so you see all the scenes without tabbing. One shared title for the whole card (no per-scene renaming). Scenes are added only from the open card.',
       'In the card editor the scene tabs moved to the top-left with the title on its own line beneath, so a long title no longer runs into “Write about this”, and the tab spacing is cleaner.',
@@ -44334,13 +44345,13 @@ body.eink .pl-plotpop-ttl{ color:var(--ink); }
 .pl-plotfield:last-child{ margin-bottom:0; }
 .pl-plotfield-lbl{ font-family:var(--sans); font-size:9.5px; font-weight:700; letter-spacing:.09em; text-transform:uppercase; color:var(--ink-soft,#6b675f); margin-bottom:5px; }
 .pl-plotfield-lbl-sp{ margin-top:2px; }
+.pl-plotfield-hint{ font-family:var(--sans); font-size:10.5px; line-height:1.4; color:var(--ink-faint,#8c7c5e); margin:0 0 8px; }
 .pl-plotfield-ta{ width:100%; box-sizing:border-box; font-family:var(--serif); font-size:14.5px; line-height:1.5; color:var(--ink); border:1px solid var(--line); border-radius:10px; padding:9px 12px; resize:vertical; background:var(--paper,#fbfaf8); }
 .pl-plotfield-ta.big{ min-height:104px; }
 .pl-plotfield-ta:focus{ outline:none; border-color:var(--gold,#c49e4a); box-shadow:0 0 0 3px rgba(196,158,74,.14); }
 /* charcoal thread-title pill (opens the plot popup) */
 .pl-threadpill{ font-family:var(--sans); font-size:11px; font-weight:700; letter-spacing:.05em; color:#f3efe6; background:#2c2a26; border:1px solid #2c2a26; border-radius:999px; padding:4px 13px; cursor:pointer; max-width:160px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; transition:background .14s, box-shadow .14s; }
-.pl-threadpill:hover{ background:#3a372f; }
-.pl-threadpill.filled{ box-shadow:0 0 0 2px rgba(196,158,74,.5); }
+.pl-threadpill:hover{ background:#3a372f; box-shadow:0 0 0 2px rgba(196,158,74,.55); }   /* clean until hover, then a gold outline */
 body.eink .pl-threadpill{ background:#000; border-color:#000; color:#fff; }
 /* plot popup: shape selector + its stages */
 .pl-plotshape-sel{ width:100%; box-sizing:border-box; font-family:var(--serif); font-size:14px; color:var(--ink); border:1px solid var(--line); border-radius:9px; padding:8px 11px; background:var(--paper,#fbfaf8); cursor:pointer; }
@@ -47719,7 +47730,7 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     // label column: a single ＋ on the timeline — opens the insert menu (Add a section / scene row / Part / prologue / epilogue).
     // It carries a solid background so the gold spine reads UNDER it, not through it.
     var lab=document.createElement('div'); lab.className='pl-insrow pl-inscell';
-    var more=document.createElement('button'); more.className='pl-plus pl-insmore'; more.textContent='＋'; more.title='Add here — a section (its own diamond), a scene row in the section above, a Part, or a prologue/epilogue';
+    var more=document.createElement('button'); more.className='pl-plus pl-insmore'; more.textContent='＋'; more.title='Add here — a section (its own diamond), a Part, or a prologue/epilogue';
     more.addEventListener('click', function(e){ e.stopPropagation(); openInsertMenu(more, i); });
     lab.appendChild(more); frag.appendChild(lab);
     // the thread columns get empty cells now (no per-column ＋) — inserts happen from the single ＋ on the timeline
@@ -47735,7 +47746,7 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     closeMenus(); var a=api();
     var m=document.createElement('div'); m.className='plan-menu'; m.style.maxHeight='360px'; m.style.overflow='auto'; m.style.minWidth='220px';
     var b0=document.createElement('button'); b0.textContent='＋ Add a section'; b0.title='A new section here — its own diamond on the timeline; joins the Part it sits within, synced to your manuscript'; b0.addEventListener('click', function(e){ e.stopPropagation(); if(a) a.insertSectionAfter(afterIdx); closeMenus(); scheduleReplot(); }); m.appendChild(b0);
-    var bSc=document.createElement('button'); bSc.textContent='＋ Add a scene row'; bSc.title='A scene within the section above — a ~ division in the prose, added as a new card row beneath that section. No new section diamond; the timeline just continues.'; bSc.addEventListener('click', function(e){ e.stopPropagation(); try { if(typeof window.orgAddSceneToSection==='function') window.orgAddSceneToSection(afterIdx); } catch(_){} closeMenus(); scheduleReplot(); }); m.appendChild(bSc);
+    /* scenes are added from inside the open card (the ＋ tab), not from the timeline menu */
     var bP=document.createElement('button'); bP.textContent='＋ Add a part'; bP.title='A named Part divider with one section — group sections under it';
     bP.addEventListener('click', function(e){ e.stopPropagation(); (async function(){ var nm=(typeof sitePrompt==='function')?await sitePrompt('Name this part',''):'Part'; if(nm===null) return; if(a) a.insertPart(afterIdx, nm); closeMenus(); scheduleReplot(); })(); }); m.appendChild(bP);
     var hasPro=a?a.hasSectionType('prologue'):false, hasEpi=a?a.hasSectionType('epilogue'):false;
@@ -48013,29 +48024,13 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     var bd=document.createElement('div'); bd.id='planCardPop'; bd.className='pl-cardpop-bd';
     var panel=document.createElement('div'); panel.className='pl-cardpop pl-plotpop';
     var hd=document.createElement('div'); hd.className='pl-cardpop-hd';
-    var ttl=document.createElement('div'); ttl.className='pl-cardpop-titlein pl-plotpop-ttl'; ttl.textContent=(_isMainCol(col)?'Main Plot':((col.name||'Thread')+' — Plot')); hd.appendChild(ttl);
-    hd.appendChild(_plotKebab(col)); panel.appendChild(hd);
+    // editable title in the header (rename the plot / thread inline), like the scene card — no separate Name field
+    var ttl=document.createElement('input'); ttl.type='text'; ttl.className='pl-cardpop-titlein pl-plotpop-ttl'; ttl.value=col.name||''; ttl.placeholder='Name this plot / thread…';
+    ttl.addEventListener('input', function(){ if(a && a.renameThread) a.renameThread(col.id, ttl.value); col.name=ttl.value; scheduleReplot(); });
+    hd.appendChild(ttl); hd.appendChild(_plotKebab(col)); panel.appendChild(hd);
     var sub=document.createElement('div'); sub.className='pl-cardpop-sub'; sub.textContent=_isMainCol(col)?'The overall plot of your story — feeds the story facts and the wiki’s questions':'The overall plot of this thread';
     panel.appendChild(sub);
     var pbody=document.createElement('div'); pbody.className='pl-plotpop-body';
-    // Name — this column's plot / thread name (the charcoal pill shows it)
-    var nameWrap=document.createElement('div'); nameWrap.className='pl-plotfield';
-    var nlb=document.createElement('div'); nlb.className='pl-plotfield-lbl'; nlb.textContent='Name'; nameWrap.appendChild(nlb);
-    var nin=document.createElement('input'); nin.type='text'; nin.className='pl-plotfield-ta'; nin.value=col.name||''; nin.placeholder='Name this plot / thread…';
-    nin.addEventListener('input', function(){ if(a && a.renameThread) a.renameThread(col.id, nin.value); col.name=nin.value; ttl.textContent=(_isMainCol(col)?'Main Plot':((nin.value||'Thread')+' — Plot')); scheduleReplot(); });
-    nameWrap.appendChild(nin); pbody.appendChild(nameWrap);
-    // Stake — added via the stake "add" system (a pill you edit / add), not a plain field
-    var stakeWrap=document.createElement('div'); stakeWrap.className='pl-plotfield';
-    var slb=document.createElement('div'); slb.className='pl-plotfield-lbl'; slb.textContent='Stake'; stakeWrap.appendChild(slb);
-    var sHost=document.createElement('div'); sHost.className='pl-plotstake'; stakeWrap.appendChild(sHost);
-    function renderStake(){
-      sHost.innerHTML=''; var sv=plotDefStake(col);
-      var editFn=function(anchor){ if(typeof editStake==='function') editStake(anchor, plotDefStake(col), 'What’s ultimately at risk in this plot?', function(v){ plotDefStakeSet(col, v); renderStake(); }); };
-      var kind=_isMainCol(col)?'story':'thread';
-      if(sv && typeof stakePill==='function'){ sHost.appendChild(stakePill(sv, { own:true, onEdit:editFn, onClear:function(){ plotDefStakeSet(col,''); renderStake(); } })); }
-      else if(typeof stakeAdd==='function'){ sHost.appendChild(stakeAdd(editFn, false, kind)); }
-    }
-    renderStake(); pbody.appendChild(stakeWrap);
     // Plot shape — an archetypal shape; its stages show beneath as guidance (never a forced structure)
     var shapeWrap=document.createElement('div'); shapeWrap.className='pl-plotfield';
     var shlb=document.createElement('div'); shlb.className='pl-plotfield-lbl'; shlb.textContent='Plot shape'; shapeWrap.appendChild(shlb);
@@ -48052,8 +48047,9 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     var dlb=document.createElement('div'); dlb.className='pl-plotfield-lbl'; dlb.textContent='Description'; descWrap.appendChild(dlb);
     var dta=document.createElement('textarea'); dta.className='pl-plotfield-ta big'; dta.rows=4; dta.value=plotDefField(col.id,'description')||''; dta.placeholder='Describe the arc of this plot…';
     dta.addEventListener('input', function(){ plotDefFieldSet(col.id,'description',dta.value); }); descWrap.appendChild(dta); pbody.appendChild(descWrap);
-    // Key elements
+    // Key elements — what this plot is about; new cards in this thread inherit these, then add their own
     var elsLbl=document.createElement('div'); elsLbl.className='pl-plotfield-lbl pl-plotfield-lbl-sp'; elsLbl.textContent='Key elements'; pbody.appendChild(elsLbl);
+    var elsHint=document.createElement('div'); elsHint.className='pl-plotfield-hint'; elsHint.textContent='What this plot is about — cards added in this thread start with these linked.'; pbody.appendChild(elsHint);
     var pillsRow=document.createElement('div'); pillsRow.className='pl-cardpop-pills';
     function renderPlotPills(){
       pillsRow.innerHTML='';
@@ -48123,19 +48119,19 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
   // R27 (Phase 1c) — "Write about this card": start a focused full-screen session with EVERY element linked on this
   // card as the Writing Focus (as if the author had added each with "+ focus element"). Reads cardEls at click time,
   // so links added while the popup is open are included.
-  function cardWriteAbout(i, col){
+  function cardWriteAbout(i, col, sid){
     var btn=document.createElement('button'); btn.type='button'; btn.className='pl-cardpop-writeabout'; btn.title='Write about this card — a focused full-screen session with all this card’s elements as your focus';
     btn.innerHTML='✍ <span class="pl-wa-lbl">Write about this</span>';
     btn.addEventListener('click', function(e){ e.stopPropagation();
-      var cels=cardEls(i, col);
+      var cels=sid?scnEls(col,sid):cardEls(i, col);
       var keys=cels.map(function(el){ return el.nkey; }).filter(Boolean);
       var a=api(); var secName=(a&&a.sectionName&&a.sectionName(i))||('Section '+(i+1));
       var title=(typeof plotCardTitle==='function'?plotCardTitle(i,col):'')||'';
       var label=title || (col.id==='main' ? secName : (secName+' · '+col.name));
       // Card-context inheritance: the card's own note text + each linked element's note under this card + the elements'
       // notepad notes; prose = this section's prose.
-      var noteBits=[]; try { var ct=(typeof plotCellText==='function')?String(plotCellText(i,col)||'').trim():''; if(ct) noteBits.push((title||label)+': '+ct); }catch(_){}
-      try { cels.forEach(function(el){ if(typeof plotElGet==='function'){ var en=String(plotElGet(i, col.id, el.nkey)||'').trim(); if(en) noteBits.push((el.label||'element')+' (here): '+en); } }); }catch(_){}
+      var noteBits=[]; try { var ct=String((sid?scnText(col,sid):plotCellText(i,col))||'').trim(); if(ct) noteBits.push((title||label)+': '+ct); }catch(_){}
+      try { cels.forEach(function(el){ var en=String((sid?scnElNote(col,sid,el.nkey):plotElGet(i, col.id, el.nkey))||'').trim(); if(en) noteBits.push((el.label||'element')+' (here): '+en); }); }catch(_){}
       var elNotes=''; try { if(typeof window.waNotesFor==='function') elNotes=window.waNotesFor(keys, []); }catch(_){}
       if(elNotes) noteBits.push(elNotes);
       var prose=''; try { if(typeof window.waProseForFrame==='function') prose=window.waProseForFrame(i); }catch(_){}
@@ -48145,11 +48141,11 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     });
     return btn;
   }
-  function cardExplore(i, col){
+  function cardExplore(i, col, sid){
     var btn=document.createElement('button'); btn.type='button'; btn.className='pl-cardpop-writeabout'; btn.title='Explore this card\u2019s elements \u2014 a full-screen Q&A that deepens them, then files into your notes';
     btn.innerHTML='\u2726 <span class="pl-wa-lbl">Explore</span>';
     btn.addEventListener('click', function(e){ e.stopPropagation();
-      var cels=cardEls(i, col); var keys=cels.map(function(el){ return el.nkey; }).filter(Boolean);
+      var cels=sid?scnEls(col,sid):cardEls(i, col); var keys=cels.map(function(el){ return el.nkey; }).filter(Boolean);
       var a=api(); var secName=(a&&a.sectionName&&a.sectionName(i))||('Section '+(i+1));
       var title=(typeof plotCardTitle==='function'?plotCardTitle(i,col):'')||'';
       var label=title || (col.id==='main' ? secName : (secName+' \u00b7 '+col.name));
@@ -48238,6 +48234,18 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     // main-column linked-element list (the main branch uses data.plotElems[i] directly)
     var _mainEls    = _sid ? function(){ return scnEls(col,_sid); } : function(){ return (data.plotElems&&data.plotElems[i])||[]; };
     var _mainElsSet = _sid ? function(l){ scnElsSet(col,_sid,l); } : function(l){ data.plotElems=data.plotElems||{}; if(l&&l.length) data.plotElems[i]=l; else delete data.plotElems[i]; save(); };
+    // Inherit the thread's Plot "Key elements" onto a fresh card (once) — the card can then add or remove its own.
+    try {
+      var _seedK=col.id+'|'+i+'|'+(_sid||'0'); data.plotSeeded=data.plotSeeded||{};
+      if(!data.plotSeeded[_seedK]){
+        var _keyEls=(typeof plotDefEls==='function')?plotDefEls(col.id):[];
+        if(_keyEls && _keyEls.length && !_els().length){
+          _elsSet(_keyEls.map(function(el){ return {nkey:el.nkey, label:el.label, cat:el.cat, kind:el.kind}; }));
+          _keyEls.forEach(function(el){ if(a && a.linkThreadEl) a.linkThreadEl(col.id, el.nkey, true, i); });
+        }
+        data.plotSeeded[_seedK]=1; save();
+      }
+    } catch(e){}
     var bd=document.createElement('div'); bd.id='planCardPop'; bd.className='pl-cardpop-bd';
     var panel=document.createElement('div'); panel.className='pl-cardpop';
     var hd=document.createElement('div'); hd.className='pl-cardpop-hd';
@@ -48247,7 +48255,7 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
       tin0.addEventListener('input', function(){ _titleSet(tin0.value); });
       // header row: scene tabs on the LEFT, the action pills on the right. Title sits on its own line beneath, so a
       // long title can't collide with "Write about this".
-      hd.appendChild(_sceneTabBar(i, col, _sid)); hd.appendChild(cardWriteAbout(i, col)); hd.appendChild(cardExplore(i, col)); hd.appendChild(cardKebab(i, col, _sid)); panel.appendChild(hd);
+      hd.appendChild(_sceneTabBar(i, col, _sid)); hd.appendChild(cardWriteAbout(i, col, _sid)); hd.appendChild(cardExplore(i, col, _sid)); hd.appendChild(cardKebab(i, col, _sid)); panel.appendChild(hd);
       var _tr0=document.createElement('div'); _tr0.className='pl-cardpop-titlerow'; _tr0.appendChild(tin0); panel.appendChild(_tr0);
       var sub0=document.createElement('div'); sub0.className='pl-cardpop-sub'; sub0.textContent=secName+'  ·  '+col.name+' thread';
       var pillsRow0=document.createElement('div'); pillsRow0.className='pl-cardpop-pills';
@@ -48305,7 +48313,7 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     // MAIN plot card: card title + element-filter pills + description (per-view note, mirrored to the notepad)
     var titleIn=document.createElement('input'); titleIn.className='pl-cardpop-titlein'; titleIn.value=_title(); titleIn.placeholder='Card title…';
     titleIn.addEventListener('input', function(){ _titleSet(titleIn.value); });
-    hd.appendChild(_sceneTabBar(i, col, _sid)); hd.appendChild(cardWriteAbout(i, col)); hd.appendChild(cardExplore(i, col)); hd.appendChild(cardKebab(i, col, _sid)); panel.appendChild(hd);
+    hd.appendChild(_sceneTabBar(i, col, _sid)); hd.appendChild(cardWriteAbout(i, col, _sid)); hd.appendChild(cardExplore(i, col, _sid)); hd.appendChild(cardKebab(i, col, _sid)); panel.appendChild(hd);
     var _trM=document.createElement('div'); _trM.className='pl-cardpop-titlerow'; _trM.appendChild(titleIn); panel.appendChild(_trM);
     var sub=document.createElement('div'); sub.className='pl-cardpop-sub'; sub.textContent=secName+'  ·  Main Plot';
 
