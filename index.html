@@ -28302,6 +28302,36 @@ function orgSectionScenes(frame){
   return out;
 }
 try { window.orgSectionScenes = orgSectionScenes; } catch(e){}
+// Reorder scenes within a section by moving one scene's prose segment before another's `~` mark. Scene card DATA
+// is keyed by the mark's stable sid, so it follows the prose automatically — no card-data move needed. Reordering
+// stays entirely inside one section, so no section index changes. Returns true if it moved.
+function orgMoveScene(frame, srcSid, destSid){
+  try {
+    var ed = $('editor'); if (!ed || srcSid === destSid) return false;
+    var fm = nodeFrameMap();
+    var kids = Array.prototype.slice.call(ed.children);
+    function markIdx(sid){ for (var j=0;j<kids.length;j++){ var n=kids[j]; if (fm.get(n)===frame && n.classList && n.classList.contains('scene-mark') && n.getAttribute('data-sid')===sid) return j; } return -1; }
+    var si = markIdx(srcSid); if (si < 0) return false;
+    // the source segment = the scene-mark + following blocks of this frame, up to the next scene-mark / section boundary
+    var seg = [kids[si]];
+    for (var m=si+1;m<kids.length;m++){ var nn=kids[m];
+      if (fm.get(nn)!==frame) break;
+      if (nn.tagName==='H3') break;
+      if (nn.classList && (nn.classList.contains('scene-mark') || nn.classList.contains('sec-mark'))) break;
+      seg.push(nn);
+    }
+    var destMark = kids[markIdx(destSid)]; if (!destMark) return false;
+    if (seg.indexOf(destMark) >= 0) return false;   // can't drop a scene into its own segment
+    if (typeof pushUndo === 'function') pushUndo();
+    var frag = document.createDocumentFragment(); seg.forEach(function(n){ frag.appendChild(n); });
+    ed.insertBefore(frag, destMark);   // place the dragged scene just before the drop-target scene
+    if (state.session){ try { state.session.html = editorHTML(); } catch(e){} }
+    if (typeof _orgRefreshViews === 'function') _orgRefreshViews();
+    if (typeof scheduleAutosave === 'function') scheduleAutosave(400);
+    return true;
+  } catch(e){ return false; }
+}
+try { window.orgMoveScene = orgMoveScene; } catch(e){}
 // Insert a scene break at the manuscript caret (prose above stays; a new scene begins below).
 function orgAddSceneBreak(){
   try {
@@ -42642,8 +42672,13 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.212';
+  var APP_VERSION = '2026.07.20.213';
   var APP_CHANGELOG = [
+    { v:'2026.07.20.213', date:'July 31, 2026', notes:[
+      'The between-rows insert is now a single ＋ on the timeline (was a ⋯), and the extra ＋ that sat between the cards in each column is gone. The gold timeline now passes cleanly behind that ＋ instead of through it.',
+      'Scene cards are grabbable: drag one to reorder the scenes within a section, or drop it onto another thread column to move that beat into that thread.',
+      'Every empty card shows its coordinate in faint text beneath the ＋ — Part | Section | Scene — so you always know where a blank card sits.'
+    ]},
     { v:'2026.07.20.212', date:'July 30, 2026', notes:[
       'Scenes now behave exactly like sections, with one difference: a scene is a division INSIDE a section (a ~ break), not a new diamond on the timeline. All the scenes in a section share that section’s one map.',
       'How you add them changed: the ＋ between rows (the ⋯ menu) now offers “Add a section” (its own diamond) and “Add a scene row” (a division in the section above). The old “＋ scene” button under the cards is gone.',
@@ -44218,6 +44253,9 @@ body.ember:not(.eink) .plan-stakepick .lp-row-tag.stk{ color:#e6968d; background
    The card/add children must NOT use flex:1 here (that collapses to zero height in a column
    context and scatters the grid); pin them to aspect-ratio sizing off their full width. */
 .pl-pcell > .pl-pcard, .pl-pcell > .pl-cardadd{ flex:0 0 auto; width:100%; align-self:stretch; }
+.pl-scenepcard[draggable="true"]{ cursor:grab; }
+.pl-scenepcard[draggable="true"]:active{ cursor:grabbing; }
+.pl-scenedrop{ box-shadow:0 0 0 2px var(--gold,#c49e4a) inset; border-radius:10px; }
 .pl-scenecard{ width:100%; box-sizing:border-box; border:1px solid rgba(140,124,94,.3); border-left:3px solid var(--gold,#c49e4a); border-radius:8px; padding:6px 8px; background:rgba(255,255,255,.5); cursor:pointer; }
 .pl-scenecard:hover{ border-color:var(--gold,#c49e4a); }
 .pl-scenecard-empty{ border-style:dashed; background:transparent; opacity:.8; }
@@ -44242,8 +44280,10 @@ body.ember:not(.eink) .plan-stakepick .lp-row-tag.stk{ color:#e6968d; background
 .pl-scell2.pl-drop-above .pl-spill{ box-shadow:0 -3px 0 -1px var(--gold,#c49e4a); }
 .pl-scell2.pl-drop-below .pl-spill{ box-shadow:0 3px 0 -1px var(--gold,#c49e4a); }
 .pl-pcell{ display:flex; flex-direction:column; gap:6px; align-items:stretch; }
-.pl-cardadd{ flex:1; align-self:stretch; aspect-ratio:1.618/1; min-height:0; border:1px dashed rgba(140,124,94,.2); border-radius:10px; background:transparent; color:rgba(140,124,94,.4); font-size:14px; cursor:pointer; transition:color .14s, border-color .14s, background .14s; }
+.pl-cardadd{ flex:1; align-self:stretch; aspect-ratio:1.618/1; min-height:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px; border:1px dashed rgba(140,124,94,.2); border-radius:10px; background:transparent; color:rgba(140,124,94,.4); font-size:14px; cursor:pointer; transition:color .14s, border-color .14s, background .14s; }
 .pl-cardadd:hover{ border-color:var(--gold,#c49e4a); border-style:solid; color:var(--gold,#c49e4a); background:rgba(196,158,74,.06); }
+.pl-cardadd .pl-addplus{ font-size:14px; line-height:1; }
+.pl-cardadd .pl-addmeta{ font-family:var(--sans); font-size:8.5px; letter-spacing:.05em; text-transform:uppercase; color:inherit; opacity:.85; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:92%; }   /* faint coordinate, same muted tone as the ＋ */
 .pl-pcard{ position:relative; flex:1; align-self:stretch; aspect-ratio:1.618/1; min-height:0; background:#faf6ea; border:1px solid rgba(138,99,32,.28); border-radius:10px; padding:10px 12px; cursor:pointer; overflow:hidden; display:flex; flex-direction:column; }
 .pl-pcard:hover{ border-color:var(--gold,#c49e4a); }
 .pl-pcard-ttl{ font-family:var(--serif); font-size:15.5px; font-weight:800; color:#c8791f; margin-bottom:5px; line-height:1.25; }   /* closed-card title in the gold brand colour */
@@ -44450,8 +44490,8 @@ body.eink .pl-gappill{ background:#fff; border:none; color:#000; }
    and fades out then back in across a Part divider (where a lot of story time usually passes). ---- */
 .pl-scell2::before{ content:''; position:absolute; left:calc(50% + 1px); transform:translateX(-50%); width:1px; top:-30px; bottom:-30px; background:rgba(196,158,74,.6); z-index:0; pointer-events:none; }
 #planPlot .pl-sname2{ position:relative; z-index:1; background:#fff; }        /* the section name masks the spine so it doesn't cut through the letters */
-#planPlot .pl-insadd{ background:#fff; }                                       /* the + insert pill masks the spine behind it */
-#planPlot .pl-insadd::after{ content:''; position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); width:15px; height:32px; background:#fff; border-radius:8px; z-index:-1; pointer-events:none; }   /* taller panel-coloured strip so the spine clearly passes BEHIND the + node (like it does behind the section names) */
+#planPlot .pl-insmore{ background:#fff; }                                      /* the + insert pill on the timeline masks the spine behind it */
+#planPlot .pl-insmore::after{ content:''; position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); width:15px; height:34px; background:#fff; border-radius:8px; z-index:-1; pointer-events:none; }   /* taller panel-coloured strip so the spine clearly passes BEHIND the + node (like it does behind the section names) */
 .pl-scell2 .pl-spill, .pl-scell2 .pl-gappill{ position:relative; z-index:1; }  /* diamonds + timeframe pills ride above the spine */
 .pl-scell2.pl-sec-first::before{ top:8px; }                                    /* start at the first node, never above it */
 .pl-scell2.pl-sec-last::before{ bottom:10px; }                                 /* stop at the last diamond — no dangling tail */
@@ -44463,7 +44503,7 @@ body.eink .pl-scell2.pl-sec-partend::before{ background:linear-gradient(to top, 
 body.eink .pl-scell2.pl-sec-partstart::before{ background:linear-gradient(to bottom, rgba(0,0,0,0), rgba(0,0,0,.42) 28px); }
 /* keep the + insert button and the Part label/divider frozen when threads scroll horizontally.
    z-index 6 sits ABOVE the spine (5) so the + masks it, but below the frozen top row (7). */
-#planPlot .pl-insadd{ position:relative; z-index:6; }   /* per-column ＋ — centered in its own column (no longer sticky under the label) */
+#planPlot .pl-insmore{ position:relative; z-index:6; }   /* the single timeline ＋ sits above the spine so it masks it */
 #planPlot .pl-parttop, #planPlot .pl-partctrls{ position:sticky; left:0; z-index:6; }
 .pl-grid{ display:grid; gap:10px; align-items:start; }
 .pl-col-head{ font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:.06em; color:#6b675f;
@@ -47120,6 +47160,23 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
   function scheduleReplot(){ renderPlot(); if(typeof requestAnimationFrame==='function') requestAnimationFrame(updatePlotOverflow); if(typeof plotCapture==='function') plotCapture(); setTimeout(function(){ if(document.body.classList.contains('plan-view-plot')){ renderPlot(); updatePlotOverflow(); } }, 220); }
   var plotDragFrom=null;
   var plotCardDrag=null;   // { i, colId } while a thread card is being dragged to another section/thread
+  var plotSceneDrag=null;  // { i, colId, sid } while a SCENE card is being dragged (reorder within a section, or move to another thread)
+  // Move a scene card's content to another thread column (same scene id) — the "drop into another thread" case.
+  function moveSceneCardToCol(srcColId, sid, dstColId){
+    if(srcColId===dstColId) return;
+    data.sceneData=data.sceneData||{};
+    var sk=srcColId+'|'+sid, dk=dstColId+'|'+sid;
+    var srcRec=data.sceneData[sk];
+    // fold any legacy note-only string into a record first
+    if(!srcRec && data.sceneCards && data.sceneCards[sk]!=null){ srcRec={title:'',text:data.sceneCards[sk],els:[],elNotes:{},stakeNotes:{}}; delete data.sceneCards[sk]; }
+    if(!srcRec) return;
+    var dstRec=data.sceneData[dk];
+    if(!dstRec && data.sceneCards && data.sceneCards[dk]!=null){ dstRec={title:'',text:data.sceneCards[dk],els:[],elNotes:{},stakeNotes:{}}; delete data.sceneCards[dk]; }
+    delete data.sceneData[sk];
+    data.sceneData[dk]=srcRec;
+    if(dstRec) data.sceneData[sk]=dstRec;   // occupied target → swap the two scene cards
+    save(); scheduleReplot();
+  }
   // auto-scroll the plot panel when a dragged section OR card nears the top/bottom edge (so you can move past what's on screen)
   var plotDragY=0, plotScrollRAF=null;
   function plotAutoScroll(){
@@ -47489,18 +47546,16 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
   function insertRow(i){
     var frag=document.createDocumentFragment();
     var a=api();
-    // label column: the ⋯ menu (Part · prologue/epilogue · scene break)
+    // label column: a single ＋ on the timeline — opens the insert menu (Add a section / scene row / Part / prologue / epilogue).
+    // It carries a solid background so the gold spine reads UNDER it, not through it.
     var lab=document.createElement('div'); lab.className='pl-insrow pl-inscell';
-    var more=document.createElement('button'); more.className='pl-plus pl-insmore'; more.textContent='⋯'; more.title='More — add a section, a scene row (in the section above), a Part, or a prologue/epilogue';
+    var more=document.createElement('button'); more.className='pl-plus pl-insmore'; more.textContent='＋'; more.title='Add here — a section (its own diamond), a scene row in the section above, a Part, or a prologue/epilogue';
     more.addEventListener('click', function(e){ e.stopPropagation(); openInsertMenu(more, i); });
     lab.appendChild(more); frag.appendChild(lab);
-    // a centered ＋ in EACH column — one click inserts a scene (section) here, into the Part, synced to the manuscript
+    // the thread columns get empty cells now (no per-column ＋) — inserts happen from the single ＋ on the timeline
     var cols=plotColumns();
     cols.forEach(function(c){
-      var cell=document.createElement('div'); cell.className='pl-insrow pl-inscell pl-insscene';
-      var add=document.createElement('button'); add.className='pl-plus pl-insadd'; add.innerHTML='＋'; add.title='Insert a section here — its own diamond; joins this Part, synced to your manuscript (Revise)';
-      add.addEventListener('click', function(e){ e.stopPropagation(); if(a && a.insertSectionAfter) a.insertSectionAfter(i); closeMenus(); scheduleReplot(); });
-      cell.appendChild(add); frag.appendChild(cell);
+      var cell=document.createElement('div'); cell.className='pl-insrow pl-inscell pl-insscene'; frag.appendChild(cell);
     });
     // + thread column: empty spacer
     var sp=document.createElement('div'); sp.className='pl-insrow pl-inscell'; frag.appendChild(sp);
@@ -47588,6 +47643,24 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     cell.addEventListener('dragleave', function(e){ if(!cell.contains(e.relatedTarget)) cell.classList.remove('pl-carddrop'); });
     cell.addEventListener('drop', function(e){ if(!plotCardDrag) return; e.preventDefault(); e.stopPropagation(); cell.classList.remove('pl-carddrop'); var src=plotCardDrag; plotCardDrag=null; stopPlotAutoScroll(); if(src.i!==i || src.colId!==col.id) moveThreadCard(src.i, src.colId, i, col.id); });
   }
+  // Part ordinal (1-based) for a section, or 0 if it's in no Part.
+  function _partOrdinal(i){ try{ var a=api(); var pid=(a&&a.partIdForSection)?a.partIdForSection(i):null; if(!pid) return 0; var parts=(state.session&&state.session.parts)||[]; for(var k=0;k<parts.length;k++){ if(parts[k].id===pid) return k+1; } return 0; }catch(e){ return 0; } }
+  // "Part P | Section S | Scene N" for an empty card. sceneIdx 0 = the section card (scene 1); a ~ scene at
+  // orgSectionScenes index j is scene (j+2), so pass sceneIdx = j+1. Part is omitted when the section is in no Part.
+  function _emptyCardMeta(i, sceneIdx){
+    var out=[]; var po=_partOrdinal(i); if(po) out.push('Part '+po);
+    var sn; try{ sn=(typeof window.msSecLabel==='function')?window.msSecLabel(i).n:(i+1); }catch(e){ sn=i+1; }
+    out.push('Section '+sn); out.push('Scene '+(sceneIdx+1));
+    return out.join('  |  ');
+  }
+  // an empty add card: a faint ＋ with the Part | Section | Scene coordinate faint beneath it.
+  function _mkAddCard(cls, title, i, sceneIdx, onClick){
+    var b=document.createElement('button'); b.className=cls; b.title=title;
+    var plus=document.createElement('span'); plus.className='pl-addplus'; plus.textContent='+'; b.appendChild(plus);
+    var meta=document.createElement('span'); meta.className='pl-addmeta'; meta.textContent=_emptyCardMeta(i, sceneIdx); b.appendChild(meta);
+    b.addEventListener('click', onClick);
+    return b;
+  }
   function plotCell(i, col){
     var a=api();
     var cell=document.createElement('div'); cell.className='pl-pcell';
@@ -47596,8 +47669,7 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     var elems = cardEls(i, col);
     var _hasStakeNote = !!((cardStakeNoteGet(i, col.id, 'story')||'').trim() || (cardStakeNoteGet(i, col.id, 'thread')||'').trim());
     if(!(text||'').trim() && !elems.length && !ttlTxt && !_hasStakeNote){
-      var add=document.createElement('button'); add.className='pl-cardadd'; add.innerHTML='+'; add.title='Add a card';
-      add.addEventListener('click', function(e){ e.stopPropagation(); openCardPopup(i, col); });
+      var add=_mkAddCard('pl-cardadd', 'Add a card', i, 0, function(e){ e.stopPropagation(); openCardPopup(i, col); });   // the section card is scene 1
       cell.appendChild(add);
     } else {
       var card=document.createElement('div'); card.className='pl-pcard'; card.title='Drag to move · click to open';
@@ -47643,16 +47715,26 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     // from the section card; it just lives on a stable sid so it survives section merge/reorder/split untouched.
     try {
       var _scenes = (typeof window.orgSectionScenes === 'function') ? window.orgSectionScenes(i) : [];
-      _scenes.forEach(function(scn){
+      // a scene card / empty scene slot accepts a dragged scene: same column → reorder before it; other column → move
+      // that scene's content into this thread (same scene row). Cross-section drops aren't accepted.
+      function _wireSceneDrop(el, sid){
+        el.addEventListener('dragover', function(e){ if(!plotSceneDrag || plotSceneDrag.i!==i) return; if(plotSceneDrag.colId===col.id && plotSceneDrag.sid===sid) return; e.preventDefault(); if(e.dataTransfer) e.dataTransfer.dropEffect='move'; el.classList.add('pl-scenedrop'); });
+        el.addEventListener('dragleave', function(e){ if(!el.contains(e.relatedTarget)) el.classList.remove('pl-scenedrop'); });
+        el.addEventListener('drop', function(e){ if(!plotSceneDrag || plotSceneDrag.i!==i) return; e.preventDefault(); e.stopPropagation(); el.classList.remove('pl-scenedrop'); var src=plotSceneDrag; plotSceneDrag=null; stopPlotAutoScroll();
+          if(src.colId===col.id){ if(src.sid!==sid && typeof window.orgMoveScene==='function'){ if(window.orgMoveScene(i, src.sid, sid)) scheduleReplot(); } }
+          else { moveSceneCardToCol(src.colId, src.sid, col.id); }   // move the scene's content into this thread column
+        });
+      }
+      _scenes.forEach(function(scn, _sIdx){
         var sttl = scnTitle(col, scn.sid);
         var sprev = (sceneCardPreview(col, scn.sid) || '').trim();
         var sels = scnEls(col, scn.sid);
         var filled = !!(sttl || sprev || (sels && sels.length));
         if(!filled){
-          // an empty scene row shows a dashed ＋ add card (exactly like an empty section card) — it only fills to
-          // parchment once a card is added. Scenes are added from the between-rows ⋯ menu, not a per-cell button.
-          var sadd = document.createElement('button'); sadd.className = 'pl-cardadd pl-scene-cardadd'; sadd.innerHTML = '+'; sadd.title = 'Add a card to this scene';
-          sadd.addEventListener('click', function(e){ e.stopPropagation(); openCardPopup(i, col, scn.sid, scn.label); });
+          // an empty scene row shows a dashed ＋ add card (exactly like an empty section card) — with its
+          // Part | Section | Scene coordinate faint beneath the ＋. It fills to parchment once a card is added.
+          var sadd = _mkAddCard('pl-cardadd pl-scene-cardadd', 'Add a card to this scene', i, _sIdx+1, function(e){ e.stopPropagation(); openCardPopup(i, col, scn.sid, scn.label); });
+          _wireSceneDrop(sadd, scn.sid);   // an empty slot still accepts a scene dropped from another thread
           cell.appendChild(sadd);
           return;
         }
@@ -47661,8 +47743,12 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
         var sbody = document.createElement('div'); sbody.className = 'pl-pcard-body';
         if (sprev){ var sg = document.createElement('div'); sg.className = 'pl-pcard-gen'; sg.textContent = sprev; sbody.appendChild(sg); }
         scard.appendChild(sbody);
-        scard.title = 'Scene card — click to open (title, linked elements, notes)';
+        scard.title = 'Scene card — drag to reorder or move to another thread · click to open';
+        scard.setAttribute('draggable','true');
+        scard.addEventListener('dragstart', function(e){ e.stopPropagation(); plotSceneDrag={ i:i, colId:col.id, sid:scn.sid }; plotCardDrag=null; if(e.dataTransfer){ e.dataTransfer.effectAllowed='move'; try{ e.dataTransfer.setData('text/plain','scene'); }catch(_){} } scard.classList.add('pl-carddragging'); });
+        scard.addEventListener('dragend', function(){ plotSceneDrag=null; scard.classList.remove('pl-carddragging'); stopPlotAutoScroll(); clearCardDropMarks(); try{ document.querySelectorAll('#planPlot .pl-scenedrop').forEach(function(x){ x.classList.remove('pl-scenedrop'); }); }catch(_){} });
         scard.addEventListener('click', function(e){ e.stopPropagation(); openCardPopup(i, col, scn.sid, scn.label); });
+        _wireSceneDrop(scard, scn.sid);
         cell.appendChild(scard);
       });
     } catch(e){}
