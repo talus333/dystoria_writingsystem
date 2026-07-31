@@ -42672,8 +42672,12 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.213';
+  var APP_VERSION = '2026.07.20.214';
   var APP_CHANGELOG = [
+    { v:'2026.07.20.214', date:'July 31, 2026', notes:[
+      'Scene 1 (the section card) and the other scenes now behave identically for dragging — you can drop a card from any scene onto any other, including onto scene 1, and move cards between threads or reorder them freely. Previously the section card and the scene cards used two separate drag systems that couldn’t hand cards to each other.',
+      'A card dropped onto an occupied slot swaps with it; its linked map elements travel with it and stay on the section’s map.'
+    ]},
     { v:'2026.07.20.213', date:'July 31, 2026', notes:[
       'The between-rows insert is now a single ＋ on the timeline (was a ⋯), and the extra ＋ that sat between the cards in each column is gone. The gold timeline now passes cleanly behind that ＋ instead of through it.',
       'Scene cards are grabbable: drag one to reorder the scenes within a section, or drop it onto another thread column to move that beat into that thread.',
@@ -44253,9 +44257,9 @@ body.ember:not(.eink) .plan-stakepick .lp-row-tag.stk{ color:#e6968d; background
    The card/add children must NOT use flex:1 here (that collapses to zero height in a column
    context and scatters the grid); pin them to aspect-ratio sizing off their full width. */
 .pl-pcell > .pl-pcard, .pl-pcell > .pl-cardadd{ flex:0 0 auto; width:100%; align-self:stretch; }
-.pl-scenepcard[draggable="true"]{ cursor:grab; }
-.pl-scenepcard[draggable="true"]:active{ cursor:grabbing; }
-.pl-scenedrop{ box-shadow:0 0 0 2px var(--gold,#c49e4a) inset; border-radius:10px; }
+.pl-pcard[draggable="true"], .pl-scenepcard[draggable="true"]{ cursor:grab; }
+.pl-pcard[draggable="true"]:active, .pl-scenepcard[draggable="true"]:active{ cursor:grabbing; }
+.pl-scenedrop, .pl-slotdrop{ box-shadow:0 0 0 2px var(--gold,#c49e4a) inset; border-radius:10px; }
 .pl-scenecard{ width:100%; box-sizing:border-box; border:1px solid rgba(140,124,94,.3); border-left:3px solid var(--gold,#c49e4a); border-radius:8px; padding:6px 8px; background:rgba(255,255,255,.5); cursor:pointer; }
 .pl-scenecard:hover{ border-color:var(--gold,#c49e4a); }
 .pl-scenecard-empty{ border-style:dashed; background:transparent; opacity:.8; }
@@ -47159,29 +47163,73 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
   try{ window.addEventListener('resize', function(){ if(typeof requestAnimationFrame==='function') requestAnimationFrame(updatePlotOverflow); else updatePlotOverflow(); }); }catch(e){}
   function scheduleReplot(){ renderPlot(); if(typeof requestAnimationFrame==='function') requestAnimationFrame(updatePlotOverflow); if(typeof plotCapture==='function') plotCapture(); setTimeout(function(){ if(document.body.classList.contains('plan-view-plot')){ renderPlot(); updatePlotOverflow(); } }, 220); }
   var plotDragFrom=null;
-  var plotCardDrag=null;   // { i, colId } while a thread card is being dragged to another section/thread
-  var plotSceneDrag=null;  // { i, colId, sid } while a SCENE card is being dragged (reorder within a section, or move to another thread)
-  // Move a scene card's content to another thread column (same scene id) — the "drop into another thread" case.
-  function moveSceneCardToCol(srcColId, sid, dstColId){
-    if(srcColId===dstColId) return;
-    data.sceneData=data.sceneData||{};
-    var sk=srcColId+'|'+sid, dk=dstColId+'|'+sid;
-    var srcRec=data.sceneData[sk];
-    // fold any legacy note-only string into a record first
-    if(!srcRec && data.sceneCards && data.sceneCards[sk]!=null){ srcRec={title:'',text:data.sceneCards[sk],els:[],elNotes:{},stakeNotes:{}}; delete data.sceneCards[sk]; }
-    if(!srcRec) return;
-    var dstRec=data.sceneData[dk];
-    if(!dstRec && data.sceneCards && data.sceneCards[dk]!=null){ dstRec={title:'',text:data.sceneCards[dk],els:[],elNotes:{},stakeNotes:{}}; delete data.sceneCards[dk]; }
-    delete data.sceneData[sk];
-    data.sceneData[dk]=srcRec;
-    if(dstRec) data.sceneData[sk]=dstRec;   // occupied target → swap the two scene cards
-    save(); scheduleReplot();
+  // ---- Unified card "slot" drag/drop. A slot is (section i, column col, scene sid) where sid=null is the SECTION
+  // card (scene 1) and a sid is a ~ scene. Scene 1 and the other scenes are the SAME thing to the dragger — a card
+  // can be dropped from any slot onto any other (reorder ~ scenes, move between scene 1 and later scenes, or move
+  // into another thread column). Both slot kinds read/write through one content shape below. ----
+  var plotSlotDrag=null;   // { i, col, sid } while any card is dragged (sid null = the section card)
+  var plotCardDrag=null;   // kept only so older auto-scroll guards stay valid; the slot system uses plotSlotDrag
+  function _slotRead(s){
+    if(s.sid){ var r=_scnGet(s.col, s.sid) || {title:'',text:'',els:[],elNotes:{},stakeNotes:{}};
+      return { title:r.title||'', text:r.text||'', els:(r.els||[]).slice(), elNotes:Object.assign({}, r.elNotes||{}), stakeNotes:Object.assign({}, r.stakeNotes||{}) }; }
+    var els=cardEls(s.i, s.col).slice(); var elNotes={}; els.forEach(function(el){ var n=plotElGet(s.i, s.col.id, el.nkey); if(n && n.trim()) elNotes[el.nkey]=n; });
+    var sn={}; ['story','thread'].forEach(function(w){ var v=cardStakeNoteGet(s.i, s.col.id, w); if(v && v.trim()) sn[w]=v; });
+    return { title:plotCardTitle(s.i, s.col), text:plotCellText(s.i, s.col), els:els, elNotes:elNotes, stakeNotes:sn };
+  }
+  function _slotClear(s){
+    var a=api(); var c=_slotRead(s);
+    (c.els||[]).forEach(function(el){ if(a && a.linkThreadEl) a.linkThreadEl(s.col.id, el.nkey, false, s.i); });   // drop the map link (re-added on write at the destination)
+    if(s.sid){ scnDelete(s.col, s.sid); return; }
+    cardEls(s.i, s.col).slice().forEach(function(el){ plotElSet(s.i, s.col.id, el.nkey, ''); });
+    cardElsSet(s.i, s.col, []); plotCellSet(s.i, s.col, ''); plotCardTitleSet(s.i, s.col, '');
+    ['story','thread'].forEach(function(w){ cardStakeNoteSet(s.i, s.col.id, w, ''); });
+    if(data.plotCardsMade) delete data.plotCardsMade[s.col.id+'|'+s.i];
+  }
+  function _slotWrite(s, c){
+    var a=api();
+    if(s.sid){ var r=_scnEnsure(s.col, s.sid); r.title=c.title||''; r.text=c.text||''; r.els=(c.els||[]).slice(); r.elNotes=Object.assign({}, c.elNotes||{}); r.stakeNotes=Object.assign({}, c.stakeNotes||{}); }
+    else {
+      plotCardTitleSet(s.i, s.col, c.title||''); plotCellSet(s.i, s.col, c.text||'');
+      cardElsSet(s.i, s.col, (c.els||[]).slice());
+      Object.keys(c.elNotes||{}).forEach(function(k){ plotElSet(s.i, s.col.id, k, c.elNotes[k]); });
+      ['story','thread'].forEach(function(w){ cardStakeNoteSet(s.i, s.col.id, w, (c.stakeNotes&&c.stakeNotes[w])||''); });
+      if((c.els&&c.els.length) || (c.title||'').trim() || (c.text||'').trim()){ data.plotCardsMade=data.plotCardsMade||{}; data.plotCardsMade[s.col.id+'|'+s.i]=1; }
+    }
+    (c.els||[]).forEach(function(el){ if(a && a.linkThreadEl) a.linkThreadEl(s.col.id, el.nkey, true, s.i); });   // scenes share the section's one map — links live at the section level
+    save();
+  }
+  function _slotEmpty(c){ return !(c.title||'').trim() && !(c.text||'').trim() && !(c.els&&c.els.length) && !(c.stakeNotes && Object.keys(c.stakeNotes).length); }
+  function moveSlotContent(src, dst){
+    if(src.i===dst.i && src.col.id===dst.col.id && (src.sid||null)===(dst.sid||null)) return;
+    var srcC=_slotRead(src); if(_slotEmpty(srcC)) return;
+    var dstC=_slotRead(dst);
+    _slotClear(src); _slotClear(dst);
+    _slotWrite(dst, srcC);
+    if(!_slotEmpty(dstC)) _slotWrite(src, dstC);   // occupied target → swap
+    save(); if(typeof window.renderNpCard==='function'){ try{ window.renderNpCard(); }catch(_){} } scheduleReplot();
+  }
+  // make a card grabbable
+  function _wireSlotDrag(el, i, col, sid){
+    el.setAttribute('draggable','true');
+    el.addEventListener('dragstart', function(e){ e.stopPropagation(); plotSlotDrag={ i:i, col:col, sid:sid||null }; if(e.dataTransfer){ e.dataTransfer.effectAllowed='move'; try{ e.dataTransfer.setData('text/plain', sid?'scene':'card'); }catch(_){} } el.classList.add('pl-carddragging'); });
+    el.addEventListener('dragend', function(){ plotSlotDrag=null; el.classList.remove('pl-carddragging'); stopPlotAutoScroll(); clearCardDropMarks(); try{ document.querySelectorAll('#planPlot .pl-slotdrop').forEach(function(x){ x.classList.remove('pl-slotdrop'); }); }catch(_){} });
+  }
+  // make a card / empty slot accept a dropped card
+  function _wireSlotDrop(el, i, col, sid){
+    el.addEventListener('dragover', function(e){ var s=plotSlotDrag; if(!s) return; if(s.i===i && s.col.id===col.id && (s.sid||null)===(sid||null)) return; e.preventDefault(); if(e.dataTransfer) e.dataTransfer.dropEffect='move'; el.classList.add('pl-slotdrop'); });
+    el.addEventListener('dragleave', function(e){ if(!el.contains(e.relatedTarget)) el.classList.remove('pl-slotdrop'); });
+    el.addEventListener('drop', function(e){ var s=plotSlotDrag; if(!s) return; e.preventDefault(); e.stopPropagation(); el.classList.remove('pl-slotdrop'); plotSlotDrag=null; stopPlotAutoScroll();
+      if(s.i===i && s.col.id===col.id && (s.sid||null)===(sid||null)) return;
+      // two ~ scenes in the same section + column → reorder the prose (card data follows the stable sid)
+      if(s.sid && sid && s.i===i && s.col.id===col.id){ if(typeof window.orgMoveScene==='function' && window.orgMoveScene(i, s.sid, sid)) scheduleReplot(); return; }
+      moveSlotContent({ i:s.i, col:s.col, sid:s.sid||null }, { i:i, col:col, sid:sid||null });
+    });
   }
   // auto-scroll the plot panel when a dragged section OR card nears the top/bottom edge (so you can move past what's on screen)
   var plotDragY=0, plotScrollRAF=null;
   function plotAutoScroll(){
     plotScrollRAF=null;
-    if(plotDragFrom==null && !plotCardDrag && plotPartDrag==null) return;
+    if(plotDragFrom==null && !plotCardDrag && !plotSlotDrag && plotPartDrag==null) return;
     // the actual scroll container is .pl-grid-wrap (#planPlot itself is overflow:hidden), so scroll THAT
     var host=document.getElementById('planPlot'); var sc=host?host.querySelector('.pl-grid-wrap'):null; if(!sc){ return; }
     var r=sc.getBoundingClientRect(); var EDGE=70, y=plotDragY, dy=0;
@@ -47250,7 +47298,7 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
   var paintPlotColsBtns=null;   // set when the plot bar is built
   function renderPlot(){
     var host=document.getElementById('planPlot'); if(!host) return;
-    if(!host.__dragScroll){ host.__dragScroll=1; host.addEventListener('dragover', function(e){ if(plotDragFrom==null && !plotCardDrag && plotPartDrag==null) return; plotDragY=e.clientY; if(plotScrollRAF==null) plotScrollRAF=requestAnimationFrame(plotAutoScroll); }); }
+    if(!host.__dragScroll){ host.__dragScroll=1; host.addEventListener('dragover', function(e){ if(plotDragFrom==null && !plotCardDrag && !plotSlotDrag && plotPartDrag==null) return; plotDragY=e.clientY; if(plotScrollRAF==null) plotScrollRAF=requestAnimationFrame(plotAutoScroll); }); }
     ensurePlotCols(); migrateMainToThread(); ensureStarterThread(); migratePlotElNotes(); host.innerHTML='';
     var a=api();
     var n=a?a.sectionCount():1;
@@ -47638,10 +47686,12 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     if(typeof window.renderNpCard==='function'){ try{ window.renderNpCard(); }catch(_){} }
     scheduleReplot();
   }
+  // The whole cell (empty area, not on a specific scene card) is a drop target for the SECTION card slot — so dropping
+  // a dragged card anywhere on a cell that isn't a scene card targets that section's card (scene 1).
   function wireCardDrop(cell, i, col){
-    cell.addEventListener('dragover', function(e){ if(!plotCardDrag) return; if(plotCardDrag.i===i && plotCardDrag.colId===col.id) return; e.preventDefault(); if(e.dataTransfer) e.dataTransfer.dropEffect='move'; if(!cell.classList.contains('pl-carddrop')) cell.classList.add('pl-carddrop'); });
+    cell.addEventListener('dragover', function(e){ var s=plotSlotDrag; if(!s) return; if(s.i===i && s.col.id===col.id && !s.sid) return; e.preventDefault(); if(e.dataTransfer) e.dataTransfer.dropEffect='move'; if(!cell.classList.contains('pl-carddrop')) cell.classList.add('pl-carddrop'); });
     cell.addEventListener('dragleave', function(e){ if(!cell.contains(e.relatedTarget)) cell.classList.remove('pl-carddrop'); });
-    cell.addEventListener('drop', function(e){ if(!plotCardDrag) return; e.preventDefault(); e.stopPropagation(); cell.classList.remove('pl-carddrop'); var src=plotCardDrag; plotCardDrag=null; stopPlotAutoScroll(); if(src.i!==i || src.colId!==col.id) moveThreadCard(src.i, src.colId, i, col.id); });
+    cell.addEventListener('drop', function(e){ var s=plotSlotDrag; if(!s) return; e.preventDefault(); e.stopPropagation(); cell.classList.remove('pl-carddrop'); plotSlotDrag=null; stopPlotAutoScroll(); moveSlotContent({ i:s.i, col:s.col, sid:s.sid||null }, { i:i, col:col, sid:null }); });
   }
   // Part ordinal (1-based) for a section, or 0 if it's in no Part.
   function _partOrdinal(i){ try{ var a=api(); var pid=(a&&a.partIdForSection)?a.partIdForSection(i):null; if(!pid) return 0; var parts=(state.session&&state.session.parts)||[]; for(var k=0;k<parts.length;k++){ if(parts[k].id===pid) return k+1; } return 0; }catch(e){ return 0; } }
@@ -47670,6 +47720,7 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     var _hasStakeNote = !!((cardStakeNoteGet(i, col.id, 'story')||'').trim() || (cardStakeNoteGet(i, col.id, 'thread')||'').trim());
     if(!(text||'').trim() && !elems.length && !ttlTxt && !_hasStakeNote){
       var add=_mkAddCard('pl-cardadd', 'Add a card', i, 0, function(e){ e.stopPropagation(); openCardPopup(i, col); });   // the section card is scene 1
+      _wireSlotDrop(add, i, col, null);   // an empty section card still accepts a card dropped from a scene
       cell.appendChild(add);
     } else {
       var card=document.createElement('div'); card.className='pl-pcard'; card.title='Drag to move · click to open';
@@ -47704,9 +47755,8 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
       // element"), mark it at-risk with a small crimson flag so those beats stand out at a glance.
       if(cardHasLinkedStake(i, col)){ var _cf=document.createElement('span'); _cf.className='pl-card-stakeflag'; _cf.textContent='⚑'; _cf.title='This card is dealing with the stakes'; card.appendChild(_cf); card.classList.add('pl-card-atrisk'); }
       void pcardIconRail;   // small cards no longer show the linked-element icon rail (icons live on the open card only)
-      card.setAttribute('draggable','true');
-      card.addEventListener('dragstart', function(e){ plotCardDrag={ i:i, colId:col.id }; if(e.dataTransfer){ e.dataTransfer.effectAllowed='move'; try{ e.dataTransfer.setData('text/plain','card'); }catch(_){} } card.classList.add('pl-carddragging'); });
-      card.addEventListener('dragend', function(){ plotCardDrag=null; card.classList.remove('pl-carddragging'); stopPlotAutoScroll(); clearCardDropMarks(); });
+      _wireSlotDrag(card, i, col, null);   // the section card is a slot like any scene — grab it, drop it anywhere
+      _wireSlotDrop(card, i, col, null);
       card.addEventListener('click', function(e){ e.stopPropagation(); openCardPopup(i, col); });
       cell.appendChild(card);
     }
@@ -47715,16 +47765,6 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     // from the section card; it just lives on a stable sid so it survives section merge/reorder/split untouched.
     try {
       var _scenes = (typeof window.orgSectionScenes === 'function') ? window.orgSectionScenes(i) : [];
-      // a scene card / empty scene slot accepts a dragged scene: same column → reorder before it; other column → move
-      // that scene's content into this thread (same scene row). Cross-section drops aren't accepted.
-      function _wireSceneDrop(el, sid){
-        el.addEventListener('dragover', function(e){ if(!plotSceneDrag || plotSceneDrag.i!==i) return; if(plotSceneDrag.colId===col.id && plotSceneDrag.sid===sid) return; e.preventDefault(); if(e.dataTransfer) e.dataTransfer.dropEffect='move'; el.classList.add('pl-scenedrop'); });
-        el.addEventListener('dragleave', function(e){ if(!el.contains(e.relatedTarget)) el.classList.remove('pl-scenedrop'); });
-        el.addEventListener('drop', function(e){ if(!plotSceneDrag || plotSceneDrag.i!==i) return; e.preventDefault(); e.stopPropagation(); el.classList.remove('pl-scenedrop'); var src=plotSceneDrag; plotSceneDrag=null; stopPlotAutoScroll();
-          if(src.colId===col.id){ if(src.sid!==sid && typeof window.orgMoveScene==='function'){ if(window.orgMoveScene(i, src.sid, sid)) scheduleReplot(); } }
-          else { moveSceneCardToCol(src.colId, src.sid, col.id); }   // move the scene's content into this thread column
-        });
-      }
       _scenes.forEach(function(scn, _sIdx){
         var sttl = scnTitle(col, scn.sid);
         var sprev = (sceneCardPreview(col, scn.sid) || '').trim();
@@ -47734,7 +47774,7 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
           // an empty scene row shows a dashed ＋ add card (exactly like an empty section card) — with its
           // Part | Section | Scene coordinate faint beneath the ＋. It fills to parchment once a card is added.
           var sadd = _mkAddCard('pl-cardadd pl-scene-cardadd', 'Add a card to this scene', i, _sIdx+1, function(e){ e.stopPropagation(); openCardPopup(i, col, scn.sid, scn.label); });
-          _wireSceneDrop(sadd, scn.sid);   // an empty slot still accepts a scene dropped from another thread
+          _wireSlotDrop(sadd, i, col, scn.sid);   // an empty slot accepts a card dropped from any other slot
           cell.appendChild(sadd);
           return;
         }
@@ -47743,12 +47783,10 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
         var sbody = document.createElement('div'); sbody.className = 'pl-pcard-body';
         if (sprev){ var sg = document.createElement('div'); sg.className = 'pl-pcard-gen'; sg.textContent = sprev; sbody.appendChild(sg); }
         scard.appendChild(sbody);
-        scard.title = 'Scene card — drag to reorder or move to another thread · click to open';
-        scard.setAttribute('draggable','true');
-        scard.addEventListener('dragstart', function(e){ e.stopPropagation(); plotSceneDrag={ i:i, colId:col.id, sid:scn.sid }; plotCardDrag=null; if(e.dataTransfer){ e.dataTransfer.effectAllowed='move'; try{ e.dataTransfer.setData('text/plain','scene'); }catch(_){} } scard.classList.add('pl-carddragging'); });
-        scard.addEventListener('dragend', function(){ plotSceneDrag=null; scard.classList.remove('pl-carddragging'); stopPlotAutoScroll(); clearCardDropMarks(); try{ document.querySelectorAll('#planPlot .pl-scenedrop').forEach(function(x){ x.classList.remove('pl-scenedrop'); }); }catch(_){} });
+        scard.title = 'Scene card — drag to reorder, move to scene 1, or move to another thread · click to open';
+        _wireSlotDrag(scard, i, col, scn.sid);
+        _wireSlotDrop(scard, i, col, scn.sid);
         scard.addEventListener('click', function(e){ e.stopPropagation(); openCardPopup(i, col, scn.sid, scn.label); });
-        _wireSceneDrop(scard, scn.sid);
         cell.appendChild(scard);
       });
     } catch(e){}
