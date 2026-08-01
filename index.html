@@ -9717,6 +9717,14 @@ const BEING_STATE_POOLS = {
   'Mental State': ['Focused','Distracted','Confused','Dazed','Alert','Overwhelmed','Clear-Headed','Frantic','Calm','Preoccupied','Resolute','Doubtful','Inspired','Blank','Scheming','Lucid','Foggy','Determined','Reeling','Spellbound'],
   'Mood': ['Joyful','Grieving','Furious','Serene','Anxious','Hopeful','Bitter','Content','Restless','Wistful','Elated','Sullen','Tender','Guarded','Playful','Despairing','Grateful','Irritable','Melancholy','Buoyant']
 };
+// Extra Place dimensions the importer already recognized but the deterministic builder had no words for.
+// Surfaced as addable place characteristics (charPool resolves them below); grouped Feel/State/Meaning in the Settings builder.
+const SETTING_EXTRA_POOLS = {
+  'Climate': ['Arid','Frozen','Temperate','Humid','Tropical','Storm-Wracked','Misty','Scorching','Windswept','Rain-Soaked','Snowbound','Balmy','Foggy','Parched','Monsoon-Struck','Sun-Baked','Sweltering','Bitter-Cold'],
+  'Population': ['Deserted','Sparse','Populous','Crowded','Teeming','Overcrowded','Depopulated','Thriving','Isolated','Newly-Settled','Refugee-Swollen','Migrant-Filled','Dwindling','Bustling'],
+  'Origin': ['Ancient','Man-Made','Natural','Sacred','War-Born','Recently-Built','Prehistoric','Colonial','Grown','Carved','Ruined-and-Rebuilt','Forgotten-Age','Fallen-from-the-Sky','Purpose-Built','Accidental'],
+  'Symbolism': ['A Threshold','A Refuge','A Tomb','A Crossroads','A Cage','A Crucible','A Sanctuary','A Wound','A Promise','A Memory','A Trap','A Homecoming','A Beginning','An Ending','A Boundary','A Mirror','A Proving Ground']
+};
 function _starterPickFrom(pool, wordsSeen){
   let guard = 0;
   while (guard++ < 30){
@@ -11054,6 +11062,7 @@ function charPool(subName, catId){
     return sb ? sb.words : null;
   }
   if ((!catId || catId === 'being') && typeof BEING_STATE_POOLS !== 'undefined' && BEING_STATE_POOLS[subName]) return BEING_STATE_POOLS[subName];   // transient being states (Physical State / Mental State / Mood)
+  if (catId === 'setting' && typeof SETTING_EXTRA_POOLS !== 'undefined' && SETTING_EXTRA_POOLS[subName]) return SETTING_EXTRA_POOLS[subName];   // extra place dimensions (Climate / Population / Origin / Symbolism)
   return rerollPool('being', subName);
 }
 function addAspect(i, subName){
@@ -36462,7 +36471,7 @@ document.addEventListener('DOMContentLoaded', init);
       if(cat==='concept'){ const c=getCat('concept'); return c?c.subcategories.filter(sb=>!sb.retired).map(sb=>sb.name):[]; }
       if(cat==='group'){ const gs=(typeof GROUP_CHARS!=='undefined')?GROUP_CHARS.map(c=>c.sub):[]; return gs.concat(['State','Adjective']); }
       if(cat==='being'){ const ns=getCat('being').subcategories.filter(sb=>!sb.retired && sb.name!=='Archetype' && sb.name!=='Motivation' && sb.name!=='Age').map(sb=>sb.name); ['Physical State','Mental State','Mood'].forEach(s=>{ if(ns.indexOf(s)<0) ns.push(s); }); ns.push('Adjective'); return ns; }   // Type & Occupation can be added as extra traits; the transient states (Physical/Mental/Mood) round out the taxonomy; Archetype/Motivation/Age handled elsewhere
-      if(cat==='setting') return ['Condition','Control','Function','Scale','Atmosphere','Adjective'];
+      if(cat==='setting') return ['Condition','Control','Population','Origin','Function','Scale','Atmosphere','Climate','Symbolism','Adjective'];
       if(cat==='object') return ['Material','Condition','Provenance','Charge','Adjective'];
       if(cat==='org') return ['Standing','Structure','Culture','Repute','Era','Adjective'];
       return ['Adjective'];
@@ -36578,7 +36587,8 @@ document.addEventListener('DOMContentLoaded', init);
     function tpRenderPills(){
       const p=tpEl(), host=p.querySelector('.tp-pills');
       host.innerHTML='';
-      if(TP.mode!=='trait'){ host.style.display='none'; return; }   // motivation/obstacle pickers have no subcategory pills
+      if(TP.mode!=='trait' || TP.single){ host.style.display='none'; }   // motivation/obstacle pickers + single-dimension builder picks have no subcategory switcher
+      else {
       host.style.display='flex';
       const subs=traitSubs(TP.cat);
       const mkPill=(s)=>{ const b=document.createElement('span'); b.className='tp-pill'+(s===TP.sub?' on':''); b.textContent=s;
@@ -36590,6 +36600,7 @@ document.addEventListener('DOMContentLoaded', init);
         const extra=subs.filter(s=>!shown.has(s)); if(extra.length){ mkHd('More'); extra.forEach(mkPill); }   // any user-custom being subcategories still appear
       } else {
         subs.forEach(mkPill);
+      }
       }
       // Type has families (Humanfolk, Beasts, Undead, …) — an always-visible filter row so every family is reachable
       const fams=p.querySelector('.tp-fams'); if(fams){ fams.innerHTML='';
@@ -36682,6 +36693,27 @@ document.addEventListener('DOMContentLoaded', init);
         const d=(typeof descFor==='function')?descFor({word, cat, sub}):'';
         b.innerHTML='<span class="ec-w">'+word.replace(/</g,'&lt;')+'</span><span class="ec-sub">'+sub+'</span>'+(d?'<span class="ec-d">'+d.replace(/</g,'&lt;')+'</span>':'');
         b.addEventListener('click', ()=>tpPick(word, false)); return b; };
+      // Builder single-pick with an explicit pool override (e.g. Sex / Age) — flat list + search + create-your-own
+      if(TP.single && Array.isArray(TP.pool)){
+        const seen=new Set();
+        const matches=TP.pool.map(x=>typeof x==='string'?x:(x&&x.w)).filter(Boolean).filter(word=>{ const k=word.toLowerCase(); if(seen.has(k)) return false; seen.add(k); return !q || k.includes(q); }).slice(0,120);
+        matches.forEach(word=> res.appendChild(mkOpt(word)));
+        const exact=TP.pool.some(x=>String(typeof x==='string'?x:(x&&x.w)).toLowerCase()===q);
+        if(raw && !exact){ const b=document.createElement('button'); b.className='ec-opt tp-new'; b.innerHTML='<span class="ec-w">+ Create “'+raw.replace(/</g,'&lt;')+'”</span><span class="ec-sub">'+sub+'</span>'; b.addEventListener('click', ()=>tpPick(raw, true)); res.appendChild(b); }
+        else if(!matches.length){ const e=document.createElement('div'); e.className='tp-empty'; e.textContent='Nothing here yet — type a name to create one.'; res.appendChild(e); }
+        return;
+      }
+      // Setting "Kind" → every place type grouped by its setting subcategory (like Type's families), + create-your-own
+      if(TP.cat==='setting' && sub==='Kind'){
+        const scat=(typeof getCat==='function')?getCat('setting'):null; const subs2=(scat&&scat.subcategories)||[]; const seen=new Set(); let shown=0, poolAll=[];
+        subs2.forEach(sb=>{ const words=(sb.words||[]).map(x=>typeof x==='string'?x:x.w).filter(word=>{ const k=word.toLowerCase(); if(seen.has(k)) return false; seen.add(k); poolAll.push(k); return !q || k.includes(q); });
+          if(!words.length) return; const h=document.createElement('div'); h.className='tp-grouphd'; h.textContent=sb.name; res.appendChild(h);
+          words.slice(0,80).forEach(word=>{ res.appendChild(mkOpt(word)); shown++; }); });
+        const exact=poolAll.indexOf(q)>=0;
+        if(raw && !exact){ const b=document.createElement('button'); b.className='ec-opt tp-new'; b.innerHTML='<span class="ec-w">+ Create “'+raw.replace(/</g,'&lt;')+'”</span><span class="ec-sub">Kind</span>'; b.addEventListener('click', ()=>tpPick(raw, true)); res.appendChild(b); }
+        else if(!shown){ const e=document.createElement('div'); e.className='tp-empty'; e.textContent='Nothing here yet — type a name to create one.'; res.appendChild(e); }
+        return;
+      }
       // Type with NO family chosen → list every family under its own header, so nothing falls off the flat 40-cap
       const tsub = (TP.cat==='being' && sub==='Type') ? getCat('being').subcategories.find(s=>s.name==='Type') : null;
       if(tsub && tsub.groups && !TP.fam){
@@ -36714,6 +36746,7 @@ document.addEventListener('DOMContentLoaded', init);
       else if(!matches.length){ const e=document.createElement('div'); e.className='tp-empty'; e.textContent='Nothing here yet — type a name to create one.'; res.appendChild(e); }
     }
     function tpPick(word, isNew){
+      if(TP.onPick){ const cb=TP.onPick; closeTraitPicker(); try{ cb(word, isNew); }catch(e){} return; }   // callback mode (builder word picks) — no element commit
       if(TP.mode==='motivation'){ setMotivationWant(TP.i, word, isNew); closeTraitPicker(); if(window.syncElementViews) window.syncElementViews(); return; }
       if(TP.group){ if(typeof addGroupChar==='function') addGroupChar(TP.group, TP.sub, word); closeTraitPicker(); if(typeof renderNpCard==='function') renderNpCard(); setTrait('@gchar:'+TP.sub+'|'+word); return; }
       if(TP.thread && TP.cat==='concept'){ if(typeof addThreadConcept==='function') addThreadConcept(TP.thread, word); closeTraitPicker(); if(typeof renderNpCard==='function') renderNpCard(); if(typeof renderConstellation==='function') renderConstellation(); return; }
@@ -36763,6 +36796,16 @@ document.addEventListener('DOMContentLoaded', init);
       tpEl().querySelector('.tp-search').placeholder='search or name what they want…';
       tpOpen(i, x, y);
     }
+    // Generic "add system" word picker for the builders — filtered to one dimension, scroll or type to filter, create-your-own by typing. onPick(word,isNew).
+    function openWordPicker(opts){
+      opts=opts||{};
+      TP={ i:-1, cat:opts.cat||'', sub:opts.sub||'', mode:'trait', single:true, fam:'', onPick:opts.onPick||null, pool:(Array.isArray(opts.pool)?opts.pool:null) };
+      const p=tpEl();
+      p.querySelector('.tp-title').textContent=opts.title||('Pick a '+String(opts.sub||'word').toLowerCase());
+      p.querySelector('.tp-search').placeholder=opts.placeholder||('search or type a '+String(opts.sub||'word').toLowerCase()+'…');
+      tpOpen(-1, opts.x, opts.y);
+    }
+    window.openWordPicker=openWordPicker;
     // Exposed for the Plan-layer Arcs view, which drives these real "add system" pickers at a chosen section.
     window.openTraitPicker=openTraitPicker; window.openTraitChange=openTraitChange; window.openMotivationPicker=openMotivationPicker; window.setTrait=setTrait;
     window.openObstaclePicker=openObstaclePicker; window.openStakePicker=openStakePicker; window.openMotivatorPicker=openMotivatorPicker;
@@ -36806,17 +36849,10 @@ document.addEventListener('DOMContentLoaded', init);
     function ccRemove(idx){ const s=CC.slots[idx]; if(!s||!ccRemovable(s)) return; CC.slots.splice(idx,1); ccRenderSlots(); }
     function ccPickMenu(idx, x, y){
       const s=CC.slots[idx]; if(!s) return;
-      const menu=document.getElementById('aspectMenu'); if(!menu) return; menu.innerHTML='';
-      if(menu.parentElement!==document.body) document.body.appendChild(menu);
-      let words;
-      if(s.sub==='Sex'){ try{ words=(typeof SEX_GROUPS!=='undefined'&&SEX_GROUPS)?SEX_GROUPS.reduce((a,g)=>a.concat(g.values||[]),[]):['Male','Female','Unspecified']; }catch(e){ words=['Male','Female','Unspecified']; } }
-      else if(s.sub==='Age'){ words=(typeof ageMenuValues==='function')?ageMenuValues():['Infant','Toddler','Child','Young Adult','Adult','Elder','Unspecified']; }
-      else { words=(typeof poolWords==='function')?poolWords(s.sub,'being'):[]; }
-      (words||[]).slice(0,80).forEach(v=>{ const b=document.createElement('button'); b.textContent=(s.word===v?'✓ ':'')+v; b.addEventListener('click', ev=>{ ev.stopPropagation(); menu.style.display='none'; s.word=v; ccRenderSlots(); }); menu.appendChild(b); });
-      if(!words||!words.length){ const e=document.createElement('div'); e.textContent='No preset words — reroll instead'; e.style.cssText='padding:6px 11px;color:var(--ink-faint);font-size:11px'; menu.appendChild(e); }
-      menu.style.left=Math.max(8, Math.min(x||220, window.innerWidth-206))+'px';
-      menu.style.top=Math.max(8, Math.min(y||200, window.innerHeight-320))+'px';
-      menu.style.display='block';
+      let pool=null;
+      if(s.sub==='Sex'){ try{ pool=(typeof SEX_GROUPS!=='undefined'&&SEX_GROUPS)?SEX_GROUPS.reduce((a,g)=>a.concat(g.values||[]),[]):['Male','Female','Unspecified']; }catch(e){ pool=['Male','Female','Unspecified']; } }
+      else if(s.sub==='Age'){ pool=(typeof ageMenuValues==='function')?ageMenuValues():['Infant','Toddler','Child','Young Adult','Adult','Elder','Unspecified']; }
+      openWordPicker({ cat:'being', sub:s.sub, pool:pool, x:x, y:y, title:s.sub, onPick:(word)=>{ s.word=word; ccRenderSlots(); } });
     }
     function ccAddMenu(x, y){
       const menu=document.getElementById('aspectMenu'); if(!menu) return; menu.innerHTML='';
@@ -37016,12 +37052,13 @@ document.addEventListener('DOMContentLoaded', init);
     /* ================= Settings / Places builder (roadmap #6d) — mirrors the Character-Creator ================= */
     const SB = { name:'', desc:'', complexity:1, slots:[] };
     const SB_LEVELS = [ {label:'Sketch', extra:0}, {label:'Fuller', extra:3}, {label:'Rich', extra:5} ];
-    const SB_DIMS = ['Condition','Control','Function','Scale','Atmosphere','Adjective'];   // stackable characteristics (Kind handled specially)
+    const SB_DIMS = ['Condition','Control','Population','Origin','Function','Scale','Atmosphere','Climate','Symbolism','Adjective'];   // stackable characteristics (Kind handled specially)
     const SB_FAMILIES = [
       { name:'Kind', subs:['Kind'] },
-      { name:'State', subs:['Condition','Control'] },
+      { name:'State', subs:['Condition','Control','Population','Origin'] },
       { name:'Role', subs:['Function','Scale'] },
-      { name:'Feel', subs:['Atmosphere'] },
+      { name:'Feel', subs:['Atmosphere','Climate'] },
+      { name:'Meaning', subs:['Symbolism'] },
       { name:'Freeform', subs:['Adjective'] }
     ];
     function sbRollKind(){   // pick a place type from the setting subcategories (genre-weighted), returns {word, sub}
@@ -37051,19 +37088,14 @@ document.addEventListener('DOMContentLoaded', init);
     function sbRemove(idx){ const s=SB.slots[idx]; if(!s||!sbRemovable(s)) return; SB.slots.splice(idx,1); sbRenderSlots(); }
     function sbPickMenu(idx, x, y){
       const s=SB.slots[idx]; if(!s) return;
-      const menu=document.getElementById('aspectMenu'); if(!menu) return; menu.innerHTML='';
-      if(menu.parentElement!==document.body) document.body.appendChild(menu);
-      if(s.sub==='Kind'){ const cat=(typeof getCat==='function')?getCat('setting'):null; const subs=(cat&&cat.subcategories)||[];
-        subs.forEach(sb=>{ const h=document.createElement('div'); h.textContent=sb.name; h.style.cssText='font-family:var(--sans);font-size:7.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-faint);padding:6px 11px 2px'; menu.appendChild(h);
-          (sb.words||[]).forEach(x2=>{ const v=(typeof x2==='string')?x2:(x2&&x2.w); if(!v) return; const b=document.createElement('button'); b.textContent=(s.word===v?'✓ ':'')+v; b.addEventListener('click', ev=>{ ev.stopPropagation(); menu.style.display='none'; s.word=v; s.kindSub=sb.name; sbRenderSlots(); }); menu.appendChild(b); }); });
-      } else {
-        const words=(typeof poolWords==='function')?poolWords(s.sub,'setting'):[];
-        (words||[]).slice(0,90).forEach(v=>{ const b=document.createElement('button'); b.textContent=(s.word===v?'✓ ':'')+v; b.addEventListener('click', ev=>{ ev.stopPropagation(); menu.style.display='none'; s.word=v; sbRenderSlots(); }); menu.appendChild(b); });
-        if(!words||!words.length){ const e=document.createElement('div'); e.textContent='No preset words — reroll instead'; e.style.cssText='padding:6px 11px;color:var(--ink-faint);font-size:11px'; menu.appendChild(e); }
+      if(s.sub==='Kind'){
+        openWordPicker({ cat:'setting', sub:'Kind', x:x, y:y, title:'Kind of place', placeholder:'search or type a kind of place…', onPick:(word)=>{
+          s.word=word; s.kindSub='';   // derive the subcategory from the chosen place type (blank if it's a custom one)
+          try{ const cat=getCat('setting'); (cat?cat.subcategories:[]).some(sb=>{ if((sb.words||[]).some(x2=>((typeof x2==='string')?x2:(x2&&x2.w))===word)){ s.kindSub=sb.name; return true; } return false; }); }catch(e){}
+          sbRenderSlots(); } });
+        return;
       }
-      menu.style.left=Math.max(8, Math.min(x||220, window.innerWidth-206))+'px';
-      menu.style.top=Math.max(8, Math.min(y||200, window.innerHeight-320))+'px';
-      menu.style.display='block';
+      openWordPicker({ cat:'setting', sub:s.sub, x:x, y:y, title:s.sub, onPick:(word)=>{ s.word=word; sbRenderSlots(); } });
     }
     function sbAddMenu(x, y){
       const menu=document.getElementById('aspectMenu'); if(!menu) return; menu.innerHTML='';
@@ -37171,18 +37203,18 @@ document.addEventListener('DOMContentLoaded', init);
     function openSettingByDesc(){ openDescPrompt({ title:'Describe the place', note:'Write a sentence or two in your own words — Dystoria breaks it into characteristics you can review before creating.', placeholder:'e.g. A half-flooded harbor town, lawless and salt-worn, where every deal is watched…', goLabel:'✦ Break it down', onGo:sbApplyDescription }); }
     async function sbApplyDescription(text){
       text=(text||'').trim();
-      const sys='You extract ONE place/setting from a description into structured fields for a fiction worldbuilding tool. Return ONLY compact JSON, no prose, no markdown fences. Shape: {"name":"","kind":"","condition":"","control":"","function":"","scale":"","atmosphere":"","traits":[{"sub":"","word":""}]}. '
-        +'name = a proper place name if the text states one, else "". kind = the KIND of place in 1–2 words (Harbor, Forest, Tavern, City, Cave…). condition = its state (ruined, bustling, flooded…). control = who holds it (lawless, occupied, sacred…). function = what it is for (sanctuary, prison, crossroads…). scale = its size/feel (vast, cramped, labyrinthine…). atmosphere = the mood in a word. Leave any field "" if not stated or implied. '
-        +'traits = extra SHORT 1–2 word characteristics as {sub,word} with sub from EXACTLY: Condition, Control, Function, Scale, Atmosphere, Adjective. Include ONLY what the text states or clearly implies — never invent. Each word short, never a sentence.';
+      const sys='You extract ONE place/setting from a description into structured fields for a fiction worldbuilding tool. Return ONLY compact JSON, no prose, no markdown fences. Shape: {"name":"","kind":"","condition":"","control":"","population":"","origin":"","function":"","scale":"","atmosphere":"","climate":"","symbolism":"","traits":[{"sub":"","word":""}]}. '
+        +'name = a proper place name if the text states one, else "". kind = the KIND of place in 1–2 words (Harbor, Forest, Tavern, City, Cave…). condition = its state (ruined, bustling, flooded…). control = who holds it (lawless, occupied, sacred…). population = how peopled (deserted, teeming, sparse…). origin = how it came to be (ancient, man-made, war-born…). function = what it is for (sanctuary, prison, crossroads…). scale = its size/feel (vast, cramped, labyrinthine…). atmosphere = the mood in a word. climate = weather (arid, frozen, humid…). symbolism = what it represents, a short noun phrase (a threshold, a tomb, a refuge…). Leave any field "" if not stated or implied. '
+        +'traits = extra SHORT 1–2 word characteristics as {sub,word} with sub from EXACTLY: Condition, Control, Population, Origin, Function, Scale, Atmosphere, Climate, Symbolism, Adjective. Include ONLY what the text states or clearly implies — never invent. Each word short, never a sentence.';
       const prompt='Description:\n"""\n'+text+'\n"""\n\nJSON:';
-      let out=''; try{ out=await aiCall(sys, prompt, { maxTokens: 520, temperature: 0, json: true }); }catch(e){ throw new Error('Could not reach the AI — try again.'); }
+      let out=''; try{ out=await aiCall(sys, prompt, { maxTokens: 560, temperature: 0, json: true }); }catch(e){ throw new Error('Could not reach the AI — try again.'); }
       let data=null; try{ const m=String(out).match(/\{[\s\S]*\}/); data=m?JSON.parse(m[0]):null; }catch(e){ data=null; }
       if(!data) throw new Error('Could not read that — try rephrasing.');
       SB.name=(data.name||'').trim(); SB.desc=text; SB.complexity=1;
       const kindWord=(data.kind||'').trim()||'Place';
       let kindSub=''; try{ const cat=getCat('setting'); (cat?cat.subcategories:[]).some(sb=>{ if((sb.words||[]).some(x=>((typeof x==='string')?x:(x&&x.w))===kindWord)){ kindSub=sb.name; return true; } return false; }); }catch(e){}
       const slots=[{ sub:'Kind', word:kindWord, kindSub:kindSub }];
-      [['condition','Condition'],['control','Control'],['function','Function'],['scale','Scale'],['atmosphere','Atmosphere']].forEach(p=>{ const v=(data[p[0]]||'').trim(); if(v) slots.push({ sub:p[1], word:v }); });
+      [['condition','Condition'],['control','Control'],['population','Population'],['origin','Origin'],['function','Function'],['scale','Scale'],['atmosphere','Atmosphere'],['climate','Climate'],['symbolism','Symbolism']].forEach(p=>{ const v=(data[p[0]]||'').trim(); if(v) slots.push({ sub:p[1], word:v }); });
       (Array.isArray(data.traits)?data.traits:[]).forEach(t=>{ if(t && t.word){ const sub=(SB_DIMS.indexOf(t.sub)>=0)?t.sub:'Adjective'; slots.push({ sub, word:String(t.word).trim() }); } });
       SB.slots=slots; closeDescPrompt(); openSettingCreator({ keep:true });
     }
@@ -45076,7 +45108,7 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.287';
+  var APP_VERSION = '2026.07.20.289';
   var APP_CHANGELOG = [
     { v:'2026.07.20.257', date:'August 1, 2026', notes:[
       'A freshly generated writing prompt now arrives large on the page, holds a beat, then shrinks into its resting place above your writing — so a new spark actually lands.'
