@@ -906,6 +906,10 @@
   .org-scene .org-scnum{flex:none; font-family:var(--sans); font-size:9px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:var(--gold,#c8961f)}
   .org-scene .org-scnum:before{content:'~ '; opacity:.6}
   .org-scene .org-scttl{flex:1; min-width:0; font-family:var(--serif); font-style:italic; font-size:11.5px; color:var(--ink-soft); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+  .org-scene[draggable]{cursor:grab}
+  .org-scene.org-dragging{opacity:.45}
+  .org-scene.drop-before{box-shadow:inset 0 2px 0 var(--gold,#c8961f)}
+  .org-scene.drop-after{box-shadow:inset 0 -2px 0 var(--gold,#c8961f)}
   .org-sec.sel{background:rgba(200,150,31,.12)}
   .org-sec[draggable]{cursor:grab}
   .org-sec.org-dragging{opacity:.45}
@@ -22159,26 +22163,76 @@ function _recapExitFullscreen(){
 // Add-to-section: the session's writing joins the draft. `target` is a section index, or 'new' for a fresh
 // trailing section, or the current section (default). The passage is then scanned (prose path) and the writer
 // lands in Refine on that section. The session also stays as a pill in the Notepad Sessions surface.
+// A session's prose becomes a SCENE the right way: a brand-new section opens directly on the writing
+// (no empty leading scene); an existing section that already held prose gets the writing as a NEW scene
+// (a ~ divider before it, which the writer can later merge). Operates on the session's stamped blocks.
+function _recapSceneAdjust(curId, k, isNew){
+  try {
+    const ed = $('editor'); if (!ed || !curId) return;
+    const fm = (typeof nodeFrameMap === 'function') ? nodeFrameMap() : null;
+    const kids = Array.prototype.slice.call(ed.children);
+    let firstSess = null, idx = -1;
+    for (let i = 0; i < kids.length; i++){ const c = kids[i]; if (fm && fm.get(c) !== k) continue; if (c.dataset && c.dataset.sess === curId){ firstSess = c; idx = i; break; } }
+    if (!firstSess) return;
+    const isScene = n => n.classList && n.classList.contains('scene-mark');
+    const isDeco  = n => n.tagName === 'H3' || (n.classList && n.classList.contains('sec-mark'));
+    const isEmpty = n => !isScene(n) && !isDeco(n) && !(n.textContent || '').trim() && !n.querySelector('img');
+    // nodes of frame k that sit BEFORE the session's first block
+    const before = [];
+    for (let j = 0; j < idx; j++){ if (!fm || fm.get(kids[j]) === k) before.push(kids[j]); }
+    if (isNew){
+      // a brand-new section must open on the prose — strip any stray scene-mark / empty line before it
+      before.forEach(n => { if (isScene(n) || isEmpty(n)){ if (n.parentNode) n.parentNode.removeChild(n); } });
+    } else {
+      const hasPrior = before.some(n => !isScene(n) && !isDeco(n) && (n.textContent || '').trim());
+      const prev = firstSess.previousElementSibling;
+      const alreadyScene = prev && isScene(prev) && (!fm || fm.get(prev) === k);
+      if (hasPrior && !alreadyScene && typeof _orgMakeSceneMark === 'function'){
+        firstSess.parentNode.insertBefore(_orgMakeSceneMark(), firstSess);   // the session becomes a new scene
+      }
+    }
+    if (state.session){ try { state.session.html = editorHTML(); state.session.text = editorText(); } catch(e){} }
+  } catch(e){}
+}
+// After routing, land the writer IN the section their words went into (Refine), with the Organize drawer open.
+function _recapLandInSection(k){
+  setTimeout(function(){
+    try {
+      if (state.frames && state.frames[k]) state.frameIdx = k;
+      const cols = document.getElementById('editCols');
+      if (cols){ if (typeof ensureOrgDrawer === 'function') ensureOrgDrawer(); cols.classList.add('org-open'); if (typeof renderOrgTree === 'function') renderOrgTree(); }
+      if (typeof orgJumpTo === 'function') orgJumpTo(k);
+      else { if (typeof msScrollTo === 'function') msScrollTo('edit', k); if (typeof syncModeSecNav === 'function') syncModeSecNav('edit'); }
+      if (typeof orgUpdateCurrent === 'function') orgUpdateCurrent();
+    } catch(e){}
+  }, 260);
+}
 function recapRouteProse(sid, target){
   const passage = _recapSessionPassage(sid);
   const title = _recapSessionTitle(sid);
   document.body.classList.remove('recap');
   const cur = state.frameIdx || 0;
+  let destFrame = cur, isNew = false;
   if (target === 'new'){
+    isNew = true;
     const ok = recapRouteNewScene(sid);   // moves this session's prose into a fresh trailing section, switches to it
-    if (ok){ try { const k = state.frameIdx || 0; if (state.frames && state.frames[k]){ state.frames[k].stageName = title || state.frames[k].stageName || ''; } if (typeof renumberSections === 'function') renumberSections(); if (typeof renderTimeline === 'function') renderTimeline(); } catch(e){} }
+    destFrame = state.frameIdx || 0;
+    if (ok){ try { const k = destFrame; if (state.frames && state.frames[k]){ state.frames[k].stageName = title || state.frames[k].stageName || ''; } if (typeof renumberSections === 'function') renumberSections(); if (typeof renderTimeline === 'function') renderTimeline(); } catch(e){} }
   } else {
     const tf = parseInt(target, 10);
     if (isFinite(tf) && tf !== cur && state.frames && state.frames[tf]){
       recapMoveSessionToFrame(sid, tf);   // move the session's blocks into the chosen existing section
       try { state.frameIdx = tf; state.prompt = state.frames[tf].prompt; state.activeSet = 0; } catch(e){}
-    }
-    // else: leave it in the current section
+      destFrame = tf;
+    } else { destFrame = cur; }   // left in the current section
   }
+  // make the writing a scene (new-section = opener, existing-section = a fresh ~ scene)
+  try { _recapSceneAdjust(state._lastSnapId, destFrame, isNew); } catch(e){}
   runSessionImport(passage, title, function(){
     _recapExitFullscreen();
     try { if (typeof setWriting === 'function') setWriting(false); } catch(e){}   // leave Write mode so its pill de-selects (Refine is the active mode now)
     try { if (typeof goMode === 'function') goMode('edit'); } catch(e){}   // Refine mode on the section (persists uiMode='refine')
+    _recapLandInSection(destFrame);   // land on that section with the Organize drawer open
   }, 'prose');   // scan the writing through the PROSE import path
 }
 // → Notes: the writing leaves the scene and lives in the Sessions surface; the importer scans it (background,
@@ -28688,6 +28742,7 @@ function updateEditTop(){ const es = $('editScroll'), bt = $('editTop'); if (es 
 var _orgCollapsed = {};   // partId → true when that Part is collapsed in the drawer
 var _orgSel = {};         // sectionIndex → true when checked for a merge/delete
 var _orgDragFrom = null;   // section index being drag-reordered
+var _orgSceneDrag = null;  // { frame, scene } of a scene row being drag-reordered
 var _orgSceneSel = {};     // "frame:scene" → true when a scene is checked (scene-merge selection)
 function _orgLoadCollapsed(){ try { var v = JSON.parse(localStorage.getItem('dystoria.orgCollapsed') || '{}'); if (v && typeof v === 'object') _orgCollapsed = v; } catch(e){} }
 function _orgSaveCollapsed(){ try { localStorage.setItem('dystoria.orgCollapsed', JSON.stringify(_orgCollapsed)); } catch(e){} }
@@ -28756,6 +28811,31 @@ function renderOrgTree(){
     row.addEventListener('dragover', function(e){ if (_orgDragFrom == null) return; e.preventDefault(); try { e.dataTransfer.dropEffect = 'move'; } catch(_){} var r = row.getBoundingClientRect(); var after = (e.clientY - r.top) > r.height / 2; row.classList.toggle('drop-after', after); row.classList.toggle('drop-before', !after); });
     row.addEventListener('dragleave', function(){ row.classList.remove('drop-before', 'drop-after'); });
     row.addEventListener('drop', function(e){ e.preventDefault(); if (_orgDragFrom == null) return; var t = +row.getAttribute('data-i'); var r = row.getBoundingClientRect(); var after = (e.clientY - r.top) > r.height / 2; var desired = after ? t + 1 : t; var from = _orgDragFrom; var to = (from < desired) ? desired - 1 : desired; clearDrop(); _orgDragFrom = null; if (from !== to && to >= 0) orgReorder(from, to); });
+  });
+  // drag to reorder SCENES within a section (scene rows si≥1 carry a ~ mark; scene 0 is the section opener, not draggable)
+  var clearSceneDrop = function(){ Array.prototype.forEach.call(list.querySelectorAll('.org-scene'), function(r){ r.classList.remove('drop-before', 'drop-after'); }); };
+  Array.prototype.forEach.call(list.querySelectorAll('.org-scene'), function(row){
+    var rf = +row.getAttribute('data-frame'), rs = +row.getAttribute('data-scene');
+    if (rs >= 1){   // only the ~-delimited scenes can be picked up
+      row.setAttribute('draggable', 'true');
+      row.addEventListener('dragstart', function(e){ _orgSceneDrag = { frame: rf, scene: rs }; try { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', 'scene'); } catch(_){} row.classList.add('org-dragging'); e.stopPropagation(); });
+      row.addEventListener('dragend', function(){ row.classList.remove('org-dragging'); clearSceneDrop(); _orgSceneDrag = null; });
+    }
+    row.addEventListener('dragover', function(e){ if (!_orgSceneDrag || _orgSceneDrag.frame !== rf) return; e.preventDefault(); try { e.dataTransfer.dropEffect = 'move'; } catch(_){} var r = row.getBoundingClientRect(); var after = (e.clientY - r.top) > r.height / 2; row.classList.toggle('drop-after', after); row.classList.toggle('drop-before', !after); });
+    row.addEventListener('dragleave', function(){ row.classList.remove('drop-before', 'drop-after'); });
+    row.addEventListener('drop', function(e){ if (!_orgSceneDrag || _orgSceneDrag.frame !== rf) return; e.preventDefault(); e.stopPropagation();
+      var r = row.getBoundingClientRect(); var after = (e.clientY - r.top) > r.height / 2;
+      var src = _orgSceneDrag; clearSceneDrop(); _orgSceneDrag = null;
+      // scenes 1..m carry stable sids (orgSectionScenes); tree scene index si maps to sids[si-1]
+      var sids = ((typeof orgSectionScenes === 'function') ? orgSectionScenes(rf) : []).map(function(s){ return s.sid; });
+      var m = sids.length; if (!m) return;
+      var srcSid = sids[src.scene - 1]; if (!srcSid) return;
+      // insertion boundary among the ~scenes: "before si"→ si-1 ; "after si"→ si (clamped; ==m means end)
+      var pos = after ? rs : (rs - 1); pos = Math.max(0, Math.min(pos, m));
+      var destSid = (pos < m) ? sids[pos] : null;   // null → move to end of section
+      if (destSid === srcSid) return;               // dropping onto its own boundary = no-op
+      orgMoveScene(rf, srcSid, destSid);
+    });
   });
   orgUpdateActions();
 }
@@ -28937,13 +29017,24 @@ function orgMoveScene(frame, srcSid, destSid){
       if (nn.classList && (nn.classList.contains('scene-mark') || nn.classList.contains('sec-mark'))) break;
       seg.push(nn);
     }
-    var destMark = kids[markIdx(destSid)]; if (!destMark) return false;
-    if (seg.indexOf(destMark) >= 0) return false;   // can't drop a scene into its own segment
     if (typeof pushUndo === 'function') pushUndo();
     var frag = document.createDocumentFragment(); seg.forEach(function(n){ frag.appendChild(n); });
-    ed.insertBefore(frag, destMark);   // place the dragged scene just before the drop-target scene
+    if (destSid == null){
+      // move to the END of this section: after its last non-decoration block
+      var lastInFrame = null;
+      kids.forEach(function(n){ if (fm.get(n) === frame && n.tagName !== 'H3' && seg.indexOf(n) < 0) lastInFrame = n; });
+      if (lastInFrame && lastInFrame.nextSibling) ed.insertBefore(frag, lastInFrame.nextSibling);
+      else if (lastInFrame) ed.appendChild(frag);
+      else return false;
+    } else {
+      var destMark = kids[markIdx(destSid)]; if (!destMark) return false;
+      if (seg.indexOf(destMark) >= 0) return false;   // can't drop a scene into its own segment
+      ed.insertBefore(frag, destMark);   // place the dragged scene just before the drop-target scene
+    }
     if (state.session){ try { state.session.html = editorHTML(); } catch(e){} }
+    if (typeof buildEditMode === 'function') buildEditMode();
     if (typeof _orgRefreshViews === 'function') _orgRefreshViews();
+    if (typeof renderOrgTree === 'function') renderOrgTree();
     if (typeof scheduleAutosave === 'function') scheduleAutosave(400);
     return true;
   } catch(e){ return false; }
@@ -44110,7 +44201,7 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.263';
+  var APP_VERSION = '2026.07.20.264';
   var APP_CHANGELOG = [
     { v:'2026.07.20.257', date:'August 1, 2026', notes:[
       'A freshly generated writing prompt now arrives large on the page, holds a beat, then shrinks into its resting place above your writing — so a new spark actually lands.'
