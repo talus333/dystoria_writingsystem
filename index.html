@@ -1234,8 +1234,21 @@
   #statsModal .stx-h-title{font-family:var(--cinzel,'Cinzel',var(--serif)); font-size:16px; font-weight:600; letter-spacing:.04em; color:var(--ink)}
   #statsModal #stxClose{font-size:20px; line-height:1; border:none; background:none; cursor:pointer; color:var(--ink-faint); padding:0 4px}
   #statsModal #stxClose:hover{color:var(--ink)}
-  #statsModal .stx-sub{font-family:var(--serif); font-size:12.5px; font-style:italic; color:var(--ink-faint); line-height:1.45; margin:0 0 12px}
+  #statsModal .stx-sub{font-family:var(--serif); font-size:12.5px; font-style:italic; color:var(--ink-faint); line-height:1.45; margin:0 0 10px}
+  #statsModal .stx-tabs{display:flex; gap:6px; margin:0 0 12px; border-bottom:1px solid var(--line); padding-bottom:0}
+  #statsModal .stx-tabs button{font-family:var(--sans); font-size:11.5px; font-weight:600; letter-spacing:.02em; color:var(--ink-faint); background:transparent; border:none; border-bottom:2px solid transparent; padding:6px 4px 8px; margin-bottom:-1px; cursor:pointer}
+  #statsModal .stx-tabs button:hover{color:var(--ink-soft)}
+  #statsModal .stx-tabs button.on{color:var(--ink); border-bottom-color:var(--gold,#c8791f)}
   #statsModal .stx-body{overflow-y:auto; flex:1}
+  #statsModal .stx-strow{display:flex; align-items:center; gap:9px; padding:7px 2px; border-bottom:1px solid rgba(196,158,74,.14)}
+  #statsModal .stx-strow:last-child{border-bottom:none}
+  #statsModal .stx-sdot{width:11px; height:11px; border-radius:3px; flex:none}
+  #statsModal .stx-sname{flex:0 0 32%; font-family:var(--serif); font-size:13px; color:var(--ink); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+  #statsModal .stx-scur{font-family:var(--sans); font-size:8.5px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--gold,#b0851f); margin-left:6px; vertical-align:middle}
+  #statsModal .stx-spark{flex:1; min-width:0; height:26px; display:flex; align-items:center}
+  #statsModal .stx-mini{width:100%; height:26px; display:block}
+  #statsModal .stx-sw{flex:0 0 auto; font-family:var(--sans); font-size:12px; font-weight:700; color:var(--ink-soft); min-width:78px; text-align:right}
+  #statsModal .stx-spct{font-weight:600; color:var(--ink-faint); margin-left:6px}
   #statsModal .stx-empty{font-family:var(--serif); font-size:14px; color:var(--ink-faint); padding:26px 6px; line-height:1.6; text-align:center}
   #statsModal .stx-graphhd{display:flex; align-items:baseline; justify-content:space-between; margin:2px 0 5px}
   #statsModal .stx-graphhd .stx-gt{font-family:var(--sans); font-size:10px; font-weight:700; letter-spacing:.09em; text-transform:uppercase; color:var(--ink-faint)}
@@ -29506,42 +29519,60 @@ function versionsWire(){
 versionsWire(); if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', versionsWire);
 
 /* ======================= Session Statistics (#1 / R42) — deterministic, no AI =======================
-   A read-only dashboard over state.session.sessionLog[]: a daily-words line graph (inline SVG, no chart
-   lib), plus session/day counts, writing streaks, per-section distribution, and the kept/notes/discarded
-   split. Descriptive, never gamified — no targets, no pass/fail. Opened from the Notepad Sessions surface. */
+   A read-only dashboard over the session logs: a daily-words line graph (inline SVG, no chart lib), plus
+   session/day counts, writing streaks, and a breakdown. Two tabs — THIS STORY (state.session.sessionLog,
+   with a per-section split + where-the-writing-went) and ALL STORIES (every story in loadSessions(),
+   a combined daily line + a per-story breakdown, one colour per story). Descriptive, never gamified —
+   no targets, no pass/fail. Opened from a bar-graph icon beside the Notepad button in every mode. */
 function _statsDayKey(d){ var y=d.getFullYear(), m=d.getMonth()+1, dd=d.getDate(); return y+'-'+(m<10?'0':'')+m+'-'+(dd<10?'0':'')+dd; }
 function _statsDayLabel(d){ try{ return d.toLocaleDateString(undefined,{month:'short',day:'numeric'}); }catch(e){ return _statsDayKey(d); } }
 function _statsEsc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+var _statsTab='story';
+var _statsPalette=['#c8791f','#3a7bd5','#4a9b5e','#8a5cd6','#c0455f','#2f9a9a','#b0851f','#d07a3f','#5a7d3a','#a23e8c','#6b6f7d','#c69a2e'];
+// ---- shared daily/streak helpers (used by both tabs) ----
+function _statsRange(activeKeys){
+  if(!activeKeys || !activeKeys.length) return null;
+  var first=new Date(activeKeys[0]+'T00:00:00');
+  var lastActive=new Date(activeKeys[activeKeys.length-1]+'T00:00:00');
+  var today=new Date(); today.setHours(0,0,0,0);
+  var end=(today.getTime()>lastActive.getTime())? today : lastActive;
+  var MAXD=90, start=first, capped=false;
+  var span=Math.round((end.getTime()-first.getTime())/86400000)+1;
+  if(span>MAXD){ start=new Date(end.getTime()-(MAXD-1)*86400000); capped=true; }
+  return { start:start, end:end, capped:capped };
+}
+function _statsDaysFrom(byDay, range){
+  var days=[]; if(!range) return days;
+  for(var t=range.start.getTime(); t<=range.end.getTime()+1000; t+=86400000){ var dd=new Date(t); var k=_statsDayKey(dd); days.push({ key:k, date:dd, words:byDay[k]||0 }); }
+  return days;
+}
+function _statsStreaks(activeSet){
+  var keys=Object.keys(activeSet).sort(); var longest=0, current=0;
+  if(!keys.length) return { longest:0, current:0 };
+  var run=0, prev=null;
+  keys.forEach(function(k){ var d=new Date(k+'T00:00:00'); if(prev && Math.round((d.getTime()-prev.getTime())/86400000)===1) run++; else run=1; if(run>longest) longest=run; prev=d; });
+  var t0=new Date(); t0.setHours(0,0,0,0); var probe=t0;
+  if(!activeSet[_statsDayKey(probe)]) probe=new Date(t0.getTime()-86400000);   // allow a streak that ends yesterday
+  if(activeSet[_statsDayKey(probe)]){ var p=probe; while(activeSet[_statsDayKey(p)]){ current++; p=new Date(p.getTime()-86400000); } }
+  return { longest:longest, current:current };
+}
+// every story (persisted library + the fresher in-memory open one)
+function _statsAllStories(){
+  var list=[]; try{ list=(typeof loadSessions==='function')? loadSessions() : []; }catch(e){ list=[]; }
+  var out=[], seen={}, activeId=(state.session&&state.session.id)||null;
+  list.forEach(function(s){ if(!s) return; if(s.id) seen[s.id]=1; if(activeId && s.id===activeId && state.session) out.push(state.session); else out.push(s); });
+  if(activeId && !seen[activeId] && state.session) out.push(state.session);
+  if(!out.length && state.session) out.push(state.session);
+  return out;
+}
 function statsCompute(){
   var log=((state.session&&state.session.sessionLog)||[]).filter(function(e){ return e && e.at; });
   var wentries=log.filter(function(e){ return (e.words||0)>0; });
   var total=wentries.reduce(function(a,e){ return a+(e.words||0); },0);
-  // daily buckets (local calendar day)
-  var byDay={}; wentries.forEach(function(e){ var d=new Date(e.at); if(isNaN(d.getTime())) return; var k=_statsDayKey(d); byDay[k]=(byDay[k]||0)+(e.words||0); });
-  var activeKeys=Object.keys(byDay).sort();
-  var activeDays=activeKeys.length;
-  // continuous daily range for the graph (zeros fill the gaps; extend to today so a lull is visible)
-  var days=[], capped=false;
-  if(activeDays){
-    var first=new Date(activeKeys[0]+'T00:00:00');
-    var lastActive=new Date(activeKeys[activeKeys.length-1]+'T00:00:00');
-    var today=new Date(); today.setHours(0,0,0,0);
-    var end=(today.getTime()>lastActive.getTime())? today : lastActive;
-    var MAXD=90, start=first;
-    var span=Math.round((end.getTime()-first.getTime())/86400000)+1;
-    if(span>MAXD){ start=new Date(end.getTime()-(MAXD-1)*86400000); capped=true; }
-    for(var t=start.getTime(); t<=end.getTime()+1000; t+=86400000){ var dd=new Date(t); var k=_statsDayKey(dd); days.push({ key:k, date:dd, words:byDay[k]||0 }); }
-  }
-  // streaks — consecutive active calendar days
-  var longest=0, current=0;
-  if(activeDays){
-    var set={}; activeKeys.forEach(function(k){ set[k]=1; });
-    var run=0, prev=null;
-    activeKeys.forEach(function(k){ var d=new Date(k+'T00:00:00'); if(prev && Math.round((d.getTime()-prev.getTime())/86400000)===1) run++; else run=1; if(run>longest) longest=run; prev=d; });
-    var t0=new Date(); t0.setHours(0,0,0,0); var probe=t0;
-    if(!set[_statsDayKey(probe)]) probe=new Date(t0.getTime()-86400000);   // allow a streak that ends yesterday
-    if(set[_statsDayKey(probe)]){ var p=probe; while(set[_statsDayKey(p)]){ current++; p=new Date(p.getTime()-86400000); } }
-  }
+  var byDay={}, activeSet={}; wentries.forEach(function(e){ var d=new Date(e.at); if(isNaN(d.getTime())) return; var k=_statsDayKey(d); byDay[k]=(byDay[k]||0)+(e.words||0); activeSet[k]=1; });
+  var activeKeys=Object.keys(byDay).sort(); var activeDays=activeKeys.length;
+  var range=_statsRange(activeKeys); var days=_statsDaysFrom(byDay, range);
+  var st=_statsStreaks(activeSet);
   // per-section distribution
   var bySec={}; wentries.forEach(function(e){ var f=(e.frame!=null?e.frame:0); bySec[f]=(bySec[f]||0)+(e.words||0); });
   var sections=Object.keys(bySec).map(function(f){ return { frame:+f, words:bySec[f] }; }).sort(function(a,b){ return b.words-a.words; });
@@ -29552,8 +29583,37 @@ function statsCompute(){
   return { sessions:wentries.length, total:total, activeDays:activeDays,
     avgPerSession: wentries.length? Math.round(total/wentries.length):0,
     avgPerDay: activeDays? Math.round(total/activeDays):0,
-    longest:longest, current:current, days:days, maxDay:maxDay, capped:capped,
+    longest:st.longest, current:st.current, days:days, maxDay:maxDay, capped:range?range.capped:false,
     sections:sections, kept:kept, notes:notes, disc:disc, hasWords: wentries.length>0 };
+}
+function statsComputeAll(){
+  var stories=_statsAllStories();
+  var perStory=[], allByDay={}, allSet={}, total=0, sessions=0;
+  stories.forEach(function(s){
+    var log=((s&&s.sessionLog)||[]).filter(function(e){ return e && e.at && (e.words||0)>0; });
+    if(!log.length) return;
+    var byDay={}, w=0; log.forEach(function(e){ var d=new Date(e.at); if(isNaN(d.getTime())) return; var k=_statsDayKey(d); byDay[k]=(byDay[k]||0)+(e.words||0); allByDay[k]=(allByDay[k]||0)+(e.words||0); allSet[k]=1; w+=e.words||0; });
+    if(w<=0) return;
+    total+=w; sessions+=log.length;
+    perStory.push({ id:(s&&s.id)||('s'+perStory.length), name:((s&&s.name&&String(s.name).trim())||'Untitled story'), words:w, sessions:log.length, byDay:byDay, active:Object.keys(byDay).length, isCurrent: !!(state.session && s===state.session) });
+  });
+  perStory.sort(function(a,b){ return b.words-a.words; });
+  perStory.forEach(function(p,i){ p.color=_statsPalette[i%_statsPalette.length]; });
+  var activeKeys=Object.keys(allByDay).sort(); var range=_statsRange(activeKeys);
+  var days=_statsDaysFrom(allByDay, range); var st=_statsStreaks(allSet);
+  perStory.forEach(function(p){ p.days=_statsDaysFrom(p.byDay, range); });
+  var maxDay=0; days.forEach(function(d){ if(d.words>maxDay) maxDay=d.words; });
+  return { stories:perStory.length, sessions:sessions, total:total, activeDays:activeKeys.length,
+    avgPerDay: activeKeys.length? Math.round(total/activeKeys.length):0,
+    longest:st.longest, current:st.current, days:days, maxDay:maxDay, capped:range?range.capped:false,
+    perStory:perStory, hasWords: total>0 };
+}
+function _statsMiniSVG(days, color){
+  if(!days || !days.length) return '';
+  var W=170, H=26, mx=1; days.forEach(function(d){ if(d.words>mx) mx=d.words; });
+  var n=days.length, xOf=function(i){ return n===1? W/2 : (i/(n-1))*W; }, yOf=function(v){ return (H-2) - (v/mx)*(H-4); };
+  var line=days.map(function(d,i){ return (i?'L':'M')+xOf(i).toFixed(1)+' '+yOf(d.words).toFixed(1); }).join(' ');
+  return '<svg viewBox="0 0 '+W+' '+H+'" class="stx-mini" preserveAspectRatio="none"><path d="'+line+'" fill="none" stroke="'+color+'" stroke-width="1.6" vector-effect="non-scaling-stroke" stroke-linejoin="round" stroke-linecap="round"/></svg>';
 }
 function _statsSVG(days, maxDay){
   if(!days || !days.length) return '';
@@ -29577,20 +29637,27 @@ function ensureStatsModal(){
   var m=document.getElementById('statsModal'); if(m) return m;
   m=document.createElement('div'); m.id='statsModal';
   m.innerHTML='<div class="stx-card"><div class="stx-head"><span class="stx-h-title">Session statistics</span><button type="button" id="stxClose" title="Close">×</button></div>'
-    +'<div class="stx-sub">Your writing over time — a mirror, not a target.</div><div class="stx-body" id="stxBody"></div></div>';
+    +'<div class="stx-sub">Your writing over time — a mirror, not a target.</div>'
+    +'<div class="stx-tabs" id="stxTabs"><button type="button" data-tab="story" class="on">This story</button><button type="button" data-tab="all">All stories</button></div>'
+    +'<div class="stx-body" id="stxBody"></div></div>';
   document.body.appendChild(m);
   m.addEventListener('mousedown', function(e){ if(e.target===m) closeSessionStats(); });
   var x=m.querySelector('#stxClose'); if(x) x.addEventListener('click', function(e){ e.stopPropagation(); closeSessionStats(); });
+  var tabs=m.querySelector('#stxTabs'); if(tabs) tabs.addEventListener('click', function(e){ var b=e.target.closest('button[data-tab]'); if(!b) return; _statsTab=b.getAttribute('data-tab'); Array.prototype.forEach.call(tabs.querySelectorAll('button'), function(x){ x.classList.toggle('on', x===b); }); renderSessionStats(); });
   return m;
 }
 function closeSessionStats(){ var m=document.getElementById('statsModal'); if(m) m.classList.remove('show'); }
 function openSessionStats(){
   if(!state.session){ if(typeof flashStatus==='function') flashStatus('Open a story first'); return; }
-  var m=ensureStatsModal(); renderSessionStats(); m.classList.add('show');
+  _statsTab='story';   // always open on the active story
+  var m=ensureStatsModal();
+  var tabs=m.querySelector('#stxTabs'); if(tabs) Array.prototype.forEach.call(tabs.querySelectorAll('button'), function(x){ x.classList.toggle('on', x.getAttribute('data-tab')==='story'); });
+  renderSessionStats(); m.classList.add('show');
 }
 try{ window.openSessionStats=openSessionStats; }catch(e){}
 function renderSessionStats(){
   var body=document.getElementById('stxBody'); if(!body) return;
+  if(_statsTab==='all'){ _statsRenderAll(body); return; }
   var S=statsCompute();
   if(!S.hasWords){ body.innerHTML='<div class="stx-empty">No writing sessions with words yet.<br>Once you write in a session, your daily totals, streaks, and section breakdown will appear here.</div>'; return; }
   var h='';
@@ -29636,6 +29703,40 @@ function renderSessionStats(){
     }).join('');
     if(S.sections.length>8) h+='<div class="stx-cap">+'+(S.sections.length-8)+' more section'+(S.sections.length-8===1?'':'s')+'</div>';
   }
+  body.innerHTML=h;
+}
+function _statsRenderAll(body){
+  var S=statsComputeAll();
+  if(!S.hasWords){ body.innerHTML='<div class="stx-empty">No writing yet across your stories.<br>Your combined daily rhythm and per-story breakdown will appear here once you write.</div>'; return; }
+  var h='';
+  // combined daily-words line graph
+  var peak=S.maxDay, peakDay=null; S.days.forEach(function(d){ if(d.words===peak && !peakDay) peakDay=d.date; });
+  h+='<div class="stx-graphhd"><span class="stx-gt">Words per day · all stories</span><span class="stx-peak">Peak <b>'+peak+'</b>'+(peakDay?(' · '+_statsEsc(_statsDayLabel(peakDay))):'')+'</span></div>';
+  h+=_statsSVG(S.days, S.maxDay);
+  if(S.days.length){ h+='<div class="stx-xrow"><span>'+_statsEsc(_statsDayLabel(S.days[0].date))+'</span><span>'+_statsEsc(_statsDayLabel(S.days[S.days.length-1].date))+'</span></div>'; }
+  if(S.capped) h+='<div class="stx-cap">showing the last 90 days</div>';
+  // headline tiles (aggregated across every story)
+  var tiles=[
+    ['Total words', S.total.toLocaleString(), ''],
+    ['Stories', String(S.stories), 'with writing'],
+    ['Sessions', String(S.sessions), ''],
+    ['Active days', String(S.activeDays), ''],
+    ['Current streak', S.current+(S.current===1?' day':' days'), S.current?'consecutive':'—'],
+    ['Longest streak', S.longest+(S.longest===1?' day':' days'), 'best run'],
+    ['Avg / active day', S.avgPerDay.toLocaleString(), 'words']
+  ];
+  h+='<div class="stx-tiles">'+tiles.map(function(t){ return '<div class="stx-tile"><div class="stx-tv">'+_statsEsc(t[1])+'</div><div class="stx-tl">'+_statsEsc(t[0])+'</div>'+(t[2]?'<div class="stx-tsub">'+_statsEsc(t[2])+'</div>':'')+'</div>'; }).join('')+'</div>';
+  // per-story breakdown — one colour each, with a mini daily trend in that colour
+  h+='<div class="stx-hd">By story</div>';
+  h+=S.perStory.map(function(p){
+    var pct=S.total? Math.round(p.words/S.total*100):0;
+    return '<div class="stx-strow">'
+      +'<span class="stx-sdot" style="background:'+p.color+'"></span>'
+      +'<span class="stx-sname" title="'+_statsEsc(p.name)+'">'+_statsEsc(p.name)+(p.isCurrent?'<span class="stx-scur">current</span>':'')+'</span>'
+      +'<span class="stx-spark">'+_statsMiniSVG(p.days, p.color)+'</span>'
+      +'<span class="stx-sw">'+p.words.toLocaleString()+'w<span class="stx-spct">'+pct+'%</span></span>'
+      +'</div>';
+  }).join('');
   body.innerHTML=h;
 }
 // When Refine edits a session: archive a copy of the ORIGINAL (pre-refine) session — restorable —
@@ -33645,11 +33746,6 @@ function renderNpElements(){
   if (filter === 'sessions'){   // R37 — writing sessions (newest first); selecting one shows its record above the pad
     const _slog = ((state.session && state.session.sessionLog) || []).slice().reverse();
     if (!_slog.length){ const e = document.createElement('span'); e.className = 'np-goalempty'; e.textContent = 'No sessions yet'; host.appendChild(e); return; }
-    { const stat = document.createElement('span'); stat.className = 'np-chip np-session'; stat.title = 'Session statistics — your writing over time';   // R42 — deterministic stats dashboard
-      const l = document.createElement('span'); l.className = 'np-label'; l.textContent = '◷ Statistics'; stat.appendChild(l);
-      const ar = document.createElement('span'); ar.className = 'np-arrow'; ar.textContent = '▸'; stat.appendChild(ar);
-      stat.addEventListener('click', () => { if (typeof openSessionStats === 'function') openSessionStats(); });
-      host.appendChild(stat); }
     _slog.forEach(s => {
       const key = 'session:' + s.id;
       const chip = document.createElement('span'); chip.className = 'np-chip np-session' + (key === active ? ' on' : '');
@@ -44014,7 +44110,7 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.260';
+  var APP_VERSION = '2026.07.20.261';
   var APP_CHANGELOG = [
     { v:'2026.07.20.257', date:'August 1, 2026', notes:[
       'A freshly generated writing prompt now arrives large on the page, holds a beat, then shrinks into its resting place above your writing — so a new spark actually lands.'
@@ -46101,9 +46197,18 @@ body.eink .pl-scell2.pl-sec-partstart::before{ background:linear-gradient(to bot
 .pad-toggle:hover{ color:var(--ink); border-color:var(--ink-faint); }
 .pad-toggle.on{ color:var(--gold); border-color:var(--gold); }
 .pad-toggle svg{ width:12px; height:12px; flex:none; }
-#deskbar .pad-toggle{ margin-left:auto; }
+#deskbar .pad-toggle{ margin-left:6px; }
+#deskbar .pad-stats{ margin-left:auto; }
 body.eink .pad-toggle{ border-width:2px; border-radius:0; }
 body.eink .pad-toggle.on{ color:#000; border-color:#000; }
+/* R42 — statistics icon button beside the Notepad button */
+.pad-stats{ display:inline-flex; align-items:center; justify-content:center; width:30px; height:26px; padding:0; flex:none;
+  color:var(--ink-faint); background:var(--paper); border:1px solid var(--line); border-radius:16px; cursor:pointer; }
+.pad-stats:hover{ color:var(--gold); border-color:var(--gold); }
+.pad-stats svg{ width:15px; height:15px; }
+body.eink .pad-stats{ border-width:2px; border-radius:0; }
+body.ember:not(.eink) .pad-stats.pad-stats{ background:rgba(255,255,255,.05) !important; border:1px solid rgba(250,154,49,.28) !important; border-radius:22px !important; color:#cf9a48 !important; width:34px !important; min-height:30px !important; }
+body.ember:not(.eink) .pad-stats.pad-stats:hover{ border-color:rgba(250,154,49,.6) !important; color:#f0bf6c !important; }
 /* Notepad button — ONE consistent look in every mode (Plan, Write, Refine, Read, Wiki); colour matches the mode labels.
    Doubled class raises specificity above the per-mode action-bar button rules (body.ember .wk-head-actions button …). */
 body.ember:not(.eink) .pad-toggle.pad-toggle{ background:rgba(255,255,255,.05) !important; border:1px solid rgba(250,154,49,.28) !important; border-radius:22px !important; color:#cf9a48 !important; padding:6px 15px !important; gap:8px !important; min-height:30px !important; }
@@ -49867,6 +49972,11 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
                 ['wk', document.querySelector('#wikiPanel .wk-head-actions')] ];
     spots.forEach(function(s){
       var host=s[1]; if(!host || host.querySelector('.pad-toggle')) return;
+      // R42 — a small bar-graph-with-trend-arrow icon beside the Notepad button opens Session Statistics
+      var sbtn=document.createElement('button'); sbtn.type='button'; sbtn.className='pad-stats'; sbtn.title='Session statistics — your writing over time';
+      sbtn.innerHTML='<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="13" width="3.6" height="8" rx="1" fill="currentColor" stroke="none"/><rect x="10.2" y="9.5" width="3.6" height="11.5" rx="1" fill="currentColor" stroke="none"/><rect x="17.4" y="5.5" width="3.6" height="15.5" rx="1" fill="currentColor" stroke="none"/><path d="M4.2 8.4 L9.6 4.6 L13.6 6.8 L20 2"/><path d="M16.4 2.2 L20 2 L19.9 5.6"/></svg>';
+      sbtn.addEventListener('click', function(e){ e.stopPropagation(); if(typeof openSessionStats==='function') openSessionStats(); });
+      host.appendChild(sbtn);
       var b=document.createElement('button'); b.type='button'; b.className='pad-toggle';
       b.innerHTML=ICONS.feather+'<span class="pad-lbl">Notepad</span>'; b.title='Show your notepad';
       b.addEventListener('click', function(e){ e.stopPropagation(); setPad(!document.body.classList.contains('pad-open')); });
