@@ -20932,6 +20932,32 @@ function _groupMembership(name, info){
   else lead='Organized as a hierarchy'+(info.heads.length===1?', led by '+info.heads[0]:(info.heads.length>1?', headed by '+_joinList(info.heads):''))+'. ';
   return (lead+'Members: '+_joinList(names)+'.').replace(/\s+/g,' ').trim();
 }
+// #6(g) — "Edit in [Element] Creator": load an existing element's characteristics into its builder,
+// and update it in place on save (reusing applyElemEdit for identity + key migration; attrs set separately).
+window.dystElementToSlots = function(w){
+  var slots=[];
+  if(w.role==='being') slots.push({ sub:'Type', word:w.word });
+  else slots.push({ sub:'Kind', word:w.word, kindSub:(w.sub||'') });
+  (w.attrs||[]).forEach(function(a){ if(a && a.word) slots.push({ sub:a.sub, word:a.word }); });
+  return slots;
+};
+window.dystSetElementAttrs = function(key, attrs){
+  var mk=function(){ return (attrs||[]).map(function(a){ return { word:a.word, sub:a.sub }; }); };
+  var apply=function(w){ if(w && wordKey(w)===key) w.attrs=mk(); };
+  try{ ((state.prompt&&state.prompt.words)||[]).forEach(apply); }catch(e){}
+  try{ ((state.frames)||[]).forEach(function(fr){ ((fr&&fr.prompt&&fr.prompt.words)||[]).forEach(apply); }); }catch(e){}
+  try{ if(state.session&&Array.isArray(state.session.elemLibrary)) state.session.elemLibrary.forEach(function(r){ if(r&&r.item) apply(r.item); }); }catch(e){}
+  try{ ((state.nodes)||[]).forEach(function(nd){ if(nd && wordKey(nd)===key) nd.attrs=mk(); }); }catch(e){}
+};
+// open the right builder in edit mode for an element key
+window.dystEditElementInBuilder = function(key){
+  var w=(typeof npFindEl==='function')?npFindEl(key):null; if(!w) return;
+  var i=-1; try{ i=((state.prompt&&state.prompt.words)||[]).findIndex(function(x){ return x && wordKey(x)===key; }); }catch(e){}
+  var opts={ edit:key, editIdx:i };
+  var fn={ being:'openCharCreator', setting:'openSettingCreator', object:'openObjectCreator', org:'openGroupCreator', event:'openEventCreator', concept:'openConceptCreator' }[w.cat] ||
+         (w.role==='being'?'openCharCreator':null);
+  if(fn && typeof window[fn]==='function') window[fn](opts);
+};
 function openElementDossier(key){
   try{
     var w=(typeof npFindEl==='function')?npFindEl(key):null; if(!w) return;
@@ -21024,6 +21050,38 @@ function openElementDossier(key){
       htext.appendChild(meta); top.appendChild(htext);
       var xb=document.createElement('button'); xb.className='dossier-x'; xb.innerHTML='&times;'; xb.title='Close'; xb.addEventListener('click', close); top.appendChild(xb);
       card.appendChild(top);
+
+      // #6(g) — the full characteristics the builder holds (not just the identity line), + one-tap Edit in the builder
+      (function(){
+        var rows=[];
+        if(isBeing){ if(w.word) rows.push({ dim:'Type', val:(typeof capWord==='function'?capWord(w.word):w.word) }); }
+        else { rows.push({ dim:'Kind', val:(typeof capWord==='function'?capWord(w.word):w.word)+(subcat?'  ·  '+subcat:'') }); }
+        if(w.storyRole) rows.push({ dim:'Story Role', val:w.storyRole });
+        (attrs||[]).forEach(function(a){ if(a&&a.word) rows.push({ dim:a.sub||'Trait', val:a.word }); });
+        var hasBuilder=!!({being:1,setting:1,object:1,org:1,event:1,concept:1})[w.cat];
+        if(!rows.length && !hasBuilder) return;
+        var sec=document.createElement('div'); sec.className='dossier-sec dossier-chars';
+        var lab=document.createElement('div'); lab.className='dossier-seclab'; lab.textContent='Characteristics'; sec.appendChild(lab);
+        if(rows.length){
+          var list=document.createElement('div');
+          rows.forEach(function(r){
+            var row=document.createElement('div'); row.style.cssText='display:flex; gap:12px; align-items:baseline; padding:5px 0; border-bottom:1px dotted rgba(120,92,40,.18)';
+            var d=document.createElement('span'); d.textContent=r.dim; d.style.cssText='flex:0 0 96px; font-family:var(--sans,system-ui,sans-serif); font-size:9px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:#a08a56'; row.appendChild(d);
+            var v=document.createElement('span'); v.textContent=r.val; v.style.cssText='flex:1; font-family:var(--serif,Georgia,serif); font-size:15px; color:#463b26; line-height:1.3'; row.appendChild(v);
+            list.appendChild(row);
+          });
+          sec.appendChild(list);
+        }
+        if(hasBuilder){
+          var er=document.createElement('div'); er.className='dossier-grow';
+          var creatorName=({ being:'Character Creator', setting:'Place Builder', object:'Artifact Builder', org:'Group Builder', event:'Event Builder', concept:'Concept Builder' })[w.cat]||'Creator';
+          var eb=document.createElement('button'); eb.className='dossier-enrich'; eb.textContent='✎ Edit in '+creatorName;
+          eb.title='Open the '+creatorName+' loaded with this element to change its characteristics';
+          eb.addEventListener('click', function(){ close(); if(typeof window.dystEditElementInBuilder==='function') window.dystEditElementInBuilder(key); });
+          er.appendChild(eb); sec.appendChild(er);
+        }
+        card.appendChild(sec);
+      })();
 
       proseBlock({ cls:'dossier-glance', aspect:'glance', auto:(isBeing ? _dossierGlance(name, traits, arche, occ, type||baseType, age, sex, mot, obstacles) : isObject ? _objectGlance(name, kind, traits) : _placeGlance(name, kind, traits)),
         sys:'You help a novelist keep a vivid dossier of a story element. From the structured facts, write ONE evocative 1–2 sentence portrait for the author’s planning notes — never story prose, and never invent facts beyond those given. Return only the portrait.',
@@ -37332,11 +37390,14 @@ document.addEventListener('DOMContentLoaded', init);
       opts=opts||{};
       if(typeof addsLocked==='function' && addsLocked()){ if(typeof flashStatus==='function') flashStatus('End the session to add elements'); return; }
       if(!opts.keep){ CC.name=''; CC.desc=''; CC.complexity=0; }   // fresh open lands on Sketch (minimal); opts.keep → open with the already-populated CC (e.g. from a description breakdown)
+      CC.editKey=null; CC.editIdx=null;
+      if(opts.edit){ var _ew=(typeof npFindEl==='function')?npFindEl(opts.edit):null; if(_ew){ CC.editKey=opts.edit; CC.editIdx=(opts.editIdx!=null?opts.editIdx:-1); CC.name=_ew.name||''; CC.desc=''; CC.slots=(typeof window.dystElementToSlots==='function')?window.dystElementToSlots(_ew):[]; } }
       ccEl();
       const nm=document.getElementById('ccName'); if(nm) nm.value=CC.name||'';
       const ds=document.getElementById('ccDesc'); if(ds) ds.value=CC.desc||'';
       ccSyncSeg();
-      if(opts.keep) ccRenderSlots(); else ccGenerate();
+      if(opts.keep||opts.edit) ccRenderSlots(); else ccGenerate();
+      try{ var _cb=document.getElementById('ccCreate'); if(_cb) _cb.textContent=CC.editKey?'Save changes':'Create character'; var _ct=document.querySelector('#charCreator .cc-title'); if(_ct) _ct.textContent=CC.editKey?('Edit '+((CC.name||'').trim()||'character')):'Build a character'; }catch(e){}
       document.getElementById('charCreatorBd').classList.add('show');
       document.getElementById('charCreator').classList.add('show');
       document.body.classList.add('dyb-open');
@@ -37346,6 +37407,13 @@ document.addEventListener('DOMContentLoaded', init);
     function ccCommit(){
       if(typeof addsLocked==='function' && addsLocked()){ if(typeof flashStatus==='function') flashStatus('End the session to add elements'); return; }
       const typeSlots=CC.slots.filter(s=>s.sub==='Type'&&s.word); const type=(typeSlots[0]&&typeSlots[0].word)||'Human';
+      if(CC.editKey){   // #6(g) edit mode — update the existing being in place, keep its position/links/notes
+        const eAttrs=[]; let eFirst=false; CC.slots.forEach(sl=>{ if(!sl.word) return; if(sl.sub==='Type'){ if(!eFirst){ eFirst=true; return; } } eAttrs.push({ word:sl.word, sub:sl.sub }); });
+        try{ if(typeof window.dystSetElementAttrs==='function') window.dystSetElementAttrs(CC.editKey, eAttrs); }catch(e){}
+        try{ if(typeof applyElemEdit==='function') applyElemEdit(CC.editKey, (CC.editIdx!=null?CC.editIdx:-1), { cat:'being', word:type, sub:'Type', name:(CC.name||'').trim() }); }catch(e){}
+        const _nm=(CC.name||'').trim(); CC.editKey=null; CC.editIdx=null; closeCharCreator();
+        if(typeof flashStatus==='function') flashStatus((_nm||type)+' — updated'); return;
+      }
       if(typeof pushUndo==='function') pushUndo();
       if(!state.prompt){ state.prompt={words:[],sets:1,links:[],removedLinks:[]}; state.activeSet=0; state.frames=[{gap:null,prompt:state.prompt}]; state.frameIdx=0; }
       const s=Math.min(state.activeSet||0,(state.prompt.sets||1)-1);
@@ -37573,11 +37641,14 @@ document.addEventListener('DOMContentLoaded', init);
       opts=opts||{};
       if(typeof addsLocked==='function' && addsLocked()){ if(typeof flashStatus==='function') flashStatus('End the session to add elements'); return; }
       if(!opts.keep){ SB.name=''; SB.desc=''; SB.complexity=0; }
+      SB.editKey=null; SB.editIdx=null;
+      if(opts.edit){ var _ew=(typeof npFindEl==='function')?npFindEl(opts.edit):null; if(_ew){ SB.editKey=opts.edit; SB.editIdx=(opts.editIdx!=null?opts.editIdx:-1); SB.name=_ew.name||''; SB.desc=''; SB.slots=(typeof window.dystElementToSlots==='function')?window.dystElementToSlots(_ew):[]; } }
       sbEl();
       const nm=document.getElementById('sbName'); if(nm) nm.value=SB.name||'';
       const ds=document.getElementById('sbDesc'); if(ds) ds.value=SB.desc||'';
       sbSyncSeg();
-      if(opts.keep) sbRenderSlots(); else sbGenerate();
+      if(opts.keep||opts.edit) sbRenderSlots(); else sbGenerate();
+      try{ var _cb=document.getElementById('sbCreate'); if(_cb) _cb.textContent=SB.editKey?'Save changes':'Create place'; var _ct=document.querySelector('#settingCreator .sc-title'); if(_ct) _ct.textContent=SB.editKey?('Edit '+((SB.name||'').trim()||'place')):'Build a place'; }catch(e){}
       document.getElementById('settingCreatorBd').classList.add('show');
       document.getElementById('settingCreator').classList.add('show');
       document.body.classList.add('dyb-open');
@@ -37587,6 +37658,7 @@ document.addEventListener('DOMContentLoaded', init);
     function sbCommit(){
       if(typeof addsLocked==='function' && addsLocked()){ if(typeof flashStatus==='function') flashStatus('End the session to add elements'); return; }
       const kindSlot=SB.slots.find(s=>s.sub==='Kind'); const kind=(kindSlot&&kindSlot.word)||'Place'; const kindSub=(kindSlot&&kindSlot.kindSub)||'';
+      if(SB.editKey){ const eAttrs=[]; SB.slots.forEach(sl=>{ if(sl.sub==='Kind') return; if(!sl.word) return; eAttrs.push({ word:sl.word, sub:sl.sub }); }); try{ if(typeof window.dystSetElementAttrs==='function') window.dystSetElementAttrs(SB.editKey, eAttrs); }catch(e){} try{ if(typeof applyElemEdit==='function') applyElemEdit(SB.editKey, (SB.editIdx!=null?SB.editIdx:-1), { cat:'setting', word:kind, sub:kindSub, name:(SB.name||'').trim() }); }catch(e){} const _nm=(SB.name||'').trim(); SB.editKey=null; SB.editIdx=null; closeSettingCreator(); if(typeof flashStatus==='function') flashStatus((_nm||kind)+' — updated'); return; }
       if(typeof pushUndo==='function') pushUndo();
       if(!state.prompt){ state.prompt={words:[],sets:1,links:[],removedLinks:[]}; state.activeSet=0; state.frames=[{gap:null,prompt:state.prompt}]; state.frameIdx=0; }
       const s=Math.min(state.activeSet||0,(state.prompt.sets||1)-1);
@@ -37744,11 +37816,14 @@ document.addEventListener('DOMContentLoaded', init);
       opts=opts||{};
       if(typeof addsLocked==='function' && addsLocked()){ if(typeof flashStatus==='function') flashStatus('End the session to add elements'); return; }
       if(!opts.keep){ OB.name=''; OB.desc=''; OB.complexity=0; }
+      OB.editKey=null; OB.editIdx=null;
+      if(opts.edit){ var _ew=(typeof npFindEl==='function')?npFindEl(opts.edit):null; if(_ew){ OB.editKey=opts.edit; OB.editIdx=(opts.editIdx!=null?opts.editIdx:-1); OB.name=_ew.name||''; OB.desc=''; OB.slots=(typeof window.dystElementToSlots==='function')?window.dystElementToSlots(_ew):[]; } }
       obEl();
       const nm=document.getElementById('obName'); if(nm) nm.value=OB.name||'';
       const ds=document.getElementById('obDesc'); if(ds) ds.value=OB.desc||'';
       obSyncSeg();
-      if(opts.keep) obRenderSlots(); else obGenerate();
+      if(opts.keep||opts.edit) obRenderSlots(); else obGenerate();
+      try{ var _cb=document.getElementById('obCreate'); if(_cb) _cb.textContent=OB.editKey?'Save changes':'Create artifact'; var _ct=document.querySelector('#objectCreator .oc-title'); if(_ct) _ct.textContent=OB.editKey?('Edit '+((OB.name||'').trim()||'artifact')):'Build an artifact'; }catch(e){}
       document.getElementById('objectCreatorBd').classList.add('show');
       document.getElementById('objectCreator').classList.add('show');
       document.body.classList.add('dyb-open');
@@ -37758,6 +37833,7 @@ document.addEventListener('DOMContentLoaded', init);
     function obCommit(){
       if(typeof addsLocked==='function' && addsLocked()){ if(typeof flashStatus==='function') flashStatus('End the session to add elements'); return; }
       const kindSlot=OB.slots.find(s=>s.sub==='Kind'); const kind=(kindSlot&&kindSlot.word)||'Object'; const kindSub=(kindSlot&&kindSlot.kindSub)||'';
+      if(OB.editKey){ const eAttrs=[]; OB.slots.forEach(sl=>{ if(sl.sub==='Kind') return; if(!sl.word) return; eAttrs.push({ word:sl.word, sub:sl.sub }); }); try{ if(typeof window.dystSetElementAttrs==='function') window.dystSetElementAttrs(OB.editKey, eAttrs); }catch(e){} try{ if(typeof applyElemEdit==='function') applyElemEdit(OB.editKey, (OB.editIdx!=null?OB.editIdx:-1), { cat:'object', word:kind, sub:kindSub, name:(OB.name||'').trim() }); }catch(e){} const _nm=(OB.name||'').trim(); OB.editKey=null; OB.editIdx=null; closeObjectCreator(); if(typeof flashStatus==='function') flashStatus((_nm||kind)+' — updated'); return; }
       if(typeof pushUndo==='function') pushUndo();
       if(!state.prompt){ state.prompt={words:[],sets:1,links:[],removedLinks:[]}; state.activeSet=0; state.frames=[{gap:null,prompt:state.prompt}]; state.frameIdx=0; }
       const s=Math.min(state.activeSet||0,(state.prompt.sets||1)-1);
@@ -37913,11 +37989,14 @@ document.addEventListener('DOMContentLoaded', init);
       opts=opts||{};
       if(typeof addsLocked==='function' && addsLocked()){ if(typeof flashStatus==='function') flashStatus('End the session to add elements'); return; }
       if(!opts.keep){ GB.name=''; GB.desc=''; GB.complexity=0; }
+      GB.editKey=null; GB.editIdx=null;
+      if(opts.edit){ var _ew=(typeof npFindEl==='function')?npFindEl(opts.edit):null; if(_ew){ GB.editKey=opts.edit; GB.editIdx=(opts.editIdx!=null?opts.editIdx:-1); GB.name=_ew.name||''; GB.desc=''; GB.slots=(typeof window.dystElementToSlots==='function')?window.dystElementToSlots(_ew):[]; } }
       gbEl();
       const nm=document.getElementById('gbName'); if(nm) nm.value=GB.name||'';
       const ds=document.getElementById('gbDesc'); if(ds) ds.value=GB.desc||'';
       gbSyncSeg();
-      if(opts.keep) gbRenderSlots(); else gbGenerate();
+      if(opts.keep||opts.edit) gbRenderSlots(); else gbGenerate();
+      try{ var _cb=document.getElementById('gbCreate'); if(_cb) _cb.textContent=GB.editKey?'Save changes':'Create group'; var _ct=document.querySelector('#groupCreator .gc-title'); if(_ct) _ct.textContent=GB.editKey?('Edit '+((GB.name||'').trim()||'group')):'Build a group'; }catch(e){}
       document.getElementById('groupCreatorBd').classList.add('show');
       document.getElementById('groupCreator').classList.add('show');
       document.body.classList.add('dyb-open');
@@ -37927,6 +38006,7 @@ document.addEventListener('DOMContentLoaded', init);
     function gbCommit(){
       if(typeof addsLocked==='function' && addsLocked()){ if(typeof flashStatus==='function') flashStatus('End the session to add elements'); return; }
       const kindSlot=GB.slots.find(s=>s.sub==='Kind'); const kind=(kindSlot&&kindSlot.word)||'Organization'; const kindSub=(kindSlot&&kindSlot.kindSub)||'';
+      if(GB.editKey){ const eAttrs=[]; GB.slots.forEach(sl=>{ if(sl.sub==='Kind') return; if(!sl.word) return; eAttrs.push({ word:sl.word, sub:sl.sub }); }); try{ if(typeof window.dystSetElementAttrs==='function') window.dystSetElementAttrs(GB.editKey, eAttrs); }catch(e){} try{ if(typeof applyElemEdit==='function') applyElemEdit(GB.editKey, (GB.editIdx!=null?GB.editIdx:-1), { cat:'org', word:kind, sub:kindSub, name:(GB.name||'').trim() }); }catch(e){} const _nm=(GB.name||'').trim(); GB.editKey=null; GB.editIdx=null; closeGroupCreator(); if(typeof flashStatus==='function') flashStatus((_nm||kind)+' — updated'); return; }
       if(typeof pushUndo==='function') pushUndo();
       if(!state.prompt){ state.prompt={words:[],sets:1,links:[],removedLinks:[]}; state.activeSet=0; state.frames=[{gap:null,prompt:state.prompt}]; state.frameIdx=0; }
       const s=Math.min(state.activeSet||0,(state.prompt.sets||1)-1);
@@ -38082,11 +38162,14 @@ document.addEventListener('DOMContentLoaded', init);
       opts=opts||{};
       if(typeof addsLocked==='function' && addsLocked()){ if(typeof flashStatus==='function') flashStatus('End the session to add elements'); return; }
       if(!opts.keep){ EV.name=''; EV.desc=''; EV.complexity=0; }
+      EV.editKey=null; EV.editIdx=null;
+      if(opts.edit){ var _ew=(typeof npFindEl==='function')?npFindEl(opts.edit):null; if(_ew){ EV.editKey=opts.edit; EV.editIdx=(opts.editIdx!=null?opts.editIdx:-1); EV.name=_ew.name||''; EV.desc=''; EV.slots=(typeof window.dystElementToSlots==='function')?window.dystElementToSlots(_ew):[]; } }
       evEl();
       const nm=document.getElementById('evName'); if(nm) nm.value=EV.name||'';
       const ds=document.getElementById('evDesc'); if(ds) ds.value=EV.desc||'';
       evSyncSeg();
-      if(opts.keep) evRenderSlots(); else evGenerate();
+      if(opts.keep||opts.edit) evRenderSlots(); else evGenerate();
+      try{ var _cb=document.getElementById('evCreate'); if(_cb) _cb.textContent=EV.editKey?'Save changes':'Create event'; var _ct=document.querySelector('#eventCreator .gc-title'); if(_ct) _ct.textContent=EV.editKey?('Edit '+((EV.name||'').trim()||'event')):'Build an event'; }catch(e){}
       document.getElementById('eventCreatorBd').classList.add('show');
       document.getElementById('eventCreator').classList.add('show');
       document.body.classList.add('dyb-open');
@@ -38096,6 +38179,7 @@ document.addEventListener('DOMContentLoaded', init);
     function evCommit(){
       if(typeof addsLocked==='function' && addsLocked()){ if(typeof flashStatus==='function') flashStatus('End the session to add elements'); return; }
       const kindSlot=EV.slots.find(s=>s.sub==='Kind'); const kind=(kindSlot&&kindSlot.word)||'Event'; const kindSub=(kindSlot&&kindSlot.kindSub)||'';
+      if(EV.editKey){ const eAttrs=[]; EV.slots.forEach(sl=>{ if(sl.sub==='Kind') return; if(!sl.word) return; eAttrs.push({ word:sl.word, sub:sl.sub }); }); try{ if(typeof window.dystSetElementAttrs==='function') window.dystSetElementAttrs(EV.editKey, eAttrs); }catch(e){} try{ if(typeof applyElemEdit==='function') applyElemEdit(EV.editKey, (EV.editIdx!=null?EV.editIdx:-1), { cat:'event', word:kind, sub:kindSub, name:(EV.name||'').trim() }); }catch(e){} const _nm=(EV.name||'').trim(); EV.editKey=null; EV.editIdx=null; closeEventCreator(); if(typeof flashStatus==='function') flashStatus((_nm||kind)+' — updated'); return; }
       if(typeof pushUndo==='function') pushUndo();
       if(!state.prompt){ state.prompt={words:[],sets:1,links:[],removedLinks:[]}; state.activeSet=0; state.frames=[{gap:null,prompt:state.prompt}]; state.frameIdx=0; }
       const s=Math.min(state.activeSet||0,(state.prompt.sets||1)-1);
@@ -38252,11 +38336,14 @@ document.addEventListener('DOMContentLoaded', init);
       opts=opts||{};
       if(typeof addsLocked==='function' && addsLocked()){ if(typeof flashStatus==='function') flashStatus('End the session to add elements'); return; }
       if(!opts.keep){ CO.name=''; CO.desc=''; CO.complexity=0; }
+      CO.editKey=null; CO.editIdx=null;
+      if(opts.edit){ var _ew=(typeof npFindEl==='function')?npFindEl(opts.edit):null; if(_ew){ CO.editKey=opts.edit; CO.editIdx=(opts.editIdx!=null?opts.editIdx:-1); CO.name=_ew.name||''; CO.desc=''; CO.slots=(typeof window.dystElementToSlots==='function')?window.dystElementToSlots(_ew):[]; } }
       coEl();
       const nm=document.getElementById('coName'); if(nm) nm.value=CO.name||'';
       const ds=document.getElementById('coDesc'); if(ds) ds.value=CO.desc||'';
       coSyncSeg();
-      if(opts.keep) coRenderSlots(); else coGenerate();
+      if(opts.keep||opts.edit) coRenderSlots(); else coGenerate();
+      try{ var _cb=document.getElementById('coCreate'); if(_cb) _cb.textContent=CO.editKey?'Save changes':'Create concept'; var _ct=document.querySelector('#conceptCreator .gc-title'); if(_ct) _ct.textContent=CO.editKey?('Edit '+((CO.name||'').trim()||'concept')):'Build a concept'; }catch(e){}
       document.getElementById('conceptCreatorBd').classList.add('show');
       document.getElementById('conceptCreator').classList.add('show');
       document.body.classList.add('dyb-open');
@@ -38266,6 +38353,7 @@ document.addEventListener('DOMContentLoaded', init);
     function coCommit(){
       if(typeof addsLocked==='function' && addsLocked()){ if(typeof flashStatus==='function') flashStatus('End the session to add elements'); return; }
       const kindSlot=CO.slots.find(s=>s.sub==='Kind'); const kind=(kindSlot&&kindSlot.word)||'Theme'; const kindSub=(kindSlot&&kindSlot.kindSub)||'';
+      if(CO.editKey){ const eAttrs=[]; CO.slots.forEach(sl=>{ if(sl.sub==='Kind') return; if(!sl.word) return; eAttrs.push({ word:sl.word, sub:sl.sub }); }); try{ if(typeof window.dystSetElementAttrs==='function') window.dystSetElementAttrs(CO.editKey, eAttrs); }catch(e){} try{ if(typeof applyElemEdit==='function') applyElemEdit(CO.editKey, (CO.editIdx!=null?CO.editIdx:-1), { cat:'concept', word:kind, sub:kindSub, name:(CO.name||'').trim() }); }catch(e){} const _nm=(CO.name||'').trim(); CO.editKey=null; CO.editIdx=null; closeConceptCreator(); if(typeof flashStatus==='function') flashStatus((_nm||kind)+' — updated'); return; }
       if(typeof pushUndo==='function') pushUndo();
       if(!state.prompt){ state.prompt={words:[],sets:1,links:[],removedLinks:[]}; state.activeSet=0; state.frames=[{gap:null,prompt:state.prompt}]; state.frameIdx=0; }
       const s=Math.min(state.activeSet||0,(state.prompt.sets||1)-1);
@@ -46204,7 +46292,7 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.304';
+  var APP_VERSION = '2026.07.20.305';
   var APP_CHANGELOG = [
     { v:'2026.07.20.257', date:'August 1, 2026', notes:[
       'A freshly generated writing prompt now arrives large on the page, holds a beat, then shrinks into its resting place above your writing — so a new spark actually lands.'
