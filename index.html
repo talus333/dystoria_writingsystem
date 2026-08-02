@@ -25259,8 +25259,9 @@ function _frToPlan(view, then){
 function frPlanAction(act){
   try {
     frPlanClosePlanning();
-    if(act==='wizard' || act==='goals'){ if(typeof openStartCard==='function') openStartCard(); }
-    else if(act==='structure'){ _frToPlan('narrative'); }
+    if(act==='wizard'){ if(typeof openPlanWizard==='function') openPlanWizard({step:0}); else if(typeof openStartCard==='function') openStartCard(); }
+    else if(act==='goals'){ if(typeof openPlanWizard==='function') openPlanWizard({step:0}); else if(typeof openStartCard==='function') openStartCard(); }
+    else if(act==='structure'){ if(typeof openPlanWizard==='function') openPlanWizard({step:1}); else _frToPlan('narrative'); }
     else if(act==='char'){ _frToPlan('narrative', function(){ if(typeof window.openBeingChooser==='function') window.openBeingChooser(); }); }
     else if(act==='world'){ _frToPlan('map', function(){ if(typeof window.openSettingChooser==='function') window.openSettingChooser(); }); }
     else if(act==='plot'){ _frToPlan('plot'); }
@@ -25294,6 +25295,179 @@ function showPlanningDoors(){
   try { track('planning_doors_shown'); } catch(e){}
 }
 window.showPlanningDoors = showPlanningDoors;
+
+// ---- The guided planning wizard: a full-screen, stepped Goals → Narrative layers → Story elements → Review ----
+// Stays in the full-screen overlay throughout (matches the doors). Reuses the existing goals + narrative-layers
+// editors (renderStartCard / renderStartLayers, which target #sgGoals/#sgActions/#sgLayers) hosted inside the
+// wizard, plus the six element choosers for the elements step. Commits goals + layers on exit.
+var PW = { step: 0 };
+function ensurePlanWizardCSS(){
+  if (document.getElementById('pwCSS')) return;
+  var st=document.createElement('style'); st.id='pwCSS';
+  st.textContent =
+    '#planWizard{position:fixed; inset:0; z-index:150; display:flex; align-items:flex-start; justify-content:center; padding:40px 24px; overflow:auto; background:radial-gradient(120% 90% at 50% -10%,#2a2419 0%,#171410 68%)}'
+    + '#planWizard .pw-card{max-width:720px; width:100%; color:#f4ecd8; margin:auto}'
+    + '#planWizard .pw-kick{font-family:var(--sans,system-ui,sans-serif); font-size:11px; letter-spacing:.16em; text-transform:uppercase; color:#c8961f; text-align:center; margin:0 0 6px}'
+    + '#planWizard .pw-h{font-family:var(--serif,Georgia,serif); font-size:27px; font-weight:600; color:#f6efdd; text-align:center; margin:0 0 20px}'
+    + '#planWizard .pw-rail{display:flex; gap:8px; justify-content:center; flex-wrap:wrap; margin:0 0 22px}'
+    + '#planWizard .pw-chip{display:flex; align-items:center; gap:7px; font-family:var(--sans,system-ui,sans-serif); font-size:12.5px; color:rgba(240,232,212,.5); padding:5px 12px 5px 6px; border-radius:20px; border:1px solid rgba(200,170,110,.16)}'
+    + '#planWizard .pw-chip .pw-n{display:inline-flex; align-items:center; justify-content:center; width:20px; height:20px; border-radius:50%; font-size:11px; background:rgba(255,247,230,.08); color:rgba(240,232,212,.6)}'
+    + '#planWizard .pw-chip.on{color:#f6efdd; border-color:rgba(200,150,31,.5); background:rgba(200,150,31,.1)}'
+    + '#planWizard .pw-chip.on .pw-n{background:#c8961f; color:#23170a}'
+    + '#planWizard .pw-chip.done .pw-n{background:rgba(200,150,31,.4); color:#23170a}'
+    + '#planWizard .pw-panel{background:rgba(255,247,230,.04); border:1px solid rgba(200,170,110,.2); border-radius:16px; padding:22px 24px}'
+    + '#planWizard .pw-intro{font-family:var(--sans,system-ui,sans-serif); font-size:14px; line-height:1.5; color:rgba(240,232,212,.72); margin:0 0 14px}'
+    + '#planWizard .pw-step{display:none}'
+    + '#planWizard .pw-step.on{display:block}'
+    // goals editor (renderStartCard classes) — dark
+    + '#planWizard #sgGoals{margin-top:2px}'
+    + '#planWizard .sg-goal{border:1px solid rgba(200,170,110,.2); border-radius:10px; padding:10px 12px; margin-top:10px; background:rgba(255,247,230,.03)}'
+    + '#planWizard .sg-goal-head{display:flex; align-items:center; gap:8px}'
+    + '#planWizard .sg-goal-title{font-family:var(--serif,Georgia,serif); font-size:15.5px; color:#f3ecdd; font-weight:600}'
+    + '#planWizard .sg-goal-cat{font-family:var(--sans,system-ui,sans-serif); font-size:9.5px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; color:#b9ad93; border:1px solid rgba(200,170,110,.28); border-radius:20px; padding:1px 7px}'
+    + '#planWizard .sg-goal-x{margin-left:auto; border:none; background:transparent; font-size:17px; line-height:1; color:#9a8f74; cursor:pointer}'
+    + '#planWizard .sg-goal-x:hover{color:#f3ecdd}'
+    + '#planWizard .sg-goal-note{width:100%; box-sizing:border-box; margin-top:7px; font-family:var(--sans,system-ui,sans-serif); font-size:12px; padding:6px 8px; border:1px solid rgba(200,170,110,.28); border-radius:6px; background:#1f1811; color:#ece7de; resize:vertical; min-height:42px; line-height:1.4}'
+    + '#planWizard .sg-goal-note::placeholder{color:#8f836c}'
+    + '#planWizard .sm-goalpill{display:inline-flex; align-items:center; gap:5px; margin-top:13px; font-family:var(--sans,system-ui,sans-serif); font-size:12.5px; font-weight:600; color:#d8c8a4; background:transparent; border:1px dashed rgba(250,154,49,.4); border-radius:20px; padding:7px 15px; cursor:pointer}'
+    + '#planWizard .sm-goalpill:hover{border-color:#fa9a31; background:rgba(250,154,49,.1)}'
+    + '#planWizard #sgActions{display:none}'
+    // elements step
+    + '#planWizard .pw-addrow{display:flex; flex-wrap:wrap; gap:8px; margin:2px 0 16px}'
+    + '#planWizard .pw-add{font-family:var(--sans,system-ui,sans-serif); font-size:13px; color:#e9dfc6; background:rgba(255,247,230,.05); border:1px solid rgba(200,170,110,.26); border-radius:20px; padding:8px 14px; cursor:pointer}'
+    + '#planWizard .pw-add:hover{color:#fff; border-color:rgba(200,170,110,.55); background:rgba(255,247,230,.1)}'
+    + '#planWizard .pw-els{display:flex; flex-direction:column; gap:7px}'
+    + '#planWizard .pw-el{display:flex; align-items:baseline; gap:9px; padding:7px 2px; border-bottom:1px dotted rgba(200,170,110,.16)}'
+    + '#planWizard .pw-el-cat{font-family:var(--sans,system-ui,sans-serif); font-size:9px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:#c8961f; flex:0 0 78px}'
+    + '#planWizard .pw-el-nm{font-family:var(--serif,Georgia,serif); font-size:15px; color:#f3ecdd}'
+    + '#planWizard .pw-empty{font-family:var(--serif,Georgia,serif); font-style:italic; font-size:14px; color:rgba(240,232,212,.5)}'
+    // review / done
+    + '#planWizard .pw-done-sum{font-family:var(--sans,system-ui,sans-serif); font-size:14px; line-height:1.7; color:rgba(240,232,212,.8); margin:0 0 6px}'
+    + '#planWizard .pw-done-sum b{color:#f6efdd}'
+    + '#planWizard .pw-done-btns{display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:18px}'
+    // footer
+    + '#planWizard .pw-foot{display:flex; align-items:center; gap:12px; margin-top:18px}'
+    + '#planWizard .pw-btn{font-family:var(--sans,system-ui,sans-serif); font-size:13px; color:#e9dfc6; background:rgba(255,247,230,.05); border:1px solid rgba(200,170,110,.28); border-radius:10px; padding:10px 18px; cursor:pointer}'
+    + '#planWizard .pw-btn:hover{color:#fff; border-color:rgba(200,170,110,.55)}'
+    + '#planWizard .pw-btn[disabled]{opacity:.35; cursor:default}'
+    + '#planWizard .pw-btn.pw-primary{background:linear-gradient(180deg,#fca63a,#e0851f); color:#23170a; border:none; font-weight:700}'
+    + '#planWizard .pw-btn.pw-primary:hover{filter:brightness(1.05)}'
+    + '#planWizard .pw-next{margin-left:auto}'
+    + '#planWizard .pw-skip{font-family:var(--sans,system-ui,sans-serif); font-size:12.5px; color:rgba(240,232,212,.55); background:none; border:none; cursor:pointer; text-decoration:underline}'
+    + '#planWizard .pw-skip:hover{color:rgba(240,232,212,.85)}'
+    + '#planWizard .pw-toplink{display:block; margin:16px auto 0; font-family:var(--sans,system-ui,sans-serif); font-size:12.5px; color:rgba(240,232,212,.5); background:none; border:none; cursor:pointer; text-align:center}'
+    + '#planWizard .pw-toplink:hover{color:rgba(240,232,212,.85)}';
+  document.head.appendChild(st);
+}
+var PW_STEPS = ['Goals','Structure','Elements','Review'];
+function pwRenderElements(){
+  var host=document.getElementById('pwEls'); if(!host) return; host.innerHTML='';
+  var cats={being:'Character',setting:'Place',object:'Artifact',org:'Group',event:'Event',concept:'Concept'};
+  var ws=(state.prompt && state.prompt.words)||[];
+  var rows=ws.filter(function(w){ return w && cats[w.cat]; });
+  if(!rows.length){ var e=document.createElement('div'); e.className='pw-empty'; e.textContent='No elements yet — add your first above. Everything here is optional.'; host.appendChild(e); return; }
+  rows.forEach(function(w){ var r=document.createElement('div'); r.className='pw-el';
+    var c=document.createElement('span'); c.className='pw-el-cat'; c.textContent=cats[w.cat]; r.appendChild(c);
+    var n=document.createElement('span'); n.className='pw-el-nm'; n.textContent=(typeof elDisplayName==='function'?elDisplayName(w):(w.name||w.word)); r.appendChild(n);
+    host.appendChild(r); });
+}
+function pwRenderDone(){
+  var host=document.getElementById('pwDone'); if(!host) return;
+  var goals=(state._goalDraft||[]).length;
+  var layers=0; try{ if(state._layerDraft) START_LAYERS.forEach(function(p){ layers+=(state._layerDraft[p[0]]||[]).length; }); }catch(e){}
+  var cats={being:1,setting:1,object:1,org:1,event:1,concept:1};
+  var els=((state.prompt&&state.prompt.words)||[]).filter(function(w){ return w && cats[w.cat]; }).length;
+  var parts=[];
+  parts.push('<b>'+goals+'</b> goal'+(goals===1?'':'s'));
+  parts.push('<b>'+layers+'</b> narrative layer'+(layers===1?'':'s'));
+  parts.push('<b>'+els+'</b> element'+(els===1?'':'s'));
+  host.innerHTML='<p class="pw-done-sum">You’ve got a frame: '+parts.join(' · ')+'.</p>'
+    + '<p class="pw-intro">Nothing here is locked — you can add to or change any of it anytime. Where to now?</p>';
+}
+function pwGoStep(n){
+  n=Math.max(0, Math.min(3, n)); PW.step=n;
+  var root=document.getElementById('planWizard'); if(!root) return;
+  Array.prototype.forEach.call(root.querySelectorAll('.pw-step'), function(s){ s.classList.toggle('on', +s.getAttribute('data-step')===n); });
+  Array.prototype.forEach.call(root.querySelectorAll('.pw-chip'), function(c){ var i=+c.getAttribute('data-i'); c.classList.toggle('on', i===n); c.classList.toggle('done', i<n); });
+  if(n===2) pwRenderElements();
+  if(n===3) pwRenderDone();
+  var foot=document.getElementById('pwFoot'); if(foot) foot.style.display = (n===3)?'none':'flex';
+  var back=document.getElementById('pwBack'); if(back) back.disabled = (n===0);
+  var next=document.getElementById('pwNext'); if(next) next.textContent = (n===2)?'Review ›':'Next ›';
+}
+function pwCommit(){
+  try{ if(typeof syncGoalNotes==='function') syncGoalNotes(); }catch(e){}
+  try{ if(typeof applyStartGoal==='function') applyStartGoal({ items: (state._goalDraft||[]).slice() }); }catch(e){}
+  try{ var layers=[]; if(state._layerDraft) START_LAYERS.forEach(function(p){ layers=layers.concat(state._layerDraft[p[0]]||[]); });
+    if(layers.length && typeof seedNarrativeLayers==='function') seedNarrativeLayers(layers); }catch(e){}
+  state._goalDraft=null; state._layerDraft=null;
+}
+function closePlanWizard(){ var el=document.getElementById('planWizard'); if(el && el.parentNode) el.parentNode.removeChild(el); }
+function pwFinish(mode){
+  pwCommit();
+  closePlanWizard();
+  if(mode==='write'){ if(typeof goMode==='function') goMode('write'); return; }
+  if(typeof goMode==='function') goMode('notepad');
+  setTimeout(function(){ try{ if(typeof window.__planSetView==='function') window.__planSetView('map'); }catch(e){} }, 80);
+}
+function openPlanWizard(opts){
+  opts=opts||{};
+  if(document.getElementById('planWizard')){ pwGoStep(opts.step||0); return; }
+  ensurePlanWizardCSS();
+  // fresh drafts (mirrors openStartCard)
+  try{ var prev=(typeof goalItems==='function' && state.session)? goalItems(state.session.goal): [];
+    state._goalDraft = prev.map(function(it){ return { word: it.word, cat: it.cat||null, sub: it.sub||'', note: (typeof goalNoteText==='function'?goalNoteText(it):'') }; }); }
+  catch(e){ state._goalDraft = []; }
+  state._layerDraft = {};
+  // keep the element list live as elements are added via the choosers
+  if(!window.__pwOnAddInstalled){ window.__pwPrevOnAdd = window.__qaOnElementAdd;
+    window.__qaOnElementAdd = function(el){ try{ if(window.__pwPrevOnAdd) window.__pwPrevOnAdd(el); }catch(e){} try{ if(document.getElementById('planWizard')) pwRenderElements(); }catch(e){} };
+    window.__pwOnAddInstalled = true; }
+  var w=document.createElement('div'); w.id='planWizard';
+  var rail=''; for(var i=0;i<PW_STEPS.length;i++){ rail+='<span class="pw-chip" data-i="'+i+'"><span class="pw-n">'+(i+1)+'</span>'+PW_STEPS[i]+'</span>'; }
+  w.innerHTML = '<div class="pw-card">'
+    + '<div class="pw-kick">Guided planning</div>'
+    + '<div class="pw-h">Let’s shape your story</div>'
+    + '<div class="pw-rail">'+rail+'</div>'
+    + '<div class="pw-panel">'
+    +   '<div class="pw-step" data-step="0"><p class="pw-intro">What do you want this story to <em>do</em> — what it’s about, how it should feel, who it’s for? Optional, and you can change it anytime.</p><div id="sgGoals"></div><div id="sgActions"></div></div>'
+    +   '<div class="pw-step" data-step="1"><p class="pw-intro">Set the frame: genre, context, the concepts at its heart, what’s at stake. Add as many or as few as you like — these steer the wiki and your writing prompts.</p><div id="sgLayers"></div></div>'
+    +   '<div class="pw-step" data-step="2"><p class="pw-intro">Gather your first few elements. Add a main character, a key place, a driving idea — build them out or keep them light. You can always add more later.</p>'
+    +     '<div class="pw-addrow">'
+    +       '<button type="button" class="pw-add" data-cat="being">＋ Character</button>'
+    +       '<button type="button" class="pw-add" data-cat="setting">＋ Place</button>'
+    +       '<button type="button" class="pw-add" data-cat="object">＋ Artifact</button>'
+    +       '<button type="button" class="pw-add" data-cat="org">＋ Group</button>'
+    +       '<button type="button" class="pw-add" data-cat="event">＋ Event</button>'
+    +       '<button type="button" class="pw-add" data-cat="concept">＋ Concept</button>'
+    +     '</div><div class="pw-els" id="pwEls"></div></div>'
+    +   '<div class="pw-step" data-step="3"><div id="pwDone"></div>'
+    +     '<div class="pw-done-btns">'
+    +       '<button type="button" class="pw-btn pw-primary" id="pwWrite">Start a writing session</button>'
+    +       '<button type="button" class="pw-btn" id="pwKeep">Keep planning</button>'
+    +     '</div>'
+    +     '<button type="button" class="pw-toplink" id="pwBack2">‹ Back to elements</button>'
+    +   '</div>'
+    + '</div>'
+    + '<div class="pw-foot" id="pwFoot"><button type="button" class="pw-btn" id="pwBack" disabled>‹ Back</button>'
+    +   '<button type="button" class="pw-skip" id="pwSkip">Skip planning for now</button>'
+    +   '<button type="button" class="pw-btn pw-primary pw-next" id="pwNext">Next ›</button></div>'
+    + '</div>';
+  document.body.appendChild(w);
+  // wire
+  w.querySelectorAll('.pw-add').forEach(function(b){ b.addEventListener('click', function(){ var c=b.getAttribute('data-cat'); if(typeof openElemCard==='function') openElemCard(c,'add'); }); });
+  w.querySelector('#pwBack').addEventListener('click', function(){ pwGoStep(PW.step-1); });
+  w.querySelector('#pwNext').addEventListener('click', function(){ pwGoStep(PW.step+1); });
+  w.querySelector('#pwSkip').addEventListener('click', function(){ pwFinish('plan'); });
+  w.querySelector('#pwBack2').addEventListener('click', function(){ pwGoStep(2); });
+  w.querySelector('#pwWrite').addEventListener('click', function(){ pwFinish('write'); });
+  w.querySelector('#pwKeep').addEventListener('click', function(){ pwFinish('plan'); });
+  // populate the reused editors, then show the requested step
+  try{ if(typeof renderStartCard==='function') renderStartCard(); }catch(e){}
+  pwGoStep(opts.step||0);
+  try { track('plan_wizard_open', { step: opts.step||0 }); } catch(e){}
+}
+window.openPlanWizard = openPlanWizard;
 function loadDeleted(){ try { return JSON.parse(localStorage.getItem(LS_DELETED)) || []; } catch (e){ return []; } }
 function saveDeleted(arr){ try { localStorage.setItem(LS_DELETED, JSON.stringify(arr.slice(-500))); } catch (e){} }
 // Deletes a whole story from the library. NOTE: must NOT be named deleteSession —
@@ -46042,7 +46216,7 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.300';
+  var APP_VERSION = '2026.07.20.301';
   var APP_CHANGELOG = [
     { v:'2026.07.20.257', date:'August 1, 2026', notes:[
       'A freshly generated writing prompt now arrives large on the page, holds a beat, then shrinks into its resting place above your writing — so a new spark actually lands.'
