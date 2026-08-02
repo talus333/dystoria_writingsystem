@@ -289,7 +289,7 @@
   #core .script{font-family:var(--script);line-height:1.05;padding:0.04em 0.14em 0.34em;display:inline-block;
     background:linear-gradient(100deg,var(--gold-d) 0%,var(--gold) 46%,var(--gold-b) 100%);
     -webkit-background-clip:text;background-clip:text;color:transparent;
-    filter:drop-shadow(0 2px 4px rgba(0,0,0,.55));}
+    filter:drop-shadow(0 2px 4px rgba(0,0,0,.55));transition:opacity .95s ease;}
 
   /* ---- STATE 2 (entered): centre wordmark → hero copy; nav in; labyrinth faint ---- */
   
@@ -302,6 +302,12 @@
   body.entered .lh-lead{opacity:1;transform:none;}
   body.entered .lh-cta-row{opacity:1;transform:none;pointer-events:auto;}
   body.entered #cue{opacity:0;}
+
+  /* ---- STATE 0 (boot reveal): stage the fade-in so nothing snaps — labyrinth fades in from
+     the charcoal stage, then the Dystoria wordmark fades in already at full size, then the thread starts ---- */
+  body.pre-lab #labyrinth{opacity:0;}
+  body.pre-core #core .script{opacity:0;}
+  body.pre-thread #thread{opacity:0;}
 
   /* labyrinth hero container + intro scroll-lock */
   #labhero{position:relative; height:100vh; overflow:hidden;}
@@ -957,6 +963,7 @@ const svg=document.getElementById('thread');
 let CELL=26; const TIER_SCALE={1:1,2:2,3:3};
 let words=[], layout=null, originX=0, originY=0;
 let threadEl=null, threadLen=0, threadDots=[], threadHead=null;
+let threadGo=false, threadT0=null;   // the thread stays still until the reveal sequence starts it
 
 function build(seed){
   lab.innerHTML=''; words=[];
@@ -1023,11 +1030,13 @@ function frame(ts){
     const r=Math.round(56+v*188), g=Math.round(48+v*170), b=Math.round(36+v*138);
     wd.el.style.color=`rgb(${r},${g},${b})`; wd.el.style.opacity=(0.4+v*0.6).toFixed(3);
   }
-  if(threadEl&&threadLen){
+  if(threadGo&&threadEl&&threadLen){
+    if(threadT0===null) threadT0=ts;                                // clock starts only when the thread is released
+    const tt=(ts-threadT0)/1000;
     const speed=Math.max(45,Math.min(95,threadLen/24));
     const tail0=Math.min(threadLen*0.9,CELL*26);
     const travel=threadLen/speed; let head,tail;
-    if(t<travel){ head=t*speed; tail=Math.min(tail0,head); }        // weaving in toward Dystoria
+    if(tt<travel){ head=tt*speed; tail=Math.min(tail0,head); }      // weaving in toward Dystoria
     else {                                                           // arrived at Dystoria -> auto-reveal the hero (once)
       head=threadLen; tail=tail0;
       if(!autoRevealed){ autoRevealed=true; if(window.__dystEnter) window.__dystEnter(); }
@@ -1046,8 +1055,27 @@ function frame(ts){
 
 /* ---------- boot + state transitions ---------- */
 let SEED=71010;
-build(SEED); requestAnimationFrame(frame);
-if(document.fonts&&document.fonts.ready){document.fonts.ready.then(()=>build(SEED));}
+// Staged, glitch-free entrance: keep everything hidden while the layout builds (so the wordmark's
+// font-load re-measure never shows as a snap), then fade in one thing at a time —
+// (1) the word-labyrinth from the charcoal stage, (2) the Dystoria wordmark already at full size,
+// (3) release the gold thread — so the load reads as one smooth, sequential reveal.
+document.body.classList.add('pre-lab','pre-core','pre-thread');
+build(SEED);                       // first build (may use fallback fonts) — invisible under pre-* classes
+requestAnimationFrame(frame);      // the labyrinth shimmer loops; the thread stays parked until threadGo
+
+let _revealed=false;
+function revealSequence(){
+  if(_revealed) return; _revealed=true;
+  build(SEED);                     // rebuild now that webfonts are ready — corrects the wordmark size while still hidden
+  requestAnimationFrame(function(){          // let the corrected layout paint (hidden) for one frame first
+    document.body.classList.remove('pre-lab');                                   // 1) labyrinth fades in
+    setTimeout(function(){ document.body.classList.remove('pre-core'); }, 950);  // 2) Dystoria fades in at full size
+    setTimeout(function(){ document.body.classList.remove('pre-thread'); threadGo=true; }, 1850); // 3) thread starts
+  });
+}
+if(document.fonts&&document.fonts.ready){ document.fonts.ready.then(revealSequence); }
+else { setTimeout(revealSequence,150); }
+setTimeout(revealSequence,1800);   // safety net if fonts.ready never resolves
 
 let rzT;
 window.addEventListener('resize',()=>{clearTimeout(rzT);rzT=setTimeout(()=>build(SEED),160);});
