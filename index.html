@@ -751,6 +751,12 @@
   #editClose{font-size:20px; color:var(--ink-faint); line-height:1; padding:0 4px; background:none}
   #editChrome{font-family:var(--serif); font-size:18.5px; line-height:1.85; color:var(--ink)}   /* match #readBody .rd-prose so the section diamond + title space the same */
   #editChrome .rd-name{font-family:var(--serif); font-style:italic; font-size:46px; font-weight:600; letter-spacing:0; line-height:1.5; text-align:center; color:var(--ink); margin:14px 0 2px}   /* explicit line-height matches Read's .rd-name (which inherits body 1.5) so the title sits at the identical height in both modes */
+  #editChrome .rd-name.ed-storyname{outline:none; cursor:text; border-radius:8px; padding:0 8px; transition:background .12s}   /* #71 — click to rename the story right here in Revise */
+  #editChrome .rd-name.ed-storyname:hover{background:rgba(0,0,0,.035)}
+  #editChrome .rd-name.ed-storyname:focus{background:rgba(200,141,31,.09)}
+  #editChrome .rd-name.ed-storyname:empty::before{content:attr(data-ph); color:var(--ink-faint); font-style:italic}
+  body.ember:not(.eink) #editChrome .rd-name.ed-storyname:hover{background:rgba(255,255,255,.045)}
+  body.ember:not(.eink) #editChrome .rd-name.ed-storyname:focus{background:rgba(250,154,49,.11)}
   #editChrome h3{font-family:'Cormorant SC',var(--serif); font-style:normal; font-weight:600; font-size:25px; letter-spacing:.04em; text-transform:none; margin:20px 0 6px; text-align:center; color:var(--ink)}
   /* Book cover in Refine, above the title */
   #editChrome .ed-cover{display:flex; flex-direction:column; align-items:center; margin:4px 0 24px}
@@ -22486,6 +22492,14 @@ function recapRouteProse(sid, target){
       destFrame = tf;
     } else { destFrame = cur; }   // left in the current section
   }
+  // #64 — naming the session also names its section, UNLESS the section is already named
+  try {
+    if (title && state.frames && state.frames[destFrame] && !((state.frames[destFrame].stageName || '').trim())){
+      state.frames[destFrame].stageName = title;
+      if (typeof renumberSections === 'function') renumberSections();
+      if (typeof renderTimeline === 'function') renderTimeline();
+    }
+  } catch(e){}
   // make the writing a scene (new-section = opener, existing-section = a fresh ~ scene)
   try { _recapSceneAdjust(state._lastSnapId, destFrame, isNew); } catch(e){}
   runSessionImport(passage, title, function(){
@@ -29214,7 +29228,8 @@ function buildEditMode(){
   const escA = s => esc(s).replace(/"/g, '&quot;');
   let chrome = '';
   // (book cover is prepended by edApplyCover below — it manages its own loading state)
-  if (name) chrome += '<h1 class="rd-name">' + esc(name) + '</h1>';
+  // #71 — the story title is EDITABLE in Revise; edits sync live to #storyName (which propagates everywhere)
+  chrome += '<h1 class="rd-name ed-storyname" contenteditable="true" spellcheck="false" data-ph="Untitled story" title="Click to rename the story">' + esc(name) + '</h1>';
   const p0 = (typeof partHeaderBeforeSection === 'function') ? partHeaderBeforeSection(0) : null;   // Part header above frame 0's diamond (Refine chrome)
   const p0a = p0 ? ' data-part="' + escA(p0) + '"' : '';
   const t0 = (typeof frameSecType === 'function') ? frameSecType(0) : null;
@@ -29225,6 +29240,16 @@ function buildEditMode(){
   const sub0 = sub || (t0 && typeof secTypeLabel === 'function' ? secTypeLabel(t0) : '');
   if (sub0) chrome += '<h3>' + esc(sub0) + '</h3>';
   $('editChrome').innerHTML = chrome;
+  // #71 — wire the editable Revise title back to #storyName (live sync to header, Write title bar, autosave, wiki, etc.)
+  { const _tt = $('editChrome').querySelector('.ed-storyname');
+    if (_tt){
+      _tt.addEventListener('input', () => {
+        const v = _tt.textContent.replace(/\s+/g, ' ').replace(/^\s/, '');
+        const sn = $('storyName');
+        if (sn && sn.value !== v){ sn.value = v; if (typeof scheduleAutosave === 'function') scheduleAutosave(); if (typeof updateWmTitle === 'function') updateWmTitle(); if (typeof autosizeStoryName === 'function') autosizeStoryName(); }
+      });
+      _tt.addEventListener('keydown', e => { if (e.key === 'Enter'){ e.preventDefault(); _tt.blur(); } });
+    } }
   edApplyCover(state._coverBusy ? 'busy' : ((state.session && state.session.cover) ? 'has' : 'none'), state.session && state.session.cover);
   { const w = $('edImgWrap'); if (w) w.classList.toggle('on', amOwner()); }   // owner-only "+ Image" (cover + insert) button in the mode bar
   const tmp = document.createElement('div');
@@ -35988,6 +36013,13 @@ function init(){
     else if (e.key === 'Escape'){ e.preventDefault(); ipClose(null); }
   });
   $('inPrompt').addEventListener('mousedown', e => { if (e.target === $('inPrompt')) ipClose(null); });
+  // #67 — Enter in a builder's Name field creates the element (the generic prompt + element-name popup already submit on Enter)
+  document.addEventListener('keydown', function(e){
+    if (e.key !== 'Enter' || e.shiftKey) return;
+    var t = e.target; if (!t || !t.id) return;
+    var m = /^(cc|sb|ob|gb|ev|co)Name$/.exec(t.id); if (!m) return;
+    var btn = document.getElementById(m[1] + 'Create'); if (btn){ e.preventDefault(); btn.click(); }
+  }, true);
   $('newSessionBtn').addEventListener('click', newSession);
   $('einkBtn').addEventListener('click', () => setEink(!document.body.classList.contains('eink')));
   window.addEventListener('pointerdown', e => {
@@ -46210,6 +46242,8 @@ body.eink #expMenu{background:#fff; border-color:#000}
     var nodeScreenN = function(j){ var nd = state.nodes && state.nodes[j]; if (!nd) return null; return { x: rrN.left - sr.left + (nd.x - vvN[0]) / vvN[2] * rrN.width, y: rrN.top - sr.top + (nd.y - vvN[1]) / vvN[3] * rrN.height }; };
     // 1) connections to other MAP elements → a curved web line (stops at each label edge, with a direction arrow) + a type pill
     var _NSm = 'http://www.w3.org/2000/svg';
+    // #66 — a reusable gold arrowhead marker so a connection shows its direction (auto-start-reverse → points outward at whichever end it's placed)
+    (function(){ if (web.querySelector('#expArrow')) return; var defs = document.createElementNS(_NSm, 'defs'); var mk = document.createElementNS(_NSm, 'marker'); mk.setAttribute('id', 'expArrow'); mk.setAttribute('viewBox', '0 0 10 10'); mk.setAttribute('refX', '8.5'); mk.setAttribute('refY', '5'); mk.setAttribute('markerWidth', '7'); mk.setAttribute('markerHeight', '7'); mk.setAttribute('markerUnits', 'userSpaceOnUse'); mk.setAttribute('orient', 'auto-start-reverse'); var tri = document.createElementNS(_NSm, 'path'); tri.setAttribute('d', 'M0 1 L9 5 L0 9 Z'); tri.setAttribute('fill', WEB_GOLD); mk.appendChild(tri); defs.appendChild(mk); web.appendChild(defs); })();
     ((state.prompt.links) || []).forEach(function(l){
       var oj = (l.a === i) ? l.b : ((l.b === i) ? l.a : -1); if (oj < 0) return;
       var ow = state.prompt.words[oj]; if (!ow || !MAP[ow.cat] || (ow.role !== 'being' && ow.role !== 'word') || ow.needsPlace) return;
@@ -46222,11 +46256,18 @@ body.eink #expMenu{background:#fff; border-color:#000}
       var pm = document.createElementNS(_NSm, 'path');
       pm.setAttribute('d', 'M' + startA.x + ' ' + startA.y + ' C' + midx + ' ' + startA.y + ' ' + midx + ' ' + endA.y + ' ' + endA.x + ' ' + endA.y);
       pm.setAttribute('fill', 'none'); pm.setAttribute('stroke', col0); pm.setAttribute('stroke-width', '1.6'); pm.setAttribute('opacity', '.72');
+      // direction: fwd = a→b, rev = b→a; an untyped legacy link (l.rel only) reads as a→b
+      var fTy = (l.fwd && l.fwd.type) || '', rTy = (l.rev && l.rev.type) || '', hasRel = !!l.rel && !fTy && !rTy;
+      var dirToOj, dirToI;
+      if (l.a === i){ dirToOj = !!fTy || hasRel; dirToI = !!rTy; } else { dirToI = !!fTy || hasRel; dirToOj = !!rTy; }
+      if (dirToOj) pm.setAttribute('marker-end', 'url(#expArrow)');    // arrow into the connected element
+      if (dirToI) pm.setAttribute('marker-start', 'url(#expArrow)');   // arrow back into the selected element (rev / bidirectional)
       web.appendChild(pm);
-      // a small dot at the connected end marks where the connection is going
-      var dotM = document.createElementNS(_NSm, 'circle');
-      dotM.setAttribute('cx', endA.x); dotM.setAttribute('cy', endA.y); dotM.setAttribute('r', '3');
-      dotM.setAttribute('fill', col0); dotM.setAttribute('opacity', '.85'); web.appendChild(dotM);
+      if (!dirToOj){   // no arrow at the connected end → keep the small dot marking where the connection lands
+        var dotM = document.createElementNS(_NSm, 'circle');
+        dotM.setAttribute('cx', endA.x); dotM.setAttribute('cy', endA.y); dotM.setAttribute('r', '3');
+        dotM.setAttribute('fill', col0); dotM.setAttribute('opacity', '.85'); web.appendChild(dotM);
+      }
       expConnChip((startA.x + endA.x) / 2, (startA.y + endA.y) / 2, i, oj);
     });
     // 2) connections to SIDEBAR elements (concepts/orgs + threads) → line to the row's port + (typed) pill
@@ -46432,7 +46473,7 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.313';
+  var APP_VERSION = '2026.07.20.315';
   var APP_CHANGELOG = [
     { v:'2026.07.20.257', date:'August 1, 2026', notes:[
       'A freshly generated writing prompt now arrives large on the page, holds a beat, then shrinks into its resting place above your writing — so a new spark actually lands.'
