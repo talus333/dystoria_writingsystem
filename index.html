@@ -1421,6 +1421,18 @@
   body:not(.eink) #writeIntro .wi-seg-b.on{background:var(--gold,#fa9a31); color:#241c10}
   body:not(.eink) #writeIntro .wi-start{background:var(--gold,#fa9a31); color:#241c10; font-weight:700}
   body:not(.eink) #writeIntro .wi-start:hover{background:#ffb04a}
+  /* #68 — one-time "continuing where you left off" card (session 2+) */
+  #continueHint{position:fixed; inset:0; z-index:9600; display:none; align-items:center; justify-content:center; padding:26px; background:rgba(20,17,12,.5)}
+  #continueHint.show{display:flex; animation:sgPopIn .16s ease}
+  #continueHint .ch-card{width:min(92vw,380px); background:var(--paper,#f7f3ea); color:var(--ink,#2b2720); border:1px solid var(--line); border-radius:16px; padding:24px 24px 20px; box-shadow:0 24px 70px rgba(0,0,0,.42); text-align:center; font-family:var(--serif,Georgia,serif)}
+  #continueHint .ch-title{font-family:var(--cinzel,'Cinzel',var(--serif)); font-size:22px; letter-spacing:.04em; margin:0 0 10px; color:var(--ink)}
+  #continueHint .ch-body{font-family:var(--sans); font-size:13.5px; line-height:1.55; color:var(--ink-soft); margin:0 0 18px}
+  #continueHint .ch-ok{width:100%; padding:11px 0; border:none; border-radius:11px; background:var(--ink,#3b362c); color:var(--paper,#f7f3ea); font-family:var(--sans); font-size:11px; letter-spacing:.14em; text-transform:uppercase; cursor:pointer}
+  body:not(.eink) #continueHint .ch-card{background:#2b2926; color:#e7e2d8; border-color:rgba(255,255,255,.14)}
+  body:not(.eink) #continueHint .ch-title{color:#f0e6cf}
+  body:not(.eink) #continueHint .ch-ok{background:var(--gold,#fa9a31); color:#241c10; font-weight:700}
+  body:not(.eink) #continueHint .ch-ok:hover{background:#ffb04a}
+  body.eink #continueHint .ch-card{border:2px solid #000}
   /* ---------- About Dystoria page (opened from the quill) ---------- */
   #aboutPage{position:fixed; inset:0; z-index:9100; display:none; background:var(--paper); overflow:hidden}   /* above the onboarding card (9002) so it can be opened from the welcome step */
   #aboutPage.show{display:block; animation:sgPopIn .18s ease}
@@ -23536,9 +23548,10 @@ function startWritingSession(fullscreen){
             || ed.lastElementChild;
           if (!target) return;
           const hdr = fullscreen ? $('fsHeader') : null; const hh = hdr ? hdr.getBoundingClientRect().height : 0;   // full-screen lands under the fixed header; normal view lands at the top of the pane
-          // scroll ONLY the editor pane (never scrollIntoView — it scrolls the window and pushes the fixed header off-screen on iOS)
           const pr = target.getBoundingClientRect(), wr = wrap.getBoundingClientRect();
-          const delta = (pr.top - wr.top) - (hh + 12);   // land the prompt just under the header; the .ph's 64px top margin tucks prior prose away above
+          // #68 — CONTINUING (prior prose in this section): land the prompt lower so the tail of the last sentence peeks above it; a fresh BEGIN lands it just under the header
+          const landGap = (hasProse ? 104 : 12);
+          const delta = (pr.top - wr.top) - (hh + landGap);
           if (Math.abs(delta) > 1) wrap.scrollTop += delta;
         } catch(e){} };
         requestAnimationFrame(doScroll); requestAnimationFrame(function(){ requestAnimationFrame(doScroll); });
@@ -23556,6 +23569,8 @@ function startWritingSession(fullscreen){
           } catch(e){}
         }
       }
+      // #68 \u2014 first time a writer CONTINUES (session 2+, with prior prose), a one-time card explains where their last session went
+      try { if (fullscreen && typeof maybeContinueHint === 'function') setTimeout(function(){ maybeContinueHint(hasProse, k); }, 520); } catch(e){}
     }
   }
   flashStatus(fullscreen ? 'Full-screen session \u2014 scroll up anytime to revisit earlier sessions.' : 'Session started \u2014 the clock is running. Write.');
@@ -28455,6 +28470,33 @@ function openWriteIntro(){
 }
 function maybeWriteIntro(){ if(writeIntroSeen()) return; setWriteIntroSeen(); try{ openWriteIntro(); }catch(e){} }
 try{ window.openWriteIntro=openWriteIntro; }catch(e){}
+/* #68 — the first time a writer CONTINUES an existing section (session 2+), a one-time card orients them: their
+   last session sits just above (its final line showing), and they keep writing below. Shown once (localStorage). */
+function continueHintSeen(){ try{ return localStorage.getItem('dystoria.continueHintSeen')==='1'; }catch(e){ return false; } }
+function maybeContinueHint(hasProse, k){
+  try{
+    if(!hasProse) return;                                            // only when there's a prior session to continue
+    if(!document.body.classList.contains('insession')) return;
+    if(continueHintSeen()) return;                                   // orientation, not a nag — once is enough
+    try{ localStorage.setItem('dystoria.continueHintSeen','1'); }catch(e){}
+    var ki = (typeof k==='number') ? k : ((state&&state.frameIdx)||0);
+    var nm = (state&&state.frames&&state.frames[ki]&&(state.frames[ki].stageName||'').trim())||'';
+    var esc = function(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); };
+    var label = 'Section ' + (ki+1) + (nm ? (' · ' + nm) : '');
+    var old=document.getElementById('continueHint'); if(old) old.remove();
+    var ov=document.createElement('div'); ov.id='continueHint';
+    ov.innerHTML='<div class="ch-card" role="dialog" aria-modal="true" aria-label="Continuing your story">'
+      +'<div class="ch-title">Right where you left off</div>'
+      +'<div class="ch-body">Your last session — <b>'+esc(label)+'</b> — is just above, with its final line showing. Keep writing below to continue it, or scroll up anytime to reread.</div>'
+      +'<button type="button" class="ch-ok">Continue</button></div>';
+    document.body.appendChild(ov);
+    requestAnimationFrame(function(){ ov.classList.add('show'); });
+    var dismiss=function(){ ov.classList.remove('show'); setTimeout(function(){ if(ov.parentNode) ov.parentNode.removeChild(ov); try{ var e=document.getElementById('editor'); if(e) e.focus({preventScroll:true}); }catch(_){}}, 220); };
+    ov.querySelector('.ch-ok').addEventListener('click', dismiss);
+    ov.addEventListener('mousedown', function(e){ if(e.target===ov) dismiss(); });
+  }catch(e){}
+}
+try{ window.maybeContinueHint=maybeContinueHint; }catch(e){}
 function goMode(target){
   if (target === 'write'){ enterWriteFullscreen(); return; }   // never land in the old non-full-screen write view
   track('mode_opened', { mode: target });   // notepad(Map) / write / edit(Refine) / read / wiki
@@ -46473,7 +46515,7 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.315';
+  var APP_VERSION = '2026.07.20.316';
   var APP_CHANGELOG = [
     { v:'2026.07.20.257', date:'August 1, 2026', notes:[
       'A freshly generated writing prompt now arrives large on the page, holds a beat, then shrinks into its resting place above your writing — so a new spark actually lands.'
