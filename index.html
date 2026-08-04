@@ -43044,10 +43044,20 @@ window.__dystSetupWriteMic = function(){
         });
       }
       function micStopW(){ onW = false; btn.classList.remove('on'); btn.innerHTML = '\ud83c\udfa4'; if (recW) try{ recW.stop(); }catch(e){} recW = null; if (aiBuf.trim()) aiFlush(); }   // punctuate whatever's left when the mic goes down
+      // Reliable fallback: focus the editor so the phone keyboard (with its own mic) comes up, and tell the user to tap it.
+      function _kbdDictate(msg){
+        var ed = document.getElementById('editor');
+        if (ed){ try{ ed.focus({ preventScroll:false }); }catch(e){ try{ ed.focus(); }catch(_){ } }
+          try{ var sel=window.getSelection(), r=document.createRange(); r.selectNodeContents(ed); r.collapse(false); sel.removeAllRanges(); sel.addRange(r); }catch(e){ } }
+        if (typeof flashStatus === 'function') flashStatus(msg || 'Tap the \ud83c\udfa4 on your keyboard to dictate \u2014 your words type straight in.');
+      }
       btn.addEventListener('click', function(){
-        if (!SRw){ if (typeof flashStatus === 'function') flashStatus('Voice input isn\u2019t supported in this browser \u2014 try Chrome, Edge or Safari'); return; }
         if (onW){ micStopW(); return; }
         if (state.inkMode){ if (typeof flashStatus === 'function') flashStatus('Dictation writes text \u2014 switch from Ink to Type first'); return; }
+        var _secure = (typeof window.isSecureContext === 'boolean') ? window.isSecureContext : (location.protocol === 'https:');
+        var _isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent||'') || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+        if (!SRw || !_secure || _isIOS){ _kbdDictate(); return; }   // iOS Web Speech is unreliable across browsers; no engine / not https -> use the phone keyboard's mic (always works, prompts via the OS)
+        var _started = false;
         recW = new SRw(); recW.continuous = true; recW.interimResults = true;
         try{ recW.lang = navigator.language || 'en-US'; }catch(e){}
         recW.onresult = function(ev){
@@ -43059,8 +43069,14 @@ window.__dystSetupWriteMic = function(){
           }
         };
         recW.onend = function(){ if (onW && recW){ try{ recW.start(); }catch(e){ micStopW(); } } };   // Chrome stops on silence — keep listening while toggled on
-        recW.onerror = function(ev){ if (ev && (ev.error === 'not-allowed' || ev.error === 'service-not-allowed')) micStopW(); };
-        try{ recW.start(); onW = true; btn.classList.add('on'); btn.innerHTML = '\ud83c\udfa4'; }catch(e){ micStopW(); }
+        recW.onstart = function(){ _started = true; };
+        recW.onaudiostart = function(){ _started = true; };
+        recW.onerror = function(ev){ var er = ev && ev.error;
+          if (er === 'not-allowed' || er === 'service-not-allowed'){ micStopW(); _kbdDictate('Couldn\u2019t start in-app dictation \u2014 tap the mic on your keyboard instead.'); return; }
+          if (er === 'audio-capture' || er === 'network'){ micStopW(); _kbdDictate(); return; }
+        };
+        try{ recW.start(); onW = true; btn.classList.add('on'); btn.innerHTML = '\ud83c\udfa4'; }catch(e){ micStopW(); _kbdDictate(); return; }
+        setTimeout(function(){ if (onW && !_started){ micStopW(); _kbdDictate(); } }, 1800);   // engine never really started (silent failure on some mobile browsers) -> keyboard mic
       });
       setInterval(function(){
         var avail = document.body.classList.contains('writing') && (document.body.classList.contains('insession') || (typeof addsLocked === 'function' && addsLocked()));
@@ -46759,7 +46775,7 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.325';
+  var APP_VERSION = '2026.07.20.326';
   var APP_CHANGELOG = [
     { v:'2026.07.20.257', date:'August 1, 2026', notes:[
       'A freshly generated writing prompt now arrives large on the page, holds a beat, then shrinks into its resting place above your writing — so a new spark actually lands.'
