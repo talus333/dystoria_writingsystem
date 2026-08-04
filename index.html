@@ -42884,26 +42884,39 @@ body.eink #mobileNotice .mn-card{border:2px solid #000}
   function phone(){ try{ return window.matchMedia && window.matchMedia('(max-width:500px)').matches; }catch(e){ return window.innerWidth<=500; } }
   function fullPref(){ try{ return localStorage.getItem('dystoria.mobileFullLayout')==='1'; }catch(e){ return false; } }
   function active(){ return phone() && !fullPref(); }
+  // Phase: the phone Plan uses the real ELEMENTS organizer (#planNarrative / renderNarrative) — the fuller,
+  // element-organizing view — instead of the map's Story Legend. That view lives in the desktop plan-exp closure
+  // whose init() only runs once a #expMapBar exists (its retry loop polls). So on the phone we plant a hidden
+  // #expMapBar to let init() build #planNarrative, then reparent that panel to <body> (escaping #sky's scroll+
+  // transform) and switch the plan view to 'narrative'. Anchored just below the parchment header.
+  function setTop(){ var up=document.getElementById('upper'); if(up){ try{ var t=Math.max(0, Math.round(up.getBoundingClientRect().top)); document.documentElement.style.setProperty('--mm-plan-top', t+'px'); }catch(_){ } } }
+  window.__mmSetPlanTop=setTop;
+  function ensurePlanExp(){ try{ var sky=document.getElementById('sky'); if(sky && !document.getElementById('expMapBar')){ var mc=document.createElement('div'); mc.id='expMapBar'; mc.className='mm-expbar-stub'; sky.appendChild(mc); } }catch(e){} }
+  function activateElements(){
+    var pn=document.getElementById('planNarrative'); if(!pn) return false;   // init() hasn't built it yet — caller retries
+    if(pn.parentElement!==document.body){ pn._mmHome=pn.parentElement; pn._mmNext=pn.nextElementSibling; document.body.appendChild(pn); }
+    try{ if(typeof window.__planSetView==='function') window.__planSetView('narrative'); }catch(_){ }   // shows #planNarrative, hides the map SVG, renders + persists data.view
+    setTop(); try{ requestAnimationFrame(setTop); }catch(_){ }
+    return true;
+  }
+  function deactivateElements(){
+    try{ if(typeof window.__planSetView==='function') window.__planSetView('map'); }catch(_){ }   // restore the map view for the desktop layout
+    var pn=document.getElementById('planNarrative');
+    if(pn && pn._mmHome){ try{ if(pn._mmNext && pn._mmNext.parentElement===pn._mmHome) pn._mmHome.insertBefore(pn, pn._mmNext); else pn._mmHome.appendChild(pn); }catch(_){ } pn._mmHome=null; pn._mmNext=null; }
+  }
+  var _mmElemsOn=false, _mmRetry=null;
   function apply(){
     var on=active();
     document.body.classList.toggle('mobile-min', on);
     var btn=document.getElementById('mFullLayoutBtn'); if(btn) btn.classList.toggle('active', fullPref());   // switch ON = full desktop layout chosen
-    // Phase 1b — the roster becomes a fixed, full-panel Elements list on the phone. #sky is a scrolled + transformed
-    // map container, which corrupts fixed/absolute anchoring, so we REPARENT the Legend to <body> while mobile-min is
-    // on (escaping #sky entirely) and put it back on exit. Its top is anchored just below the parchment header.
-    var win=document.getElementById('storyLibWin');
-    var setTop=function(){ var up=document.getElementById('upper'); if(up){ try{ var t=Math.max(0, Math.round(up.getBoundingClientRect().top)); document.documentElement.style.setProperty('--mm-plan-top', t+'px'); }catch(_){ } } };
-    if(win){
-      if(on){
-        if(win.parentElement!==document.body){ win._mmHome=win.parentElement; win._mmNext=win.nextElementSibling; document.body.appendChild(win); }
-        win.classList.remove('lib-min');   // full open panel on the phone, not the collapsed side-pill (whose title renders vertically)
-        setTop(); try{ requestAnimationFrame(setTop); }catch(_){ }
-      } else if(win._mmHome){
-        try{ if(win._mmNext && win._mmNext.parentElement===win._mmHome) win._mmHome.insertBefore(win, win._mmNext); else win._mmHome.appendChild(win); }catch(_){ }
-        win._mmHome=null; win._mmNext=null;
-      }
+    if(_mmRetry){ clearInterval(_mmRetry); _mmRetry=null; }
+    if(on){
+      ensurePlanExp();
+      if(!activateElements()){ var tries=0; _mmRetry=setInterval(function(){ tries++; if(activateElements() || tries>60){ clearInterval(_mmRetry); _mmRetry=null; } }, 200); }
+      _mmElemsOn=true;
+    } else if(_mmElemsOn){   // only restore if we actually activated (never touch a pure-desktop session)
+      deactivateElements(); _mmElemsOn=false;
     }
-    window.__mmSetPlanTop=setTop;
   }
   window.__applyMobileMin=apply;
   function start(){
@@ -46600,7 +46613,7 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.323';
+  var APP_VERSION = '2026.07.20.324';
   var APP_CHANGELOG = [
     { v:'2026.07.20.257', date:'August 1, 2026', notes:[
       'A freshly generated writing prompt now arrives large on the page, holds a beat, then shrinks into its resting place above your writing — so a new spark actually lands.'
@@ -47545,8 +47558,26 @@ body.mobile-min #storyLibWin.has-elements{
   transform:none !important;   /* kill the map-pan translate that otherwise drags the panel off-screen */
 }
 body.mobile-min #storyLibWin.lib-min #storyLibBody{ display:block !important; }
-/* The reparented roster is the PLAN surface only — hide it in Write/Revise/Review/Wiki (else it covers End Session etc.). */
-body.mobile-min.mm-hide-roster #storyLibWin{ display:none !important; }
+/* The phone Plan now uses the fuller ELEMENTS organizer (#planNarrative), not the map's Story Legend — hide the Legend.
+   (Match the Phase-1b selectors' specificity, later in source, so this beats the old display:block on .has-elements.) */
+body.mobile-min #storyLibWin,
+body.mobile-min #storyLibWin.has-elements,
+body.mobile-min #storyLibWin.lib-min{ display:none !important; }
+/* #planNarrative reparented to <body> → a fixed, full-panel Elements organizer, anchored under the parchment header. */
+body.mobile-min #planNarrative{
+  display:block !important; position:fixed !important;
+  left:0 !important; right:0 !important; top:var(--mm-plan-top,110px) !important; bottom:0 !important;
+  width:auto !important; max-width:none !important; height:auto !important; max-height:none !important;
+  margin:0 !important; padding:24px 16px 20px !important; overflow-y:auto !important; z-index:20 !important;
+  transform:none !important; background:var(--bg,#f7f3ea) !important;
+}
+body.eink.mobile-min #planNarrative{ background:#fff !important; }
+/* The sticky filter bar was tuned for the desktop scroll container (top:-22px, -30px side margins) — re-seat it here. */
+body.mobile-min #planNarrative .pl-nfilter{ top:0 !important; margin:-24px -16px 12px -16px !important; padding:11px 16px 11px 16px !important; }
+/* The Elements organizer is the PLAN surface only — hide it in Write/Revise/Review/Wiki (else it covers End Session etc.). */
+body.mobile-min.mm-hide-roster #planNarrative{ display:none !important; }
+/* keep the injected #expMapBar stub out of sight on the phone */
+body.mobile-min .mm-expbar-stub{ position:absolute !important; left:-99999px !important; top:0 !important; width:1px !important; height:1px !important; overflow:hidden !important; pointer-events:none !important; opacity:0 !important; }
 body.mobile-min #storyLibHead{ border-radius:0 !important; padding-top:14px !important; }
 body.mobile-min #storyLibMin, body.mobile-min #storyLibPin{ display:none !important; }
 /* Roster rows: roomy, tappable, a chevron signals "opens its card". "+ map" and delete are hidden on the phone (no map to place on / destructive). */
