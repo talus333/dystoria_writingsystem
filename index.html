@@ -42944,6 +42944,134 @@ body.eink #mobileNotice .mn-card{border:2px solid #000}
 })();
 </script>
 
+<script id="writeMicJS">
+/* Write-mode dictation mic + AI auto-punctuation. Extracted from the desktop map setup so it ALSO
+   exists on phones (that map layer bails at <=768px). Idempotent — creates the controls once, on
+   whichever path runs first; styled as a big "Dictate" pill on phones. */
+window.__dystSetupWriteMic = function(){
+  if (document.getElementById('writeMic')) return;
+      var SRw = window.SpeechRecognition || window.webkitSpeechRecognition;
+      var btn = document.createElement('button'); btn.id = 'writeMic'; btn.type = 'button'; btn.innerHTML = '\ud83c\udfa4';
+      btn.title = 'Dictate into the session \u2014 speech lands at your cursor';
+      document.body.appendChild(btn);
+      var recW = null, onW = false;
+      // ---- AI auto-punctuation: buffer raw speech, punctuate on a pause via the AI worker ----
+      var aiMode = false; try{ aiMode = localStorage.getItem('dystoria.dictateAI') !== '0'; }catch(e){}   // default ON
+      var aiBuf = '', aiTimer = null, aiBusy = false;
+      var aiBtn = document.createElement('button'); aiBtn.id = 'writeMicAI'; aiBtn.type = 'button';
+      function paintAi(){ aiBtn.innerHTML = '✨'; aiBtn.classList.toggle('on', aiMode); aiBtn.title = aiMode ? 'AI adds punctuation to your dictation — tap to switch to manual (say “period”, “comma”…)' : 'Tap to let AI punctuate your dictation automatically'; }
+      document.body.appendChild(aiBtn); paintAi();
+      aiBtn.addEventListener('click', function(e){ e.stopPropagation(); aiMode = !aiMode; try{ localStorage.setItem('dystoria.dictateAI', aiMode ? '1' : '0'); }catch(_){} paintAi(); if (typeof flashStatus === 'function') flashStatus(aiMode ? 'AI punctuation on — just speak naturally' : 'Manual mode — say “period”, “comma”, “new paragraph”…'); });
+      function aiReady(){ return aiMode && (typeof aiCall === 'function') && (typeof aiAuthed !== 'function' || aiAuthed()); }
+      async function aiPunctuate(text){
+        var sys = 'You punctuate dictated prose. Add correct punctuation, capitalization, and paragraph breaks. Keep every word exactly as given — do not add, remove, reorder, translate, or reword anything, and do not wrap the result in quotes or add commentary. Return only the corrected text.';
+        return await aiCall(sys, text, { maxTokens: 500, temperature: 0 });
+      }
+      function insertPunct(text){
+        var ed = document.getElementById('editor'); if (!ed) return;
+        var t = String(text || '').replace(/\r/g, '').trim(); if (!t) return;
+        try{ ed.focus({ preventScroll: true }); }catch(e){ ed.focus(); }
+        var sel = window.getSelection();
+        if (!sel.rangeCount || !ed.contains(sel.anchorNode) || sel.anchorNode === ed){ var _k = (typeof state !== 'undefined' && state.frameIdx) || 0; var _fm = (typeof nodeFrameMap === 'function') ? nodeFrameMap() : null; var ph = Array.from(ed.children).find(function(c){ return c.classList && c.classList.contains('ph') && !(c.textContent||'').trim() && (!_fm || _fm.get(c) === _k); }) || Array.from(ed.children).reverse().find(function(c){ return c.classList && c.classList.contains('ph') && !(c.textContent||'').trim(); }); var r = document.createRange(); if (ph){ r.selectNodeContents(ph); r.collapse(true); } else { r.selectNodeContents(ed); r.collapse(false); } sel.removeAllRanges(); sel.addRange(r); }
+        var parts = t.split(/\n+/);
+        parts.forEach(function(p, i){
+          if (i > 0) document.execCommand('insertParagraph');
+          p = p.trim(); if (!p) return;
+          var s2 = window.getSelection();
+          var before = (s2.anchorNode && s2.anchorNode.textContent) ? s2.anchorNode.textContent.slice(0, s2.anchorOffset) : '';
+          var lead = (i === 0 && before && !/\s$/.test(before) && !/[“(]$/.test(before)) ? ' ' : '';
+          document.execCommand('insertText', false, lead + p);
+        });
+      }
+      function aiFlush(){
+        if (aiTimer){ clearTimeout(aiTimer); aiTimer = null; }
+        if (aiBusy){ aiSchedule(); return; }
+        var chunk = aiBuf.trim(); if (!chunk) return; aiBuf = '';
+        if (!aiReady()){ insertDict(chunk); return; }
+        aiBusy = true;
+        var prev = btn.innerHTML; if (onW) btn.innerHTML = '✨';
+        aiPunctuate(chunk).then(function(out){ insertPunct(out && out.trim() ? out : chunk); }).catch(function(){ insertDict(chunk); })
+          .then(function(){ aiBusy = false; if (onW && btn.innerHTML === '✨') btn.innerHTML = prev; if (aiBuf.trim()) aiSchedule(); });
+      }
+      function aiSchedule(){ if (aiTimer) clearTimeout(aiTimer); aiTimer = setTimeout(aiFlush, 850); }   // flush a beat after speech pauses
+      var _capNext = false;
+      // Turn spoken punctuation cues into real punctuation (the browser engine only transcribes words). \u0001 = new paragraph, \u0002 = new line.
+      function dictationFormat(raw){
+        var s = ' ' + String(raw || '') + ' ';
+        s = s.replace(/\b(?:new|next)\s+paragraph\b/gi, ' \u0001 ');
+        s = s.replace(/\b(?:new|next)\s+line\b/gi, ' \u0002 ');
+        s = s.replace(/\bnew\s+sentence\b/gi, '. ');
+        s = s.replace(/\b(?:full\s*stop|period)\b/gi, '. ');
+        s = s.replace(/\bcomma\b/gi, ', ');
+        s = s.replace(/\bquestion\s*mark\b/gi, '? ');
+        s = s.replace(/\bexclamation\s*(?:mark|point)\b/gi, '! ');
+        s = s.replace(/\bsemi[\s-]*colon\b/gi, '; ');
+        s = s.replace(/\bcolon\b/gi, ': ');
+        s = s.replace(/\b(?:ellipsis|dot\s+dot\s+dot)\b/gi, '… ');
+        s = s.replace(/\b(?:em[\s-]*dash|dash)\b/gi, ' — ');
+        s = s.replace(/\bhyphen\b/gi, '-');
+        s = s.replace(/\bopen\s*(?:paren|parenthesis|bracket)\b/gi, ' (');
+        s = s.replace(/\bclose\s*(?:paren|parenthesis|bracket)\b/gi, ') ');
+        s = s.replace(/\b(?:open\s*quotes?|begin\s*quote)\b/gi, ' “');
+        s = s.replace(/\b(?:close\s*quotes?|end\s*quote|unquote)\b/gi, '” ');
+        s = s.replace(/\bapostrophe\b/gi, '’');
+        s = s.replace(/\bampersand\b/gi, ' & ');
+        s = s.replace(/\s+([.,?!;:…”)])/g, '$1');   // no space before closing punctuation
+        s = s.replace(/([“(])\s+/g, '$1');               // no space after opening punctuation
+        s = s.replace(/[ \t]{2,}/g, ' ');
+        return s;
+      }
+      function insertDict(raw){
+        var ed = document.getElementById('editor'); if (!ed || !raw) return;
+        try{ ed.focus({ preventScroll: true }); }catch(e){ ed.focus(); }
+        var sel = window.getSelection();
+        if (!sel.rangeCount || !ed.contains(sel.anchorNode) || sel.anchorNode === ed){ var _k = (typeof state !== 'undefined' && state.frameIdx) || 0; var _fm = (typeof nodeFrameMap === 'function') ? nodeFrameMap() : null; var ph = Array.from(ed.children).find(function(c){ return c.classList && c.classList.contains('ph') && !(c.textContent||'').trim() && (!_fm || _fm.get(c) === _k); }) || Array.from(ed.children).reverse().find(function(c){ return c.classList && c.classList.contains('ph') && !(c.textContent||'').trim(); }); var r = document.createRange(); if (ph){ r.selectNodeContents(ph); r.collapse(true); } else { r.selectNodeContents(ed); r.collapse(false); } sel.removeAllRanges(); sel.addRange(r); }
+        var processed = dictationFormat(raw);
+        var tokens = processed.split(/([\u0001\u0002])/);
+        tokens.forEach(function(tok){
+          if (!tok) return;
+          if (tok === '\u0001'){ document.execCommand('insertParagraph'); _capNext = true; return; }
+          if (tok === '\u0002'){ try{ document.execCommand('insertLineBreak'); }catch(e){ document.execCommand('insertText', false, '\n'); } _capNext = true; return; }
+          var t = tok.trim(); if (!t) return;
+          var s2 = window.getSelection();
+          var before = (s2.anchorNode && s2.anchorNode.textContent) ? s2.anchorNode.textContent.slice(0, s2.anchorOffset) : '';
+          if (_capNext || !before.trim() || /[.!?…][”)\s]*$/.test(before)){
+            t = t.replace(/[a-z]/, function(c){ return c.toUpperCase(); });   // start of a sentence → capitalise the first letter
+            _capNext = false;
+          }
+          var lead = (before && !/\s$/.test(before) && !/[“(]$/.test(before) && !/^[.,?!;:…”)]/.test(t)) ? ' ' : '';
+          document.execCommand('insertText', false, lead + t);
+        });
+      }
+      function micStopW(){ onW = false; btn.classList.remove('on'); btn.innerHTML = '\ud83c\udfa4'; if (recW) try{ recW.stop(); }catch(e){} recW = null; if (aiBuf.trim()) aiFlush(); }   // punctuate whatever's left when the mic goes down
+      btn.addEventListener('click', function(){
+        if (!SRw){ if (typeof flashStatus === 'function') flashStatus('Voice input isn\u2019t supported in this browser \u2014 try Chrome, Edge or Safari'); return; }
+        if (onW){ micStopW(); return; }
+        if (state.inkMode){ if (typeof flashStatus === 'function') flashStatus('Dictation writes text \u2014 switch from Ink to Type first'); return; }
+        recW = new SRw(); recW.continuous = true; recW.interimResults = true;
+        try{ recW.lang = navigator.language || 'en-US'; }catch(e){}
+        recW.onresult = function(ev){
+          for (var r2 = ev.resultIndex; r2 < ev.results.length; r2++){
+            if (!ev.results[r2].isFinal) continue;
+            var tr = ev.results[r2][0].transcript;
+            if (aiReady()){ aiBuf += (aiBuf && !/\s$/.test(aiBuf) ? ' ' : '') + tr; if (aiBuf.length > 240) aiFlush(); else aiSchedule(); }   // buffer → AI punctuates on a pause (or when it gets long)
+            else insertDict(tr);
+          }
+        };
+        recW.onend = function(){ if (onW && recW){ try{ recW.start(); }catch(e){ micStopW(); } } };   // Chrome stops on silence — keep listening while toggled on
+        recW.onerror = function(ev){ if (ev && (ev.error === 'not-allowed' || ev.error === 'service-not-allowed')) micStopW(); };
+        try{ recW.start(); onW = true; btn.classList.add('on'); btn.innerHTML = '\ud83c\udfa4'; }catch(e){ micStopW(); }
+      });
+      setInterval(function(){
+        var avail = document.body.classList.contains('writing') && (document.body.classList.contains('insession') || (typeof addsLocked === 'function' && addsLocked()));
+        btn.classList.toggle('avail', !!avail);
+        aiBtn.classList.toggle('avail', !!avail);
+        if (!avail && onW) micStopW();   // session over → mic down
+      }, 600);
+};
+(function(){ function go(){ try{ window.__dystSetupWriteMic(); }catch(e){} } if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', go); else go(); })();
+</script>
+
 <script id="whereNextJS">
 /* "Where next?" — when stuck in Write mode, the AI offers 2–3 possible next beats for the current section,
    grounded in its plot stage, open stakes, unresolved threads, elements and the prose so far. */
@@ -44106,6 +44234,23 @@ body.writing.insession #writeMic{top:18px; right:24px; bottom:auto; z-index:121}
 body.eink #writeMicAI{background:#fff; border-color:#000; color:#000}
 body.writing.insession #writeMicAI{top:18px; right:68px; bottom:auto; z-index:121}
 @media (max-width:500px){ body.writing.insession #writeMicAI{top:10px; right:56px} }
+
+/* Phone Write: make the dictation control OBVIOUS — a labelled gold "Dictate" pill top-right, red "Listening…" when on. */
+@media (max-width:500px){
+  body.writing.insession #writeMic{
+    top:12px !important; right:12px !important; bottom:auto !important; z-index:122 !important;
+    width:auto !important; min-width:0 !important; height:42px !important; border-radius:21px !important;
+    padding:0 17px 0 14px !important; gap:8px !important; font-size:18px !important;
+    background:var(--gold,#fa9a31) !important; color:#231a0e !important; border:none !important;
+    box-shadow:0 5px 16px rgba(0,0,0,.30) !important;
+  }
+  body.writing.insession #writeMic::after{ content:'Dictate'; font-family:var(--sans,system-ui,sans-serif); font-size:13px; font-weight:800; letter-spacing:.05em; text-transform:uppercase; }
+  body.writing.insession #writeMic.on{ background:#c0392b !important; color:#fff !important; }
+  body.writing.insession #writeMic.on::after{ content:'Listening…'; text-transform:none; letter-spacing:.02em; }
+  body.eink.writing.insession #writeMic{ background:#000 !important; color:#fff !important; }
+  /* the AI-punctuation toggle stays as a small round ✨ just left of the pill */
+  body.writing.insession #writeMicAI{ top:17px !important; right:135px !important; width:32px !important; height:32px !important; font-size:14px !important; z-index:122 !important; }
+}
 #qaIngest{position:fixed; left:50%; bottom:74px; transform:translateX(-50%); z-index:300; font-family:var(--sans); font-size:11px; letter-spacing:.1em; text-transform:uppercase;
   color:#fbcf83; background:linear-gradient(180deg,#2a2117,#1b150e); border:1px solid rgba(250,154,49,.3); border-radius:16px; padding:9px 18px; box-shadow:0 10px 30px rgba(0,0,0,.4);
   animation:qaPulse 1.6s ease-in-out infinite}
@@ -45720,8 +45865,9 @@ body.eink #expMenu{background:#fff; border-color:#000}
       if (typeof xbSel !== 'undefined' && xbSel && xbSel.side === 'R'){ var _t = (typeof threadById === 'function') ? threadById(xbSel.id) : null; if (_t) exploreThread(_t); }
     });
     /* Explore dissolved: its direct-solution proposals are gone; its angle taxonomy now lives in the element/plot Explore Q&A (window.openExplore). Button intentionally not appended. */
-    // ---- Write-mode dictation: a mic pill that lives through the session ----
-    (function(){
+    // ---- Write-mode dictation: now defined in the standalone #writeMicJS script so it also exists on phones (this desktop copy is retired via if(false)). ----
+    if (window.__dystSetupWriteMic) window.__dystSetupWriteMic();
+    if (false) (function(){
       var SRw = window.SpeechRecognition || window.webkitSpeechRecognition;
       var btn = document.createElement('button'); btn.id = 'writeMic'; btn.type = 'button'; btn.innerHTML = '\ud83c\udfa4';
       btn.title = 'Dictate into the session \u2014 speech lands at your cursor';
@@ -46613,7 +46759,7 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.324';
+  var APP_VERSION = '2026.07.20.325';
   var APP_CHANGELOG = [
     { v:'2026.07.20.257', date:'August 1, 2026', notes:[
       'A freshly generated writing prompt now arrives large on the page, holds a beat, then shrinks into its resting place above your writing — so a new spark actually lands.'
