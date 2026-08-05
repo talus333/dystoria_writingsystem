@@ -4623,7 +4623,7 @@ body.eink #consentBar #cbAccept{background:#000; color:#fff; border-color:#000}
     var f=document.createElement('iframe'); f.id='landingFrame'; f.title='Welcome to Dystoria'; f.src='/welcome_undaunted.html';
     f.setAttribute('style','position:fixed;inset:0;width:100%;height:100%;border:0;z-index:9000;background:#14110d');
     function dismiss(toSignup){ try{ localStorage.setItem('dystoria_entered','1'); }catch(e){} if(f&&f.parentNode) f.parentNode.removeChild(f); try{ if(window.track) track('landing_enter_app'); }catch(e){} if(toSignup){ if(typeof openAccount==='function') openAccount(); else { var c=document.getElementById('authCard'); if(c) c.classList.add('show'); } } }
-    window.addEventListener('message', function(ev){ var d=ev&&ev.data; if(!d) return; if(d.type==='dystoria:start') dismiss(true); else if(d.type==='dystoria:about'){ dismiss(false); if(window.openAbout) setTimeout(function(){ try{ openAbout(d.section); }catch(e){} }, 40); } });
+    window.addEventListener('message', function(ev){ var d=ev&&ev.data; if(!d) return; if(d.type==='dystoria:start'){ dismiss(false); setTimeout(function(){ try{ if(window.__enterBeginPage) window.__enterBeginPage(); else if(window.showFirstRunDoors) window.showFirstRunDoors(); }catch(e){} }, 40); } else if(d.type==='dystoria:about'){ dismiss(false); if(window.openAbout) setTimeout(function(){ try{ openAbout(d.section); }catch(e){} }, 40); } });
     window.addEventListener('focus', function(){ if(hasSession() && f && f.parentNode){ f.parentNode.removeChild(f); } });
     if(document.body){ document.body.appendChild(f); } else { document.addEventListener('DOMContentLoaded', function(){ document.body.appendChild(f); }); }
   }catch(e){}
@@ -24225,6 +24225,33 @@ function persistSessions(list){
   try { localStorage.setItem(LS_SESSIONS, JSON.stringify(build(true))); return; } catch(e){}
   try { localStorage.setItem(LS_SESSIONS, JSON.stringify(list)); } catch(e){}   // last resort (may throw → the caller shows the “storage full” notice)
 }
+// A story is "empty" if nothing was ever put into it — no prose, no ink, no elements, no notes/summary/cover.
+// Such abandoned blank stories are pruned on return so they don't accumulate or strand the user on a blank page.
+function storyIsEmpty(s){
+  try {
+    if (!s) return false;
+    if ((s.text || '').trim()) return false;                                   // prose written
+    if (s.html && String(s.html).replace(/<[^>]*>/g, '').trim()) return false; // prose (html)
+    if (s.ink || (s.inkPages && s.inkPages.length)) return false;              // handwriting
+    if (s.elemLibrary && s.elemLibrary.length) return false;                   // legend / story elements
+    if (s.words && s.words.length) return false;                              // placed elements
+    if (s.frames && s.frames.some(function(f){ return f && f.prompt && f.prompt.words && f.prompt.words.length; })) return false;
+    if ((s.summary || '').trim()) return false;                                // wrote a summary
+    if (s.cover) return false;                                                 // set a cover
+    if (s.goal) return false;                                                  // set goals
+    if (s.npNotes && Object.keys(s.npNotes).some(function(k){ return (s.npNotes[k] || '').replace(/<[^>]*>/g, '').trim(); })) return false;   // notepad notes
+    return true;
+  } catch(e){ return false; }
+}
+// On boot, drop any genuinely-empty stories from the saved library (an abandoned blank new story shouldn't persist).
+function pruneEmptyStories(){
+  try {
+    var list = loadSessions(); if (!list || !list.length) return 0;
+    var kept = list.filter(function(s){ return !storyIsEmpty(s); });
+    if (kept.length !== list.length){ persistSessions(kept); return list.length - kept.length; }
+    return 0;
+  } catch(e){ return 0; }
+}
 // A story opened from a trimmed local copy pulls its handwriting + images back from the cloud (best-effort).
 async function restoreHeavyFromCloud(storyId, cloudId){
   try {
@@ -25367,6 +25394,14 @@ function showFirstRunDoors(){
   try { track('firstrun_doors_shown'); } catch(e){}
 }
 window.showFirstRunDoors = showFirstRunDoors;
+// Entry from the landing "Get Started": start a fresh blank story and open the "Where would you like to begin?" doors.
+// A blank session is locked in so the starter-example (Hansel) opener won't replace it, and the doors are forced to show.
+window.__enterBeginPage = function(){
+  try { localStorage.removeItem('dystoria.firstRunSeen'); } catch(e){}
+  try { if (typeof newSession === 'function') newSession(); } catch(e){}
+  try { if (typeof ensureSession === 'function') ensureSession(); } catch(e){}   // a blank current story → ensureStarterStory() bails instead of opening the example over the doors
+  try { if (typeof showFirstRunDoors === 'function') setTimeout(showFirstRunDoors, 60); } catch(e){}
+};
 
 // ---- "Start Planning" second page: the planning approaches (design: Dystoria_Planning_Approaches_Design.md) ----
 // A router over surfaces that already exist. One guided path (the goals+layers wizard, reusing openStartCard),
@@ -35179,6 +35214,7 @@ const DYSTORIA_BUILD = '2026-06-21 #181 — ported the Pieces experiment in: bei
 })();
 function init(){
   try { window.__DYSTORIA_BUILD = DYSTORIA_BUILD; console.log('%cDystoria','font-weight:700', 'build ' + DYSTORIA_BUILD); } catch(e){}
+  try { if (typeof pruneEmptyStories === 'function') pruneEmptyStories(); } catch(e){}   // drop abandoned blank stories on return (no prose/elements/notes)
   // Restore the story that was open last — IMMEDIATELY, before any boot-time render can call ensureSession()
   // and spin up a blank "Untitled story" (which would strand the real story in the Library and steal the
   // last-open pointer). This makes a refresh reliably land back in the current story.
@@ -44118,7 +44154,7 @@ body.eink #aisPop{border:2px solid #000; background:#fff}
 .qa-ico:hover{color:#fa9a31}
 .qa-ico.on{color:#fa9a31}
 #qaMic.on{color:#e0564a; animation:qaPulse 1.2s ease-in-out infinite}
-#qaWin.qa-full{position:fixed; inset:0; left:0; right:0; top:0; bottom:0; width:auto; max-width:none; border:none; border-radius:0; z-index:130; background:radial-gradient(120% 90% at 50% -10%,#241f16 0%,#17140f 62%)}
+#qaWin.qa-full{position:fixed; inset:0; left:0; right:0; top:0; bottom:0; width:auto; max-width:none; border:none; border-radius:0; z-index:200; background:radial-gradient(120% 90% at 50% -10%,#241f16 0%,#17140f 62%)}   /* above the mode overlays (editMode/readMode/wiki are z-150) so full-screen Explore never lands behind Revise */
 #qaWin.qa-full #qaHead{max-width:720px; margin:0 auto; width:100%; padding-top:20px}
 #qaWin.qa-full #qaLog{max-width:760px; margin:0 auto; width:100%; padding:24px 18px}
 #qaWin.qa-full .qa-t{font-size:15px}
@@ -46770,7 +46806,7 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.330';
+  var APP_VERSION = '2026.07.20.331';
   var APP_CHANGELOG = [
     { v:'2026.07.20.257', date:'August 1, 2026', notes:[
       'A freshly generated writing prompt now arrives large on the page, holds a beat, then shrinks into its resting place above your writing — so a new spark actually lands.'
