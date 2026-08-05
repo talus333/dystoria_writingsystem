@@ -21242,11 +21242,16 @@ function openThreadCard(id){
     var old=document.getElementById('dossierBd'); if(old&&old.parentNode) old.parentNode.removeChild(old);
     var name=(t.name&&String(t.name).trim())||'Thread';
     var color=t.color||'#c49e4a';
-    var members=(typeof threadElements==='function')?(threadElements(id)||[]):[];
-    var memberNames=members.map(function(m){ return (m.w)?((typeof elDisplayName==='function')?elDisplayName(m.w):(m.w.name||m.w.word)):''; }).filter(Boolean);
-    var stake=(t.stake&&String(t.stake).trim())||'';
-    var concepts=Array.isArray(t.concepts)?t.concepts.slice():[];
-    var span=''; try{ var lo=Infinity, hi=-1; members.forEach(function(m){ var secs=(typeof threadMemberSections==='function')?threadMemberSections(m.w,id):[]; (secs||[]).forEach(function(k){ if(k<lo) lo=k; if(k>hi) hi=k; }); }); if(hi>=0){ span = (lo===hi) ? ('§'+(lo+1)) : ('§'+(lo+1)+'–§'+(hi+1)); } }catch(e){}
+    var members=[], memberNames=[], stake='', concepts=[], span='';
+    function syncThread(){   // recompute after in-card edits (link/unlink elements, set/clear the stake)
+      try{ var t2=(typeof threadById==='function')?threadById(id):null; if(t2) t=t2; }catch(e){}
+      members=(typeof threadElements==='function')?(threadElements(id)||[]):[];
+      memberNames=members.map(function(m){ return (m.w)?((typeof elDisplayName==='function')?elDisplayName(m.w):(m.w.name||m.w.word)):''; }).filter(Boolean);
+      stake=(t.stake&&String(t.stake).trim())||'';
+      concepts=Array.isArray(t.concepts)?t.concepts.slice():[];
+      span=''; try{ var lo=Infinity, hi=-1; members.forEach(function(m){ var secs=(typeof threadMemberSections==='function')?threadMemberSections(m.w,id):[]; (secs||[]).forEach(function(k){ if(k<lo) lo=k; if(k>hi) hi=k; }); }); if(hi>=0){ span = (lo===hi) ? ('§'+(lo+1)) : ('§'+(lo+1)+'–§'+(hi+1)); } }catch(e){}
+    }
+    syncThread();
     try{ if(!state.session){ ensureSession(); } if(state.session && !state.session.npDossier) state.session.npDossier={}; }catch(e){}
     var nkey='thread:'+id; var np=window.__dystPlan||null;
 
@@ -21269,6 +21274,7 @@ function openThreadCard(id){
       sec.appendChild(row); card.appendChild(sec);
     }
     function render(){
+      syncThread();
       card.innerHTML='';
       var top=document.createElement('div'); top.className='dossier-top';
       var portrait=document.createElement('div'); portrait.className='dossier-portrait has-icon dossier-threadswatch'; portrait.style.background='linear-gradient(135deg,'+color+' 0%,'+color+'99 100%)';
@@ -21286,16 +21292,67 @@ function openThreadCard(id){
       proseBlock({ label:'Overview', aspect:'glance', cls:'dossier-glance', auto:glance,
         sys:'You help a novelist keep a vivid dossier of a story thread (a storyline traced across the book). From the structured facts, write ONE evocative 1–2 sentence portrait of the thread for planning notes — never story prose, never invent beyond the facts. Return only the portrait.',
         facts:'Thread: '+name+'\nMembers: '+(memberNames.join(', ')||'—')+'\nStake: '+(stake||'—')+'\nConcepts: '+(concepts.join(', ')||'—')+'\nSpans: '+(span||'—') });
-      // Cast (members) — clickable through to each element's own card
-      if(members.length){
+      // Linked elements — the cast woven into this thread: open each, unlink, or link more right here
+      (function(){
         var cs=document.createElement('div'); cs.className='dossier-sec';
-        var cl=document.createElement('div'); cl.className='dossier-seclab'; cl.textContent='Cast'; cs.appendChild(cl);
+        var cl=document.createElement('div'); cl.className='dossier-seclab'; cl.textContent='Linked elements'; cs.appendChild(cl);
         var wrap=document.createElement('div'); wrap.className='dossier-bonds';
-        members.forEach(function(m){ var b=document.createElement('button'); b.type='button'; b.className='dossier-bond dossier-castchip'; b.textContent=(m.w?((typeof elDisplayName==='function')?elDisplayName(m.w):(m.w.name||m.w.word)):'—'); b.title='Open this element'; b.addEventListener('click', function(e){ e.stopPropagation(); if(typeof window.openElementDossier==='function') window.openElementDossier(m.key); }); wrap.appendChild(b); });
+        members.forEach(function(m){
+          var b=document.createElement('button'); b.type='button'; b.className='dossier-bond dossier-castchip';
+          var lb=document.createElement('span'); lb.textContent=(m.w?((typeof elDisplayName==='function')?elDisplayName(m.w):(m.w.name||m.w.word)):'—'); b.appendChild(lb);
+          b.title='Open this element';
+          b.addEventListener('click', function(e){ e.stopPropagation(); if(typeof window.openElementDossier==='function') window.openElementDossier(m.key); });
+          var rm=document.createElement('span'); rm.className='dossier-castrm'; rm.textContent='×'; rm.title='Unlink from this thread';
+          rm.addEventListener('click', function(e){ e.stopPropagation(); if(typeof toggleWordThread==='function' && m.w){ toggleWordThread(m.w, id); try{ if(typeof renderConstellation==='function') renderConstellation(); }catch(_){} render(); } });
+          b.appendChild(rm);
+          wrap.appendChild(b);
+        });
+        var addc=document.createElement('button'); addc.type='button'; addc.className='dossier-bond dossier-castadd'; addc.textContent='＋ link an element'; addc.title='Weave another story element into this thread';
+        addc.addEventListener('click', function(e){
+          e.stopPropagation();
+          var menu=document.getElementById('aspectMenu'); if(!menu) return; menu.innerHTML='';
+          if(menu.parentElement!==document.body) document.body.appendChild(menu);
+          var els=(typeof npStoryElements==='function')?npStoryElements():[];
+          var tt2=(state.session&&state.session.threadTags)||{};
+          var avail=els.filter(function(o){ return (tt2[o.key]||[]).indexOf(id)<0; });
+          if(!avail.length){ var dd=document.createElement('div'); dd.className='np-empty'; dd.style.padding='6px 10px'; dd.textContent='Every element is already on this thread'; menu.appendChild(dd); }
+          avail.forEach(function(o){ var bb=document.createElement('button');
+            bb.textContent=(o.w.name||o.w.word||'')+' · '+(((typeof getCat==='function'&&getCat(o.w.cat))?getCat(o.w.cat).name:o.w.cat)||'');
+            bb.addEventListener('click', function(ev){ ev.stopPropagation(); menu.style.display='none'; if(typeof toggleWordThread==='function') toggleWordThread(o.w, id); try{ if(typeof renderConstellation==='function') renderConstellation(); }catch(_){} render(); });
+            menu.appendChild(bb); });
+          menu.style.maxHeight='280px'; menu.style.overflowY='auto';
+          menu.style.left=Math.max(8, Math.min(e.clientX||200, window.innerWidth-230))+'px';
+          menu.style.top=Math.max(8, Math.min(e.clientY||200, window.innerHeight-300))+'px';
+          menu.style.display='block';
+        });
+        wrap.appendChild(addc);
         cs.appendChild(wrap); card.appendChild(cs);
-      }
-      // Stake — the thread's engine
-      proseBlock({ label:'Stake — what’s at risk', aspect:'stake', auto:(stake?('At stake in “'+name+'”: '+stake+'.'):''),
+      })();
+      // Stake — the thread's engine: pick it from the stakes pool (or type your own), change or clear anytime
+      (function(){
+        var sec=document.createElement('div'); sec.className='dossier-sec';
+        var lab=document.createElement('div'); lab.className='dossier-seclab'; lab.textContent='Stake — what’s at risk'; sec.appendChild(lab);
+        var wrap=document.createElement('div'); wrap.className='dossier-bonds';
+        function pick(ev){
+          if(typeof window.openWordPicker!=='function') return;
+          var sub='Stakes'; try{ var c=getCat('stakes'); if(c&&c.subcategories&&c.subcategories.length) sub=c.subcategories[0].name; }catch(e){}
+          window.openWordPicker({ cat:'stakes', sub:sub, title:'Stake — '+name, placeholder:'search or name what’s at risk…', x:ev.clientX, y:ev.clientY, onPick:function(word){ if(typeof setThreadStake==='function') setThreadStake(id, word); render(); } });
+        }
+        if(stake){
+          var chip=document.createElement('button'); chip.type='button'; chip.className='dossier-bond dossier-castchip'; chip.title='Change this stake';
+          var lb=document.createElement('span'); lb.textContent=stake; chip.appendChild(lb);
+          chip.addEventListener('click', function(e){ e.stopPropagation(); pick(e); });
+          var rm=document.createElement('span'); rm.className='dossier-castrm'; rm.textContent='×'; rm.title='Clear the stake';
+          rm.addEventListener('click', function(e){ e.stopPropagation(); if(typeof setThreadStake==='function') setThreadStake(id, ''); render(); });
+          chip.appendChild(rm); wrap.appendChild(chip);
+        } else {
+          var addc2=document.createElement('button'); addc2.type='button'; addc2.className='dossier-bond dossier-castadd'; addc2.textContent='＋ add a stake'; addc2.title='Pick what’s at risk in this thread from the stakes pool';
+          addc2.addEventListener('click', function(e){ e.stopPropagation(); pick(e); });
+          wrap.appendChild(addc2);
+        }
+        sec.appendChild(wrap); card.appendChild(sec);
+      })();
+      proseBlock({ label:'', aspect:'stake', auto:(stake?('At stake in “'+name+'”: '+stake+'.'):''),
         sys:'You help a novelist keep vivid planning notes. Rewrite what is at stake in this thread as ONE flowing sentence — the pressure that gives the storyline momentum. Meta-description for planning, never story prose, never invent beyond the facts. Return only the sentence.',
         facts:'Thread: '+name+'\nStake: '+(stake||'—')+'\nMembers: '+(memberNames.join(', ')||'—') });
       // Concepts
@@ -21330,6 +21387,9 @@ function openThreadCard(id){
       var wab=document.createElement('button'); wab.className='dossier-writeabout'; wab.innerHTML='<svg class="wa-quill" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.24 12.24a6 6 0 0 0-8.49-8.49L5 10.5V19h8.5z"/><line x1="16" y1="8" x2="2" y2="22"/><line x1="17.5" y1="15" x2="9" y2="15"/></svg> Write about this'; wab.title='Start a focused full-screen writing session about this thread’s elements';
       wab.addEventListener('click', function(){ if(bd.parentNode) bd.parentNode.removeChild(bd); var _tn='thread'; try{ var _t=(typeof threadById==='function')?threadById(id):null; if(_t&&_t.name) _tn=_t.name; }catch(e){} if(typeof window.writeAboutFocus==='function') window.writeAboutFocus(['thread:'+id], _tn); });
       foot.appendChild(wab);
+      var exb2=document.createElement('button'); exb2.className='dossier-writeabout'; exb2.textContent='✦ Explore'; exb2.title='Explore this thread — a full-screen Q&A that deepens it, then files into your notes';
+      exb2.addEventListener('click', function(){ if(bd.parentNode) bd.parentNode.removeChild(bd); if(typeof window.openExplore==='function') window.openExplore(['thread:'+id], name); });
+      foot.appendChild(exb2);
       var nb=document.createElement('button'); nb.className='dossier-notesbtn'; nb.textContent='Open in notepad';
       nb.addEventListener('click', function(){ bd.style.display='none'; var obs=new MutationObserver(function(){ if(!document.body.classList.contains('np-open')){ obs.disconnect(); if(bd.parentNode){ bd.style.display=''; render(); } } }); try{ obs.observe(document.body, { attributes:true, attributeFilter:['class'] }); }catch(e){} if(typeof openThreadNotes==='function') openThreadNotes(id); });
       foot.appendChild(nb); card.appendChild(foot);
@@ -46900,8 +46960,12 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.349';
+  var APP_VERSION = '2026.07.20.350';
   var APP_CHANGELOG = [
+    { v:'2026.07.20.350', date:'August 5, 2026', notes:[
+      'The element cards’ header (portrait, name, identity line) is now pinned at the top just like the footer — the card scrolls behind both.',
+      'The Thread card grew into a full dossier: link and unlink story elements right on the card, pick the thread’s stake from the stakes pool (change or clear it anytime), keep rough notes with ✦ enrich — and the footer now carries Write about this · ✦ Explore · Open in notepad like every other element card. Thread pills across the app (Elements page, plot grid, thread organizer) open it.'
+    ]},
     { v:'2026.07.20.349', date:'August 5, 2026', notes:[
       'The import review is now a card deck — one element at a time with ‹ › navigation, each card styled like the element cards: description up top, characteristics as labeled rows showing just the found dimensions (plus “+ add a dimension”), and the notes being appended in their own marked section. Goals, Narrative Layers and a closing Concept Word Pool each get a summary card of their own. “Accept all” stays one click away beneath the deck, and everything remains editable later in Plan → Elements.',
       'In the element builders, “＋ add a dimension” now opens the add-system picker filtered to that dimension so you choose the value yourself — the ↻ on each row remains the random roll.',
@@ -56393,8 +56457,12 @@ body:not(.eink) #groupCreator .el-descgo:hover, body:not(.eink) #eventCreator .e
   .dossier-top{ order:-3; }
   .dossier-sec:has(.dossier-glance){ order:-2; }
 
-  /* --- header: hairline seam beneath, finer type --- */
-  .dossier-top{ border-bottom:1px solid rgba(150,112,50,.22); padding-bottom:14px; }
+  /* --- header: pinned to the card's top edge — the card scrolls behind it --- */
+  .dossier{ padding-top:0; }
+  .dossier-top{ position:sticky; top:0; z-index:6; background:inherit;
+    margin:0 -22px; padding:18px 22px 13px;
+    border-bottom:1px solid rgba(150,112,50,.22);
+    box-shadow:0 14px 18px -16px rgba(40,24,4,.35); }
   .dossier-name{ font-weight:600; letter-spacing:.01em; }
   .dossier-idline{ font-family:var(--serif,Georgia,serif); font-style:italic; font-size:13px; color:#7a6f58; }
   .dossier-x{ width:26px; height:26px; display:flex; align-items:center; justify-content:center; padding:0; border-radius:50%; font-size:19px; transition:background .14s, color .14s; }
@@ -56448,6 +56516,15 @@ body:not(.eink) #groupCreator .el-descgo:hover, body:not(.eink) #eventCreator .e
   body:not(.eink) .dossier-enrich:hover{ background:var(--gold,#c8963c) !important; color:#f6f0de !important; border-color:var(--gold,#c8963c) !important; }
   .dossier-revert{ font-family:var(--serif,Georgia,serif); font-style:italic; font-size:11.5px; color:#8a7d68; text-decoration:none; }
   .dossier-revert:hover{ text-decoration:underline; color:#a8741f; }
+
+  /* --- thread card: linked-element chips (open · unlink) and the dashed add/pick chips --- */
+  .dossier-castchip{ display:inline-flex; align-items:center; gap:2px; cursor:pointer; }
+  .dossier-castrm{ display:inline-flex; align-items:center; justify-content:center; width:16px; height:16px; margin-left:5px; border-radius:50%; font-size:12px; line-height:1; color:#8a7d68; }
+  .dossier-castrm:hover{ background:rgba(120,92,40,.16); color:#241708; }
+  body:not(.eink) .dossier-castadd{ background:transparent; border:1px dashed rgba(168,116,31,.5); color:#a8741f; cursor:pointer;
+    font-family:var(--sans); font-size:9.5px; font-weight:700; letter-spacing:.08em; text-transform:uppercase;
+    transition:background .15s, color .15s, border-color .15s; }
+  body:not(.eink) .dossier-castadd:hover{ background:var(--gold,#c8963c); color:#f6f0de; border-style:solid; border-color:var(--gold,#c8963c); }
 
   /* --- footer: pinned to the card's bottom edge — the card scrolls behind it --- */
   .dossier{ padding-bottom:0; }
