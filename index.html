@@ -1613,6 +1613,7 @@
   /* full-screen session: a bit bigger type and a proportionally wider writing zone — easier to read with the whole screen to work with */
   body.writing.insession #editor{font-size:21px; line-height:1.9; max-width:880px}
   body.eink.writing.insession #editor{font-size:22px}
+  body.mobile-min.writing.insession #editor{font-size:19px; line-height:1.75}   /* phone: the write-mode type was oversized — smaller (Living Page, when on, also holds a smaller fixed size on phones) */
   /* the centered full-screen header (clock + question + divider) is fixed at the top; push the writing below it */
   body.writing.insession #editorWrap{padding-top:178px}
   /* full-screen: prior prose (sessions and imports alike) is scrolled off-screen above the prompt — scroll up to revisit.
@@ -10463,12 +10464,14 @@ function ecRenderSubOptions(selected, containerSub){
   sel.innerHTML = opts.join('');
 }
 function openElemCard(catId, mode, node, opts){
-  if (catId === 'being' && (mode === 'add' || mode == null) && !(opts && opts.direct) && typeof window.openBeingChooser === 'function'){ window.openBeingChooser(); return; }   // + character \u2192 chooser (Add basic \u00b7 Generate \u00b7 Character Creator \u00b7 By description)
-  if (catId === 'setting' && (mode === 'add' || mode == null) && !(opts && opts.direct) && typeof window.openSettingChooser === 'function'){ window.openSettingChooser(); return; }   // + place \u2192 chooser (Add basic \u00b7 Generate \u00b7 Settings Builder \u00b7 By description)
-  if (catId === 'object' && (mode === 'add' || mode == null) && !(opts && opts.direct) && typeof window.openObjectChooser === 'function'){ window.openObjectChooser(); return; }   // + object \u2192 chooser (Add basic \u00b7 Generate \u00b7 Object Builder \u00b7 By description)
-  if (catId === 'org' && (mode === 'add' || mode == null) && !(opts && opts.direct) && typeof window.openGroupChooser === 'function'){ window.openGroupChooser(); return; }   // + group \u2192 chooser (Add basic \u00b7 Generate \u00b7 Group Builder \u00b7 By description)
-  if (catId === 'event' && (mode === 'add' || mode == null) && !(opts && opts.direct) && typeof window.openEventChooser === 'function'){ window.openEventChooser(); return; }   // + event \u2192 chooser (Add basic \u00b7 Generate \u00b7 Event Builder \u00b7 By description)
-  if (catId === 'concept' && (mode === 'add' || mode == null) && !(opts && opts.direct) && typeof window.openConceptChooser === 'function'){ window.openConceptChooser(); return; }   // + concept \u2192 chooser (Add basic \u00b7 Generate \u00b7 Concept Builder \u00b7 By description)
+  // + element \u2192 open the builder DIRECTLY (one less step). The "By description" pass now lives inside each
+  // builder (below the name), so the old chooser (Creator \u00b7 By description) is redundant.
+  if (catId === 'being' && (mode === 'add' || mode == null) && !(opts && opts.direct) && typeof window.openCharCreator === 'function'){ window.openCharCreator(); return; }
+  if (catId === 'setting' && (mode === 'add' || mode == null) && !(opts && opts.direct) && typeof window.openSettingCreator === 'function'){ window.openSettingCreator(); return; }
+  if (catId === 'object' && (mode === 'add' || mode == null) && !(opts && opts.direct) && typeof window.openObjectCreator === 'function'){ window.openObjectCreator(); return; }
+  if (catId === 'org' && (mode === 'add' || mode == null) && !(opts && opts.direct) && typeof window.openGroupCreator === 'function'){ window.openGroupCreator(); return; }
+  if (catId === 'event' && (mode === 'add' || mode == null) && !(opts && opts.direct) && typeof window.openEventCreator === 'function'){ window.openEventCreator(); return; }
+  if (catId === 'concept' && (mode === 'add' || mode == null) && !(opts && opts.direct) && typeof window.openConceptCreator === 'function'){ window.openConceptCreator(); return; }
   if (addsLocked()){ flashStatus('The session is underway \u2014 end it to add elements'); return; }
   if ($('ecScope')) $('ecScope').checked = false;
   EC.cat = catId; EC.cats = null; EC.mode = mode || 'add'; EC.node = (node == null ? -1 : node); EC.block = null; EC.fam = '';
@@ -23266,6 +23269,9 @@ var LP = { base:30, delta:3, min:27, max:33, speed:0.4, tau:1.5,
            on:false, cur:30, vel:0, focus:0, keyTimes:[], activeIdx:0, raf:0, lastT:0, settleUntil:0 };
 function lpEnabled(){ try{ return localStorage.getItem('dystoria_livingpage') !== '0'; }catch(e){ return true; } }
 function lpSetEnabled(v){ try{ localStorage.setItem('dystoria_livingpage', v ? '1':'0'); }catch(e){} }
+// Living Page runs at a FIXED size — the grow/shrink "breathing" is disabled for now (only the colour fade
+// remains). Smaller on phones so the write-mode text isn't oversized on a narrow screen.
+function lpSize(){ try{ if((document.body && document.body.classList.contains('mobile-min')) || (window.matchMedia && window.matchMedia('(max-width:500px)').matches)) return 20; }catch(e){} return LP.base; }
 function lpNow(){ return (window.performance && performance.now) ? performance.now() : Date.now(); }
 function lpClamp(v,a,b){ return Math.max(a,Math.min(b,v)); }
 function lpSmooth(x){ x=Math.max(0,Math.min(1,x)); return x*x*(3-2*x); }
@@ -23375,31 +23381,20 @@ function lpFrame(){ if(!LP.on) return;
   try{
     var ed=document.getElementById('editor'); if(!ed){ LP.raf=requestAnimationFrame(lpFrame); return; }
     var t=lpNow(), dt=Math.min(0.05,(t-LP.lastT)/1000); LP.lastT=t; var c=lpCad();
-    // Hold the size perfectly still until the layout settles — the app re-scrolls the continue block
-    // for ~2.5s after start and the prior-session hide re-asserts; letting the anchored-resize run
-    // during that window makes the prompt jitter. Freeze at the base size first, then begin breathing.
-    if(t < LP.settleUntil){
-      if(LP._applied!==LP.max){ ed.style.fontSize=LP.max.toFixed(2)+'px'; LP._applied=LP.max; }
-      LP.cur=LP.max; LP.vel=0;
-    } else {
-      // size — calm breath: low cruise, velocity eased so turns don't snap
-      var tgt=lpTarget(c), diff=tgt-LP.cur, span=Math.max(1,LP.max-LP.min);
-      var dir=diff>0?1:(diff<0?-1:0);
-      var dv=dir*LP.speed*lpSmooth(Math.min(1,Math.abs(diff)/(span*0.45)));
-      var a=1-Math.exp(-dt/Math.max(0.05,LP.tau)); LP.vel+=(dv-LP.vel)*a; LP.cur+=LP.vel*dt;
-      LP.cur=lpClamp(LP.cur,LP.min,LP.max);
-      // Anchored resize: keep the line you're writing on visually stationary as the size changes.
-      if(LP._applied==null || Math.abs(LP.cur-LP._applied)>0.02){
-        var wrap=document.getElementById('editorWrap');
-        var anchor = ed.children[Math.min(LP.activeIdx, ed.children.length-1)] || ed.lastElementChild;
-        var before = (anchor && anchor.getBoundingClientRect) ? anchor.getBoundingClientRect().top : null;
-        ed.style.fontSize=LP.cur.toFixed(2)+'px'; LP._applied=LP.cur;
-        if(anchor && wrap && before!=null && before>-240 && before<innerHeight+240){
-          var after=anchor.getBoundingClientRect().top, d=after-before;
-          if(Math.abs(d)>0.3) wrap.scrollTop += d;   // compensate so the anchor line doesn't move
-        }
+    // Size is FROZEN — the grow/shrink "breathing" is disabled for now (Jeremy); only the colour fade below
+    // remains. Hold a fixed size (smaller on phones). Anchored resize on a viewport change so the line stays put.
+    var fx=lpSize();
+    if(LP._applied==null || Math.abs(fx-LP._applied)>0.02){
+      var wrap=document.getElementById('editorWrap');
+      var anchor = ed.children[Math.min(LP.activeIdx, ed.children.length-1)] || ed.lastElementChild;
+      var before = (anchor && anchor.getBoundingClientRect) ? anchor.getBoundingClientRect().top : null;
+      ed.style.fontSize=fx.toFixed(2)+'px'; LP._applied=fx;
+      if(anchor && wrap && before!=null && before>-240 && before<innerHeight+240){
+        var after=anchor.getBoundingClientRect().top, d=after-before;
+        if(Math.abs(d)>0.3) wrap.scrollTop += d;
       }
     }
+    LP.cur=fx; LP.vel=0;
     // dimming — same breath: engages in flow, releases on pause
     var ft=(LP.dimOn && c.idleMs<700) ? lpClamp(0.4+0.6*c.intensity,0,1) : 0;
     LP.focus += (ft-LP.focus)*(1-Math.exp(-dt/Math.max(0.1,LP.tau)));
@@ -23441,8 +23436,8 @@ function lpShowPrior(){ try{ var ed=document.getElementById('editor'); if(!ed) r
 function lpStart(){ try{ if(LP.on || !lpEnabled()) return; var ed=document.getElementById('editor'); if(!ed) return;
   // Start at the MAX grow size (not the mid base) and hold there — with no typing, the breath target IS the
   // ceiling, so it stays put until the writer starts typing, at which point the shrink/grow reveals naturally.
-  lpInjectCSS(); document.body.classList.add('lp-live'); LP.on=true; LP.cur=LP.max; LP.vel=0; LP.focus=0; LP.keyTimes=[]; LP.activeIdx=lpActiveIdx(); LP.lastT=lpNow(); LP.settleUntil=lpNow()+2600;
-  ed.style.fontSize=LP.max.toFixed(2)+'px'; LP._applied=LP.max;   // apply the starting (max) size SYNCHRONOUSLY, before the first paint — no flash of the default 21px editor size, and no dependence on a stale LP._applied
+  lpInjectCSS(); document.body.classList.add('lp-live'); LP.on=true; LP.cur=lpSize(); LP.vel=0; LP.focus=0; LP.keyTimes=[]; LP.activeIdx=lpActiveIdx(); LP.lastT=lpNow(); LP.settleUntil=lpNow()+2600;
+  ed.style.fontSize=lpSize().toFixed(2)+'px'; LP._applied=lpSize();   // apply the FIXED size SYNCHRONOUSLY, before the first paint — no flash of the default 21px editor size (breathing disabled; only the colour fade remains)
   LP.hl = !!(window.CSS && CSS.highlights && window.Highlight && window.Range);   // sentence-level dimming if supported
   ed.addEventListener('input', lpOnInput); ed.addEventListener('keyup', lpOnCaret); ed.addEventListener('mouseup', lpOnCaret);
   if(LP.hl) lpUpdateDim();
@@ -25419,8 +25414,8 @@ function frPlanAction(act){
     if(act==='wizard'){ if(typeof openPlanWizard==='function') openPlanWizard({step:0}); else if(typeof openStartCard==='function') openStartCard(); }
     else if(act==='goals'){ if(typeof openPlanWizard==='function') openPlanWizard({step:0}); else if(typeof openStartCard==='function') openStartCard(); }
     else if(act==='structure'){ if(typeof openPlanWizard==='function') openPlanWizard({step:1}); else _frToPlan('narrative'); }
-    else if(act==='char'){ _frToPlan('narrative', function(){ if(typeof window.openBeingChooser==='function') window.openBeingChooser(); }); }
-    else if(act==='world'){ _frToPlan('map', function(){ if(typeof window.openSettingChooser==='function') window.openSettingChooser(); }); }
+    else if(act==='char'){ _frToPlan('narrative', function(){ if(typeof window.openCharCreator==='function') window.openCharCreator(); else if(typeof window.openBeingChooser==='function') window.openBeingChooser(); }); }
+    else if(act==='world'){ _frToPlan('map', function(){ if(typeof window.openSettingCreator==='function') window.openSettingCreator(); else if(typeof window.openSettingChooser==='function') window.openSettingChooser(); }); }
     else if(act==='plot'){ _frToPlan('plot'); }
     else if(act==='web'){ _frToPlan('map'); }
     else if(act==='idea'){ if(typeof window.openExplore==='function') window.openExplore([], 'Find an idea', 'interview'); }
@@ -33583,6 +33578,7 @@ function aiErrMsg(e){
 }
 let _aiDailyNoticed = false;
 function aiDailyNotice(){
+  try{ window.__aiLimited = true; }catch(e){}   // mirror for feature gating (e.g. the inline "Break it down" button hides once we're out of AI for the day)
   if (_aiDailyNoticed) return; _aiDailyNoticed = true;
   const canUpgrade = (typeof subsVisible === 'function' && subsVisible() && typeof aiPlan === 'function' && aiPlan() !== 'pro');
   const msg = canUpgrade
@@ -36882,6 +36878,13 @@ document.addEventListener('DOMContentLoaded', init);
   #charCreator .cc-add{display:inline-block; margin:11px 0 2px; font-family:var(--serif); font-style:italic; font-size:13px; color:var(--ink-soft); background:transparent; border:1px dashed var(--line); border-radius:9px; padding:6px 12px; cursor:pointer}
   #charCreator .cc-add:hover{color:var(--ink); border-color:var(--ink)}
   #charCreator .cc-desc{width:100%; box-sizing:border-box; font-family:var(--serif); font-size:13px; font-style:italic; color:var(--ink); border:1px solid var(--line); border-radius:10px; background:transparent; outline:none; padding:8px 10px; margin:5px 0 8px; resize:vertical; min-height:44px}
+  /* Inline "By description" row inside every element builder (below the name) — the field + a ✦ Break it down button */
+  .el-descrow{display:flex; flex-direction:column; gap:7px; margin:4px 0 12px}
+  .el-descrow textarea{margin:0 !important}
+  .el-descgo{align-self:flex-start; font-family:var(--sans); font-size:10.5px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:var(--paper); background:var(--ink); border:none; border-radius:9px; padding:8px 15px; cursor:pointer; transition:background .12s}
+  .el-descgo:hover{background:var(--gold)}
+  .el-descgo:disabled{opacity:.6; cursor:default}
+  body.eink .el-descgo{background:#000}
   #charCreator .cc-foot{display:flex; align-items:center; gap:9px; padding:12px 18px 16px; border-top:1px solid var(--line)}
   #charCreator .cc-gen{font-family:var(--serif); font-style:italic; font-size:13px; color:var(--ink-soft); background:transparent; border:1px solid var(--line); border-radius:9px; padding:8px 13px; cursor:pointer}
   #charCreator .cc-gen:hover{color:var(--ink); border-color:var(--ink)}
@@ -37546,13 +37549,13 @@ document.addEventListener('DOMContentLoaded', init);
           +'<div class="cc-head"><span class="cc-title">Build a character</span><span class="cc-x">×</span></div>'
           +'<div class="cc-body">'
           +  '<input class="cc-name" id="ccName" autocomplete="off" placeholder="Name (optional)">'
+          +  '<div class="cc-seclbl" data-ai="Describe them (optional)" data-note="A line about them (optional)">Describe them (optional)</div>'
+          +  '<div class="el-descrow"><textarea class="cc-desc" id="ccDesc" rows="2" placeholder="a sentence or two — kept as their note"></textarea><button type="button" class="el-descgo" id="ccDescGo">✦ Break it down</button></div>'
           +  '<div class="cc-seg" id="ccSeg"></div>'
           +  '<div class="cc-seghint" id="ccSegHint"></div>'
           +  '<div class="cc-seclbl">Characteristics</div>'
           +  '<div id="ccSlots"></div>'
           +  '<span class="cc-add" id="ccAdd">＋ add a dimension</span>'
-          +  '<div class="cc-seclbl">A line about them (optional)</div>'
-          +  '<textarea class="cc-desc" id="ccDesc" rows="2" placeholder="a sentence or two — saved as their note"></textarea>'
           +'</div>'
           +'<div class="cc-foot"><button class="cc-gen" id="ccGen">↻ Generate</button><button class="cc-create" id="ccCreate">Create character</button></div>';
         document.body.appendChild(el);
@@ -37560,6 +37563,7 @@ document.addEventListener('DOMContentLoaded', init);
         el.addEventListener('click', e=>e.stopPropagation());
         document.getElementById('ccName').addEventListener('input', e=>{ CC.name=e.target.value; });
         document.getElementById('ccDesc').addEventListener('input', e=>{ CC.desc=e.target.value; });
+        document.getElementById('ccDescGo').addEventListener('click', ev=>{ ev.stopPropagation(); runInlineDesc('ccDesc','ccDescGo', ccApplyDescription); });
         document.getElementById('ccAdd').addEventListener('click', ev=>{ ev.stopPropagation(); ccAddMenu(ev.clientX, ev.clientY); });
         document.getElementById('ccGen').addEventListener('click', ev=>{ ev.stopPropagation(); ccGenerate(); });
         document.getElementById('ccCreate').addEventListener('click', ev=>{ ev.stopPropagation(); ccCommit(); });
@@ -37582,6 +37586,7 @@ document.addEventListener('DOMContentLoaded', init);
       try{ var _cb=document.getElementById('ccCreate'); if(_cb) _cb.textContent=CC.editKey?'Save changes':'Create character'; var _ct=document.querySelector('#charCreator .cc-title'); if(_ct) _ct.textContent=CC.editKey?('Edit '+((CC.name||'').trim()||'character')):'Build a character'; }catch(e){}
       document.getElementById('charCreatorBd').classList.add('show');
       document.getElementById('charCreator').classList.add('show');
+      syncElDesc('charCreator');
       document.body.classList.add('dyb-open');
       if(nm) setTimeout(()=>{ try{ nm.focus(); }catch(e){} }, 30);
     }
@@ -37710,6 +37715,31 @@ document.addEventListener('DOMContentLoaded', init);
     }
     function closeDescPrompt(){ const bd=document.getElementById('descPromptBd'), el=document.getElementById('descPrompt'); if(bd) bd.classList.remove('show'); if(el) el.classList.remove('show'); }
     window.openDescPrompt=openDescPrompt; window.closeDescPrompt=closeDescPrompt;
+    // Inline "By description" breakdown — runs the same AI pass the old desc-prompt used, but from the field
+    // that now lives inside each builder (below the name). applyFn fills the builder's fields in place.
+    function runInlineDesc(taId, goId, applyFn){
+      var ta=document.getElementById(taId), go=document.getElementById(goId); if(!ta||!go||typeof applyFn!=='function') return;
+      var text=(ta.value||'').trim();
+      if(!text){ if(typeof flashStatus==='function') flashStatus('Write a line first, then break it down.'); return; }
+      if(typeof aiAuthed==='function' && !aiAuthed()){ if(typeof promptAiSignup==='function') promptAiSignup(); return; }
+      var lbl=go.textContent; go.disabled=true; go.textContent='Reading…';
+      var reset=function(){ var g=document.getElementById(goId); if(g){ g.disabled=false; g.textContent=lbl; } };
+      Promise.resolve().then(function(){ return applyFn(text); }).then(reset).catch(function(e){ reset(); if(typeof flashStatus==='function') flashStatus((e&&e.message)||'Could not read that — try again.'); });
+    }
+    window.runInlineDesc=runInlineDesc;
+    // Show the ✦ Break it down button only when AI is usable (signed in + not out of the daily free limit).
+    // For signed-out / AI-limited writers the field is just "a line about it" — it still saves as the note,
+    // it simply isn't broken down. Called on every builder open (auth / limit can change between opens).
+    function syncElDesc(rootId){
+      try{
+        var root=document.getElementById(rootId); if(!root) return;
+        var canAI = (typeof aiAuthed!=='function' || aiAuthed()) && !window.__aiLimited;
+        var go=root.querySelector('.el-descgo'); if(go) go.style.display = canAI ? '' : 'none';
+        var lbl=root.querySelector('.el-descrow') ? root.querySelector('.el-descrow').previousElementSibling : null;
+        if(lbl && lbl.getAttribute('data-ai') && lbl.getAttribute('data-note')) lbl.textContent = canAI ? lbl.getAttribute('data-ai') : lbl.getAttribute('data-note');
+      }catch(e){}
+    }
+    window.syncElDesc=syncElDesc;
     function openBeingByDesc(){ openDescPrompt({ title:'Describe the character', note:'Write a sentence or two in your own words — Dystoria breaks it into characteristics you can review before creating.', placeholder:'e.g. A weary dwarven blacksmith, honest to a fault, hiding a gambling debt…', goLabel:'✦ Break it down', onGo:ccApplyDescription }); }
     window.openBeingByDesc=openBeingByDesc; window.closeBeingDesc=closeDescPrompt;
     async function ccApplyDescription(text){
@@ -37814,13 +37844,13 @@ document.addEventListener('DOMContentLoaded', init);
           +'<div class="sc-head"><span class="sc-title">Build a place</span><span class="sc-x">×</span></div>'
           +'<div class="sc-body">'
           +  '<input class="sc-name" id="sbName" autocomplete="off" placeholder="Name (optional)">'
+          +  '<div class="sc-seclbl" data-ai="Describe it (optional)" data-note="A line about it (optional)">Describe it (optional)</div>'
+          +  '<div class="el-descrow"><textarea class="sc-desc" id="sbDesc" rows="2" placeholder="a sentence or two — kept as its note"></textarea><button type="button" class="el-descgo" id="sbDescGo">✦ Break it down</button></div>'
           +  '<div class="sc-seg" id="sbSeg"></div>'
           +  '<div class="sc-seghint" id="sbSegHint"></div>'
           +  '<div class="sc-seclbl">Characteristics</div>'
           +  '<div id="sbSlots"></div>'
           +  '<span class="sc-add" id="sbAdd">＋ add a dimension</span>'
-          +  '<div class="sc-seclbl">A line about it (optional)</div>'
-          +  '<textarea class="sc-desc" id="sbDesc" rows="2" placeholder="a sentence or two — saved as its note"></textarea>'
           +'</div>'
           +'<div class="sc-foot"><button class="sc-gen" id="sbGen">↻ Generate</button><button class="sc-create" id="sbCreate">Create place</button></div>';
         document.body.appendChild(el);
@@ -37828,6 +37858,7 @@ document.addEventListener('DOMContentLoaded', init);
         el.addEventListener('click', e=>e.stopPropagation());
         document.getElementById('sbName').addEventListener('input', e=>{ SB.name=e.target.value; });
         document.getElementById('sbDesc').addEventListener('input', e=>{ SB.desc=e.target.value; });
+        document.getElementById('sbDescGo').addEventListener('click', ev=>{ ev.stopPropagation(); runInlineDesc('sbDesc','sbDescGo', sbApplyDescription); });
         document.getElementById('sbAdd').addEventListener('click', ev=>{ ev.stopPropagation(); sbAddMenu(ev.clientX, ev.clientY); });
         document.getElementById('sbGen').addEventListener('click', ev=>{ ev.stopPropagation(); sbGenerate(); });
         document.getElementById('sbCreate').addEventListener('click', ev=>{ ev.stopPropagation(); sbCommit(); });
@@ -37850,6 +37881,7 @@ document.addEventListener('DOMContentLoaded', init);
       try{ var _cb=document.getElementById('sbCreate'); if(_cb) _cb.textContent=SB.editKey?'Save changes':'Create place'; var _ct=document.querySelector('#settingCreator .sc-title'); if(_ct) _ct.textContent=SB.editKey?('Edit '+((SB.name||'').trim()||'place')):'Build a place'; }catch(e){}
       document.getElementById('settingCreatorBd').classList.add('show');
       document.getElementById('settingCreator').classList.add('show');
+      syncElDesc('settingCreator');
       document.body.classList.add('dyb-open');
       if(nm) setTimeout(()=>{ try{ nm.focus(); }catch(e){} }, 30);
     }
@@ -37989,13 +38021,13 @@ document.addEventListener('DOMContentLoaded', init);
           +'<div class="oc-head"><span class="oc-title">Build an artifact</span><span class="oc-x">×</span></div>'
           +'<div class="oc-body">'
           +  '<input class="oc-name" id="obName" autocomplete="off" placeholder="Name (optional)">'
+          +  '<div class="oc-seclbl" data-ai="Describe it (optional)" data-note="A line about it (optional)">Describe it (optional)</div>'
+          +  '<div class="el-descrow"><textarea class="oc-desc" id="obDesc" rows="2" placeholder="a sentence or two — kept as its note"></textarea><button type="button" class="el-descgo" id="obDescGo">✦ Break it down</button></div>'
           +  '<div class="oc-seg" id="obSeg"></div>'
           +  '<div class="oc-seghint" id="obSegHint"></div>'
           +  '<div class="oc-seclbl">Characteristics</div>'
           +  '<div id="obSlots"></div>'
           +  '<span class="oc-add" id="obAdd">＋ add a dimension</span>'
-          +  '<div class="oc-seclbl">A line about it (optional)</div>'
-          +  '<textarea class="oc-desc" id="obDesc" rows="2" placeholder="a sentence or two — saved as its note"></textarea>'
           +'</div>'
           +'<div class="oc-foot"><button class="oc-gen" id="obGen">↻ Generate</button><button class="oc-create" id="obCreate">Create artifact</button></div>';
         document.body.appendChild(el);
@@ -38003,6 +38035,7 @@ document.addEventListener('DOMContentLoaded', init);
         el.addEventListener('click', e=>e.stopPropagation());
         document.getElementById('obName').addEventListener('input', e=>{ OB.name=e.target.value; });
         document.getElementById('obDesc').addEventListener('input', e=>{ OB.desc=e.target.value; });
+        document.getElementById('obDescGo').addEventListener('click', ev=>{ ev.stopPropagation(); runInlineDesc('obDesc','obDescGo', obApplyDescription); });
         document.getElementById('obAdd').addEventListener('click', ev=>{ ev.stopPropagation(); obAddMenu(ev.clientX, ev.clientY); });
         document.getElementById('obGen').addEventListener('click', ev=>{ ev.stopPropagation(); obGenerate(); });
         document.getElementById('obCreate').addEventListener('click', ev=>{ ev.stopPropagation(); obCommit(); });
@@ -38025,6 +38058,7 @@ document.addEventListener('DOMContentLoaded', init);
       try{ var _cb=document.getElementById('obCreate'); if(_cb) _cb.textContent=OB.editKey?'Save changes':'Create artifact'; var _ct=document.querySelector('#objectCreator .oc-title'); if(_ct) _ct.textContent=OB.editKey?('Edit '+((OB.name||'').trim()||'artifact')):'Build an artifact'; }catch(e){}
       document.getElementById('objectCreatorBd').classList.add('show');
       document.getElementById('objectCreator').classList.add('show');
+      syncElDesc('objectCreator');
       document.body.classList.add('dyb-open');
       if(nm) setTimeout(()=>{ try{ nm.focus(); }catch(e){} }, 30);
     }
@@ -38162,13 +38196,13 @@ document.addEventListener('DOMContentLoaded', init);
           +'<div class="gc-head"><span class="gc-title">Build a group</span><span class="gc-x">×</span></div>'
           +'<div class="gc-body">'
           +  '<input class="gc-name" id="gbName" autocomplete="off" placeholder="Name (optional)">'
+          +  '<div class="gc-seclbl" data-ai="Describe it (optional)" data-note="A line about it (optional)">Describe it (optional)</div>'
+          +  '<div class="el-descrow"><textarea class="gc-desc" id="gbDesc" rows="2" placeholder="a sentence or two — kept as its note"></textarea><button type="button" class="el-descgo" id="gbDescGo">✦ Break it down</button></div>'
           +  '<div class="gc-seg" id="gbSeg"></div>'
           +  '<div class="gc-seghint" id="gbSegHint"></div>'
           +  '<div class="gc-seclbl">Characteristics</div>'
           +  '<div id="gbSlots"></div>'
           +  '<span class="gc-add" id="gbAdd">＋ add a dimension</span>'
-          +  '<div class="gc-seclbl">A line about it (optional)</div>'
-          +  '<textarea class="gc-desc" id="gbDesc" rows="2" placeholder="a sentence or two — saved as its note"></textarea>'
           +'</div>'
           +'<div class="gc-foot"><button class="gc-gen" id="gbGen">↻ Generate</button><button class="gc-create" id="gbCreate">Create group</button></div>';
         document.body.appendChild(el);
@@ -38176,6 +38210,7 @@ document.addEventListener('DOMContentLoaded', init);
         el.addEventListener('click', e=>e.stopPropagation());
         document.getElementById('gbName').addEventListener('input', e=>{ GB.name=e.target.value; });
         document.getElementById('gbDesc').addEventListener('input', e=>{ GB.desc=e.target.value; });
+        document.getElementById('gbDescGo').addEventListener('click', ev=>{ ev.stopPropagation(); runInlineDesc('gbDesc','gbDescGo', gbApplyDescription); });
         document.getElementById('gbAdd').addEventListener('click', ev=>{ ev.stopPropagation(); gbAddMenu(ev.clientX, ev.clientY); });
         document.getElementById('gbGen').addEventListener('click', ev=>{ ev.stopPropagation(); gbGenerate(); });
         document.getElementById('gbCreate').addEventListener('click', ev=>{ ev.stopPropagation(); gbCommit(); });
@@ -38198,6 +38233,7 @@ document.addEventListener('DOMContentLoaded', init);
       try{ var _cb=document.getElementById('gbCreate'); if(_cb) _cb.textContent=GB.editKey?'Save changes':'Create group'; var _ct=document.querySelector('#groupCreator .gc-title'); if(_ct) _ct.textContent=GB.editKey?('Edit '+((GB.name||'').trim()||'group')):'Build a group'; }catch(e){}
       document.getElementById('groupCreatorBd').classList.add('show');
       document.getElementById('groupCreator').classList.add('show');
+      syncElDesc('groupCreator');
       document.body.classList.add('dyb-open');
       if(nm) setTimeout(()=>{ try{ nm.focus(); }catch(e){} }, 30);
     }
@@ -38335,13 +38371,13 @@ document.addEventListener('DOMContentLoaded', init);
           +'<div class="gc-head"><span class="gc-title">Build an event</span><span class="gc-x">×</span></div>'
           +'<div class="gc-body">'
           +  '<input class="gc-name" id="evName" autocomplete="off" placeholder="Name (optional)">'
+          +  '<div class="gc-seclbl" data-ai="Describe it (optional)" data-note="A line about it (optional)">Describe it (optional)</div>'
+          +  '<div class="el-descrow"><textarea class="gc-desc" id="evDesc" rows="2" placeholder="a sentence or two — kept as its note"></textarea><button type="button" class="el-descgo" id="evDescGo">✦ Break it down</button></div>'
           +  '<div class="gc-seg" id="evSeg"></div>'
           +  '<div class="gc-seghint" id="evSegHint"></div>'
           +  '<div class="gc-seclbl">Characteristics</div>'
           +  '<div id="evSlots"></div>'
           +  '<span class="gc-add" id="evAdd">＋ add a dimension</span>'
-          +  '<div class="gc-seclbl">A line about it (optional)</div>'
-          +  '<textarea class="gc-desc" id="evDesc" rows="2" placeholder="a sentence or two — saved as its note"></textarea>'
           +'</div>'
           +'<div class="gc-foot"><button class="gc-gen" id="evGen">↻ Generate</button><button class="gc-create" id="evCreate">Create event</button></div>';
         document.body.appendChild(el);
@@ -38349,6 +38385,7 @@ document.addEventListener('DOMContentLoaded', init);
         el.addEventListener('click', e=>e.stopPropagation());
         document.getElementById('evName').addEventListener('input', e=>{ EV.name=e.target.value; });
         document.getElementById('evDesc').addEventListener('input', e=>{ EV.desc=e.target.value; });
+        document.getElementById('evDescGo').addEventListener('click', ev=>{ ev.stopPropagation(); runInlineDesc('evDesc','evDescGo', evApplyDescription); });
         document.getElementById('evAdd').addEventListener('click', ev=>{ ev.stopPropagation(); evAddMenu(ev.clientX, ev.clientY); });
         document.getElementById('evGen').addEventListener('click', ev=>{ ev.stopPropagation(); evGenerate(); });
         document.getElementById('evCreate').addEventListener('click', ev=>{ ev.stopPropagation(); evCommit(); });
@@ -38371,6 +38408,7 @@ document.addEventListener('DOMContentLoaded', init);
       try{ var _cb=document.getElementById('evCreate'); if(_cb) _cb.textContent=EV.editKey?'Save changes':'Create event'; var _ct=document.querySelector('#eventCreator .gc-title'); if(_ct) _ct.textContent=EV.editKey?('Edit '+((EV.name||'').trim()||'event')):'Build an event'; }catch(e){}
       document.getElementById('eventCreatorBd').classList.add('show');
       document.getElementById('eventCreator').classList.add('show');
+      syncElDesc('eventCreator');
       document.body.classList.add('dyb-open');
       if(nm) setTimeout(()=>{ try{ nm.focus(); }catch(e){} }, 30);
     }
@@ -38509,13 +38547,13 @@ document.addEventListener('DOMContentLoaded', init);
           +'<div class="gc-head"><span class="gc-title">Build a concept</span><span class="gc-x">×</span></div>'
           +'<div class="gc-body">'
           +  '<input class="gc-name" id="coName" autocomplete="off" placeholder="Name (optional)">'
+          +  '<div class="gc-seclbl" data-ai="Describe it (optional)" data-note="A line about it (optional)">Describe it (optional)</div>'
+          +  '<div class="el-descrow"><textarea class="gc-desc" id="coDesc" rows="2" placeholder="a sentence or two — kept as its note"></textarea><button type="button" class="el-descgo" id="coDescGo">✦ Break it down</button></div>'
           +  '<div class="gc-seg" id="coSeg"></div>'
           +  '<div class="gc-seghint" id="coSegHint"></div>'
           +  '<div class="gc-seclbl">Characteristics</div>'
           +  '<div id="coSlots"></div>'
           +  '<span class="gc-add" id="coAdd">＋ add a dimension</span>'
-          +  '<div class="gc-seclbl">A line about it (optional)</div>'
-          +  '<textarea class="gc-desc" id="coDesc" rows="2" placeholder="a sentence or two — saved as its note"></textarea>'
           +'</div>'
           +'<div class="gc-foot"><button class="gc-gen" id="coGen">↻ Generate</button><button class="gc-create" id="coCreate">Create concept</button></div>';
         document.body.appendChild(el);
@@ -38523,6 +38561,7 @@ document.addEventListener('DOMContentLoaded', init);
         el.addEventListener('click', e=>e.stopPropagation());
         document.getElementById('coName').addEventListener('input', e=>{ CO.name=e.target.value; });
         document.getElementById('coDesc').addEventListener('input', e=>{ CO.desc=e.target.value; });
+        document.getElementById('coDescGo').addEventListener('click', ev=>{ ev.stopPropagation(); runInlineDesc('coDesc','coDescGo', coApplyDescription); });
         document.getElementById('coAdd').addEventListener('click', ev=>{ ev.stopPropagation(); coAddMenu(ev.clientX, ev.clientY); });
         document.getElementById('coGen').addEventListener('click', ev=>{ ev.stopPropagation(); coGenerate(); });
         document.getElementById('coCreate').addEventListener('click', ev=>{ ev.stopPropagation(); coCommit(); });
@@ -38545,6 +38584,7 @@ document.addEventListener('DOMContentLoaded', init);
       try{ var _cb=document.getElementById('coCreate'); if(_cb) _cb.textContent=CO.editKey?'Save changes':'Create concept'; var _ct=document.querySelector('#conceptCreator .gc-title'); if(_ct) _ct.textContent=CO.editKey?('Edit '+((CO.name||'').trim()||'concept')):'Build a concept'; }catch(e){}
       document.getElementById('conceptCreatorBd').classList.add('show');
       document.getElementById('conceptCreator').classList.add('show');
+      syncElDesc('conceptCreator');
       document.body.classList.add('dyb-open');
       if(nm) setTimeout(()=>{ try{ nm.focus(); }catch(e){} }, 30);
     }
@@ -46851,7 +46891,7 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.336';
+  var APP_VERSION = '2026.07.20.338';
   var APP_CHANGELOG = [
     { v:'2026.07.20.257', date:'August 1, 2026', notes:[
       'A freshly generated writing prompt now arrives large on the page, holds a beat, then shrinks into its resting place above your writing — so a new spark actually lands.'
