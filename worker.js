@@ -479,8 +479,12 @@ async function handleAI(request, env) {
   // and refuses to stage that answer, so this route never needs to fake a citation.
   if (body.kind === 'research'){
     const recency = body.recency === 'year' ? 'year' : '';
+    // testing-panel toggle: turning "Perplexity · Sonar" off in the AI models panel skips it here too
+    const _ronly = Array.isArray(body.models) ? body.models : null;
+    const _rexcl = Array.isArray(body.exclude) ? body.exclude.filter(x => typeof x === 'string') : [];
+    const sonarOn = paid && env.PERPLEXITY_API_KEY && (!_ronly || _ronly.includes('perplexity-sonar')) && !_rexcl.includes('perplexity-sonar');
     let rr = null;
-    if (paid && env.PERPLEXITY_API_KEY){
+    if (sonarOn){
       const sr = await runSonarResearch(env, system, prompt, maxTokens, recency);
       if (sr.text) rr = sr;
     }
