@@ -46964,8 +46964,12 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.359';
+  var APP_VERSION = '2026.07.20.360';
   var APP_CHANGELOG = [
+    { v:'2026.07.20.360', date:'August 6, 2026', notes:[
+      'Fixed the Research section not appearing on element cards opened through the notepad’s own tabs and chips — the card is now decorated on every render path, so ✦ All research and the per-question pills are always there when an element has research.',
+      'The compiled research views no longer repeat the question twice — the section heading carries it; the note’s own question line shows only in the editor.'
+    ]},
     { v:'2026.07.20.359', date:'August 6, 2026', notes:[
       'Fixed the narrow “scratchpad” sliver beside the research views — the notepad now fully hides while a compiled research view is showing.',
       'Fixed the ✦ Research roll-up: picking an element’s pill no longer shows an empty pane — its compiled research stays up, and clicking a question heading drops into that note for editing with the element’s pill still selected.'
@@ -56993,6 +56997,7 @@ body.res-allview #notepad{ display:none !important; }   /* the app forces #notep
 #resAllView .resall-h{ width:100%; box-sizing:border-box; min-width:0; }
 #resAllView .resall-body{ width:100%; box-sizing:border-box; min-width:0; overflow-wrap:anywhere; }
 #resAllView .np-ressrc{ word-break:break-all; }
+#resAllView .resall-body.resall-one > .np-resq:first-child{ display:none; }   /* the section heading already carries the question */
 .resall-h{ font-family:var(--sans); font-size:9px; font-weight:700; letter-spacing:.16em; text-transform:uppercase; color:#a8741f; margin:16px 0 6px; cursor:pointer; display:flex; align-items:center; gap:9px; }
 .resall-h:first-child{ margin-top:2px; }
 .resall-h::after{ content:''; flex:1; height:1px; background:rgba(150,112,50,.22); }
@@ -57251,7 +57256,7 @@ body.eink #resAllView{ color:#000; }
       var h=document.createElement('div'); h.className='resall-h'; h.textContent=en.label; h.title='Open this research in the editor';
       h.addEventListener('click', function(){ selElRes(base, en.tab); });
       s.appendChild(h);
-      var b=document.createElement('div'); b.className='resall-body'; b.innerHTML=en.html; s.appendChild(b);
+      var b=document.createElement('div'); b.className='resall-body resall-one'; b.innerHTML=en.html; s.appendChild(b);
       v.appendChild(s);
     });
   }
@@ -57392,6 +57397,7 @@ body.eink #resAllView{ color:#000; }
   // Notepad: ✦ Research pill on the right of the filter bar
   function mountNp(){
     try{
+      ensureNpCardObserver();
       var fr=document.querySelector('#npElements .np-filters');
       if(!fr) return;
       if(!fr.querySelector('.np-resbtn')){
@@ -57414,47 +57420,65 @@ body.eink #resAllView{ color:#000; }
         // research mode: only our tab reads as active; the normal chip rows hide (the research card lists the pills)
         host.querySelectorAll('.np-catfilter').forEach(function(x){ var mine=x.classList.contains('np-resfilter'); x.classList.toggle('on', mine); if(!mine) x.style.color=''; else x.style.color='var(--gold,#a8741f)'; });
         Array.prototype.forEach.call(host.children, function(ch){ if(ch.classList && ch.classList.contains('np-filters')) return; ch.style.display='none'; });
-      } else { hideResAll(); }
+      } else {
+        hideResAll();
+        var cardX=document.getElementById('npCard');
+        if(cardX && cardX.querySelector('[data-rescard]')){ cardX.removeAttribute('data-ressig'); try{ window.renderNpCard(); }catch(e){} }   // leaving the research filter → restore the real card
+      }
     }catch(e){}
   }
   function wrap(name, after){ var f=window[name]; if(typeof f!=='function') return; window[name]=function(){ var r=f.apply(this, arguments); try{ after.apply(this, arguments); }catch(e){} return r; }; }
   wrap('renderNpElements', mountNp);
   // the ✦ Research pill on the notepad element card (visible when the element has a research note)
-  wrap('renderNpCard', function(){
-    try{
-      // research roll-up mode: the sidebar becomes the Research card — ALL, then a pill per element with research
-      if(state.npCatFilter==='research'){
-        var rc=document.getElementById('npCard'); if(!rc) return;
-        var lm=document.getElementById('lowerMain'); if(lm) lm.classList.add('np-sheet');
-        rc.style.display='flex'; rc.innerHTML='';
-        var rbody=document.createElement('div'); rbody.className='npc-body';
-        var rt=document.createElement('div'); rt.className='npc-title'; rt.textContent='✦ Research'; rbody.appendChild(rt);
-        var rs=document.createElement('div'); rs.className='npc-sentence'; rs.textContent='Everything you’ve filed, element by element — sources ride at the end of each note.'; rbody.appendChild(rs);
-        var tr=document.createElement('div'); tr.className='npc-traits'; tr.style.cssText='margin-top:12px; display:flex; flex-direction:column; align-items:stretch; gap:5px;';
-        var cur=state._resSel||'all';
-        var mk=function(label, on, fn){ var c=document.createElement('span'); c.className='npc-trait npc-traitpill npc-research'+(on?' on':''); var lb=document.createElement('span'); lb.className='npc-tw'; lb.textContent=label; c.appendChild(lb); c.style.cursor='pointer'; c.addEventListener('click', function(e){ e.stopPropagation(); fn(); }); tr.appendChild(c); };
-        mk('ALL — every research note', cur==='all', function(){ state._resSel='all'; showResAll(); try{ window.renderNpCard(); }catch(_){} });
-        researchList().forEach(function(it){ mk(it.label, cur===it.base, function(){ selResearch(it.base); }); });
-        rbody.appendChild(tr); rc.appendChild(rbody);
-        if(cur==='all'){ showResAll(); }
-        else if(state._elResAll===cur){ showElAll(cur); }
-        else { hideResAll(); }
-        return;
-      }
-      if(state._elResAll!==state.npActive) hideResAll();
-      var key=state.npActive; if(!key||key==='general') return;
-      var w=(typeof npFindEl==='function')?npFindEl(key):null; if(!w) return;
-      var ents=elResEntries(key); if(!ents.length) return;
-      var card=document.getElementById('npCard'); if(!card || card.querySelector('.npc-ressec')) return;
-      var host=card.querySelector('.npc-connections'); host=host?host.parentNode:card;
-      var sec=document.createElement('div'); sec.className='npc-traits npc-ressec';
-      var lab=document.createElement('span'); lab.className='npc-seclbl'; lab.textContent='Research'; sec.appendChild(lab);
-      var mkP=function(label, on, title, fn){ var c=document.createElement('span'); c.className='npc-trait npc-traitpill npc-research'+(on?' on':''); c.title=title; var lb=document.createElement('span'); lb.className='npc-tw'; lb.textContent=label; c.appendChild(lb); c.style.cursor='pointer'; c.addEventListener('click', function(e){ e.stopPropagation(); fn(); }); sec.appendChild(c); return c; };
-      mkP('✦ All research', state._elResAll===key, 'Show every piece of research on this element', function(){ showElAll(key); try{ window.renderNpCard(); }catch(_){} });
-      ents.forEach(function(en){ var l=en.label.length>34?(en.label.slice(0,33)+'…'):en.label; mkP(l, state.cardTrait===en.tab, 'Open this research in the notes editor', function(){ selElRes(key, en.tab); }); });
-      host.appendChild(sec);
-    }catch(e){}
-  });
+  // The app's INTERNAL renderNpCard calls resolve inside its closure and bypass the window wrapper,
+  // so the card is (re)decorated through a MutationObserver instead — every render path gets it.
+  // Signatures stop rebuild loops.
+  function ensureNpCardObserver(){
+    var card=document.getElementById('npCard'); if(!card || card._resObs) return;
+    card._resObs=1;
+    try{ new MutationObserver(function(){ try{ decorateNpCard(); }catch(e){} }).observe(card, { childList:true }); }catch(e){}
+  }
+  function decorateNpCard(){
+    var card=document.getElementById('npCard'); if(!card) return;
+    // --- research roll-up mode: the sidebar IS the Research card ---
+    if(state.npCatFilter==='research'){
+      var cur=state._resSel||'all';
+      var sig='research|'+cur+'|'+(state._elResAll||'')+'|'+researchList().length;
+      if(card.getAttribute('data-ressig')===sig && card.querySelector('[data-rescard]')) return;
+      card.setAttribute('data-ressig', sig);
+      var lm=document.getElementById('lowerMain'); if(lm) lm.classList.add('np-sheet');
+      card.style.display='flex'; card.innerHTML='';
+      var rbody=document.createElement('div'); rbody.className='npc-body'; rbody.setAttribute('data-rescard','1');
+      var rt=document.createElement('div'); rt.className='npc-title'; rt.textContent='✦ Research'; rbody.appendChild(rt);
+      var rs=document.createElement('div'); rs.className='npc-sentence'; rs.textContent='Everything you’ve filed, element by element — sources ride at the end of each note.'; rbody.appendChild(rs);
+      var tr=document.createElement('div'); tr.className='npc-traits'; tr.style.cssText='margin-top:12px; display:flex; flex-direction:column; align-items:stretch; gap:5px;';
+      var mk=function(label, on, fn){ var c=document.createElement('span'); c.className='npc-trait npc-traitpill npc-research'+(on?' on':''); var lb=document.createElement('span'); lb.className='npc-tw'; lb.textContent=label; c.appendChild(lb); c.style.cursor='pointer'; c.addEventListener('click', function(e){ e.stopPropagation(); fn(); }); tr.appendChild(c); };
+      mk('ALL — every research note', cur==='all', function(){ state._resSel='all'; showResAll(); decorateNpCard(); });
+      researchList().forEach(function(it){ mk(it.label, cur===it.base, function(){ selResearch(it.base); }); });
+      rbody.appendChild(tr); card.appendChild(rbody);
+      if(cur==='all'){ showResAll(); }
+      else if(state._elResAll===cur){ showElAll(cur); }
+      else { hideResAll(); }
+      return;
+    }
+    card.removeAttribute('data-ressig');
+    if(state._elResAll!==state.npActive) hideResAll();
+    var key=state.npActive; if(!key||key==='general') return;
+    var w=(typeof npFindEl==='function')?npFindEl(key):null; if(!w) return;
+    var ents=elResEntries(key); if(!ents.length) return;
+    var sig2=key+'|'+(state.cardTrait||'')+'|'+(state._elResAll||'')+'|'+ents.length;
+    var old=card.querySelector('.npc-ressec');
+    if(old && old.getAttribute('data-ressig')===sig2) return;
+    if(old) old.remove();
+    var host=card.querySelector('.npc-connections'); host=host?host.parentNode:card;
+    var sec=document.createElement('div'); sec.className='npc-traits npc-ressec'; sec.setAttribute('data-ressig', sig2);
+    var lab=document.createElement('span'); lab.className='npc-seclbl'; lab.textContent='Research'; sec.appendChild(lab);
+    var mkP=function(label, on, title, fn){ var c=document.createElement('span'); c.className='npc-trait npc-traitpill npc-research'+(on?' on':''); c.title=title; var lb=document.createElement('span'); lb.className='npc-tw'; lb.textContent=label; c.appendChild(lb); c.style.cursor='pointer'; c.addEventListener('click', function(e){ e.stopPropagation(); fn(); }); sec.appendChild(c); return c; };
+    mkP('✦ All research', state._elResAll===key, 'Show every piece of research on this element', function(){ showElAll(key); decorateNpCard(); });
+    ents.forEach(function(en){ var l=en.label.length>34?(en.label.slice(0,33)+'…'):en.label; mkP(l, state.cardTrait===en.tab, 'Open this research in the notes editor', function(){ selElRes(key, en.tab); }); });
+    host.appendChild(sec);
+  }
+  wrap('renderNpCard', function(){ ensureNpCardObserver(); try{ decorateNpCard(); }catch(e){} });
   // label the research sub-note tab wherever note labels appear
   (function(){ var lf=window.npLabelFor; if(typeof lf==='function'){ window.npLabelFor=function(k){ var out=lf.apply(this, arguments); try{ if(typeof out==='string') out=out.replace(/@research(:\w+)?/,'✦ Research'); }catch(e){} return out; }; } })();
   // close research when another Revise drawer opens
