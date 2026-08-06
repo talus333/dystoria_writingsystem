@@ -208,6 +208,61 @@ async function runGemini(env, system, prompt, maxTokens, temperature, model, jso
   } catch (e) { return { text: '', error: String(e) }; }
 }
 
+// ---- Research (kind:'research') — grounded web answers whose sources are REAL retrieved pages ----
+// Perplexity Sonar: the `search_results` array comes from its retrieval layer, so every URL is a page it
+// actually fetched — the app renders ONLY this list as sources, and treats an empty list as ungrounded.
+async function runSonarResearch(env, system, prompt, maxTokens, recency) {
+  const key = env.PERPLEXITY_API_KEY;
+  if (!key) return { text: '', error: 'no PERPLEXITY_API_KEY' };
+  const payload = {
+    model: 'sonar',
+    messages: [{ role: 'system', content: system || '' }, { role: 'user', content: prompt }],
+    max_tokens: Math.min(Math.max(maxTokens, 512), 2048),
+    temperature: 0.2,
+  };
+  if (recency === 'year') payload.search_recency_filter = 'year';
+  try {
+    const r = await fetch('https://api.perplexity.ai/chat/completions', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await r.json().catch(() => null);
+    if (!r.ok) return { text: '', error: (data && data.error && (data.error.message || data.error)) || ('HTTP ' + r.status), status: r.status };
+    let text = '';
+    try { text = (data.choices[0].message.content || '').trim(); } catch (e) {}
+    let sources = [];
+    if (Array.isArray(data.search_results)) sources = data.search_results.map((s, i) => ({ n: i + 1, title: s.title || '', url: s.url || '' }));
+    else if (Array.isArray(data.citations)) sources = data.citations.map((u, i) => ({ n: i + 1, title: '', url: String(u) }));
+    sources = sources.filter(s => s.url);
+    return { text, sources, via: 'perplexity-sonar' };
+  } catch (e) { return { text: '', error: String(e) }; }
+}
+// Gemini with Google-Search grounding — the free research path; groundingMetadata carries really-retrieved URLs.
+async function runGeminiResearch(env, system, prompt, maxTokens) {
+  const key = env.GEMINI_API_KEY;
+  if (!key) return { text: '', error: 'no GEMINI_API_KEY' };
+  const url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=' + encodeURIComponent(key);
+  const payload = {
+    contents: [{ role: 'user', parts: [{ text: prompt }] }],
+    tools: [{ google_search: {} }],
+    generationConfig: { temperature: 0.2, maxOutputTokens: Math.max(maxTokens, 2048) },
+  };
+  if (system) payload.system_instruction = { parts: [{ text: system }] };
+  try {
+    const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    const data = await r.json().catch(() => null);
+    if (!r.ok) return { text: '', error: (data && data.error && data.error.message) || ('HTTP ' + r.status), status: r.status };
+    const cand = (data.candidates || [])[0] || {};
+    let text = '';
+    try { text = (cand.content.parts || []).map(p => p.text || '').join('').trim(); } catch (e) {}
+    let sources = [];
+    try { (cand.groundingMetadata.groundingChunks || []).forEach(c => { const w = c.web || {}; if (w.uri) sources.push({ title: w.title || '', url: w.uri }); }); } catch (e) {}
+    const seen = {}; sources = sources.filter(s => { if (seen[s.url]) return false; seen[s.url] = 1; return true; }).map((s, i) => ({ n: i + 1, title: s.title, url: s.url }));
+    return { text, sources, via: 'gemini-grounded' };
+  } catch (e) { return { text: '', error: String(e) }; }
+}
+
 // Claude (Anthropic Messages API). Preferred for icons when ANTHROPIC_API_KEY is set.
 async function runClaude(env, system, prompt, maxTokens, temperature) {
   const key = env.ANTHROPIC_API_KEY;
@@ -416,6 +471,25 @@ async function handleAI(request, env) {
     const err = fr.error || '';
     if (fr.exhausted) return new Response(JSON.stringify({ error: 'The import model is at today’s limit — it resets tomorrow.', limit: 'day' }), { status: 429, headers });
     return new Response(JSON.stringify({ error: 'Import model error — ' + (err || 'try again') }), { status: 502, headers });
+  }
+
+  // ---- Research (the ✦ Research drawer): grounded web answers with real citations.
+  // Sonar leads for Pro/admin when PERPLEXITY_API_KEY is set; everyone else (and any Sonar failure)
+  // takes Gemini + Google-Search grounding. The app treats an empty `sources` array as ungrounded
+  // and refuses to stage that answer, so this route never needs to fake a citation.
+  if (body.kind === 'research'){
+    const recency = body.recency === 'year' ? 'year' : '';
+    let rr = null;
+    if (paid && env.PERPLEXITY_API_KEY){
+      const sr = await runSonarResearch(env, system, prompt, maxTokens, recency);
+      if (sr.text) rr = sr;
+    }
+    if (!rr){
+      const gg = await runGeminiResearch(env, system, prompt, maxTokens);
+      if (gg.text) rr = gg;
+      else return new Response(JSON.stringify({ error: 'Research is unavailable right now — ' + (gg.error || 'try again') }), { status: 502, headers });
+    }
+    return new Response(JSON.stringify({ text: rr.text, sources: rr.sources || [], via: rr.via }), { headers });
   }
 
   // ---- general text tasks (writing prompts, Wiki rollups, Refine, etc.) — the frequent, low-token path; the heavy import model is excluded here ----

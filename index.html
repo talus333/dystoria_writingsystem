@@ -33658,7 +33658,7 @@ function npNotesForEl(el){
   if (el.ref) bases.push(wordKey(el.ref));
   bases.push(wordKey(el));                                                    // the element's own key — carries the iid, so duplicate beings read their own notes
   if (!el.iid && !(el.ref && el.ref.iid)) bases.push('0|' + el.cat + '|' + el.word);   // legacy set-0 key (kept for non-duplicate elements; skipped for iid beings so three Gods don't share one bucket)
-  const TABLBL = { '@name':'Name','@type':'Type','@archetype':'Archetype','@occupation':'Occupation','@role':'Role','@position':'Position','@group':'Allegiance','@cat':'Category','@motivation':'Motivation','@motivator':'Motivator','@stake':'Stake' };
+  const TABLBL = { '@name':'Name','@type':'Type','@archetype':'Archetype','@occupation':'Occupation','@role':'Role','@position':'Position','@group':'Allegiance','@cat':'Category','@motivation':'Motivation','@motivator':'Motivator','@stake':'Stake','@research':'Research (author-gathered, with sources)' };
   const out = [], seen = {};
   bases.forEach(base => {
     if (NN[base] && !seen[base]){ seen[base]=1; const p=npPlain(NN[base]); if(p) out.push(p); }
@@ -33670,7 +33670,7 @@ function npNotesForEl(el){
 // Threads, Parties, then Elements by category), each with its sub-notes. Empty sections are skipped.
 // Sections/groups = ALL-CAPS h2, each item = h3, each sub-note = h4.
 function _npTraitLabel(tab){
-  const TABLBL = { '@name':'Name','@type':'Type','@archetype':'Archetype','@occupation':'Occupation','@role':'Role','@position':'Position','@group':'Allegiance','@cat':'Category','@motivation':'Motivation','@motivator':'Motivator','@stake':'Stake' };
+  const TABLBL = { '@name':'Name','@type':'Type','@archetype':'Archetype','@occupation':'Occupation','@role':'Role','@position':'Position','@group':'Allegiance','@cat':'Category','@motivation':'Motivation','@motivator':'Motivator','@stake':'Stake','@research':'Research' };
   if (TABLBL[tab]) return TABLBL[tab];
   if (tab.indexOf('@obstacle:') === 0) return 'Obstacle';
   if (tab.indexOf('@role:') === 0) return 'Role: ' + tab.slice(6);
@@ -39552,6 +39552,7 @@ document.addEventListener('DOMContentLoaded', init);
         if(window.__dystArcsForSubject){ (window.__dystArcsForSubject(key)||[]).forEach(a=>_valid.add('@arc:'+a.id)); } }
       else if((wEl.role==='word' && (wEl.cat==='setting'||wEl.cat==='object'||wEl.cat==='event')) || wEl.cat==='org' || wEl.cat==='concept'){ _valid.add('@name'); _valid.add('@cat'); if(wEl.bucket)_valid.add('@role:'+wEl.bucket); }
       { const _ei=(typeof elIndexByKey==='function')?elIndexByKey(key):-1; if(_ei>=0 && state.prompt && state.prompt.links){ state.prompt.links.forEach(l=>{ let oi=-1; if(l.a===_ei) oi=l.b; else if(l.b===_ei) oi=l.a; else return; const ow=state.prompt.words[oi]; if(ow) _valid.add('@rel:'+wordKey(ow)); }); } }
+      _valid.add('@research');   // the ✦ Research sub-note (filed by the Research importer)
       if(state.cardTrait && !_valid.has(state.cardTrait)) state.cardTrait=null;
       const imgBox=document.createElement('div'); imgBox.className='npc-img';
       if(wEl.role==='being') imgBox.classList.add('npc-img-being');
@@ -46960,8 +46961,11 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.350';
+  var APP_VERSION = '2026.07.20.351';
   var APP_CHANGELOG = [
+    { v:'2026.07.20.351', date:'August 5, 2026', notes:[
+      'New: ✦ Research — a grounded research assistant. Open it from the Research tab on Revise’s right rail (under Checks) or the ✦ Research pill in the notepad’s filter bar. Ask anything; answers arrive with inline [1] citations and a Sources list built only from really-retrieved pages — an answer with no live sources is marked as model memory and can’t be staged. Highlight a passage (or “add all”) to stage it, retarget any clip, then Import files each clip into its element’s ✦ Research pill in the notepad, with a de-duplicated — Sources — list at the end of every research note. ⤢ expands the panel to full screen for deeper reading. Research notes feed the wiki, clearly labeled as author-gathered and sourced — and never feed story generation.'
+    ]},
     { v:'2026.07.20.350', date:'August 5, 2026', notes:[
       'The element cards’ header (portrait, name, identity line) is now pinned at the top just like the footer — the card scrolls behind both.',
       'The Thread card grew into a full dossier: link and unlink story elements right on the card, pick the thread’s stake from the stakes pool (change or clear it anytime), keep rough notes with ✦ enrich — and the footer now carries Write about this · ✦ Explore · Open in notepad like every other element card. Thread pills across the app (Elements page, plot grid, thread organizer) open it.'
@@ -56813,6 +56817,404 @@ body.ember:not(.eink) #importProposals .ipps-btn.on{ background:#c8963c !importa
     var cur = pageList()[D.idx];
     if(cur && cur.kind==='el'){ var n = cur.node.querySelector('.ir-name'); if(n) n.focus(); }
   }, 0); });
+})();
+</script>
+
+<style id="dyst-research">
+/* ============================================================================
+   RESEARCH — a grounded research assistant. Drawer tab in Revise (right rail,
+   under Checks) + a ✦ Research launch in the notepad's filter bar. One fixed
+   right-side panel serves both; ⤢ expands the same live session to full screen
+   for deep dives. Answers carry inline [n] markers and a Sources list built
+   ONLY from the worker's retrieved-source array — an answer with no live
+   sources is marked ungrounded and cannot be staged ("no source, no save").
+   Staged clips import into each element's ✦ Research sub-note
+   (<key>||TRAIT||@research) with a de-duped — Sources — block at the end.
+   ============================================================================ */
+/* --- the Revise rail tab, under Checks --- */
+#edResTab{position:absolute; right:0; top:254px; z-index:61; display:flex; align-items:center; background:var(--paper); color:var(--ink-soft); border:1px solid var(--line); border-right:none; border-radius:10px 0 0 10px; padding:13px 5px; cursor:pointer; writing-mode:vertical-rl; font-family:var(--sans); font-size:10px; font-weight:700; letter-spacing:.15em; text-transform:uppercase}
+#edResTab:hover{color:var(--ink); border-color:var(--ink-faint)}
+#editCols.chk-open #edResTab, #editCols.pat-open #edResTab, body.research-open #edResTab{display:none}
+@media (max-width:1220px){ #edResTab{ display:none !important; } }
+@media (min-width:761px){
+  #edResTab{ gap:7px; padding:12px 6px; flex-direction:column; }
+  body:not(.eink) #edResTab::before{ content:''; width:15px; height:15px; flex:none; background-color:currentColor;
+    -webkit-mask:var(--dtab-ic) center/contain no-repeat; mask:var(--dtab-ic) center/contain no-repeat; transition:background-color .15s; }
+  #edResTab{ --dtab-ic:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'><circle cx='10.5' cy='10.5' r='6.5'/><path d='M21 21l-5.2-5.2'/><path d='M7.5 10.5h6'/><path d='M10.5 7.5v6'/></svg>"); }
+  body.ember:not(.eink) #edResTab{ background:#2b2926 !important; border-color:rgba(250,154,49,.22) !important; color:#efe8d6; box-shadow:0 8px 22px -10px rgba(0,0,0,.45); }
+  body.ember:not(.eink) #edResTab:hover{ color:#fa9a31; border-color:rgba(250,154,49,.45) !important; }
+  body.ember:not(.eink) #edResTab::before{ background-color:#e7b25e; }
+  body.ember:not(.eink) #edResTab:hover::before{ background-color:#fa9a31; }
+}
+body.eink #edResTab{ background:#fff; border:2px solid #000; border-right:none; color:#000; }
+/* --- the notepad launch pill (right side of the filter bar) --- */
+.np-resbtn{ margin-left:auto; font-family:var(--sans); font-size:9.5px; font-weight:700; letter-spacing:.09em; text-transform:uppercase; color:#a8741f; background:transparent; border:1px dashed rgba(168,116,31,.5); border-radius:999px; padding:4px 12px; cursor:pointer; flex:none; transition:background .15s, color .15s, border-color .15s; }
+.np-resbtn:hover{ background:var(--gold,#c8963c); color:#f6f0de; border-style:solid; border-color:var(--gold,#c8963c); }
+body.eink .np-resbtn{ color:#000; border:2px dashed #000; }
+/* --- the panel --- */
+#resPanel{ position:fixed; top:0; right:0; bottom:0; width:min(420px,94vw); z-index:200; display:none; flex-direction:column; box-sizing:border-box;
+  background:var(--paper,#f7f3ea); border-left:1px solid rgba(150,112,50,.35); box-shadow:-16px 0 44px -18px rgba(40,24,4,.5); }
+body.research-open #resPanel{ display:flex; }
+body.ember:not(.eink) #resPanel{ background:#f5efe1; }
+body.eink #resPanel{ background:#fff; border-left:2px solid #000; }
+#resHead{ display:flex; align-items:center; gap:9px; padding:14px 14px 10px; border-bottom:1px solid rgba(150,112,50,.22); flex:none; }
+#resHead .res-h{ display:flex; align-items:center; gap:8px; flex:1; min-width:0; font-family:var(--sans); font-size:10px; font-weight:700; letter-spacing:.18em; text-transform:uppercase; color:#463b26; }
+#resHead .res-h::after{ content:''; flex:1; height:1px; background:rgba(150,112,50,.18); }
+#resVia{ font-family:var(--serif,Georgia,serif); font-style:italic; font-size:10.5px; color:#8a7d68; flex:none; }
+.res-hbtn{ width:26px; height:26px; flex:none; display:inline-flex; align-items:center; justify-content:center; border:none; background:none; border-radius:50%; color:#8a7d68; font-size:15px; line-height:1; cursor:pointer; padding:0; transition:background .14s, color .14s; }
+.res-hbtn:hover{ color:#241708; background:rgba(120,92,40,.1); }
+#resScope{ display:flex; align-items:center; gap:9px; flex-wrap:wrap; padding:8px 14px; border-bottom:1px solid rgba(150,112,50,.14); flex:none; font-family:var(--serif,Georgia,serif); font-style:italic; font-size:11px; color:#8a7d68; }
+#resScope label{ display:inline-flex; align-items:center; gap:5px; cursor:pointer; font-style:normal; font-family:var(--sans); font-size:9px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:#7a6f58; }
+#resScope input[type=checkbox]{ accent-color:var(--gold,#c8963c); }
+#resRecency{ font-family:var(--sans); font-size:9px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:#7a6f58; background:transparent; border:1px solid rgba(120,92,40,.3); border-radius:8px; padding:2px 5px; }
+#resLog{ flex:1; overflow-y:auto; padding:12px 14px; scrollbar-width:thin; }
+#resLog .res-empty{ font-family:var(--serif,Georgia,serif); font-style:italic; font-size:12.5px; color:#8a7d68; line-height:1.55; }
+.res-qa{ margin-bottom:16px; }
+.res-q{ font-family:var(--sans); font-size:10px; font-weight:700; letter-spacing:.06em; color:#a8741f; margin-bottom:6px; }
+.res-q::before{ content:'❯ '; opacity:.6; }
+.res-a{ font-family:var(--serif,Georgia,serif); font-size:13.5px; line-height:1.6; color:#3c3223; }
+body.research-full .res-a{ font-size:15px; line-height:1.7; }
+.res-a p{ margin:0 0 9px; }
+.res-cite{ font-family:var(--sans); font-size:8.5px; font-weight:700; color:#a8741f; vertical-align:super; margin:0 1px; cursor:default; }
+.res-warn{ margin:7px 0; padding:8px 11px; border:1px dashed rgba(166,95,107,.6); border-radius:10px; font-family:var(--serif,Georgia,serif); font-style:italic; font-size:11.5px; color:#a65f6b; line-height:1.5; }
+.res-srcs{ margin-top:7px; padding-top:6px; border-top:1px dotted rgba(120,92,40,.3); }
+.res-srcs .res-srchead{ font-family:var(--sans); font-size:8px; font-weight:700; letter-spacing:.16em; text-transform:uppercase; color:#a08a56; margin-bottom:3px; }
+.res-src{ font-family:var(--serif,Georgia,serif); font-style:italic; font-size:11px; line-height:1.5; color:#7a6f58; }
+.res-src a{ color:#a8741f; text-decoration:none; }
+.res-src a:hover{ text-decoration:underline; }
+.res-arow{ display:flex; gap:7px; margin-top:6px; }
+.res-addall, .res-expand{ font-family:var(--sans); font-size:8.5px; font-weight:700; letter-spacing:.09em; text-transform:uppercase; color:#a8741f; background:transparent; border:1px dashed rgba(168,116,31,.5); border-radius:999px; padding:3px 11px; cursor:pointer; transition:background .15s, color .15s, border-color .15s; }
+.res-addall:hover, .res-expand:hover{ background:var(--gold,#c8963c); color:#f6f0de; border-style:solid; border-color:var(--gold,#c8963c); }
+.res-think{ font-family:var(--serif,Georgia,serif); font-style:italic; font-size:12.5px; color:#8a7d68; }
+#resAsk{ flex:none; padding:10px 14px; border-top:1px solid rgba(150,112,50,.22); display:flex; gap:8px; align-items:flex-end; }
+#resAskTa{ flex:1; min-height:44px; max-height:120px; box-sizing:border-box; font-family:var(--serif,Georgia,serif); font-size:13px; line-height:1.5; color:#3c3223; background:rgba(120,92,40,.05); border:1px solid rgba(120,92,40,.16); border-radius:12px; padding:8px 11px; outline:none; resize:vertical; }
+#resAskTa:focus{ border-color:var(--gold,#c8963c); }
+#resAskGo{ flex:none; font-family:var(--sans); font-size:10px; font-weight:700; letter-spacing:.1em; text-transform:uppercase; background:var(--gold,#c8963c); color:#f6f0de; border:none; border-radius:999px; padding:9px 16px; cursor:pointer; transition:transform .12s, box-shadow .15s; box-shadow:0 2px 9px rgba(160,110,30,.3); }
+#resAskGo:hover{ transform:translateY(-1px); }
+#resAskGo[disabled]{ opacity:.5; cursor:default; transform:none; }
+/* --- staging tray --- */
+#resTray{ flex:none; border-top:1px solid rgba(150,112,50,.22); background:rgba(120,92,40,.04); max-height:38vh; display:flex; flex-direction:column; }
+#resTrayHead{ display:flex; align-items:center; gap:8px; padding:8px 14px; cursor:pointer; font-family:var(--sans); font-size:8.5px; font-weight:700; letter-spacing:.16em; text-transform:uppercase; color:#a08a56; }
+#resTrayHead .res-tct{ color:#a8741f; }
+#resTrayHead::after{ content:''; flex:1; height:1px; background:rgba(150,112,50,.18); }
+#resTrayBody{ overflow-y:auto; padding:0 14px 6px; scrollbar-width:thin; }
+#resPanel.tray-closed #resTrayBody, #resPanel.tray-closed #resTrayActs{ display:none; }
+.res-clip{ position:relative; background:var(--paper,#fbf7ec); border:1px solid rgba(120,92,40,.2); border-radius:11px; padding:8px 10px 7px; margin-bottom:7px; }
+body.ember:not(.eink) .res-clip{ background:#faf5e7; }
+.res-clip-ta{ width:100%; box-sizing:border-box; font-family:var(--serif,Georgia,serif); font-size:12px; line-height:1.5; color:#3c3223; background:transparent; border:none; outline:none; resize:vertical; min-height:34px; }
+.res-clip-foot{ display:flex; align-items:center; gap:6px; margin-top:4px; flex-wrap:wrap; }
+.res-target{ font-family:var(--sans); font-size:8.5px; font-weight:700; letter-spacing:.07em; text-transform:uppercase; color:#463b26; background:rgba(168,137,157,.14); border:1px solid rgba(168,137,157,.35); border-radius:999px; padding:2px 10px; cursor:pointer; }
+.res-target:hover{ border-color:#a8741f; color:#a8741f; }
+.res-target.story{ background:rgba(120,92,40,.08); border-color:rgba(120,92,40,.3); }
+.res-refct{ font-family:var(--serif,Georgia,serif); font-style:italic; font-size:10px; color:#8a7d68; }
+.res-clip-x{ margin-left:auto; width:20px; height:20px; display:inline-flex; align-items:center; justify-content:center; border:none; background:none; border-radius:50%; color:#8a7d68; font-size:13px; cursor:pointer; padding:0; }
+.res-clip-x:hover{ color:#241708; background:rgba(120,92,40,.12); }
+#resTrayActs{ display:flex; gap:8px; padding:4px 14px 12px; }
+#resImport{ flex:1; font-family:var(--sans); font-size:9.5px; font-weight:700; letter-spacing:.1em; text-transform:uppercase; background:var(--gold,#c8963c); color:#f6f0de; border:none; border-radius:999px; padding:8px 14px; cursor:pointer; box-shadow:0 2px 9px rgba(160,110,30,.3); }
+#resImport[disabled]{ opacity:.45; cursor:default; box-shadow:none; }
+#resClear{ font-family:var(--sans); font-size:9px; font-weight:700; letter-spacing:.09em; text-transform:uppercase; color:#8a7d68; background:transparent; border:1px solid rgba(120,92,40,.25); border-radius:999px; padding:8px 13px; cursor:pointer; }
+#resClear:hover{ color:#241708; border-color:#8a7d68; }
+/* --- selection chip --- */
+#resSelChip{ position:fixed; z-index:350; display:none; font-family:var(--sans); font-size:8.5px; font-weight:700; letter-spacing:.09em; text-transform:uppercase; background:#2b2926; color:#e7b25e; border:1px solid rgba(250,154,49,.4); border-radius:999px; padding:5px 12px; cursor:pointer; box-shadow:0 6px 18px rgba(0,0,0,.35); }
+#resSelChip:hover{ color:#fa9a31; }
+/* --- full screen --- */
+body.research-full #resPanel{ width:auto; left:0; border-left:none; z-index:205; }
+body.research-full #resLog{ padding:22px max(24px, calc(50vw - 560px)) 22px max(24px, calc(50vw - 560px)); }
+body.research-full.res-hastray #resLog{ padding-right:360px; }
+body.research-full #resTray{ position:absolute; right:16px; top:110px; bottom:86px; width:320px; max-height:none; border:1px solid rgba(150,112,50,.3); border-radius:14px; box-shadow:0 14px 40px -18px rgba(40,24,4,.4); overflow:hidden; }
+body.research-full #resAsk{ padding:10px max(24px, calc(50vw - 560px)) 14px; }
+body.research-full.res-hastray #resAsk{ padding-right:360px; }
+/* the notepad card's research pill */
+.npc-research .npc-tw{ color:#a8741f; }
+.npc-research{ border-color:rgba(168,116,31,.5) !important; }
+/* research content inside notepad notes */
+.np-resclip{ margin:0 0 7px; }
+.np-resdate{ font-size:10px; color:#8a7d68; font-style:italic; }
+.np-ressrc{ margin-top:10px; padding-top:7px; border-top:1px dotted rgba(120,92,40,.35); font-size:11px; font-style:italic; color:#7a6f58; }
+</style>
+<script id="dyst-research-js">
+/* Research assistant — see the spec (claude/Dystoria_Research_Sidebar_Spec.md).
+   Wired for the worker's kind:'research' route ({text, sources[], via}); until the
+   worker ships that route, answers come back with no sources array and render as
+   UNGROUNDED (staging blocked) — honest by construction. window.__resStub(q) can
+   inject a fixture response for testing. */
+(function(){
+  var SEP='||TRAIT||';
+  var RES={ log:[], tray:[], facts:true, recency:'', busy:false, scopeKey:null, seq:1 };
+  function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+  function persist(){ try{ if(state.session){ state.session.research={ log:RES.log.slice(-20), tray:RES.tray }; if(typeof scheduleAutosave==='function') scheduleAutosave(); } }catch(e){} }
+  function restore(){ try{ var r=state.session&&state.session.research; if(r){ if(Array.isArray(r.log)) RES.log=r.log; if(Array.isArray(r.tray)) RES.tray=r.tray; } }catch(e){} }
+  function roster(){ try{ return (npStoryElements()||[]).map(function(o){ return { key:o.key, name:(typeof elDisplayName==='function')?elDisplayName(o.w):(o.w.name||o.w.word||''), cat:o.w.cat }; }).filter(function(r){ return r.name && r.name.length>1; }); }catch(e){ return []; } }
+  function targetsIn(text){ var out=[], lo=String(text||'').toLowerCase();
+    roster().forEach(function(r){ var n=r.name.toLowerCase(); if(n.length<3) return; if(lo.indexOf(n)>=0 && out.indexOf(r.key)<0) out.push(r.key); });
+    return out; }
+  function targetName(t){ if(!t||t==='story') return 'Story research'; try{ var w=npFindEl(t); return w?((typeof elDisplayName==='function')?elDisplayName(w):(w.name||w.word)):'Story research'; }catch(e){ return 'Story research'; } }
+
+  /* ---------- backend ---------- */
+  var RES_SYS='You are a research librarian helping a novelist. Answer the question with live web research. Ground every factual claim in your retrieved sources and mark claims with inline numbered citations like [1] or [2] that match your source list. Write short, clear paragraphs — organized, concrete, quotable. If STORY FACTS are provided, angle the answer toward what serves that story, but NEVER invent sources and never present story facts as researched fact. If you could not retrieve live sources, say so plainly in one sentence.';
+  async function resCall(q){
+    if(typeof window.__resStub==='function') return window.__resStub(q);
+    if(typeof aiAuthed==='function' && !aiAuthed()){ if(typeof promptAiSignup==='function') promptAiSignup(); throw new Error('sign in'); }
+    var facts=''; try{ if(RES.facts && typeof window.storyFacts==='function') facts=window.storyFacts({maxChars:2600, maxEls:28, noteCap:110})||''; }catch(e){}
+    var scopeLine=''; try{ if(RES.scopeKey){ var sw=npFindEl(RES.scopeKey); if(sw) scopeLine='\nRESEARCH IS FOR THIS ELEMENT IN PARTICULAR: '+((typeof elDisplayName==='function')?elDisplayName(sw):sw.word); } }catch(e){}
+    var body={ kind:'research', system:RES_SYS, prompt:'QUESTION: '+q+(facts?('\n\nSTORY FACTS (context only — never present as researched fact):\n'+facts):'')+scopeLine, max_tokens:1400 };
+    if(RES.recency) body.recency=RES.recency;
+    var r=await fetch(AI_ENDPOINT, { method:'POST', headers:aiHeaders(), body:JSON.stringify(body) });
+    var data; try{ data=await r.json(); }catch(e){ throw new Error('HTTP '+r.status); }
+    if(!r.ok||data.error) throw new Error(data.error||('HTTP '+r.status));
+    return { text:(data.text||'').trim(), sources:Array.isArray(data.sources)?data.sources:[], via:data.via||'' };
+  }
+
+  /* ---------- panel ---------- */
+  function ensurePanel(){
+    if(document.getElementById('resPanel')) return;
+    var p=document.createElement('div'); p.id='resPanel';
+    p.innerHTML=''
+      +'<div id="resHead"><span class="res-h">✦ Research</span><span id="resVia"></span>'
+      +'<button type="button" class="res-hbtn" id="resExpand" title="Expand to full screen for a deeper dive">⤢</button>'
+      +'<button type="button" class="res-hbtn" id="resClose" title="Close">×</button></div>'
+      +'<div id="resScope"><span id="resScopeLbl"></span>'
+      +'<label title="Send the story’s canonical facts along with each question"><input type="checkbox" id="resFactsCb" checked> story facts</label>'
+      +'<select id="resRecency" title="How recent the sources should be"><option value="">All time</option><option value="year">Past year</option></select></div>'
+      +'<div id="resLog"></div>'
+      +'<div id="resAsk"><textarea id="resAskTa" rows="2" placeholder="Ask anything — answers come with real sources you can file into your notes…"></textarea><button type="button" id="resAskGo">Ask</button></div>'
+      +'<div id="resTray" style="display:none"><div id="resTrayHead">Staging · <span class="res-tct" id="resTrayCt">0</span></div>'
+      +'<div id="resTrayBody"></div>'
+      +'<div id="resTrayActs"><button type="button" id="resImport">Import to notepads</button><button type="button" id="resClear">Clear</button></div></div>';
+    document.body.appendChild(p);
+    var chip=document.createElement('button'); chip.type='button'; chip.id='resSelChip'; chip.textContent='＋ add to research'; document.body.appendChild(chip);
+    document.getElementById('resClose').addEventListener('click', resClose);
+    document.getElementById('resExpand').addEventListener('click', function(){ document.body.classList.toggle('research-full'); this.textContent=document.body.classList.contains('research-full')?'⤡':'⤢'; this.title=document.body.classList.contains('research-full')?'Collapse back to the drawer':'Expand to full screen for a deeper dive'; });
+    document.getElementById('resFactsCb').addEventListener('change', function(){ RES.facts=this.checked; });
+    document.getElementById('resRecency').addEventListener('change', function(){ RES.recency=this.value; });
+    document.getElementById('resAskGo').addEventListener('click', ask);
+    document.getElementById('resAskTa').addEventListener('keydown', function(e){ if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); ask(); } });
+    document.getElementById('resTrayHead').addEventListener('click', function(){ p.classList.toggle('tray-closed'); });
+    document.getElementById('resClear').addEventListener('click', function(){ RES.tray=[]; persist(); renderTray(); });
+    document.getElementById('resImport').addEventListener('click', doImport);
+    // selection → staging chip (only inside grounded answers)
+    document.getElementById('resLog').addEventListener('mouseup', function(){ setTimeout(offerSel, 10); });
+    document.addEventListener('mousedown', function(e){ if(e.target && e.target.id==='resSelChip') return; chip.style.display='none'; }, true);
+    chip.addEventListener('click', function(e){ e.stopPropagation(); stageSelection(); chip.style.display='none'; });
+    document.addEventListener('keydown', function(e){ if(e.key==='Escape' && document.body.classList.contains('research-full')){ document.body.classList.remove('research-full'); var xb=document.getElementById('resExpand'); if(xb){ xb.textContent='⤢'; } } });
+  }
+  function resOpen(opts){
+    opts=opts||{};
+    ensurePanel(); restore();
+    RES.scopeKey=opts.scope||null;
+    try{ if(typeof chkClose==='function') chkClose(); if(typeof patClose==='function') patClose(); }catch(e){}
+    document.body.classList.add('research-open');
+    var sl=document.getElementById('resScopeLbl');
+    var stn=''; try{ stn=(state.session&&state.session.name)||''; }catch(e){}
+    sl.textContent='grounded in: '+(stn||'this story')+(RES.scopeKey?(' · about '+targetName(RES.scopeKey)):'');
+    renderLog(); renderTray();
+    setTimeout(function(){ try{ document.getElementById('resAskTa').focus(); }catch(e){} }, 60);
+  }
+  function resClose(){ document.body.classList.remove('research-open'); document.body.classList.remove('research-full'); var xb=document.getElementById('resExpand'); if(xb) xb.textContent='⤢'; persist(); }
+  try{ window.openResearch=resOpen; window.closeResearch=resClose; }catch(e){}
+
+  /* ---------- ask + render ---------- */
+  async function ask(){
+    if(RES.busy) return;
+    var ta=document.getElementById('resAskTa'); var q=(ta.value||'').trim(); if(!q) return;
+    RES.busy=true; document.getElementById('resAskGo').disabled=true; ta.value='';
+    var entry={ id:'r'+(RES.seq++)+Date.now().toString(36), q:q, text:'', sources:[], via:'', pending:true };
+    RES.log.push(entry); renderLog();
+    try{
+      var out=await resCall(q);
+      entry.text=out.text; entry.sources=out.sources||[]; entry.via=out.via||''; entry.pending=false;
+      var vt=document.getElementById('resVia'); if(vt) vt.textContent=entry.via?('via '+((typeof aiViaLabel==='function')?aiViaLabel(entry.via):entry.via)):'';
+    }catch(e){ entry.pending=false; entry.err=(typeof aiErrMsg==='function')?aiErrMsg(e):(e.message||'Couldn’t reach the AI.'); }
+    RES.busy=false; document.getElementById('resAskGo').disabled=false;
+    persist(); renderLog();
+  }
+  function markers(text){ return esc(text).replace(/\[(\d+(?:\s*[,;]\s*\d+)*)\]/g, function(m, ns){ return '<span class="res-cite">['+ns+']</span>'; }); }
+  function renderLog(){
+    var log=document.getElementById('resLog'); if(!log) return;
+    if(!RES.log.length){ log.innerHTML='<div class="res-empty">Ask anything your story needs — period detail, how something works, what a place was like. Answers arrive with real sources; highlight what’s worth keeping and stage it, then import into your element notes.</div>'; return; }
+    log.innerHTML='';
+    RES.log.forEach(function(en){
+      var d=document.createElement('div'); d.className='res-qa'; d.dataset.rid=en.id;
+      var grounded=!!(en.sources&&en.sources.length);
+      var html='<div class="res-q">'+esc(en.q)+'</div>';
+      if(en.pending){ html+='<div class="res-think"><span class="spin"></span> Researching…</div>'; }
+      else if(en.err){ html+='<div class="res-warn">'+esc(en.err)+'</div>'; }
+      else {
+        html+='<div class="res-a" data-grounded="'+(grounded?'1':'0')+'">'+String(en.text||'').split(/\n\s*\n/).map(function(pp){ return '<p>'+markers(pp).replace(/\n/g,'<br>')+'</p>'; }).join('')+'</div>';
+        if(!grounded){ html+='<div class="res-warn">No live sources came back — this is model memory, not research, so it can’t be staged. The research backend may not be enabled yet; try again, or check back once it is.</div>'; }
+        else {
+          html+='<div class="res-srcs"><div class="res-srchead">Sources</div>'+en.sources.map(function(s,i){ var n=(s.n!=null?s.n:(i+1)); return '<div class="res-src">['+n+'] <a href="'+esc(s.url||'#')+'" target="_blank" rel="noopener">'+esc(s.title||s.url||('Source '+n))+'</a></div>'; }).join('')+'</div>';
+          var wordy=String(en.text||'').split(/\s+/).length>500;
+          html+='<div class="res-arow"><button type="button" class="res-addall">＋ add all to staging</button>'+(wordy&&!document.body.classList.contains('research-full')?'<button type="button" class="res-expand">⤢ read full screen</button>':'')+'</div>';
+        }
+      }
+      d.innerHTML=html;
+      var aa=d.querySelector('.res-addall'); if(aa) aa.addEventListener('click', function(){ stageClip(en, en.text, en.sources.slice()); });
+      var xp=d.querySelector('.res-expand'); if(xp) xp.addEventListener('click', function(){ var b=document.getElementById('resExpand'); if(b) b.click(); });
+      log.appendChild(d);
+    });
+    log.scrollTop=log.scrollHeight;
+  }
+
+  /* ---------- staging ---------- */
+  function entryById(id){ for(var i=0;i<RES.log.length;i++) if(RES.log[i].id===id) return RES.log[i]; return null; }
+  function refsInText(entry, text){
+    var ns={}; String(text||'').replace(/\[(\d+(?:\s*[,;]\s*\d+)*)\]/g, function(m, grp){ grp.split(/[,;]/).forEach(function(x){ ns[parseInt(x,10)]=1; }); return m; });
+    var keys=Object.keys(ns);
+    if(!keys.length) return entry.sources.slice();   // no markers inside the selection → carry the whole answer's list
+    return entry.sources.filter(function(s,i){ var n=(s.n!=null?s.n:(i+1)); return ns[n]; });
+  }
+  function stageClip(entry, text, refs){
+    var t=String(text||'').trim(); if(!t) return;
+    var tg=null;
+    var cand=targetsIn(t); if(!cand.length) cand=targetsIn(entry.text);
+    if(cand.length) tg=cand[0]; else if(RES.scopeKey) tg=RES.scopeKey; else tg='story';
+    RES.tray.push({ id:'c'+Date.now().toString(36)+Math.floor(Math.random()*900), text:t, refs:refs||[], srcMap:entry.sources.slice(), target:tg });
+    persist(); renderTray();
+    var p=document.getElementById('resPanel'); if(p) p.classList.remove('tray-closed');
+  }
+  function offerSel(){
+    var chip=document.getElementById('resSelChip'); if(!chip) return;
+    var sel=window.getSelection(); if(!sel || sel.isCollapsed || !String(sel).trim()){ chip.style.display='none'; return; }
+    var node=sel.anchorNode; var ab=node&&(node.nodeType===1?node:node.parentElement); ab=ab&&ab.closest?ab.closest('.res-a'):null;
+    if(!ab || ab.getAttribute('data-grounded')!=='1'){ chip.style.display='none'; return; }
+    var r;
+    try{ r=sel.getRangeAt(0).getBoundingClientRect(); }catch(e){ chip.style.display='none'; return; }
+    chip.style.left=Math.max(8, Math.min(r.left+r.width/2-56, window.innerWidth-130))+'px';
+    chip.style.top=Math.max(8, r.top-34)+'px';
+    chip.style.display='block';
+    chip._rid=(ab.closest('.res-qa')||{}).dataset ? ab.closest('.res-qa').dataset.rid : null;
+    chip._text=String(sel);
+  }
+  function stageSelection(){
+    var chip=document.getElementById('resSelChip'); var en=entryById(chip._rid); if(!en) return;
+    stageClip(en, chip._text, refsInText(en, chip._text));
+    try{ window.getSelection().removeAllRanges(); }catch(e){}
+  }
+  function pickTarget(clip, ev){
+    var menu=document.getElementById('aspectMenu'); if(!menu) return; menu.innerHTML='';
+    if(menu.parentElement!==document.body) document.body.appendChild(menu);
+    var mk=function(label, val){ var b=document.createElement('button'); b.textContent=label; b.addEventListener('click', function(e2){ e2.stopPropagation(); menu.style.display='none'; clip.target=val; persist(); renderTray(); }); menu.appendChild(b); };
+    mk('Story research (no single element)', 'story');
+    roster().forEach(function(r){ mk(r.name+' · '+(((typeof getCat==='function'&&getCat(r.cat))?getCat(r.cat).name:r.cat)||''), r.key); });
+    menu.style.maxHeight='300px'; menu.style.overflowY='auto';
+    menu.style.left=Math.max(8, Math.min(ev.clientX||300, window.innerWidth-240))+'px';
+    menu.style.top=Math.max(8, Math.min(ev.clientY||300, window.innerHeight-320))+'px';
+    menu.style.display='block';
+  }
+  function renderTray(){
+    var tray=document.getElementById('resTray'), body=document.getElementById('resTrayBody'), ct=document.getElementById('resTrayCt'); if(!tray) return;
+    document.body.classList.toggle('res-hastray', !!RES.tray.length);
+    tray.style.display=RES.tray.length?'flex':'none';
+    if(ct) ct.textContent=RES.tray.length+' clip'+(RES.tray.length===1?'':'s');
+    var ib=document.getElementById('resImport'); if(ib) ib.disabled=!RES.tray.length;
+    if(!body) return; body.innerHTML='';
+    RES.tray.forEach(function(c){
+      var d=document.createElement('div'); d.className='res-clip';
+      var ta=document.createElement('textarea'); ta.className='res-clip-ta'; ta.value=c.text;
+      ta.addEventListener('input', function(){ c.text=ta.value; persist(); });
+      d.appendChild(ta);
+      var foot=document.createElement('div'); foot.className='res-clip-foot';
+      var tg=document.createElement('button'); tg.type='button'; tg.className='res-target'+(c.target==='story'?' story':''); tg.textContent='→ '+targetName(c.target); tg.title='Choose which element this files under';
+      tg.addEventListener('click', function(e){ e.stopPropagation(); pickTarget(c, e); });
+      foot.appendChild(tg);
+      var rc=document.createElement('span'); rc.className='res-refct'; rc.textContent=(c.refs&&c.refs.length)?(c.refs.length+' source'+(c.refs.length===1?'':'s')):'unmarked'; foot.appendChild(rc);
+      var x=document.createElement('button'); x.type='button'; x.className='res-clip-x'; x.textContent='×'; x.title='Remove this clip';
+      x.addEventListener('click', function(){ var i=RES.tray.indexOf(c); if(i>=0) RES.tray.splice(i,1); persist(); renderTray(); });
+      foot.appendChild(x);
+      d.appendChild(foot);
+      body.appendChild(d);
+    });
+  }
+
+  /* ---------- import ---------- */
+  function noteKeyFor(target){ return (target==='story'||!target) ? ('story'+SEP+'@research') : (target+SEP+'@research'); }
+  async function doImport(){
+    if(!RES.tray.length) return;
+    var byT={}; RES.tray.forEach(function(c){ var t=c.target||'story'; (byT[t]=byT[t]||[]).push(c); });
+    var tks=Object.keys(byT);
+    var summary=tks.map(function(t){ return byT[t].length+' → '+targetName(t); }).join(' · ');
+    var ok=true;
+    try{ if(typeof siteConfirm==='function') ok=await siteConfirm('File '+RES.tray.length+' research clip'+(RES.tray.length===1?'':'s')+' into '+tks.length+' notepad'+(tks.length===1?'':'s')+'? ('+summary+') Sources ride along and de-duplicate.', 'Import research'); }catch(e){}
+    if(!ok) return;
+    try{ if(!state.session && typeof ensureSession==='function') ensureSession(); }catch(e){}
+    if(!state.session) return;
+    state.session.npNotes=state.session.npNotes||{};
+    state.session.researchRefs=state.session.researchRefs||{};
+    var dateStr=new Date().toLocaleDateString(undefined, { year:'numeric', month:'short', day:'numeric' });
+    tks.forEach(function(t){
+      var nk=noteKeyFor(t);
+      var refs=state.session.researchRefs[t]=state.session.researchRefs[t]||[];
+      // merge refs (de-dupe by URL), remembering merged index per url
+      var idxByUrl={}; refs.forEach(function(r,i){ if(r.url) idxByUrl[r.url]=i; });
+      byT[t].forEach(function(c){ (c.refs||[]).forEach(function(r){ if(!r||!r.url) return; if(idxByUrl[r.url]==null){ refs.push({ title:r.title||'', url:r.url }); idxByUrl[r.url]=refs.length-1; } }); });
+      // clips: rewrite [n] markers from the answer's numbering to the merged list's numbering
+      var clipsHtml=byT[t].map(function(c){
+        var txt=String(c.text||'');
+        txt=txt.replace(/\[(\d+)\]/g, function(m, n){
+          var src=(c.srcMap||[]).filter(function(s,i){ return (s.n!=null?s.n:(i+1))===parseInt(n,10); })[0];
+          if(src && src.url && idxByUrl[src.url]!=null) return '['+(idxByUrl[src.url]+1)+']';
+          return '';
+        });
+        return '<div class="np-resclip">✧ '+esc(txt)+' <span class="np-resdate">('+esc(dateStr)+')</span></div>';
+      }).join('');
+      var cur=String(state.session.npNotes[nk]||'').replace(/<div class="np-ressrc">[\s\S]*$/,'');
+      var srcBlock=refs.length?('<div class="np-ressrc">— Sources —'+refs.map(function(r,i){ return '<div>['+(i+1)+'] '+esc(r.title||r.url)+' — '+esc(r.url)+'</div>'; }).join('')+'</div>'):'';
+      state.session.npNotes[nk]=cur+clipsHtml+srcBlock;
+    });
+    var n=RES.tray.length; RES.tray=[]; persist(); renderTray();
+    try{ if(typeof scheduleAutosave==='function') scheduleAutosave(); }catch(e){}
+    try{ if(typeof renderNpElements==='function') renderNpElements(); if(typeof window.renderNpCard==='function') window.renderNpCard(); if(typeof renderNotepad==='function') renderNotepad(); }catch(e){}
+    try{ if(typeof flashStatus==='function') flashStatus('Filed '+n+' research clip'+(n===1?'':'s')+' — look for the ✦ Research pill on each element'); }catch(e){}
+  }
+
+  /* ---------- mounts ---------- */
+  // Revise: rail tab under Checks
+  function mountTab(){
+    var cols=document.getElementById('editCols'); if(!cols || document.getElementById('edResTab')) return !!document.getElementById('edResTab');
+    var tab=document.createElement('button'); tab.id='edResTab'; tab.type='button'; tab.title='Research — grounded answers with real sources, filed into your notes'; tab.textContent='Research';
+    tab.addEventListener('click', function(e){ e.stopPropagation(); resOpen(); });
+    cols.appendChild(tab);
+    return true;
+  }
+  // Notepad: ✦ Research pill on the right of the filter bar
+  function mountNp(){
+    try{
+      var fr=document.querySelector('#npElements .np-filters');
+      if(!fr || fr.querySelector('.np-resbtn')) return;
+      var b=document.createElement('button'); b.type='button'; b.className='np-resbtn'; b.textContent='✦ Research';
+      b.title='Research with real sources — file findings into your element notes';
+      b.addEventListener('click', function(e){ e.stopPropagation(); var k=null; try{ var a=state.npActive; if(a && a!=='general' && typeof npFindEl==='function' && npFindEl(a)) k=a; }catch(_){} resOpen({ scope:k }); });
+      fr.appendChild(b);
+    }catch(e){}
+  }
+  function wrap(name, after){ var f=window[name]; if(typeof f!=='function') return; window[name]=function(){ var r=f.apply(this, arguments); try{ after.apply(this, arguments); }catch(e){} return r; }; }
+  wrap('renderNpElements', mountNp);
+  // the ✦ Research pill on the notepad element card (visible when the element has a research note)
+  wrap('renderNpCard', function(){
+    try{
+      var key=state.npActive; if(!key||key==='general') return;
+      var w=(typeof npFindEl==='function')?npFindEl(key):null; if(!w) return;
+      var nk=key+SEP+'@research'; var raw=state.session&&state.session.npNotes&&state.session.npNotes[nk];
+      if(!raw || !String(raw).replace(/<[^>]*>/g,'').trim()) return;
+      var card=document.getElementById('npCard'); if(!card || card.querySelector('.npc-research')) return;
+      var host=card.querySelector('.npc-connections'); host=host?host.parentNode:card;
+      var sec=document.createElement('div'); sec.className='npc-traits';
+      var lab=document.createElement('span'); lab.className='npc-seclbl'; lab.textContent='Research'; sec.appendChild(lab);
+      var c=document.createElement('span'); c.className='npc-trait npc-traitpill npc-research'+(state.cardTrait==='@research'?' on':'');
+      var lb=document.createElement('span'); lb.className='npc-tw'; lb.textContent='✦ Research'; c.appendChild(lb);
+      var sb=document.createElement('span'); sb.className='npc-tsub'; sb.textContent='sourced'; c.appendChild(sb);
+      c.addEventListener('click', function(e){ e.stopPropagation(); state.cardTrait='@research'; try{ if(typeof renderNotepad==='function') renderNotepad(); }catch(_){} try{ window.renderNpCard(); }catch(_){} });
+      sec.appendChild(c); host.appendChild(sec);
+    }catch(e){}
+  });
+  // label the research sub-note tab wherever note labels appear
+  (function(){ var lf=window.npLabelFor; if(typeof lf==='function'){ window.npLabelFor=function(k){ var out=lf.apply(this, arguments); try{ if(typeof out==='string') out=out.replace('@research','✦ Research'); }catch(e){} return out; }; } })();
+  // close research when another Revise drawer opens
+  ['chkToggle','patToggle'].forEach(function(fn){ var f=window[fn]; if(typeof f==='function'){ window[fn]=function(){ try{ if(document.body.classList.contains('research-open')) resClose(); }catch(e){} return f.apply(this, arguments); }; } });
+  // the Revise columns may build late — poll until mounted
+  var tries=0, iv=setInterval(function(){ try{ if(mountTab()||++tries>240) clearInterval(iv); }catch(e){ if(++tries>240) clearInterval(iv); } }, 250);
+  document.addEventListener('DOMContentLoaded', function(){ try{ mountTab(); mountNp(); }catch(e){} });
 })();
 </script>
 
