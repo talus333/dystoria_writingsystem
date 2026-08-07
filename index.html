@@ -23911,6 +23911,7 @@ function cloudDocOf(sess){
   // internal/runtime-only fields never belong in the stored document
   delete doc._owner; delete doc._shared; delete doc._baton; delete doc._collabs; delete doc._inserting;
   delete doc._isPublic; delete doc._publicToken; delete doc._localTrim; delete doc._htmlTrim;
+  delete doc._cloudUpdatedAt; delete doc._conflict;   // per-device sync state, not story content
   // Keep the revision safety-net BOUNDED — archive holds full prose snapshots, and without a cap it grows
   // unbounded and can balloon the stored doc to many MB (which then can't fit in the browser cache on reload).
   if (Array.isArray(doc.archive) && doc.archive.length){
@@ -23952,21 +23953,36 @@ async function cloudSave(sess){
     const now = new Date().toISOString();
     if (sess.cloudId){
       // Update without touching `owner` — a collaborator saving a shared story must not seize ownership.
-      const { error } = await supa.from('stories').update({ title, doc: cloudDocOf(sess), updated_at: now }).eq('id', sess.cloudId);
+      let q = supa.from('stories').update({ title, doc: cloudDocOf(sess), updated_at: now }).eq('id', sess.cloudId);
+      const base = sess._cloudUpdatedAt || '';
+      if (base) q = q.eq('updated_at', base);   // ← the guard: only write if nobody else has since I pulled
+      const { data: rows, error } = await q.select('updated_at');
       if (error){ console.warn('cloud update error:', error); sess._needsCloud = true; flashStatus(navigator.onLine === false ? 'Saved on this device — will sync when back online' : ('Cloud: ' + error.message)); }
-      else { sess._needsCloud = false; if (typeof pubBroadcastUpdate === 'function') pubBroadcastUpdate(sess); }   // push live update to public readers
+      else if (base && (!rows || !rows.length)){
+        // Nothing matched: the row moved under us. Do NOT retry unguarded — that is the
+        // bug. Preserve this device's work and let the writer decide.
+        sess._needsCloud = true;
+        await cloudConflict(sess);
+      }
+      else { sess._needsCloud = false; sess._conflict = false;
+             if (rows && rows[0] && rows[0].updated_at) sess._cloudUpdatedAt = rows[0].updated_at; else sess._cloudUpdatedAt = now;
+             if (typeof pubBroadcastUpdate === 'function') pubBroadcastUpdate(sess); }   // push live update to public readers
     } else {
       sess._inserting = true;
-      const { data, error } = await supa.from('stories').insert({ owner: cloud.user.id, title, doc: cloudDocOf(sess), updated_at: now }).select('id').single();
+      const { data, error } = await supa.from('stories').insert({ owner: cloud.user.id, title, doc: cloudDocOf(sess), updated_at: now }).select('id,updated_at').single();
       sess._inserting = false;
       if (error){ console.warn('cloud insert error:', error); sess._needsCloud = true; flashStatus(navigator.onLine === false ? 'Saved on this device — will sync when back online' : ('Cloud: ' + error.message)); return; }
       if (data){
         sess._needsCloud = false;
         sess.cloudId = data.id; sess._owner = cloud.user.id; sess._shared = false;
+        sess._cloudUpdatedAt = data.updated_at || now;   // arm the guard from the first write
         const list = loadSessions(); const i = list.findIndex(x => x.id === sess.id); if (i >= 0){ list[i].cloudId = data.id; persistSessions(list); }
         flashStatus('Saved to cloud');
         // Flush anything typed during the insert window so the cloud row matches local state.
-        supa.from('stories').update({ title: sess.name || 'Untitled story', doc: cloudDocOf(sess), updated_at: new Date().toISOString() }).eq('id', data.id).then(() => {}, () => {});
+        (function(){ const t2 = new Date().toISOString();
+          supa.from('stories').update({ title: sess.name || 'Untitled story', doc: cloudDocOf(sess), updated_at: t2 }).eq('id', data.id).select('updated_at')
+            .then(function(r2){ if (r2 && r2.data && r2.data[0]) sess._cloudUpdatedAt = r2.data[0].updated_at; else sess._cloudUpdatedAt = t2; }, function(){});
+        })();
       }
     }
   } catch (e){ sess._inserting = false; sess._needsCloud = true; console.warn('cloud save threw:', e); flashStatus(navigator.onLine === false ? 'Saved on this device — will sync when back online' : ('Cloud error: ' + e.message)); }
@@ -23979,12 +23995,86 @@ function retryPendingCloud(){
   if (s && s._needsCloud){ flashStatus('Back online — syncing…'); cloudSave(s); }
 }
 if (typeof window !== 'undefined') window.addEventListener('online', retryPendingCloud);
+/* ============================================================================
+   Version-guarded save — the conflict path.  [roadmap #11 · launch review MUST-FIX 5]
+
+   Reached only when a guarded write matched no row, i.e. this story changed elsewhere
+   after this device last pulled. The old behaviour overwrote it; the writer lost a
+   session's work with no warning and no copy.
+
+   The rule here is that NOTHING is discarded before the writer chooses. This device's
+   draft is snapshotted into the version store first (#12's versions[], so it's visible
+   and restorable in Version history), then the other device's copy is fetched and
+   snapshotted too. Only then is the choice offered. Whichever way it goes, both drafts
+   still exist.
+   ============================================================================ */
+async function cloudConflict(sess){
+  if (!sess || sess._conflict) return;          // one prompt per conflict, not one per autosave
+  sess._conflict = true;
+  let theirs = null;
+  try {
+    const { data } = await supa.from('stories').select('doc,updated_at').eq('id', sess.cloudId).single();
+    theirs = data || null;
+  } catch (e){}
+
+  // 1. preserve THIS device's draft before anything else can touch it
+  try { if (typeof captureVersion === 'function') captureVersion('manual', 'Recovery — this device, ' + new Date().toLocaleString()); } catch(e){}
+  // 2. preserve the OTHER device's prose as a version too, so choosing "keep mine" costs nothing
+  try {
+    const th = theirs && theirs.doc && (theirs.doc.html || '');
+    if (th && Array.isArray(sess.versions) && !sess.versions.some(function(v){ return v && v.html === th; })){
+      sess.versions.push({ id: 'v' + Date.now().toString(36) + Math.floor(Math.random()*1e4).toString(36),
+                           at: (theirs.updated_at || new Date().toISOString()), kind: 'manual',
+                           label: 'From another device', html: th,
+                           words: (String(th).replace(/<[^>]*>/g,' ').match(/\S+/g) || []).length });
+    }
+  } catch(e){}
+  try { if (typeof persistSessions === 'function' && typeof loadSessions === 'function'){
+    const list = loadSessions(); const i = list.findIndex(function(x){ return x.id === sess.id; });
+    if (i >= 0){ list[i] = sess; persistSessions(list); }
+  } } catch(e){}
+
+  const msg = 'This story was also changed on another device, so Dystoria didn’t overwrite it.\n\n'
+            + 'Both drafts are safe — each is saved in Version history. Which should the cloud keep?';
+  let keepMine = true;
+  try {
+    if (typeof siteConfirm === 'function') keepMine = await siteConfirm(msg, 'Keep this device’s');
+  } catch(e){}
+
+  if (keepMine){
+    // Adopt their stamp as the new base, then write ours over it deliberately.
+    try {
+      const now2 = new Date().toISOString();
+      const { data: rows } = await supa.from('stories')
+        .update({ title: sess.name || 'Untitled story', doc: cloudDocOf(sess), updated_at: now2 })
+        .eq('id', sess.cloudId).select('updated_at');
+      sess._cloudUpdatedAt = (rows && rows[0] && rows[0].updated_at) || now2;
+      sess._needsCloud = false; sess._conflict = false;
+      if (typeof flashStatus === 'function') flashStatus('Kept this device’s version — the other is in Version history');
+    } catch (e){ if (typeof flashStatus === 'function') flashStatus('Couldn’t save — your work is safe on this device'); }
+  } else {
+    // Take theirs. Ours is already a version, so nothing is lost by loading over it.
+    try {
+      if (theirs && theirs.doc){
+        const keepVersions = sess.versions;
+        Object.assign(sess, theirs.doc);
+        sess.versions = keepVersions;                       // don't lose the recovery snapshots we just made
+        sess._cloudUpdatedAt = theirs.updated_at || '';
+        sess._needsCloud = false; sess._conflict = false;
+        try { if (typeof renderAll === 'function') renderAll(); } catch(e){}
+        try { if (typeof loadSession === 'function') loadSession(sess); } catch(e){}
+        if (typeof flashStatus === 'function') flashStatus('Loaded the other device’s version — yours is in Version history');
+      }
+    } catch (e){}
+  }
+}
+
 async function cloudPull(){
   if (!cloudReady()) return;
   if (document.body.classList.contains('guest') || /^#\/read\//.test(location.hash || '')) return;   // a shared reader link → stay on the public story; don't load the author's library or touch the URL
   try {
     // No owner filter: row-level security returns stories I own AND stories shared with me.
-    const { data, error } = await supa.from('stories').select('id,owner,doc,planning_baton,is_public,public_token');
+    const { data, error } = await supa.from('stories').select('id,owner,doc,planning_baton,is_public,public_token,updated_at');
     if (error){ console.warn('cloud pull error:', error); flashStatus('Cloud pull: ' + error.message); return; }
     if (!data) return;
     const list = loadSessions();
@@ -23998,6 +24088,7 @@ async function cloudPull(){
       d._shared = (r.owner !== cloud.user.id);
       d._baton = r.planning_baton || r.owner;
       d._isPublic = !!r.is_public; d._publicToken = r.public_token || '';
+      d._cloudUpdatedAt = r.updated_at || '';   // the base this device last saw (see cloudSave's guard)
       if (!byId[d.id] || (d.updated || '') >= (byId[d.id].updated || '')) byId[d.id] = d;
     });
     const merged = Object.values(byId).sort((a, b) => (b.updated || '').localeCompare(a.updated || ''));
@@ -46966,8 +47057,11 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.370';
+  var APP_VERSION = '2026.07.20.371';
   var APP_CHANGELOG = [
+    { v:'2026.07.20.371', date:'August 7, 2026', notes:[
+      'Writing on two devices can no longer quietly overwrite itself. Until now the last save won: if you wrote on your laptop while an older copy was still open on another device, that other device could save over your newer work with no warning. Dystoria now checks before it writes, and if the story changed somewhere else it stops and asks you which version the cloud should keep — with BOTH drafts saved into Version history first, so nothing is lost whichever you choose.'
+    ]},
     { v:'2026.07.20.370', date:'August 7, 2026', notes:[
       'The wiki medallion on a selected map element now goes away with the rest of the AI features when AI is switched off — the Explore medallion beside it already did.'
     ]},
