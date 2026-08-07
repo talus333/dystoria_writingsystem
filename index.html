@@ -4849,6 +4849,7 @@ body.eink #consentBar #cbAccept{background:#000; color:#fff; border-color:#000}
   <div id="edInsertPop" role="menu" aria-label="Insert"><button type="button" data-ins="image"><span class="eip-ic">🖼</span>Image</button><button type="button" data-ins="part"><span class="eip-ic eip-part">▬</span>Part</button><button type="button" data-ins="section"><span class="eip-ic eip-dia">◆</span>Section</button></div>
   <div id="imgSizeBar"><span class="isz-lbl">Image size</span><button type="button" data-w="30">S</button><button type="button" data-w="55">M</button><button type="button" data-w="80">L</button><button type="button" data-w="100">Full</button></div>
   <div id="sgBar">
+    <button data-sg="elcard" title="Open this element’s card">Open card</button>
     <button data-sg="rephrase" title="Refract — reflect this passage back (concepts, words, angles) so you can rewrite it; a single word gets alternatives">Refract ✦</button>
     <button data-sg="replace" title="Suggest different wording">Replace</button>
     <button data-sg="delete" title="Suggest removing this">Delete</button>
@@ -30893,6 +30894,12 @@ function onEditSelect(){
   const direct = editDirectOn();
   sb.classList.toggle('direct', direct);          // reveals the formatting group (#sgFmt) when editing directly
   sb.classList.toggle('has-sel', !collapsed);     // text-formatting (B/I/font/size/color) needs a selection
+  // Prose ↔ element link (#35): only offered when the selection resolves to a real element.
+  { const eb = sb.querySelector('[data-sg="elcard"]');
+    if (eb){ const hit = (!collapsed && typeof elLinkMatch === 'function') ? elLinkMatch(String(sel || '')) : null;
+      eb.style.display = hit ? '' : 'none';
+      if (hit) eb.textContent = 'Open ' + (hit.label.length > 22 ? hit.label.slice(0, 21) + '…' : hit.label);
+    } }
   sb.querySelector('[data-sg="rephrase"]').style.display = collapsed ? 'none' : '';
   sb.querySelector('[data-sg="replace"]').style.display = collapsed ? 'none' : '';
   sb.querySelector('[data-sg="delete"]').style.display = collapsed ? 'none' : '';
@@ -30957,6 +30964,7 @@ async function doSg(kind){
   const rng = r0.cloneRange();          // hold the spot — the styled prompt steals focus
   const direct = editDirectOn();
   $('sgBar').classList.remove('show');
+  if (kind === 'elcard'){ try { elLinkOpen(String(rng.toString() || '')); } catch(e){} return; }
   if (kind === 'rephrase'){ if (!rng.collapsed) aiRephrase(rng); return; }
   if (kind === 'delete'){
     if (rng.collapsed) return;
@@ -47057,8 +47065,12 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.371';
+  var APP_VERSION = '2026.07.20.372';
   var APP_CHANGELOG = [
+    { v:'2026.07.20.372', date:'August 7, 2026', notes:[
+      'Your prose and your elements now know about each other. Select a character, place or artifact’s name in the manuscript and an “Open …” button appears in the selection bar, taking you straight to its card. If two elements share a name, Dystoria asks which you meant rather than guessing.',
+      'And when you use Replace all on a name, Dystoria notices it belongs to an element and offers to rename the element too — so its card, map pin and notes stay in step with the page. It always asks first, and never changes prose you didn’t already replace yourself.'
+    ]},
     { v:'2026.07.20.371', date:'August 7, 2026', notes:[
       'Writing on two devices can no longer quietly overwrite itself. Until now the last save won: if you wrote on your laptop while an older copy was still open on another device, that other device could save over your newer work with no warning. Dystoria now checks before it writes, and if the story changed somewhere else it stops and asks you which version the cloud should keep — with BOTH drafts saved into Version history first, so nothing is lost whichever you choose.'
     ]},
@@ -58584,6 +58596,194 @@ body.ai-capped .pt-grouphd.ai-grouphd-empty{ display:none !important; }
   } catch(e){}
 
   try { if (window.DystAI) window.DystAI.phase = 5; } catch(e){}
+})();
+</script>
+
+
+<script id="dyst-elemlink">
+/* ============================================================================
+   Dystoria — #35 phase 1: prose ↔ element links (the matched model).
+
+   Two small bindings between the words on the page and the element records:
+
+     1. Select a name in the prose → "Open <name>" appears in the selection bar →
+        opens that element's card.
+     2. Replace-all a name in the prose → Dystoria notices the term is an element
+        and offers to rename the element too.
+
+   Deliberately the CHEAP half of the feature. Nothing about how prose is stored
+   changes: no spans are injected into the live contenteditable, so there is
+   nothing to survive undo, copy/paste or export. The cost is that matching is by
+   text rather than by identity, which is why:
+
+     · the match must be EXACT on the selection (after stripping a possessive and
+       surrounding punctuation). The user chose the boundaries, so we honour them —
+       that alone avoids the "aria inside Ariadne" class of false hit;
+     · two elements sharing a name produce a chooser rather than a guess;
+     · the rename always asks first, and never touches prose the user didn't
+       already replace themselves.
+
+   Phase 2 (anchored mentions carrying data-el-key, plus an alias list per element)
+   is what makes this exact and unprompted. This is the version that earns it.
+   ============================================================================ */
+(function(){
+  'use strict';
+
+  /* ---------- the roster ---------- */
+  function roster(){
+    var out = [];
+    try {
+      var els = (typeof npStoryElements === 'function') ? npStoryElements() : [];
+      els.forEach(function(o){
+        var w = o && o.w; if (!w) return;
+        var label = '';
+        try { label = (typeof elDisplayName === 'function') ? elDisplayName(w) : ''; } catch(e){}
+        if (!label) label = (w.name || w.word || '');
+        if (!label) return;
+        var names = [];
+        if (w.name) names.push(String(w.name).toLowerCase());
+        if (w.word) names.push(String(w.word).toLowerCase());
+        // Two characters is too short to match on — "Al" would fire on half the page.
+        names = names.filter(function(n){ return n && n.length >= 3; });
+        if (!names.length) return;
+        out.push({ key: o.key, label: label, names: names, cat: w.cat || '' });
+      });
+    } catch(e){}
+    return out;
+  }
+
+  /* ---------- normalise a selection to a comparable name ----------
+     Strips a trailing possessive ("Aria's" → "aria") and any surrounding
+     punctuation or whitespace, so selecting a name mid-sentence still lands. */
+  function norm(s){
+    var t = String(s == null ? '' : s);
+    t = t.replace(/[’‘']s$/i, '').replace(/[’‘']$/, '');
+    try { t = t.replace(/^[^\p{L}\p{N}]+/u, '').replace(/[^\p{L}\p{N}]+$/u, ''); }
+    catch(e){ t = t.replace(/^[^A-Za-z0-9]+/, '').replace(/[^A-Za-z0-9]+$/, ''); }
+    return t.trim().toLowerCase();
+  }
+
+  function matches(text){
+    var n = norm(text);
+    if (!n || n.length < 3 || n.length > 60) return [];
+    if (n.indexOf('\n') >= 0) return [];                 // a whole paragraph is not a name
+    return roster().filter(function(r){ return r.names.indexOf(n) >= 0; });
+  }
+
+  // The selection bar asks this on every selection change, so keep it cheap and quiet.
+  window.elLinkMatch = function(text){
+    try { var m = matches(text); return m.length ? m[0] : null; } catch(e){ return null; }
+  };
+
+  /* ---------- open (with a chooser when a name is shared) ---------- */
+  function openCard(key){
+    try { if (typeof openElementDossier === 'function') openElementDossier(key); } catch(e){}
+  }
+
+  function picker(list){
+    var old = document.getElementById('elLinkPick'); if (old) old.remove();
+    var box = document.createElement('div'); box.id = 'elLinkPick';
+    box.innerHTML = '<div class="elp-h">Which one?</div>' + list.map(function(r, i){
+      return '<button type="button" class="elp-row" data-i="' + i + '">'
+           + '<span class="elp-n">' + String(r.label).replace(/[<&]/g, '') + '</span>'
+           + '<span class="elp-c">' + String(r.cat || '').replace(/[<&]/g, '') + '</span></button>';
+    }).join('');
+    document.body.appendChild(box);
+    // anchor to the selection
+    try {
+      var s = window.getSelection();
+      if (s && s.rangeCount){
+        var rc = s.getRangeAt(0).getBoundingClientRect();
+        box.style.left = Math.max(8, Math.min(window.innerWidth - box.offsetWidth - 8, rc.left)) + 'px';
+        box.style.top  = Math.max(8, rc.bottom + 8) + 'px';
+      }
+    } catch(e){}
+    box.querySelectorAll('.elp-row').forEach(function(b){
+      b.addEventListener('click', function(ev){
+        ev.stopPropagation();
+        var r = list[parseInt(b.dataset.i, 10)]; box.remove(); if (r) openCard(r.key);
+      });
+    });
+    setTimeout(function(){
+      document.addEventListener('mousedown', function once(e){
+        if (!box.contains(e.target)) { box.remove(); document.removeEventListener('mousedown', once, true); }
+      }, true);
+    }, 0);
+  }
+
+  window.elLinkOpen = function(text){
+    var m = matches(text);
+    if (!m.length) return false;
+    if (m.length === 1){ openCard(m[0].key); return true; }
+    picker(m);                                   // same name, different elements — ask rather than guess
+    return true;
+  };
+
+  /* ---------- rename-aware Replace all ----------
+     Wraps frReplaceAll rather than editing it, so the replace itself is untouched.
+     We count the matches ourselves beforehand because frReplaceAll doesn't report
+     how many it changed, and we only want to offer the rename if prose actually moved. */
+  try {
+    if (typeof window.frReplaceAll === 'function' && !window.frReplaceAll.__elLink){
+      var orig = window.frReplaceAll;
+      var wrapped = function(rep){
+        var term = '';
+        try { var fi = document.getElementById('edFindInput'); term = (fi && fi.value) || ''; } catch(e){}
+        var hits = 0;
+        try {
+          var body = document.getElementById('editBody');
+          if (body && term){
+            var re = new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+            hits = ((body.textContent || '').match(re) || []).length;
+          }
+        } catch(e){}
+
+        var r = orig.apply(this, arguments);
+
+        try {
+          var newName = String(rep == null ? '' : rep).trim();
+          if (!hits || !term || !newName || norm(term) === norm(newName)) return r;
+          var m = matches(term);
+          if (!m.length) return r;
+          var el = m[0];
+          setTimeout(function(){
+            var q = 'You replaced “' + term + '” with “' + newName + '” in the prose.\n\n'
+                  + 'Rename the element as well, so its card, map pin and notes match?';
+            var go = (typeof siteConfirm === 'function') ? siteConfirm(q, 'Rename element') : Promise.resolve(false);
+            Promise.resolve(go).then(function(ok){
+              if (!ok) return;
+              try {
+                if (typeof applyElemEdit === 'function') applyElemEdit(el.key, -1, { name: newName });
+                if (typeof flashStatus === 'function') flashStatus('Renamed to ' + newName);
+              } catch(e){ if (typeof flashStatus === 'function') flashStatus('Couldn’t rename that element'); }
+            });
+          }, 260);   // let the replace-all status land first
+        } catch(e){}
+        return r;
+      };
+      wrapped.__elLink = true;
+      window.frReplaceAll = wrapped;
+    }
+  } catch(e){}
+
+  /* ---------- the chooser's look (matches the app's parchment popovers) ---------- */
+  try {
+    var css = document.createElement('style');
+    css.id = 'dyst-elemlink-css';
+    css.textContent =
+        '#elLinkPick{position:fixed; z-index:340; min-width:190px; max-width:280px; padding:6px;'
+      + ' background:#f6f0de; color:#463b26; border:1px solid rgba(70,59,38,.22); border-radius:12px;'
+      + ' box-shadow:0 16px 44px rgba(0,0,0,.28); font-family:var(--sans, system-ui, sans-serif);}'
+      + '#elLinkPick .elp-h{font-size:9.5px; font-weight:700; letter-spacing:.14em; text-transform:uppercase;'
+      + ' opacity:.55; padding:4px 8px 6px;}'
+      + '#elLinkPick .elp-row{display:flex; align-items:baseline; gap:8px; width:100%; padding:7px 9px; border:none;'
+      + ' background:none; border-radius:8px; cursor:pointer; text-align:left; font-family:inherit; color:inherit;}'
+      + '#elLinkPick .elp-row:hover{background:rgba(70,59,38,.08);}'
+      + '#elLinkPick .elp-n{font-size:13px; font-weight:600;}'
+      + '#elLinkPick .elp-c{font-size:10.5px; opacity:.55; text-transform:capitalize;}'
+      + 'body.eink #elLinkPick{background:#fff; color:#000; border-color:#000; box-shadow:none;}';
+    document.head.appendChild(css);
+  } catch(e){}
 })();
 </script>
 
