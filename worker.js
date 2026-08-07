@@ -235,7 +235,7 @@ async function runSonarResearch(env, system, prompt, maxTokens, recency) {
     if (Array.isArray(data.search_results)) sources = data.search_results.map((s, i) => ({ n: i + 1, title: s.title || '', url: s.url || '' }));
     else if (Array.isArray(data.citations)) sources = data.citations.map((u, i) => ({ n: i + 1, title: '', url: String(u) }));
     sources = sources.filter(s => s.url);
-    return { text, sources, via: 'perplexity-sonar' };
+    return { text, sources, via: 'perplexity-sonar', raw: data };
   } catch (e) { return { text: '', error: String(e) }; }
 }
 // Gemini with Google-Search grounding — the free research path; groundingMetadata carries really-retrieved URLs.
@@ -259,7 +259,7 @@ async function runGeminiResearch(env, system, prompt, maxTokens) {
     let sources = [];
     try { (cand.groundingMetadata.groundingChunks || []).forEach(c => { const w = c.web || {}; if (w.uri) sources.push({ title: w.title || '', url: w.uri }); }); } catch (e) {}
     const seen = {}; sources = sources.filter(s => { if (seen[s.url]) return false; seen[s.url] = 1; return true; }).map((s, i) => ({ n: i + 1, title: s.title, url: s.url }));
-    return { text, sources, via: 'gemini-grounded' };
+    return { text, sources, via: 'gemini-grounded', raw: data };
   } catch (e) { return { text: '', error: String(e) }; }
 }
 
@@ -344,6 +344,56 @@ function isQuotaErr(e) { return /per ?day|daily|quota|exhaust|4006|neuron|insuff
 
 // Try the chain in quality order; skip cooled-down providers; fall through on busy/empty/quota to the next.
 // opts.allowPaid=false → free tier (skip Claude); opts.allowLast=false → skip the Workers-AI llama (used for icon SVG).
+// ============================================================
+//  AI USAGE METERING (migration 6: public.ai_usage)
+//  Records what each call actually cost, per feature. Changes no limits — the count
+//  caps above stay as the backstop. This exists because those caps meter the wrong
+//  unit: an import and an icon-name lookup differ ~1000x in cost and currently spend
+//  the same quota. Meter first, set policy from real data.
+// ============================================================
+
+// Pull real token counts out of whichever provider served the call. Three shapes cover
+// the whole chain: Anthropic (input_tokens/output_tokens), OpenAI-compatible — Cerebras,
+// Groq, Mistral, OpenRouter, Workers AI — (prompt_tokens/completion_tokens), and Gemini
+// (usageMetadata.promptTokenCount/candidatesTokenCount). Anything that reports nothing
+// falls back to ~4 chars/token, flagged `estimated` so analysis can weight it apart.
+function usageFrom(raw, system, prompt, text) {
+  let inTok = null, outTok = null;
+  try {
+    const u = raw && (raw.usage || raw.usageMetadata);
+    if (u) {
+      const pick = (...ks) => { for (const k of ks) if (typeof u[k] === 'number') return u[k]; return null; };
+      inTok  = pick('input_tokens', 'prompt_tokens', 'promptTokenCount');
+      outTok = pick('output_tokens', 'completion_tokens', 'candidatesTokenCount');
+    }
+  } catch (e) {}
+  const estimated = (inTok === null || outTok === null);
+  if (inTok === null)  inTok  = Math.ceil(((system || '').length + (prompt || '').length) / 4);
+  if (outTok === null) outTok = Math.ceil((text || '').length / 4);
+  return { in: inTok, out: outTok, estimated };
+}
+
+// Fire-and-forget through ctx.waitUntil so metering never delays the writer's response.
+// A failure here is swallowed on purpose: losing a usage row must never cost someone
+// their AI call.
+async function _postUsage(env, row) {
+  const key = env && env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!key) return;
+  try {
+    await fetch(SUPABASE_URL + '/rest/v1/ai_usage', {
+      method: 'POST',
+      headers: { apikey: key, Authorization: 'Bearer ' + key, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+      body: JSON.stringify(row),
+    });
+  } catch (e) {}
+}
+function logUsage(env, ctx, row) {
+  try {
+    const p = _postUsage(env, row);
+    if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(p);
+  } catch (e) {}
+}
+
 async function runFrontier(env, system, prompt, maxTokens, temperature, opts) {
   opts = opts || {};
   const admin = !!opts.admin;
@@ -383,7 +433,7 @@ async function runFrontier(env, system, prompt, maxTokens, temperature, opts) {
     let r;
     try { r = await p.run(system, prompt, maxTokens, temperature, opts.json); }
     catch (e){ r = { text: '', error: String(e) }; }
-    if (r && r.text) return { text: r.text, via: p.name };
+    if (r && r.text) return { text: r.text, via: p.name, raw: r.raw };   // raw carries the provider's usage block (see usageFrom)
     const e = (r && r.error) || 'empty response';
     tried.push(p.name + ': ' + e);
     if (isQuotaErr(e)){ exhausted = true; if (!testing) _cooldown.set(p.name, now + 60 * 60 * 1000); }   // daily-ish quota → rest this provider an hour
@@ -401,7 +451,7 @@ function cors(origin) {
   };
 }
 
-async function handleAI(request, env) {
+async function handleAI(request, env, ctx) {
   const headers = cors(request.headers.get('origin') || '');
   if (request.method === 'OPTIONS') return new Response(null, { headers });
   if (request.method !== 'POST') return new Response(JSON.stringify({ error: 'POST only' }), { status: 405, headers });
@@ -435,6 +485,21 @@ async function handleAI(request, env) {
 
   const maxTokens = Math.min(Math.max(parseInt(body.max_tokens, 10) || 600, 64), body.kind === 'import' ? 8192 : 4096);   // import returns a big element list → allow a larger JSON reply
   const model = body.model || (image ? VISION_MODEL : MODEL);
+  // --- metering (see migration 6). `feature` is the registry name the client sends;
+  // sanitized here because it lands in a database column.
+  const _t0 = Date.now();
+  const _feature = String(body.feature || '').replace(/[^a-z0-9_]/gi, '').slice(0, 40) || null;
+  const meter = (res, kind, okFlag, outcome) => {
+    try {
+      const u = usageFrom(res && res.raw, system, prompt, (res && res.text) || '');
+      logUsage(env, ctx, {
+        user_id: user.id, feature: _feature, kind: kind,
+        model: (res && res.via) || null, plan: plan,
+        in_tokens: u.in, out_tokens: u.out, estimated: u.estimated,
+        ok: !!okFlag, outcome: outcome || null, ms: Date.now() - _t0,
+      });
+    } catch (e) {}
+  };
   // Providers the user opted out of (may-train-on-free-prose toggles). Sanitized; only ever narrows the chain.
   const exclude = Array.isArray(body.exclude) ? body.exclude.filter(x => typeof x === 'string').slice(0, 12) : [];
 
@@ -442,6 +507,7 @@ async function handleAI(request, env) {
   if (image) {
     try {
       const { text, raw } = await runVision(env, model, system, prompt, image, maxTokens);
+      meter({ text, raw, via: model }, 'image', !!text, text ? null : 'error');
       const out = { text };
       if (!text) out.debug = (() => { try { return JSON.stringify(raw).slice(0, 700); } catch (e) { return String(raw); } })();
       return new Response(JSON.stringify(out), { headers });
@@ -458,8 +524,9 @@ async function handleAI(request, env) {
   // briefs may use it as a final resort. allowPaid (= admin || Pro) decides whether Claude leads; free users get the free chain.
   if (body.kind === 'icon' || body.kind === 'brief') {
     const fr = await runFrontier(env, system, prompt, maxTokens, temperature, { admin, allowPaid: paid, allowLast: body.kind !== 'icon', only: body.models, exclude, kind: body.kind });
-    if (fr.text) return new Response(JSON.stringify({ text: fr.text, via: fr.via }), { headers });
+    if (fr.text){ meter(fr, body.kind, true); return new Response(JSON.stringify({ text: fr.text, via: fr.via }), { headers }); }
     const err = fr.error || '';
+    meter(fr, body.kind, false, fr.exhausted ? 'limit' : 'error');
     if (fr.exhausted) return new Response(JSON.stringify({ error: 'Free AI models at today’s limit — ' + err, limit: 'day' }), { status: 429, headers });
     return new Response(JSON.stringify({ error: 'Image model error — ' + (err || 'try again') }), { status: 502, headers });
   }
@@ -467,8 +534,9 @@ async function handleAI(request, env) {
   // ---- Import extraction: dedicated large-context model (Gemini 2.5 Pro), reserved so its free quota isn't spent on frequent small calls ----
   if (body.kind === 'import'){
     const fr = await runFrontier(env, system, prompt, maxTokens, temperature, { admin, allowPaid: paid, importOnly: true, json: !!body.json, only: body.models, exclude });
-    if (fr.text) return new Response(JSON.stringify({ text: fr.text, via: fr.via }), { headers });
+    if (fr.text){ meter(fr, 'import', true); return new Response(JSON.stringify({ text: fr.text, via: fr.via }), { headers }); }
     const err = fr.error || '';
+    meter(fr, 'import', false, fr.exhausted ? 'limit' : 'error');
     if (fr.exhausted) return new Response(JSON.stringify({ error: 'The import model is at today’s limit — it resets tomorrow.', limit: 'day' }), { status: 429, headers });
     return new Response(JSON.stringify({ error: 'Import model error — ' + (err || 'try again') }), { status: 502, headers });
   }
@@ -491,8 +559,9 @@ async function handleAI(request, env) {
     if (!rr){
       const gg = await runGeminiResearch(env, system, prompt, maxTokens);
       if (gg.text) rr = gg;
-      else return new Response(JSON.stringify({ error: 'Research is unavailable right now — ' + (gg.error || 'try again') }), { status: 502, headers });
+      else { meter(gg, 'research', false, 'error'); return new Response(JSON.stringify({ error: 'Research is unavailable right now — ' + (gg.error || 'try again') }), { status: 502, headers }); }
     }
+    meter(rr, 'research', true);
     return new Response(JSON.stringify({ text: rr.text, sources: rr.sources || [], via: rr.via }), { headers });
   }
 
@@ -502,8 +571,9 @@ async function handleAI(request, env) {
   // stays reserved for the premium ICON path to bound cost. (Only admins get Claude here, for testing.) To also give
   // Pro subscribers Claude for text, change `allowPaid: admin` → `allowPaid: paid`. Pass json mode through.
   const tr = await runFrontier(env, system, prompt, maxTokens, temperature, { admin, allowPaid: admin, json: !!body.json, only: body.models, exclude });
-  if (tr.text) return new Response(JSON.stringify({ text: tr.text, via: tr.via }), { headers });
+  if (tr.text){ meter(tr, 'text', true); return new Response(JSON.stringify({ text: tr.text, via: tr.via }), { headers }); }
   const terr = tr.error || '';
+  meter(tr, 'text', false, tr.exhausted ? 'limit' : 'error');
   if (tr.exhausted) return new Response(JSON.stringify({ error: 'Dystoria’s free AI models are all at today’s limit — they reset tomorrow.', limit: 'day' }), { status: 429, headers });
   return new Response(JSON.stringify({ error: 'AI error: ' + terr }), { status: 502, headers });
 }
@@ -789,7 +859,7 @@ async function handleFeedbackHook(request, env){
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
     if (url.pathname === '/version'){
       // Report the deployed app version (read once per isolate from index.html) so the client can
@@ -806,7 +876,7 @@ export default {
     }
     if (url.pathname === '/ai'){
       // Never let an unhandled exception become an opaque 500 — return the real reason so the client can show it.
-      try { return await handleAI(request, env); }
+      try { return await handleAI(request, env, ctx); }
       catch (e){
         const h = Object.assign({ 'Content-Type': 'application/json' }, cors(request.headers.get('Origin')));
         return new Response(JSON.stringify({ error: 'AI worker error: ' + String((e && e.message) || e) }), { status: 502, headers: h });
