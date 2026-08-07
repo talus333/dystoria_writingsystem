@@ -46965,8 +46965,11 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.361';
+  var APP_VERSION = '2026.07.20.362';
   var APP_CHANGELOG = [
+    { v:'2026.07.20.362', date:'August 6, 2026', notes:[
+      'The Research panel now opens with a clean slate — earlier research waits in a History section (with a count) just under the scope row. Reopen any past research and its full thread comes back, and follow-up questions carry that thread’s context so you can go deeper. The ＋ button in the panel header starts new research anytime, filing the current thread into History.'
+    ]},
     { v:'2026.07.20.361', date:'August 6, 2026', notes:[
       'Fixed the mode bar keeping the Revise (or Review/Wiki) medallion highlighted after switching back to Plan.'
     ]},
@@ -56906,6 +56909,16 @@ body.eink #resPanel{ background:#fff; border-left:2px solid #000; }
 #resScope label{ display:inline-flex; align-items:center; gap:5px; cursor:pointer; font-style:normal; font-family:var(--sans); font-size:9px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:#7a6f58; }
 #resScope input[type=checkbox]{ accent-color:var(--gold,#c8963c); }
 #resRecency{ font-family:var(--sans); font-size:9px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:#7a6f58; background:transparent; border:1px solid rgba(120,92,40,.3); border-radius:8px; padding:2px 5px; }
+#resHist{ flex:none; border-bottom:1px solid rgba(150,112,50,.14); }
+#resHistHead{ display:flex; align-items:center; gap:6px; padding:7px 14px; cursor:pointer; font-family:var(--sans); font-size:8.5px; font-weight:700; letter-spacing:.16em; text-transform:uppercase; color:#a08a56; }
+#resHistHead:hover{ color:#a8741f; }
+.res-histcaret{ margin-left:auto; font-size:9px; }
+#resHistList{ padding:0 10px 8px; max-height:180px; overflow-y:auto; scrollbar-width:thin; }
+.res-histrow{ display:flex; align-items:center; gap:8px; padding:6px 8px; border-radius:9px; cursor:pointer; }
+.res-histrow:hover{ background:rgba(138,99,32,.09); }
+.res-histtitle{ flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-family:var(--serif,Georgia,serif); font-size:12.5px; color:#3c3223; }
+.res-histmeta{ flex:none; font-family:var(--serif,Georgia,serif); font-style:italic; font-size:10px; color:#8a7d68; }
+body.research-full #resHistList{ max-height:260px; }
 #resLog{ flex:1; overflow-y:auto; padding:12px 14px; scrollbar-width:thin; }
 #resLog .res-empty{ font-family:var(--serif,Georgia,serif); font-style:italic; font-size:12.5px; color:#8a7d68; line-height:1.55; }
 .res-qa{ margin-bottom:16px; }
@@ -57023,10 +57036,19 @@ body.eink #resAllView{ color:#000; }
    inject a fixture response for testing. */
 (function(){
   var SEP='||TRAIT||';
-  var RES={ log:[], tray:[], facts:true, recency:'', busy:false, scopeKey:null, seq:1 };
+  var RES={ threads:[], cur:null, tray:[], facts:true, recency:'', busy:false, scopeKey:null, seq:1, histOpen:false };
+  function freshThread(){ return { id:'t'+Date.now().toString(36)+Math.floor(Math.random()*900), log:[], ts:Date.now() }; }
+  function curThread(){ if(!RES.cur) RES.cur=freshThread(); return RES.cur; }
+  function threadTitle(t){ var q=(t&&t.log&&t.log[0]&&t.log[0].q)||'Research'; return q.length>60?(q.slice(0,59)+'…'):q; }
+  function archiveCur(){ var t=RES.cur; if(t && t.log && t.log.length){ t.ts=Date.now(); RES.threads.push(t); if(RES.threads.length>20) RES.threads=RES.threads.slice(-20); } RES.cur=freshThread(); }
   function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
-  function persist(){ try{ if(state.session){ state.session.research={ log:RES.log.slice(-20), tray:RES.tray }; if(typeof scheduleAutosave==='function') scheduleAutosave(); } }catch(e){} }
-  function restore(){ try{ var r=state.session&&state.session.research; if(r){ if(Array.isArray(r.log)) RES.log=r.log; if(Array.isArray(r.tray)) RES.tray=r.tray; } }catch(e){} }
+  function persist(){ try{ if(state.session){ state.session.research={ threads:RES.threads.slice(-20), cur:RES.cur, tray:RES.tray }; if(typeof scheduleAutosave==='function') scheduleAutosave(); } }catch(e){} }
+  function restore(){ try{ var r=state.session&&state.session.research; if(r){
+    if(Array.isArray(r.threads)) RES.threads=r.threads;
+    if(r.cur && r.cur.log) RES.cur=r.cur;
+    if(Array.isArray(r.log) && r.log.length && !Array.isArray(r.threads)){ RES.threads=[{ id:'tlegacy', log:r.log, ts:Date.now() }]; }   // pre-thread sessions
+    if(Array.isArray(r.tray)) RES.tray=r.tray;
+  } }catch(e){} }
   function roster(){ try{ return (npStoryElements()||[]).map(function(o){ return { key:o.key, name:(typeof elDisplayName==='function')?elDisplayName(o.w):(o.w.name||o.w.word||''), cat:o.w.cat }; }).filter(function(r){ return r.name && r.name.length>1; }); }catch(e){ return []; } }
   function targetsIn(text){ var out=[], lo=String(text||'').toLowerCase();
     roster().forEach(function(r){ var n=r.name.toLowerCase(); if(n.length<3) return; if(lo.indexOf(n)>=0 && out.indexOf(r.key)<0) out.push(r.key); });
@@ -57036,11 +57058,14 @@ body.eink #resAllView{ color:#000; }
   /* ---------- backend ---------- */
   var RES_SYS='You are a research librarian helping a novelist. Answer the question with live web research. Ground every factual claim in your retrieved sources and mark claims with inline numbered citations like [1] or [2] that match your source list. Write short, clear paragraphs — organized, concrete, quotable. If STORY FACTS are provided, angle the answer toward what serves that story, but NEVER invent sources and never present story facts as researched fact. If you could not retrieve live sources, say so plainly in one sentence.';
   async function resCall(q){
-    if(typeof window.__resStub==='function') return window.__resStub(q);
-    if(typeof aiAuthed==='function' && !aiAuthed()){ if(typeof promptAiSignup==='function') promptAiSignup(); throw new Error('sign in'); }
     var facts=''; try{ if(RES.facts && typeof window.storyFacts==='function') facts=window.storyFacts({maxChars:2600, maxEls:28, noteCap:110})||''; }catch(e){}
     var scopeLine=''; try{ if(RES.scopeKey){ var sw=npFindEl(RES.scopeKey); if(sw) scopeLine='\nRESEARCH IS FOR THIS ELEMENT IN PARTICULAR: '+((typeof elDisplayName==='function')?elDisplayName(sw):sw.word); } }catch(e){}
-    var body={ kind:'research', system:RES_SYS, prompt:'QUESTION: '+q+(facts?('\n\nSTORY FACTS (context only — never present as researched fact):\n'+facts):'')+scopeLine, max_tokens:1400 };
+    var convo=''; try{ var lg=curThread().log.filter(function(en){ return en.text && !en.err; }).slice(-2);
+      if(lg.length) convo='\n\nCONVERSATION SO FAR (the writer is going deeper on this thread — keep continuity):\n'+lg.map(function(en){ return 'Q: '+en.q+'\nA: '+String(en.text).slice(0,700); }).join('\n'); }catch(e){}
+    var body={ kind:'research', system:RES_SYS, prompt:'QUESTION: '+q+convo+(facts?('\n\nSTORY FACTS (context only — never present as researched fact):\n'+facts):'')+scopeLine, max_tokens:1400 };
+    try{ window.__resDbgPrompt=body.prompt; }catch(e){}
+    if(typeof window.__resStub==='function') return window.__resStub(q);
+    if(typeof aiAuthed==='function' && !aiAuthed()){ if(typeof promptAiSignup==='function') promptAiSignup(); throw new Error('sign in'); }
     if(RES.recency) body.recency=RES.recency;
     try{ var _m=(typeof aiEnabledModels==='function')?aiEnabledModels():null; if(_m) body.models=_m; }catch(e){}
     try{ var _ex=(typeof aiExcludedModels==='function')?aiExcludedModels():[]; if(_ex.length) body.exclude=_ex; }catch(e){}
@@ -57056,11 +57081,13 @@ body.eink #resAllView{ color:#000; }
     var p=document.createElement('div'); p.id='resPanel';
     p.innerHTML=''
       +'<div id="resHead"><span class="res-h">✦ Research</span><span id="resVia"></span>'
+      +'<button type="button" class="res-hbtn" id="resNew" title="Start new research — the current one is saved to History">＋</button>'
       +'<button type="button" class="res-hbtn" id="resExpand" title="Expand to full screen for a deeper dive">⤢</button>'
       +'<button type="button" class="res-hbtn" id="resClose" title="Close">×</button></div>'
       +'<div id="resScope"><span id="resScopeLbl"></span>'
       +'<label title="Send the story’s canonical facts along with each question"><input type="checkbox" id="resFactsCb" checked> story facts</label>'
       +'<select id="resRecency" title="How recent the sources should be"><option value="">All time</option><option value="year">Past year</option></select></div>'
+      +'<div id="resHist" style="display:none"><div id="resHistHead">History · <span id="resHistCt">0</span><span class="res-histcaret">▾</span></div><div id="resHistList" style="display:none"></div></div>'
       +'<div id="resLog"></div>'
       +'<div id="resAsk"><textarea id="resAskTa" rows="2" placeholder="Ask anything — answers come with real sources you can file into your notes…"></textarea><button type="button" id="resAskGo">Ask</button></div>'
       +'<div id="resTray" style="display:none"><div id="resTrayHead">Staging · <span class="res-tct" id="resTrayCt">0</span></div>'
@@ -57070,6 +57097,8 @@ body.eink #resAllView{ color:#000; }
     var chip=document.createElement('button'); chip.type='button'; chip.id='resSelChip'; chip.textContent='＋ add to research'; document.body.appendChild(chip);
     document.getElementById('resClose').addEventListener('click', resClose);
     document.getElementById('resExpand').addEventListener('click', function(){ document.body.classList.toggle('research-full'); this.textContent=document.body.classList.contains('research-full')?'⤡':'⤢'; this.title=document.body.classList.contains('research-full')?'Collapse back to the drawer':'Expand to full screen for a deeper dive'; });
+    document.getElementById('resNew').addEventListener('click', function(){ archiveCur(); persist(); renderLog(); renderHist(); try{ document.getElementById('resAskTa').focus(); }catch(e){} });
+    document.getElementById('resHistHead').addEventListener('click', function(){ RES.histOpen=!RES.histOpen; renderHist(); });
     document.getElementById('resFactsCb').addEventListener('change', function(){ RES.facts=this.checked; });
     document.getElementById('resRecency').addEventListener('change', function(){ RES.recency=this.value; });
     document.getElementById('resAskGo').addEventListener('click', ask);
@@ -57086,13 +57115,14 @@ body.eink #resAllView{ color:#000; }
   function resOpen(opts){
     opts=opts||{};
     ensurePanel(); restore();
+    archiveCur();   // every open starts clean — the previous thread waits in History
     RES.scopeKey=opts.scope||null;
     try{ if(typeof chkClose==='function') chkClose(); if(typeof patClose==='function') patClose(); }catch(e){}
     document.body.classList.add('research-open');
     var sl=document.getElementById('resScopeLbl');
     var stn=''; try{ stn=(state.session&&state.session.name)||''; }catch(e){}
     sl.textContent='grounded in: '+(stn||'this story')+(RES.scopeKey?(' · about '+targetName(RES.scopeKey)):'');
-    renderLog(); renderTray();
+    renderLog(); renderHist(); renderTray();
     setTimeout(function(){ try{ document.getElementById('resAskTa').focus(); }catch(e){} }, 60);
   }
   function resClose(){ document.body.classList.remove('research-open'); document.body.classList.remove('research-full'); var xb=document.getElementById('resExpand'); if(xb) xb.textContent='⤢'; persist(); }
@@ -57104,7 +57134,7 @@ body.eink #resAllView{ color:#000; }
     var ta=document.getElementById('resAskTa'); var q=(ta.value||'').trim(); if(!q) return;
     RES.busy=true; document.getElementById('resAskGo').disabled=true; ta.value='';
     var entry={ id:'r'+(RES.seq++)+Date.now().toString(36), q:q, text:'', sources:[], via:'', pending:true };
-    RES.log.push(entry); renderLog();
+    curThread().log.push(entry); renderLog();
     try{
       var out=await resCall(q);
       entry.text=out.text; entry.sources=out.sources||[]; entry.via=out.via||''; entry.pending=false;
@@ -57116,9 +57146,10 @@ body.eink #resAllView{ color:#000; }
   function markers(text){ return esc(text).replace(/\[(\d+(?:\s*[,;]\s*\d+)*)\]/g, function(m, ns){ return '<span class="res-cite">['+ns+']</span>'; }); }
   function renderLog(){
     var log=document.getElementById('resLog'); if(!log) return;
-    if(!RES.log.length){ log.innerHTML='<div class="res-empty">Ask anything your story needs — period detail, how something works, what a place was like. Answers arrive with real sources; highlight what’s worth keeping and stage it, then import into your element notes.</div>'; return; }
+    var lg=curThread().log;
+    if(!lg.length){ log.innerHTML='<div class="res-empty">Ask anything your story needs — period detail, how something works, what a place was like. Answers arrive with real sources; highlight what’s worth keeping and stage it, then import into your element notes. Earlier research waits under History.</div>'; return; }
     log.innerHTML='';
-    RES.log.forEach(function(en){
+    lg.forEach(function(en){
       var d=document.createElement('div'); d.className='res-qa'; d.dataset.rid=en.id;
       var grounded=!!(en.sources&&en.sources.length);
       var html='<div class="res-q">'+esc(en.q)+'</div>';
@@ -57142,7 +57173,33 @@ body.eink #resAllView{ color:#000; }
   }
 
   /* ---------- staging ---------- */
-  function entryById(id){ for(var i=0;i<RES.log.length;i++) if(RES.log[i].id===id) return RES.log[i]; return null; }
+  function entryById(id){ var lg=curThread().log; for(var i=0;i<lg.length;i++) if(lg[i].id===id) return lg[i]; return null; }
+  function renderHist(){
+    var h=document.getElementById('resHist'), ct=document.getElementById('resHistCt'), list=document.getElementById('resHistList'); if(!h) return;
+    var n=RES.threads.length;
+    h.style.display=n?'block':'none';
+    if(ct) ct.textContent=n;
+    var caret=h.querySelector('.res-histcaret'); if(caret) caret.textContent=RES.histOpen?'▴':'▾';
+    if(!list) return;
+    list.style.display=RES.histOpen?'block':'none';
+    list.innerHTML='';
+    RES.threads.slice().reverse().forEach(function(t){
+      var row=document.createElement('div'); row.className='res-histrow'; row.title='Reopen this research — its context comes back so you can go deeper';
+      var tt=document.createElement('span'); tt.className='res-histtitle'; tt.textContent=threadTitle(t); row.appendChild(tt);
+      var meta=document.createElement('span'); meta.className='res-histmeta'; meta.textContent=t.log.length+' question'+(t.log.length===1?'':'s'); row.appendChild(meta);
+      var x=document.createElement('button'); x.type='button'; x.className='res-clip-x'; x.textContent='×'; x.title='Delete from history';
+      x.addEventListener('click', function(e){ e.stopPropagation(); var i=RES.threads.indexOf(t); if(i>=0) RES.threads.splice(i,1); persist(); renderHist(); });
+      row.appendChild(x);
+      row.addEventListener('click', function(){
+        archiveCur();
+        var i=RES.threads.indexOf(t); if(i>=0) RES.threads.splice(i,1);
+        RES.cur=t;
+        RES.histOpen=false;
+        persist(); renderLog(); renderHist();
+      });
+      list.appendChild(row);
+    });
+  }
   function refsInText(entry, text){
     var ns={}; String(text||'').replace(/\[(\d+(?:\s*[,;]\s*\d+)*)\]/g, function(m, grp){ grp.split(/[,;]/).forEach(function(x){ ns[parseInt(x,10)]=1; }); return m; });
     var keys=Object.keys(ns);
