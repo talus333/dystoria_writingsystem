@@ -43,22 +43,39 @@ create table if not exists public.story_impressions (
   id         uuid primary key default gen_random_uuid(),
   story_id   uuid not null references public.stories(id) on delete cascade,
   version_id text,
-  anchor_key text not null,
-  kind       text not null,
+  anchor_key text,
+  kind       text,
   reader_id  uuid references auth.users(id) on delete cascade,
-  created_at timestamptz not null default now(),
-  constraint story_impressions_kind_chk check (kind in ('like', 'dislike', 'confused'))
+  created_at timestamptz not null default now()
 );
 
--- The author paints all impressions for a story, and the version-preview filters by version.
+-- Bring an EXISTING table up to shape. The statement above is a no-op if some earlier
+-- attempt already created story_impressions, which would leave the indexes below pointing
+-- at columns that aren't there — the "column version_id does not exist" failure. These
+-- adds are no-ops on a fresh install and repairs on a partial one.
+alter table public.story_impressions add column if not exists version_id text;
+alter table public.story_impressions add column if not exists anchor_key text;
+alter table public.story_impressions add column if not exists kind       text;
+alter table public.story_impressions add column if not exists reader_id  uuid references auth.users(id) on delete cascade;
+alter table public.story_impressions add column if not exists created_at timestamptz not null default now();
+
+-- Add the kind check only if it isn't already there (ALTER ... ADD CONSTRAINT has no
+-- IF NOT EXISTS form, so catch the duplicate).
+do $imp$ begin
+  alter table public.story_impressions
+    add constraint story_impressions_kind_chk check (kind in ('like', 'dislike', 'confused'));
+exception when duplicate_object then null; end $imp$;
+
+-- The author paints all impressions for a story; the version preview filters by version.
 create index if not exists story_impressions_story_idx   on public.story_impressions (story_id);
 create index if not exists story_impressions_version_idx on public.story_impressions (story_id, version_id);
 
--- One mark per reader per passage per feeling. A reader may leave two DIFFERENT feelings
--- on the same passage (the client blends them), so `kind` is part of the key.
--- version_id is coalesced because NULL never equals NULL in a unique index.
+-- One mark per reader per passage per feeling. A reader may leave two DIFFERENT feelings on
+-- the same passage (the client blends them), so kind is part of the key. version_id is
+-- coalesced because NULL never equals NULL in a unique index; the extra parens make it a
+-- valid index expression.
 create unique index if not exists story_impressions_unique_idx
-  on public.story_impressions (story_id, coalesce(version_id, ''), anchor_key, kind, reader_id);
+  on public.story_impressions (story_id, (coalesce(version_id, '')), anchor_key, kind, reader_id);
 
 alter table public.story_impressions enable row level security;
 

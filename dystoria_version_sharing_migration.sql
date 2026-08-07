@@ -38,6 +38,8 @@ alter table public.stories add column if not exists published_at         timesta
 -- ----------------------------------------------------------------
 alter table public.story_comments add column if not exists version_id text;
 
+-- Defensive: if story_comments predates this and the column add above was skipped for any
+-- reason, this index would fail. The add is idempotent, so re-running is safe.
 create index if not exists story_comments_version_idx
   on public.story_comments (story_id, version_id, created_at);
 
