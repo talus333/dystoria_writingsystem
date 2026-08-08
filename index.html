@@ -47875,8 +47875,13 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.384';
+  var APP_VERSION = '2026.07.20.385';
   var APP_CHANGELOG = [
+    { v:'2026.07.20.385', date:'August 8, 2026', notes:[
+      'A Style Challenge, in the ＋ menu while you write and on your Style Fingerprint. It reads your fingerprint first and shows you the habit with its numbers — “your sentences average 11 words”, “only 12% of your long words come from Latin or French”, “almost none of this story is spoken aloud” — and then dares you out of it once. The dare is never prose and never a correction: a habit is not a fault, and the card says so. A dial sets how far you are taking it, from once in this section to the whole section, and ↻ finds another angle on you.',
+      'It works with no account and no AI — the habit, the evidence and the dare are all measured and written. If you are signed in, ✦ makes the dare about THIS story: your character, your place, the moment you are standing in. It still never writes a line of it for you.',
+      'Two fixes to the selection bar in Revise, both from Jeremy. It now waits for you to let go of the mouse instead of appearing the instant a highlight starts and following the cursor across the page. And when you click into a word in direct Edit mode, the bar appears just above that word rather than wherever it happened to be last.'
+    ]},
     { v:'2026.07.20.384', date:'August 8, 2026', notes:[
       'Two things the Diction lens called measurements were guesses about the shape of a word, and both now read from data. Its Anglo-Saxon ↔ Latinate meter had been testing for suffixes like -tion and -ment plus “four or more syllables” — which misses Latinate words with no giveaway ending (remember, question, liberty, difficult) and wrongly flags long Germanic compounds. Dystoria now traces words to a real source language: Latin, French and Greek against Old English and Old Norse. The lens tells you what share it could trace, and reads the rest from their endings as before, so you always know which you are looking at.',
       'And “concrete vs abstract” is a rating rather than a tally. It used to count a list of sensory words against nouns ending in -tion, -ness and -ity — two rough tests standing in for one real quantity, and between them they covered only a sliver of any page. It now uses concreteness ratings collected from 4,000 people across 37,000 words, so the reading covers almost everything you wrote. Your own most concrete and most abstract words are listed with their scores, so you can look at the number and disagree with it.',
@@ -60916,10 +60921,41 @@ body.ai-signedout .pt-rh-hint, body.ai-capped .pt-rh-hint, body.ai-off .pt-rh-hi
     var w = t.slice(a, b);
     return bare(w).length >= 2 ? { node:node, a:a, b:b, word:w } : null;
   }
+  /* onEditSelect bails before it positions anything when the caret is not at a word gap
+     — which is exactly the case we have just re-enabled — so the bar was being SHOWN at
+     wherever it last sat, sometimes half a page away. Place it over the caret's own word,
+     with the same arithmetic the selection branch uses, so a click in Edit mode puts the
+     bar in the same place a highlight in Suggest mode does. */
+  function placeOverCaretWord(bar){
+    var r = caretRange(); if (!r) return;
+    var rect = r.getBoundingClientRect(); if (!rect || !rect.width) return;
+    var bw = bar.offsetWidth || 230;
+    var cx = (rect.left + rect.right) / 2, cy = rect.top;
+    bar.style.left = Math.max(8, Math.min(window.innerWidth - bw - 8, cx - bw / 2)) + 'px';
+    bar.style.top = Math.max(8, cy - 44) + 'px';
+  }
   function caretRange(){
     var c = WB._caret; if (!c) return null;
     try{ var r = document.createRange(); r.setStart(c.node, c.a); r.setEnd(c.node, c.b); return r; }catch(e){ return null; }
   }
+
+  /* The bar waits for the mouse to come up. onEditSelect also runs on selectionchange,
+     which fires on every pixel of a drag — so the bar used to appear the moment a
+     highlight began and chase the cursor across the page while the writer was still
+     choosing what to select. Held down, it stays hidden; released, it lands once. */
+  var DOWN = false;
+  try{
+    document.addEventListener('mousedown', function(e){
+      var b = document.getElementById('sgBar');
+      if (b && b.contains(e.target)) return;                 // pressing the bar itself is not a drag
+      DOWN = true;
+    }, true);
+    document.addEventListener('mouseup', function(){
+      if (!DOWN) return;
+      DOWN = false;
+      setTimeout(function(){ try{ if (typeof onEditSelect === 'function') onEditSelect(); }catch(e){} }, 0);
+    }, true);
+  }catch(e){}
 
   /* Show the button only when the selection is one word — or, in direct edit, when the
      caret is inside one. onEditSelect owns the bar's layout, so wrap it rather than
@@ -60930,6 +60966,7 @@ body.ai-signedout .pt-rh-hint, body.ai-capped .pt-rh-hint, body.ai-off .pt-rh-hi
     var next = function(){
       var r = orig.apply(this, arguments);
       try{
+        if (DOWN){ var b0 = document.getElementById('sgBar'); if (b0) b0.classList.remove('show'); return r; }
         ensureButton();
         var bar = document.getElementById('sgBar');
         var b = bar && bar.querySelector('[data-sg="word"]');
@@ -60942,6 +60979,7 @@ body.ai-signedout .pt-rh-hint, body.ai-capped .pt-rh-hint, body.ai-off .pt-rh-hi
           // and the range is built from the caret's own word when the button is pressed
           var rf = bar.querySelector('[data-sg="rephrase"]'); if (rf) rf.style.display = '';
           bar.classList.add('show');
+          placeOverCaretWord(bar);
         }
       }catch(e){}
       return r;
@@ -61700,6 +61738,343 @@ body.ember:not(.eink) #apCard .apo-save{color:#241c12; background:#e0a44a; borde
              coverage: content ? Math.round(n / content * 100) : 0,
              concrete: best.slice(0, 8), abstract: worst.slice(0, 8) };
   };
+})();
+</script>
+
+<style id="dyst-challenge-css">
+/* The Style Challenge (#22). Block-local variables, own prefix — the two rules v.382
+   and v.383 each cost a bug to learn. */
+#scCard{--sc-paper:var(--paper); --sc-ink:var(--ink); --sc-soft:var(--ink-soft); --sc-faint:var(--ink-faint); --sc-line:var(--line); --sc-bg2:var(--bg2);
+  position:fixed; inset:0; z-index:9760; display:none; align-items:center; justify-content:center; padding:24px;
+  background:rgba(12,9,6,.62); backdrop-filter:blur(2px)}
+#scCard.show{display:flex}
+body.ember:not(.eink) #scCard, body.lp-live #scCard{--sc-paper:#241c12; --sc-ink:#e9dcc4; --sc-soft:#c3b394; --sc-faint:#9a8a6f; --sc-line:#4a3a22; --sc-bg2:#2f2417}
+#scCard .sc-box{width:min(94vw,540px); max-height:88vh; display:flex; flex-direction:column;
+  background:var(--sc-paper); color:var(--sc-ink); border:1px solid var(--sc-line); border-radius:16px;
+  box-shadow:0 30px 70px -18px rgba(0,0,0,.6); overflow:hidden}
+#scCard .sc-head{position:relative; padding:20px 22px 0}
+#scCard .sc-kick{font:700 10px/1 var(--sans); letter-spacing:.16em; text-transform:uppercase; color:var(--gold); margin-bottom:9px}
+#scCard .sc-x{position:absolute; top:14px; right:16px; font-size:21px; line-height:1; color:var(--sc-faint); background:none; border:none; cursor:pointer}
+#scCard .sc-x:hover{color:var(--gold)}
+#scCard .sc-body{overflow:auto; padding:0 22px 4px; flex:1 1 auto}
+#scCard .sc-h{font:700 9.5px/1 var(--sans); letter-spacing:.14em; text-transform:uppercase; color:var(--sc-faint); margin:16px 0 7px}
+#scCard .sc-obs{font-family:var(--serif); font-size:16px; line-height:1.55; color:var(--sc-ink)}
+#scCard .sc-obs b{font-weight:600}
+#scCard .sc-ev{display:flex; flex-wrap:wrap; gap:6px; margin-top:9px}
+#scCard .sc-tag{font:400 11px/1 var(--sans); color:var(--sc-soft); border:1px solid var(--sc-line); border-radius:999px; padding:5px 9px}
+#scCard .sc-tag b{font-weight:700; color:var(--sc-ink)}
+#scCard .sc-dare{font-family:var(--serif); font-size:19px; line-height:1.5; color:var(--sc-ink);
+  border-left:2px solid var(--gold); padding:2px 0 2px 14px; margin-top:2px}
+#scCard .sc-why{font:400 12px/1.55 var(--sans); color:var(--sc-faint); margin-top:9px; font-style:italic}
+#scCard .sc-dial{display:flex; align-items:center; gap:8px; margin:16px 0 2px; flex-wrap:wrap}
+#scCard .sc-dial-l{font:700 9.5px/1 var(--sans); letter-spacing:.14em; text-transform:uppercase; color:var(--sc-faint); margin-right:2px}
+#scCard .sc-step{font:400 12px/1 var(--sans); color:var(--sc-soft); background:var(--sc-bg2); border:1px solid var(--sc-line);
+  border-radius:999px; padding:7px 13px; cursor:pointer}
+#scCard .sc-step.on{color:var(--sc-paper); background:var(--sc-ink); border-color:var(--sc-ink)}
+body.ember:not(.eink) #scCard .sc-step.on, body.lp-live #scCard .sc-step.on{color:#241c12; background:#e0a44a; border-color:#e0a44a}
+#scCard .sc-foot{display:flex; align-items:center; gap:10px; padding:14px 22px 18px; border-top:1px solid var(--sc-line); flex-wrap:wrap}
+#scCard .sc-btn{font:600 12px/1 var(--sans); letter-spacing:.04em; color:var(--sc-ink); background:var(--sc-bg2);
+  border:1px solid var(--sc-line); border-radius:20px; padding:9px 15px; cursor:pointer}
+#scCard .sc-btn:hover{border-color:var(--gold)}
+#scCard .sc-btn.sc-go{color:var(--paper); background:var(--ink); border-color:var(--ink)}
+body.ember:not(.eink) #scCard .sc-btn.sc-go, body.lp-live #scCard .sc-btn.sc-go{color:#241c12; background:#e0a44a; border-color:#e0a44a}
+#scCard .sc-dismiss{font:400 12px/1 var(--sans); color:var(--sc-faint); background:none; border:none; cursor:pointer; text-decoration:underline; margin-left:auto}
+#scCard .sc-dismiss:hover{color:var(--sc-ink)}
+#scCard .sc-note{font:400 11px/1.5 var(--sans); color:var(--sc-faint); font-style:italic; padding:0 22px 16px}
+#scCard .sc-wait{display:flex; align-items:center; gap:9px; font:400 13px/1.4 var(--sans); color:var(--sc-faint); padding:6px 0 2px}
+#scCard .sc-empty{font-family:var(--serif); font-style:italic; font-size:15px; line-height:1.6; color:var(--sc-soft); padding:8px 0 14px}
+</style>
+<script id="dyst-challenge-js">
+/* ============================================================================
+   Dystoria — the Style Challenge (#22).
+
+   A dare off your habitual style, and the whole point is that it is EARNED: the
+   habit is measured first, from the Style Fingerprint, and shown with its numbers
+   before anything is asked of you. "Write a 40-word sentence" is a writing
+   exercise. "Every sentence you have written in this story is between 9 and 13
+   words — write one that runs past forty" is a challenge, because it is about you.
+
+   Three rules it inherits:
+   • NEVER PROSE. The dare is an instruction. The AI half makes it about THIS
+     story — your character, your section — and still never writes a line of it.
+   • DETERMINISTIC HALF STANDS ALONE. The habit, its evidence and a real dare all
+     compute with no model and no account. The ✦ pass only makes it specific.
+   • DESCRIPTIVE, NOT CORRECTIVE. A habit is not a fault. The card says so, and the
+     dare is always framed as "try the other thing once", never "stop doing this".
+
+   The intensity dial changes the COMMITMENT rather than the wording — one sentence,
+   one paragraph, the whole section — which is the honest axis: the dare is the same
+   dare, and what a writer is choosing is how much of the page to give it.
+   ========================================================================== */
+(function(){
+  'use strict';
+  var SC = window.STYLECHALLENGE = window.STYLECHALLENGE || {};
+  var STATE = { fp:null, habit:null, level:1, seed:0, ai:null };
+  function T(n,p){ try{ if(typeof track==='function') track(n,p||{}); }catch(e){} }
+  function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+
+  /* ---- the habits ------------------------------------------------------
+     Each is measured, has a threshold taken from the same eight passages the
+     other lenses were calibrated against, and a `force` saying how far past that
+     threshold this writer sits — so the card can pick the habit that is most
+     THEIRS rather than the first one that trips. */
+  var HABITS = [
+    { key:'length-short', label:'Short sentences',
+      test:function(f){ return f.avgSentence <= 12 ? (12 - f.avgSentence) / 4 : 0; },
+      obs:function(f){ return 'Your sentences average <b>' + f.avgSentence + ' words</b>. You write short, and you do it consistently.'; },
+      ev:function(f){ return [['Average sentence', f.avgSentence + ' words'], ['Rhythm variety', f.cv]]; },
+      dare:'Write one sentence that runs past forty words without a full stop — let it accumulate, and put the thing it is about at the very end.',
+      why:'Short sentences are a real voice, not a failing. This is about finding out what your long one sounds like, once.' },
+    { key:'length-long', label:'Long sentences',
+      test:function(f){ return f.avgSentence >= 20 ? (f.avgSentence - 20) / 6 : 0; },
+      obs:function(f){ return 'Your sentences average <b>' + f.avgSentence + ' words</b>. You build long, and the reader stays inside them a while.'; },
+      ev:function(f){ return [['Average sentence', f.avgSentence + ' words'], ['Rhythm variety', f.cv]]; },
+      dare:'Say the most important thing in four words or fewer, on its own line, and do not explain it afterwards.',
+      why:'A long sentence carries a reader; a short one stops them. You have the first. This is the second.' },
+    { key:'variety-even',  label:'Even rhythm',
+      test:function(f){ return f.cv <= 0.38 ? (0.38 - f.cv) / 0.18 : 0; },
+      obs:function(f){ return 'Your sentence lengths barely vary — a rhythm variety of <b>' + f.cv + '</b>, where most prose sits nearer 0.5.'; },
+      ev:function(f){ return [['Rhythm variety', f.cv], ['Average sentence', f.avgSentence + ' words']]; },
+      dare:'Put your longest sentence in the story directly beside your shortest, in that order, and let the join do the work.',
+      why:'An even rhythm is restful and it is also invisible. One deliberate break in it will be heard.' },
+    { key:'openers',       label:'Sentence openings',
+      test:function(f){ return f.openerVariety <= 42 ? (42 - f.openerVariety) / 20 : 0; },
+      obs:function(f){ return 'Your sentences tend to begin the same way — an opener variety of <b>' + f.openerVariety + '%</b>.'; },
+      ev:function(f){ return [['Opener variety', f.openerVariety + '%']]; },
+      dare:'Begin a sentence with something that is not the subject — a place, a time, a sound, a subordinate clause — and keep the subject waiting.',
+      why:'Openings are where a reader feels a pattern first, and where a habit shows before you notice it.' },
+    { key:'register-plain', label:'Anglo-Saxon register',
+      test:function(f){ return f.latinPct <= 16 ? (16 - f.latinPct) / 8 : 0; },
+      obs:function(f){ return 'Only <b>' + f.latinPct + '%</b> of your long words come from Latin, French or Greek. You write out of the old Germanic core of English.'; },
+      ev:function(f){ return [['Latinate by origin', f.latinPct + '%']]; },
+      dare:'Let one formal, Latinate word do the work of a whole plain phrase — and put it where the reader will feel the change of register.',
+      why:'A plain register is the harder one to write well, and you have it. A single formal word inside it lands like a struck bell.' },
+    { key:'register-latin', label:'Latinate register',
+      test:function(f){ return f.latinPct >= 30 ? (f.latinPct - 30) / 12 : 0; },
+      obs:function(f){ return '<b>' + f.latinPct + '%</b> of your long words come from Latin, French or Greek — a formal, learned register.'; },
+      ev:function(f){ return [['Latinate by origin', f.latinPct + '%']]; },
+      dare:'Rewrite your most abstract idea using only words a child would know, and do not lose an ounce of what it means.',
+      why:'The plainest words are the hardest to hide behind, which is exactly why they are worth reaching for once.' },
+    { key:'concrete-abs',  label:'Abstract diction',
+      test:function(f){ return (f.conc != null && f.conc <= 3.35) ? (3.35 - f.conc) / 0.35 : 0; },
+      obs:function(f){ return 'Your words average <b>' + f.conc + ' of 5</b> for concreteness — you write in ideas more than in things.'; },
+      ev:function(f){ return [['Concreteness', f.conc + ' of 5']]; },
+      dare:'Carry the next turn entirely on physical detail — what is touched, heard or seen — and name no feeling at all.',
+      why:'An abstraction tells a reader what to think. An object lets them arrive at it, and they trust what they arrived at.' },
+    { key:'concrete-con',  label:'Concrete diction',
+      test:function(f){ return (f.conc != null && f.conc >= 3.9) ? (f.conc - 3.9) / 0.4 : 0; },
+      obs:function(f){ return 'Your words average <b>' + f.conc + ' of 5</b> for concreteness — cups, coats, windows. You write in things.'; },
+      ev:function(f){ return [['Concreteness', f.conc + ' of 5']]; },
+      dare:'Say one thing outright that you would normally leave to an object — a judgement, a fear, a name for what is happening.',
+      why:'Concrete writing earns the right to an abstraction. You have earned one; spend it.' },
+    { key:'dialogue-none', label:'Narration',
+      test:function(f){ return f.dialogue <= 10 ? (10 - f.dialogue) / 10 : 0; },
+      obs:function(f){ return 'Almost none of this story is spoken aloud — dialogue is <b>' + f.dialogue + '%</b> of it.'; },
+      ev:function(f){ return [['Dialogue', f.dialogue + '%']]; },
+      dare:'Let two people say the thing you have been narrating, and cut every line that only tells the reader what they already know.',
+      why:'Narration can say anything, which is its danger. A person speaking can only say what they would say.' },
+    { key:'dialogue-heavy', label:'Dialogue',
+      test:function(f){ return f.dialogue >= 55 ? (f.dialogue - 55) / 20 : 0; },
+      obs:function(f){ return '<b>' + f.dialogue + '%</b> of this story is spoken aloud. Your people talk.'; },
+      ev:function(f){ return [['Dialogue', f.dialogue + '%']]; },
+      dare:'Take a beat of the conversation and let nobody speak — carry it on gesture, object and silence, and lose nothing.',
+      why:'What a scene can carry without speech is a good measure of what the speech was actually doing.' },
+    { key:'reach-common',  label:'Familiar phrasing',
+      test:function(f){ return (f.reach != null && f.reach <= 45) ? (45 - f.reach) / 20 : 0; },
+      obs:function(f){ return 'Your Reach reads <b>' + f.reach + '</b> — close to the common core of English, and where stock phrasing turned up it was quoted back to you.'; },
+      ev:function(f){ return [['Reach', f.reach], ['Ready-made per 1,000 words', (f.stock != null ? f.stock : '—')]]; },
+      dare:'Take the most familiar image on the page and describe the same thing as if English had no phrase for it yet.',
+      why:'A familiar phrase is sometimes exactly right. This is about knowing which of yours are chosen and which are inherited.' },
+    { key:'reach-far',     label:'Far-ranging phrasing',
+      test:function(f){ return (f.reach != null && f.reach >= 88) ? (f.reach - 88) / 10 : 0; },
+      obs:function(f){ return 'Your Reach reads <b>' + f.reach + '</b> — you range a long way from the common core, and almost nothing here is ready-made.'; },
+      ev:function(f){ return [['Reach', f.reach]]; },
+      dare:'Write the turn in words a reader will not notice — no image, no unusual word — and make it land on what happens alone.',
+      why:'Prose that never rests is hard to stay inside. A plain passage gives the far-ranging ones somewhere to be heard from.' },
+    { key:'richness',      label:'Vocabulary range',
+      test:function(f){ return f.mattr <= 42 ? (42 - f.mattr) / 14 : 0; },
+      obs:function(f){ return 'You return to the same words often — a lexical richness of <b>' + f.mattr + '%</b>.'; },
+      ev:function(f){ return [['Lexical richness', f.mattr + '%'], ['Most repeated', (f.crutchWord || '—')]]; },
+      dare:'Write the next stretch without using ' + '“' + '%CRUTCH%' + '”' + ' once, and do not reach for a synonym — go around it.',
+      why:'A word you keep returning to is as often a motif as a crutch. Going around it for a page tells you which.' }
+  ];
+
+  /* The dial changes the COMMITMENT, not the wording — the dare is the same dare. */
+  var LEVELS = [
+    { label:'Gentle', scope:'Just once, anywhere in this section.' },
+    { label:'Firm',   scope:'For a whole paragraph.' },
+    { label:'Dare',   scope:'For this entire section, start to finish.' }
+  ];
+
+  /* ---- measuring -------------------------------------------------------- */
+  function measure(){
+    var fp = null;
+    try{ fp = (typeof styleFingerprint === 'function') ? styleFingerprint() : null; }catch(e){}
+    if (!fp || !fp.wordCount || fp.wordCount < 120) return null;
+    var f = { avgSentence:fp.avgSentence, cv:fp.cv, openerVariety:fp.openerVariety,
+              latinPct:fp.latinPct, dialogue:fp.dialogue, mattr:fp.mattr,
+              reach:(fp.reach ? fp.reach.reach : null), stock:(fp.reach ? fp.reach.stockPer1k : null),
+              conc:null, crutchWord:null, wordCount:fp.wordCount, sections:fp.sections || [] };
+    try{ var c = (fp.crutch && fp.crutch.length) ? fp.crutch[0] : null; f.crutchWord = c ? (c.w || c.word || c) : null; }catch(e){}
+    try{
+      var txt = (typeof patTensionText === 'function') ? patTensionText('story') : '';
+      var toks = (String(txt).toLowerCase().match(/[a-z'’]{2,}/g) || []).map(function(t){ return t.replace(/[^a-z]/g,''); }).filter(function(b){ return b.length >= 2; });
+      var cr = (typeof _fpConcrete === 'function') ? _fpConcrete(toks) : null;
+      if (cr) f.conc = Math.round(cr.mean * 100) / 100;
+    }catch(e){}
+    return f;
+  }
+  /* The strongest habit, not the first — and never the same one twice running, so a
+     re-roll is a different challenge rather than the same words shuffled. */
+  function pickHabit(f, avoid){
+    var scored = HABITS.map(function(h){ var s = 0; try{ s = h.test(f) || 0; }catch(e){ s = 0; } return { h:h, s:s }; })
+      .filter(function(x){ return x.s > 0 && x.h.key !== avoid; })
+      .sort(function(a, b){ return b.s - a.s; });
+    if (!scored.length) return null;
+    // among the top few, vary — a writer who re-rolls wants another angle on themselves
+    var pool = scored.slice(0, Math.min(3, scored.length));
+    return pool[STATE.seed % pool.length].h;
+  }
+  function dareText(h, f){
+    var d = h.dare;
+    if (d.indexOf('%CRUTCH%') >= 0) d = d.replace('%CRUTCH%', f.crutchWord || 'the word you lean on');
+    return d;
+  }
+
+  /* ---- the card --------------------------------------------------------- */
+  function close(){ var c = document.getElementById('scCard'); if (c) c.classList.remove('show'); }
+  SC.close = close;
+  function box(){
+    var c = document.getElementById('scCard');
+    if (c) return c;
+    c = document.createElement('div'); c.id = 'scCard';
+    c.innerHTML = '<div class="sc-box">'
+      + '<div class="sc-head"><button type="button" class="sc-x" title="Not now">×</button>'
+      +   '<div class="sc-kick">Style challenge</div></div>'
+      + '<div class="sc-body"></div>'
+      + '<div class="sc-foot"></div>'
+      + '<div class="sc-note">Your fingerprint is a mirror, not a target — a habit is not a fault, and nothing here is scored. '
+      +   'This is one deliberate step outside it, for as long as you feel like taking it.</div>'
+      + '</div>';
+    document.body.appendChild(c);
+    c.querySelector('.sc-x').addEventListener('click', function(){ close(); T('style_challenge_dismissed'); });
+    c.addEventListener('mousedown', function(e){ if (e.target === c){ close(); T('style_challenge_dismissed'); } });
+    return c;
+  }
+
+  function render(){
+    var c = box(), body = c.querySelector('.sc-body'), foot = c.querySelector('.sc-foot');
+    var f = STATE.fp, h = STATE.habit;
+    if (!f){
+      body.innerHTML = '<div class="sc-empty">Write a few hundred words and this can read your habits. It has nothing to push against yet — which is the right reason for it to stay quiet.</div>';
+      foot.innerHTML = ''; return;
+    }
+    if (!h){
+      body.innerHTML = '<div class="sc-empty">Nothing in your style sits far enough from the middle to be worth daring you out of. That is not a criticism — a balanced hand is hard to come by. Come back after a few more sections.</div>';
+      foot.innerHTML = ''; return;
+    }
+    var ev = [];
+    try{ ev = h.ev(f) || []; }catch(e){}
+    var html = '<div class="sc-h">What you keep doing</div><div class="sc-obs">' + h.obs(f) + '</div>'
+      + '<div class="sc-ev">' + ev.map(function(p){ return '<span class="sc-tag">' + esc(p[0]) + ' <b>' + esc(p[1]) + '</b></span>'; }).join('') + '</div>'
+      + '<div class="sc-h">The challenge</div>'
+      + '<div class="sc-dare">' + esc(STATE.ai ? STATE.ai : dareText(h, f)) + '</div>'
+      + '<div class="sc-why">' + esc(LEVELS[STATE.level].scope) + ' ' + esc(h.why) + '</div>'
+      + '<div class="sc-dial"><span class="sc-dial-l">How far</span>'
+      +   LEVELS.map(function(l, i){ return '<button type="button" class="sc-step' + (i === STATE.level ? ' on' : '') + '" data-i="' + i + '">' + esc(l.label) + '</button>'; }).join('')
+      + '</div>';
+    body.innerHTML = html;
+    Array.prototype.forEach.call(body.querySelectorAll('.sc-step'), function(b){
+      b.addEventListener('click', function(){ STATE.level = +b.getAttribute('data-i'); T('style_challenge_level', { level:STATE.level }); render(); });
+    });
+
+    foot.innerHTML = '';
+    var mk = function(cls, label, fn){ var b = document.createElement('button'); b.type = 'button'; b.className = 'sc-btn' + (cls ? ' ' + cls : ''); b.textContent = label; b.addEventListener('click', fn); foot.appendChild(b); return b; };
+    mk('', '↻ Another', function(){ STATE.seed++; STATE.ai = null; STATE.habit = pickHabit(STATE.fp, h.key) || pickHabit(STATE.fp, null); T('style_challenge_reroll'); render(); });
+    var ai = mk('sc-go', '✦ Make it about this story', function(){ runAi(ai, h, f); });
+    var d = document.createElement('button'); d.type = 'button'; d.className = 'sc-dismiss'; d.textContent = 'Not now';
+    d.addEventListener('click', function(){ close(); T('style_challenge_dismissed'); });
+    foot.appendChild(d);
+  }
+
+  /* The ✦ half makes the dare about THIS story — this section, these people — and is
+     held to the same contract as every other AI surface here: it may not write a line
+     of the prose it is asking for. */
+  async function runAi(btn, h, f){
+    if (typeof aiAuthed === 'function' && !aiAuthed()){ if (typeof promptAiSignup === 'function') promptAiSignup(); return; }
+    var body = document.getElementById('scCard').querySelector('.sc-body');
+    var slot = body.querySelector('.sc-dare');
+    if (slot) slot.innerHTML = '<span class="spin"></span> ';
+    btn.disabled = true;
+    var facts = '';
+    try{ facts = (typeof storyFacts === 'function') ? String(storyFacts()).slice(0, 3000) : ''; }catch(e){}
+    var sec = '';
+    try{ sec = String((typeof patTensionText === 'function') ? patTensionText('section') : '').slice(-1400); }catch(e){}
+    var sys = 'You turn a general writing challenge into ONE specific dare for the story in front of you. '
+      + 'Return ONLY the dare — a single sentence, at most 32 words, in the imperative, addressed to the writer. '
+      + 'It must keep the SHAPE of the general challenge exactly (if it asks for a long sentence, yours asks for a long sentence) '
+      + 'while naming something real from this story: a character, a place, an object, the moment the section is at. '
+      + 'You must NEVER write any of the prose yourself — no example sentence, no phrasing for them to use, no "such as". '
+      + 'Do not praise, do not explain, do not hedge. No preamble, no quotation marks. Just the dare.';
+    var prompt = 'THE GENERAL CHALLENGE: ' + dareText(h, f)
+      + '\n\nTHE WRITER’S HABIT: ' + String(h.obs(f)).replace(/<[^>]+>/g, '')
+      + (facts ? ('\n\nTHE STORY:\n' + facts) : '')
+      + (sec ? ('\n\nWHERE THEY ARE NOW (end of the current section):\n' + sec) : '')
+      + '\n\nThe dare:';
+    try{
+      var out = await aiCall(sys, prompt, { maxTokens:120, feature:'style_challenge' });
+      var t = String(out || '').replace(/[\r\n]+/g, ' ').replace(/^["'“‘\s]+|["'”’\s]+$/g, '').trim();
+      if (t){ STATE.ai = t; T('style_challenge_ai'); }
+    }catch(e){}
+    btn.disabled = false;
+    render();
+  }
+
+  /* ---- opening ---------------------------------------------------------- */
+  SC.open = function(){
+    STATE.fp = measure();
+    STATE.ai = null;
+    STATE.habit = STATE.fp ? pickHabit(STATE.fp, null) : null;
+    render();
+    box().classList.add('show');
+    T('style_challenge_open', { habit: STATE.habit ? STATE.habit.key : 'none', words: STATE.fp ? STATE.fp.wordCount : 0 });
+  };
+
+  /* The Write session's ＋ menu is built from a fixed array in an init block, so the
+     item is appended to the rendered menu instead — the array is not reachable from
+     here, and reaching into it would break the moment it is reordered. */
+  function mountMenu(){
+    var fam = document.getElementById('fsAddMenu');
+    if (!fam || !fam.classList.contains('show')) return;
+    if (fam.querySelector('[data-sc]')) return;
+    var sep = document.createElement('div'); sep.className = 'fsam-sep';
+    var b = document.createElement('button'); b.type = 'button'; b.setAttribute('data-sc', '1');
+    var ic = document.createElement('span'); ic.className = 'fsam-ic'; ic.textContent = '✦'; b.appendChild(ic);
+    var l = document.createElement('span'); l.textContent = 'Style challenge'; b.appendChild(l);
+    b.addEventListener('click', function(){
+      try{ fam.classList.remove('show'); fam.hidden = true; document.body.classList.remove('fsadd-open'); }catch(e){}
+      SC.open();
+    });
+    fam.appendChild(sep); fam.appendChild(b);
+  }
+  try{ new MutationObserver(mountMenu).observe(document.documentElement, { subtree:true, attributes:true, attributeFilter:['class'], childList:true }); }catch(e){}
+  setInterval(mountMenu, 700);
+
+  /* And from the Fingerprint itself, which is where a writer is already looking at
+     the habit the challenge is about. */
+  function mountFp(){
+    var card = document.querySelector('#fpBd .fp-card'); if (!card) return;
+    if (card.querySelector('[data-scfp]')) return;
+    var b = document.createElement('button'); b.type = 'button'; b.setAttribute('data-scfp', '1');
+    b.className = 'pt-fp-interp-btn';
+    b.innerHTML = '<span class="ai-star">✦</span> Challenge my style';
+    b.style.marginTop = '10px';
+    b.addEventListener('click', function(e){ e.stopPropagation();
+      try{ var bd = document.getElementById('fpBd'); if (bd) bd.classList.remove('show'); }catch(e2){}
+      SC.open(); });
+    card.appendChild(b);
+  }
+  setInterval(mountFp, 900);
 })();
 </script>
 
