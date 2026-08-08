@@ -47875,8 +47875,12 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.389';
+  var APP_VERSION = '2026.07.20.390';
   var APP_CHANGELOG = [
+    { v:'2026.07.20.390', date:'August 8, 2026', notes:[
+      'Sentence tinting now has a third setting: kept. The ＋ menu item cycles off → fading → kept. Fading is what it was — each sentence lights for a moment as you finish it and then lets go. Kept leaves every finished sentence coloured, so a whole section reads as a map of its own feeling: where it runs cold, where it warms, and which words inside a line are pulling against it. Turn it on mid-section and the section you already have is painted straight away.',
+      'The colours stay quiet in the middle on purpose. Most prose is mildly warm, so a scale that shouted at every sentence would tell you nothing; only the lines that are genuinely charged step forward. Kept mode paints the most recent 150 sentences, so a very long section stays quick.'
+    ]},
     { v:'2026.07.20.389', date:'August 8, 2026', notes:[
       'Sentence tinting, rebuilt around what Jeremy actually wanted from it. Each word now takes a colour as you finish typing it — a brief flicker of its own feeling — and then, when you close the sentence, the whole line tints from everything in it together. So you get the temperature of what you are laying down word by word, and then a look at the shape of the whole thing.',
       'And a sentence is rarely one feeling. The words that pull AGAINST the line keep their own colour on top of it, so “he was tired and ignored and sad, but the kitchen was warm and someone had left him bread” shows you cold and warm in the same breath, in the places they actually sit. That is the emotional complexity of the sentence made visible — not a mood, a mixture.',
@@ -62181,11 +62185,22 @@ body.ember:not(.eink) #scCard .sc-btn.sc-go, body.lp-live #scCard .sc-btn.sc-go{
   var DECAY = [1, 0.55, 0.24];                         // the three steps back to the page
   var WDECAY = [1, 0.45];                              // a word gets two, and goes quicker
   var LPT = window.LPTINT = window.LPTINT || {};
-  var state = { lastSent:'', lastWord:'', primed:false, timers:[], names:[], wtimers:[], wnames:[] };
+  var state = { lastSent:'', lastWord:'', primed:false, painted:'', timers:[], names:[], wtimers:[], wnames:[] };
 
   function reduced(){ try{ return window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches; }catch(e){ return false; } }
-  LPT.enabled = function(){ try{ return localStorage.getItem(LS) === '1'; }catch(e){ return false; } };
-  LPT.setEnabled = function(v){ try{ localStorage.setItem(LS, v ? '1' : '0'); }catch(e){} if(!v) clearAll(); };
+  /* Three positions, not two. "Fading" is the sentence as a beat — it lights, it lets go,
+     and the page stays the page. "Kept" is the whole section as a map of its own feeling,
+     which is a different thing to look at and worth being able to look at. '1' stays
+     "fading" so an existing setting means what it meant. */
+  var MODES = ['off', 'fade', 'keep'];
+  LPT.mode = function(){ try{ var v = localStorage.getItem(LS); return v === '2' ? 'keep' : (v === '1' ? 'fade' : 'off'); }catch(e){ return 'off'; } };
+  LPT.setMode = function(m){
+    try{ localStorage.setItem(LS, m === 'keep' ? '2' : (m === 'fade' ? '1' : '0')); }catch(e){}
+    clearAll(); state.painted = '';
+    if (m === 'keep') repaintAll();
+  };
+  LPT.enabled = function(){ return LPT.mode() !== 'off'; };
+  LPT.setEnabled = function(v){ LPT.setMode(v ? 'fade' : 'off'); };
   LPT.available = function(){ return !!(window.CSS && CSS.highlights && window.Highlight && window.Range) && !reduced(); };
 
   /* ---- the table -------------------------------------------------------- */
@@ -62443,6 +62458,58 @@ body.ember:not(.eink) #scCard .sc-btn.sc-go, body.lp-live #scCard .sc-btn.sc-go{
     return { h:h, s:s, v:r[0], a:r[1] };
   }
 
+  /* ---- kept mode: the whole section at once -----------------------------
+     Rebuilt from scratch rather than accumulated. A Range survives most editing, but
+     not a text node being replaced — and the editor replaces them constantly — so an
+     incrementally-grown set would rot into ranges pointing at nothing. One pass over
+     the closed sentences, one Highlight per colour with every matching range added to
+     it, so the cost is 21 highlight objects however long the section runs.
+
+     Capped at the most recent 150 sentences. A writer with 40,000 words in one section
+     does not need the opening tinted while they work at the end, and rebuilding it on
+     every pause would be felt. */
+  var KEEP_MAX = 150;
+  function repaintAll(){
+    if (LPT.mode() !== 'keep' || !LPT.available()) return;
+    var ed = document.getElementById('editor'); if (!ed) return;
+    if (typeof lpAllSentences !== 'function') return;
+    ensureCSS();
+    clearSent();
+    try{
+      var info = lpAllSentences(ed); if (!info.bounds.length) return;
+      var buf = bufOf(info);
+      var closedOnly = info.bounds.filter(function(b){ return isClosed(buf, b); });
+      if (closedOnly.length > KEEP_MAX) closedOnly = closedOnly.slice(closedOnly.length - KEEP_MAX);
+      var bags = Object.create(null), glow = null;
+      var addTo = function(name, range){
+        if (!bags[name]) bags[name] = new Highlight();
+        bags[name].add(range);
+      };
+      closedOnly.forEach(function(b){
+        var sl = info.loc(b[0]), el = info.loc(b[1]);
+        var rr = document.createRange();
+        try{ rr.setStart(sl.node, sl.offset); rr.setEnd(el.node, el.offset); }catch(e){ return; }
+        if (rr.collapsed) return;
+        var txt = rr.toString(); if (txt.trim().length < 12) return;
+        var r = read(txt); if (!r || r.n < 1) return;
+        addTo('lpt-' + r.h + '-' + r.s + '-0', rr.cloneRange());
+        if (isOwn(txt, r)){ if (!glow) glow = new Highlight(); glow.add(rr.cloneRange()); }
+        counterWords(buf, b, r.v).forEach(function(c){
+          try{
+            var csl = info.loc(c.a), cel = info.loc(c.z);
+            var cr = document.createRange(); cr.setStart(csl.node, csl.offset); cr.setEnd(cel.node, cel.offset);
+            if (!cr.collapsed) addTo('lpt-' + c.h + '-' + c.s + '-0', cr);
+          }catch(e){}
+        });
+      });
+      Object.keys(bags).forEach(function(nm){ CSS.highlights.set(nm, bags[nm]); if (state.names.indexOf(nm) < 0) state.names.push(nm); });
+      if (glow){ CSS.highlights.set('lpt-glow', glow); if (state.names.indexOf('lpt-glow') < 0) state.names.push('lpt-glow'); }
+    }catch(e){}
+  }
+  var repaintT = null;
+  function repaintSoon(){ clearTimeout(repaintT); repaintT = setTimeout(repaintAll, 650); }
+  LPT.repaintAll = repaintAll;
+
   /* ---- the settle detector ----------------------------------------------
      The sentence that settled is the one the caret just LEFT. lpAllSentences is
      the Living Page's own tokenizer, complete with its node-offset mapper, so
@@ -62451,6 +62518,14 @@ body.ember:not(.eink) #scCard .sc-btn.sc-go, body.lp-live #scCard .sc-btn.sc-go{
     var b = ''; for (var i = 0; i < info.map.length; i++) b += info.map[i].node.nodeValue; return b;
   }
   var WCH = /[A-Za-z'\u2019]/;
+  /* lpAllSentences also emits a bound for whatever follows the last full stop — the line
+     you are still writing — so "is this a finished sentence" has to be asked separately. */
+  function isClosed(buf, bb){
+    var k = bb[1] - 1;
+    while (k > bb[0] && /\s/.test(buf.charAt(k))) k--;
+    while (k > bb[0] && /["'\u201d\u2019)\]]/.test(buf.charAt(k))) k--;
+    return /[.!?\u2026]/.test(buf.charAt(k));
+  }
 
   function tick(){
     try{
@@ -62473,14 +62548,8 @@ body.ember:not(.eink) #scCard .sc-btn.sc-go, body.lp-live #scCard .sc-btn.sc-go{
          end of the buffer, which is where the caret is. So every single keystroke looked
          like a completed sentence, and the sentence tint fired on each letter while the
          per-word tint never got a turn at all. */
-      var closed = function(bb){
-        var k = bb[1] - 1;
-        while (k > bb[0] && /\s/.test(buf.charAt(k))) k--;
-        while (k > bb[0] && /["'\u201d\u2019)\]]/.test(buf.charAt(k))) k--;
-        return /[.!?\u2026]/.test(buf.charAt(k));
-      };
       var doneIdx = -1, i;
-      for (i = 0; i < info.bounds.length; i++){ if (info.bounds[i][1] <= cg && closed(info.bounds[i])) doneIdx = i; else if (info.bounds[i][1] > cg) break; }
+      for (i = 0; i < info.bounds.length; i++){ if (info.bounds[i][1] <= cg && isClosed(buf, info.bounds[i])) doneIdx = i; else if (info.bounds[i][1] > cg) break; }
       /* Prime once per session, on the first tick after the Living Page starts, so
          whatever was already on the page does not tint on arrival. It has to be an
          explicit flag rather than "lastSent is still empty": on a blank page there are
@@ -62501,8 +62570,11 @@ body.ember:not(.eink) #scCard .sc-btn.sc-go, body.lp-live #scCard .sc-btn.sc-go{
             var rr = document.createRange(); rr.setStart(sl.node, sl.offset); rr.setEnd(el.node, el.offset);
             var txt = rr.toString();
             if (txt.trim().length >= 12){
-              var r = read(txt);
-              if (r && r.n >= 1) tint(info, b, rr, r, isOwn(txt, r), counterWords(buf, b, r.v));
+              if (LPT.mode() === 'keep'){ clearWord(); repaintAll(); }
+              else {
+                var r = read(txt);
+                if (r && r.n >= 1) tint(info, b, rr, r, isOwn(txt, r), counterWords(buf, b, r.v));
+              }
             }
           }catch(e){}
           return;                                                   // the sentence has the floor this tick
@@ -62512,6 +62584,11 @@ body.ember:not(.eink) #scCard .sc-btn.sc-go, body.lp-live #scCard .sc-btn.sc-go{
       /* ---- the word you just FINISHED ------------------------------------
          A word is finished when the caret has moved past it onto a space or a mark.
          Only words carrying something get a flicker — see readWord. */
+      if (LPT.mode() === 'keep'){
+        // an edit anywhere can change a sentence that is already painted
+        var sig = buf.length + ':' + info.bounds.length;
+        if (sig !== state.painted){ state.painted = sig; repaintSoon(); }
+      }
       if (cg > 0 && !WCH.test(buf.charAt(cg - 1))){
         var e = cg - 1;
         while (e > 0 && !WCH.test(buf.charAt(e - 1))) e--;
@@ -62560,7 +62637,7 @@ body.ember:not(.eink) #scCard .sc-btn.sc-go, body.lp-live #scCard .sc-btn.sc-go{
       var next = function(){ var r = orig.apply(this, arguments); try{ after(); }catch(e){} return r; };
       next.__lptWrapped = true; window[name] = next;
     };
-    wrapFn('lpStart', function(){ state.lastSent = ''; state.lastWord = ''; state.primed = false; if (LPT.enabled() && LPT.available()) load(); });
+    wrapFn('lpStart', function(){ state.lastSent = ''; state.lastWord = ''; state.primed = false; state.painted = ''; if (LPT.enabled() && LPT.available()) load().then(function(){ if (LPT.mode() === 'keep') repaintAll(); }); });
     wrapFn('lpStop', function(){ clearAll(); state.lastSent = ''; state.lastWord = ''; state.primed = false; });
   }catch(e){}
 
@@ -62573,23 +62650,24 @@ body.ember:not(.eink) #scCard .sc-btn.sc-go, body.lp-live #scCard .sc-btn.sc-go{
     var ic = document.createElement('span'); ic.className = 'fsam-ic';
     var l = document.createElement('span');
     var paint = function(){
-      var on = LPT.enabled(), ok = LPT.available();
-      ic.textContent = ok ? (on ? '◉' : '◌') : '◌';
-      l.textContent = ok ? ('Sentence tint' + (on ? ' · on' : '')) : 'Sentence tint · off (reduced motion)';
+      var m = LPT.mode(), ok = LPT.available();
+      ic.textContent = ok ? (m === 'off' ? '◌' : (m === 'fade' ? '◉' : '⬢')) : '◌';
+      l.textContent = ok ? ('Sentence tint · ' + (m === 'off' ? 'off' : (m === 'fade' ? 'fading' : 'kept')))
+                         : 'Sentence tint · off (reduced motion)';
       b.title = ok
-        ? 'As you finish each sentence it takes a colour for a moment — warmer and stronger for the more charged lines — then fades. Never marks anything as wrong, and never changes your text.'
+        ? 'Off → fading → kept. Fading lights each sentence for a moment as you finish it. Kept leaves every sentence coloured, so the section reads as a map of its own feeling. Never marks anything as wrong, and never changes your text.'
         : 'Your system is set to reduce motion, so this stays off.';
     };
     b.appendChild(ic); b.appendChild(l); paint();
     b.addEventListener('click', function(e){
       e.stopPropagation();
       if (!LPT.available()) return;
-      var on = !LPT.enabled();
-      LPT.setEnabled(on);
-      if (on) load();
+      var next = MODES[(MODES.indexOf(LPT.mode()) + 1) % MODES.length];
+      LPT.setMode(next);
+      if (next !== 'off') load().then(function(){ if (LPT.mode() === 'keep') repaintAll(); });
       paint();
-      try{ if (typeof track === 'function') track('lp_tint_toggled', { on:on }); }catch(e2){}
-      try{ if (typeof flashStatus === 'function') flashStatus(on ? 'Sentence tint on' : 'Sentence tint off'); }catch(e2){}
+      try{ if (typeof track === 'function') track('lp_tint_mode', { mode:next }); }catch(e2){}
+      try{ if (typeof flashStatus === 'function') flashStatus('Sentence tint ' + (next === 'off' ? 'off' : next)); }catch(e2){}
       try{ fam.classList.remove('show'); fam.hidden = true; document.body.classList.remove('fsadd-open'); }catch(e2){}
     });
     fam.appendChild(b);
