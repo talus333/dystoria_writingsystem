@@ -47875,8 +47875,11 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.390';
+  var APP_VERSION = '2026.07.20.391';
   var APP_CHANGELOG = [
+    { v:'2026.07.20.391', date:'August 8, 2026', notes:[
+      'Fixed: kept tinting flickered while you wrote. It was rebuilding itself shortly after every keystroke — and each rebuild cleared the page before repainting it, so the colours blinked out and came back as you typed. Two changes: it now only recomputes when a sentence is actually finished, so typing inside the line you are on leaves everything exactly where it is; and the repaint swaps the new colouring in over the old rather than clearing first, so there is no blank frame even when it does run.'
+    ]},
     { v:'2026.07.20.390', date:'August 8, 2026', notes:[
       'Sentence tinting now has a third setting: kept. The ＋ menu item cycles off → fading → kept. Fading is what it was — each sentence lights for a moment as you finish it and then lets go. Kept leaves every finished sentence coloured, so a whole section reads as a map of its own feeling: where it runs cold, where it warms, and which words inside a line are pulling against it. Turn it on mid-section and the section you already have is painted straight away.',
       'The colours stay quiet in the middle on purpose. Most prose is mildly warm, so a scale that shouted at every sentence would tell you nothing; only the lines that are genuinely charged step forward. Kept mode paints the most recent 150 sentences, so a very long section stays quick.'
@@ -62474,7 +62477,6 @@ body.ember:not(.eink) #scCard .sc-btn.sc-go, body.lp-live #scCard .sc-btn.sc-go{
     var ed = document.getElementById('editor'); if (!ed) return;
     if (typeof lpAllSentences !== 'function') return;
     ensureCSS();
-    clearSent();
     try{
       var info = lpAllSentences(ed); if (!info.bounds.length) return;
       var buf = bufOf(info);
@@ -62502,12 +62504,18 @@ body.ember:not(.eink) #scCard .sc-btn.sc-go, body.lp-live #scCard .sc-btn.sc-go{
           }catch(e){}
         });
       });
-      Object.keys(bags).forEach(function(nm){ CSS.highlights.set(nm, bags[nm]); if (state.names.indexOf(nm) < 0) state.names.push(nm); });
-      if (glow){ CSS.highlights.set('lpt-glow', glow); if (state.names.indexOf('lpt-glow') < 0) state.names.push('lpt-glow'); }
+      /* Swap, don't clear-then-rebuild. Clearing first meant every repaint blanked the
+         page for a frame before the colours came back — which is the flicker. Set the new
+         set over the old, then delete only the names that are no longer used. */
+      var live = [];
+      Object.keys(bags).forEach(function(nm){ CSS.highlights.set(nm, bags[nm]); live.push(nm); });
+      if (glow){ CSS.highlights.set('lpt-glow', glow); live.push('lpt-glow'); }
+      state.names.forEach(function(nm){ if (live.indexOf(nm) < 0){ try{ CSS.highlights.delete(nm); }catch(e){} } });
+      state.names = live;
     }catch(e){}
   }
   var repaintT = null;
-  function repaintSoon(){ clearTimeout(repaintT); repaintT = setTimeout(repaintAll, 650); }
+  function repaintSoon(){ clearTimeout(repaintT); repaintT = setTimeout(repaintAll, 260); }
   LPT.repaintAll = repaintAll;
 
   /* ---- the settle detector ----------------------------------------------
@@ -62570,7 +62578,7 @@ body.ember:not(.eink) #scCard .sc-btn.sc-go, body.lp-live #scCard .sc-btn.sc-go{
             var rr = document.createRange(); rr.setStart(sl.node, sl.offset); rr.setEnd(el.node, el.offset);
             var txt = rr.toString();
             if (txt.trim().length >= 12){
-              if (LPT.mode() === 'keep'){ clearWord(); repaintAll(); }
+              if (LPT.mode() === 'keep'){ clearWord(); repaintAll(); state.painted = ''; }
               else {
                 var r = read(txt);
                 if (r && r.n >= 1) tint(info, b, rr, r, isOwn(txt, r), counterWords(buf, b, r.v));
@@ -62585,8 +62593,16 @@ body.ember:not(.eink) #scCard .sc-btn.sc-go, body.lp-live #scCard .sc-btn.sc-go{
          A word is finished when the caret has moved past it onto a space or a mark.
          Only words carrying something get a flicker — see readWord. */
       if (LPT.mode() === 'keep'){
-        // an edit anywhere can change a sentence that is already painted
-        var sig = buf.length + ':' + info.bounds.length;
+        /* The signature counts only what is FINISHED. It used to be the buffer length,
+           which moves on every keystroke — so kept mode rebuilt itself 650ms after every
+           character and the page flickered while you wrote. Typing inside the sentence you
+           are on changes nothing here; closing one, or editing back across a full stop,
+           changes it and the page is repainted once. */
+        var nClosed = 0, lastEnd = 0;
+        for (var q = 0; q < info.bounds.length; q++){
+          if (isClosed(buf, info.bounds[q])){ nClosed++; lastEnd = info.bounds[q][1]; }
+        }
+        var sig = nClosed + ':' + lastEnd;
         if (sig !== state.painted){ state.painted = sig; repaintSoon(); }
       }
       if (cg > 0 && !WCH.test(buf.charAt(cg - 1))){
