@@ -47065,8 +47065,11 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.372';
+  var APP_VERSION = '2026.07.20.373';
   var APP_CHANGELOG = [
+    { v:'2026.07.20.373', date:'August 7, 2026', notes:[
+      'Review mode can now search the whole story. Press ⌘F (or the new magnifier in the Review bar), type, and every match lights up — ↑ ↓ or Enter steps through them, and the counter tells you not just “3 of 17” but which section you have landed in. Your prose is never touched: the highlights are painted over the page rather than written into it, so nothing can reach an export.'
+    ]},
     { v:'2026.07.20.372', date:'August 7, 2026', notes:[
       'Your prose and your elements now know about each other. Select a character, place or artifact’s name in the manuscript and an “Open …” button appears in the selection bar, taking you straight to its card. If two elements share a name, Dystoria asks which you meant rather than guessing.',
       'And when you use Replace all on a name, Dystoria notices it belongs to an element and offers to rename the element too — so its card, map pin and notes stay in step with the page. It always asks first, and never changes prose you didn’t already replace yourself.'
@@ -58784,6 +58787,273 @@ body.ai-capped .pt-grouphd.ai-grouphd-empty{ display:none !important; }
       + 'body.eink #elLinkPick{background:#fff; color:#000; border-color:#000; box-shadow:none;}';
     document.head.appendChild(css);
   } catch(e){}
+})();
+</script>
+
+
+<script id="dyst-readfind">
+/* ============================================================================
+   Dystoria — #8: search within the read view.
+
+   Review mode already had the per-section jump nav (buildModeSecNav('read') +
+   the parchment scroll menu), so this is the last piece of #8.
+
+   Read-only means the prose must not be touched. Revise's Find wraps matches
+   in the editable body, which is fine there and wrong here — Review renders
+   the finished manuscript and a stray span could reach an export. So this
+   paints with the **CSS Custom Highlight API**, the same non-destructive
+   mechanism the Living Page dimming and Reader Impressions already use: the
+   DOM is never mutated, only decorated.
+
+   It also answers "where am I?" — the count reads "3 of 17 · Section 4 ◆ The
+   Bridge", using the same msSecLabel() the jump nav uses. Search and the
+   navigator are two halves of the same question, so they should speak the
+   same language.
+   ============================================================================ */
+(function(){
+  'use strict';
+
+  var RF = { term:'', ranges:[], idx:-1, ci:true, open:false };
+  var HL_OK = !!(window.CSS && CSS.highlights && window.Highlight && window.Range);
+
+  function prose(){
+    var b = document.getElementById('readBody'); if (!b) return null;
+    return b.querySelector('.rd-prose') || b;
+  }
+  function inReview(){
+    var m = document.getElementById('readMode');
+    return !!(m && m.classList.contains('show'));
+  }
+
+  /* ---------- collect matches as Ranges (no DOM mutation) ---------- */
+  function textNodes(root){
+    var out = [], w;
+    try { w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+      acceptNode: function(n){
+        if (!n.nodeValue || !n.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
+        var p = n.parentElement;
+        // skip section headings and structural marks — matching them would jump
+        // the reader to furniture rather than to their story
+        if (p && p.closest && p.closest('h3, .sec-mark, .rd-part, .ph')) return NodeFilter.FILTER_REJECT;
+        return NodeFilter.FILTER_ACCEPT;
+      }
+    }); } catch(e){ return out; }
+    var n; while ((n = w.nextNode())) out.push(n);
+    return out;
+  }
+
+  function collect(term){
+    RF.ranges = []; RF.idx = -1;
+    var root = prose(); if (!root || !term) return 0;
+    var needle = RF.ci ? term.toLowerCase() : term;
+    if (!needle) return 0;
+    textNodes(root).forEach(function(node){
+      var hay = RF.ci ? node.nodeValue.toLowerCase() : node.nodeValue;
+      var from = 0, at;
+      while ((at = hay.indexOf(needle, from)) >= 0){
+        try {
+          var r = document.createRange();
+          r.setStart(node, at); r.setEnd(node, at + needle.length);
+          RF.ranges.push(r);
+        } catch(e){}
+        from = at + Math.max(1, needle.length);
+      }
+    });
+    return RF.ranges.length;
+  }
+
+  /* ---------- paint ---------- */
+  function clearPaint(){
+    try { if (HL_OK){ CSS.highlights.delete('rd-find'); CSS.highlights.delete('rd-find-cur'); } } catch(e){}
+    try { var f = prose(); if (f) f.querySelectorAll('.rd-find-flash').forEach(function(el){ el.classList.remove('rd-find-flash'); }); } catch(e){}
+  }
+  function paint(){
+    if (!HL_OK) return;
+    try {
+      var all = new Highlight(), cur = new Highlight();
+      RF.ranges.forEach(function(r, i){ try { (i === RF.idx ? cur : all).add(r); } catch(e){} });
+      if (all.size) CSS.highlights.set('rd-find', all); else CSS.highlights.delete('rd-find');
+      if (cur.size) CSS.highlights.set('rd-find-cur', cur); else CSS.highlights.delete('rd-find-cur');
+    } catch(e){}
+  }
+
+  /* ---------- which section is the current match in? ---------- */
+  function sectionOf(range){
+    try {
+      var el = range.startContainer; el = (el.nodeType === 1 ? el : el.parentElement);
+      while (el && el !== document.body){
+        var p = el.previousElementSibling;
+        while (p){
+          if (p.tagName === 'H3' && p.hasAttribute('data-frame')) return parseInt(p.getAttribute('data-frame'), 10) || 0;
+          var inner = p.querySelector && p.querySelector('h3[data-frame]');
+          if (inner) return parseInt(inner.getAttribute('data-frame'), 10) || 0;
+          p = p.previousElementSibling;
+        }
+        el = el.parentElement;
+      }
+    } catch(e){}
+    return -1;
+  }
+
+  function countLabel(){
+    var el = document.getElementById('rdFindCount'); if (!el) return;
+    if (!RF.term){ el.textContent = ''; return; }
+    if (!RF.ranges.length){ el.textContent = 'No matches'; return; }
+    var txt = (RF.idx >= 0 ? (RF.idx + 1) : 1) + ' of ' + RF.ranges.length;
+    try {
+      var fi = RF.idx >= 0 ? sectionOf(RF.ranges[RF.idx]) : -1;
+      if (fi >= 0 && typeof msSecLabel === 'function'){
+        var L = msSecLabel(fi);
+        txt += ' · ' + L.n + (L.title ? ' ◆ ' + L.title : '');
+      }
+    } catch(e){}
+    el.textContent = txt;
+  }
+
+  function show(i){
+    if (!RF.ranges.length){ RF.idx = -1; paint(); countLabel(); return; }
+    var n = RF.ranges.length;
+    RF.idx = ((i % n) + n) % n;                 // wrap both ways
+    paint(); countLabel();
+    try {
+      var r = RF.ranges[RF.idx];
+      var el = r.startContainer; el = (el.nodeType === 1 ? el : el.parentElement);
+      if (el && el.scrollIntoView) el.scrollIntoView({ block:'center', behavior:'smooth' });
+      if (!HL_OK && el){                        // no Highlight API → flash the block instead of wrapping a span
+        el.classList.add('rd-find-flash');
+        setTimeout(function(){ try { el.classList.remove('rd-find-flash'); } catch(e){} }, 1400);
+      }
+    } catch(e){}
+    try { if (typeof syncModeSecNav === 'function') syncModeSecNav('read'); } catch(e){}
+  }
+
+  function run(){
+    var inp = document.getElementById('rdFindInput');
+    RF.term = inp ? inp.value : '';
+    collect(RF.term);
+    if (RF.ranges.length) show(0); else { paint(); countLabel(); }
+  }
+
+  /* ---------- the panel ---------- */
+  function build(){
+    if (document.getElementById('rdFindPanel')) return;
+    var bar = document.getElementById('rdSubbar'); if (!bar) return;
+
+    var btn = document.createElement('button');
+    btn.id = 'rdFindBtn'; btn.type = 'button'; btn.className = 'hbtn rd-iconbtn';
+    btn.title = 'Find in this story (⌘F)';
+    btn.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>';
+    bar.appendChild(btn);
+
+    var p = document.createElement('div'); p.id = 'rdFindPanel';
+    p.innerHTML = '<button class="rdf-x" id="rdFindClose" title="Close (Esc)">×</button>'
+      + '<div class="rdf-row"><input type="text" id="rdFindInput" placeholder="Find in this story…" autocomplete="off">'
+      +   '<span class="rdf-nav"><button id="rdFindPrev" title="Previous (⇧⏎)">↑</button><button id="rdFindNext" title="Next (⏎)">↓</button></span></div>'
+      + '<div class="rdf-foot"><span id="rdFindCount" class="rdf-count"></span>'
+      +   '<label class="rdf-opt"><input type="checkbox" id="rdFindCase"> Match case</label></div>';
+    bar.appendChild(p);
+
+    btn.addEventListener('click', function(e){ e.stopPropagation(); toggle(!RF.open); });
+    p.querySelector('#rdFindClose').addEventListener('click', function(e){ e.stopPropagation(); toggle(false); });
+    p.querySelector('#rdFindPrev').addEventListener('click', function(e){ e.stopPropagation(); show(RF.idx - 1); });
+    p.querySelector('#rdFindNext').addEventListener('click', function(e){ e.stopPropagation(); show(RF.idx + 1); });
+    p.querySelector('#rdFindCase').addEventListener('change', function(){
+      RF.ci = !document.getElementById('rdFindCase').checked; run();
+    });
+    var inp = p.querySelector('#rdFindInput');
+    // Typing searches live — the read view is static, so there's no cost to it
+    // and it saves a keystroke on every look-up.
+    var t = 0;
+    inp.addEventListener('input', function(){ clearTimeout(t); t = setTimeout(run, 140); });
+    inp.addEventListener('keydown', function(e){
+      if (e.key === 'Enter'){ e.preventDefault(); if (!RF.ranges.length) run(); else show(RF.idx + (e.shiftKey ? -1 : 1)); }
+      else if (e.key === 'Escape'){ e.preventDefault(); toggle(false); }
+    });
+  }
+
+  function toggle(on){
+    build();
+    var p = document.getElementById('rdFindPanel'); if (!p) return;
+    RF.open = !!on;
+    p.classList.toggle('show', RF.open);
+    var b = document.getElementById('rdFindBtn'); if (b) b.classList.toggle('on', RF.open);
+    if (RF.open){
+      var inp = document.getElementById('rdFindInput');
+      if (inp){ inp.focus(); inp.select(); }
+      if (RF.term) run();
+    } else {
+      RF.ranges = []; RF.idx = -1; RF.term = '';
+      var i2 = document.getElementById('rdFindInput'); if (i2) i2.value = '';
+      clearPaint(); countLabel();
+    }
+  }
+
+  /* ⌘F while Review is open — Revise keeps its own binding, unchanged. */
+  try {
+    document.addEventListener('keydown', function(e){
+      if ((e.metaKey || e.ctrlKey) && (e.key === 'f' || e.key === 'F') && !e.shiftKey && !e.altKey && inReview()){
+        e.preventDefault(); toggle(true);
+      } else if (e.key === 'Escape' && RF.open && inReview()){ toggle(false); }
+    });
+  } catch(e){}
+
+  /* Re-collect if the rendered view changes underneath an open search (switching
+     Suggestions/Original, or Manuscript↔Book, re-renders the prose and would
+     leave every Range pointing at detached nodes). */
+  try {
+    var mo = new MutationObserver(function(){
+      if (!RF.open || !RF.term) return;
+      clearTimeout(mo._t); mo._t = setTimeout(function(){ var keep = RF.idx; run(); if (keep > 0) show(keep); }, 200);
+    });
+    var startObs = function(){ var b = document.getElementById('readBody'); if (b) mo.observe(b, { childList:true, subtree:true }); };
+    if (document.readyState !== 'loading') startObs(); else document.addEventListener('DOMContentLoaded', startObs);
+  } catch(e){}
+
+  /* Leaving Review must not leave paint behind. */
+  try {
+    document.addEventListener('click', function(){
+      setTimeout(function(){ if (RF.open && !inReview()) toggle(false); }, 60);
+    }, true);
+  } catch(e){}
+
+  try {
+    var css = document.createElement('style'); css.id = 'dyst-readfind-css';
+    css.textContent =
+        '::highlight(rd-find){ background-color:rgba(250,154,49,.28); }'
+      + '::highlight(rd-find-cur){ background-color:rgba(250,154,49,.72); color:#2b2720; }'
+      + '.rd-find-flash{ background:rgba(250,154,49,.25); transition:background .5s; }'
+      + '#rdFindBtn.on{ color:var(--gold,#c8913c); }'
+      + '#rdFindPanel{position:absolute; top:calc(100% + 6px); right:26px; z-index:120; width:290px;'
+      + ' max-width:calc(100vw - 40px); background:var(--paper,#f6f0de); color:var(--ink,#2b2926);'
+      + ' border:1px solid var(--line,#d8d0bf); border-radius:12px; box-shadow:0 14px 40px rgba(0,0,0,.22);'
+      + ' padding:13px 13px 11px; display:none; text-align:left}'
+      + '#rdFindPanel.show{display:block}'
+      + '#rdFindPanel .rdf-x{position:absolute; top:6px; right:9px; border:none; background:none;'
+      + ' font-size:17px; line-height:1; color:var(--ink-faint,#8d8a84); cursor:pointer}'
+      + '#rdFindPanel .rdf-row{display:flex; align-items:center; gap:7px; padding-right:20px}'   /* clear the × */
+      + '#rdFindPanel input[type=text]{flex:1 1 auto; min-width:0; font-family:inherit; font-size:14px;'
+      + ' padding:6px 9px; border:1px solid var(--line,#d8d0bf); border-radius:8px;'
+      + ' background:rgba(255,255,255,.5); color:inherit}'
+      + '#rdFindPanel .rdf-nav button{border:none; background:none; color:var(--ink-faint,#8d8a84);'
+      + ' font-size:14px; cursor:pointer; padding:3px 5px; border-radius:6px}'
+      + '#rdFindPanel .rdf-nav button:hover{color:var(--gold,#c8913c); background:rgba(0,0,0,.05)}'
+      + '#rdFindPanel .rdf-foot{display:flex; align-items:center; justify-content:space-between;'
+      + ' gap:8px; margin-top:9px; font-size:11.5px; color:var(--ink-faint,#8d8a84)}'
+      + '#rdFindPanel .rdf-count{overflow:hidden; text-overflow:ellipsis; white-space:nowrap}'
+      + '#rdFindPanel .rdf-opt{display:flex; align-items:center; gap:5px; flex:none; cursor:pointer}'
+      + 'body.eink #rdFindPanel{background:#fff; color:#000; border:2px solid #000; box-shadow:none}'
+      + 'body.eink ::highlight(rd-find){ background-color:#ddd; }'
+      + 'body.eink ::highlight(rd-find-cur){ background-color:#000; color:#fff; }';
+    document.head.appendChild(css);
+  } catch(e){}
+
+  /* The sub-bar is static markup, but build lazily anyway so a late render can't miss it. */
+  try {
+    if (document.readyState !== 'loading') build(); else document.addEventListener('DOMContentLoaded', build);
+    var tries = 0, iv = setInterval(function(){ build(); if (document.getElementById('rdFindPanel') || ++tries > 20) clearInterval(iv); }, 400);
+  } catch(e){}
+
+  try { window.__rdFind = { toggle: toggle, state: RF, run: run, show: show }; } catch(e){}
 })();
 </script>
 
