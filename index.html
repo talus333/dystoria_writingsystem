@@ -47875,8 +47875,14 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.392';
+  var APP_VERSION = '2026.07.20.393';
   var APP_CHANGELOG = [
+    { v:'2026.07.20.393', date:'August 8, 2026', notes:[
+      'Living Page tinting now colours the page under a sentence rather than the text itself, so warm sentences read as warm — the old version recoloured the ink, which is already a warm tan, and only the cold half of the scale ever showed.',
+      'The kept tint holds. It no longer competes with the Living Page dimming for the same property, and it repaints when the editor rebuilds a paragraph instead of quietly going blank.',
+      'The colour scale was re-measured on real prose: plain narration now sits in the quiet middle instead of a step off it, and both ends of the scale need a sentence to actually mean something before they light.',
+      'Sentences already read are not read again when the page repaints.'
+    ] },
     { v:'2026.07.20.392', date:'August 8, 2026', notes:[
       'Research and Checks are dark now, tabs and all. They are the two drawers that are AI from end to end — without a model behind them there is nothing in either one — so they no longer look like the parchment your own writing sits on. A thin gold edge marks them as a different room. Patterns is deliberately left as it was: its Fingerprint and its reading lenses are computed rather than asked, so they belong with the manuscript. E-ink is untouched.'
     ]},
@@ -62151,10 +62157,17 @@ body.ember:not(.eink) #scCard .sc-btn.sc-go, body.lp-live #scCard .sc-btn.sc-go{
 /* ============================================================================
    Dystoria — Living Page sentence tinting (#23).
 
-   When you finish a sentence it takes on a colour for a moment and then lets go:
-   HUE from how pleasant its words are, SATURATION from how activating they are,
-   and a faint GLOW when the line is distinctly yours. Then it fades back to the
-   page and leaves nothing behind.
+   When you finish a sentence the PAGE UNDER IT takes a colour: HUE from how pleasant
+   its words are, STRENGTH from how activating they are, and a faint GLOW when the
+   line is distinctly yours. Words that pull against their own sentence keep their
+   own colour in the ink on top of it. In `fading` it lets go after a moment; in
+   `kept` it stays, and the section reads as a map of its own feeling.
+
+   The wash is on the paper rather than in the ink for two reasons, both learned the
+   hard way — see the palette block below. Short version: the page's ink is already a
+   warm tan, so a warm tint on it was invisible and the feature looked like it only
+   owned one colour; and the Living Page's dimming paints ::highlight COLOUR, so
+   anything of ours doing the same was in a fight it kept losing.
 
    Three things it is careful about, and they are the whole design:
 
@@ -62178,20 +62191,58 @@ body.ember:not(.eink) #scCard .sc-btn.sc-go, body.lp-live #scCard .sc-btn.sc-go{
 (function(){
   'use strict';
   var LS = 'dystoria.lptint';
-  /* Cold slate through parchment to warm amber. The first build ramped through the
-     greens on its way from blue to gold, which reads as sickly on prose rather than
-     as a mood — and at 9% saturation on 82% lightness the whole scale was invisible
-     against the page's own warm grey. Hues stay in ink territory, and saturation is
-     scaled DOWN toward the middle of the ramp so a neutral sentence looks like
-     ordinary text rather than like a decision. */
-  var HUES = [212, 206, 198, 44, 38, 32, 26];          // cold → warm, by valence
-  var HMUL = [1, 0.82, 0.5, 0.22, 0.5, 0.82, 1];       // the middle of the ramp is meant to be quiet
-  var SATS = [22, 46, 70];                             // flat → charged, by arousal
-  var LIGHT = 74;
+  /* ---- the palette, and why it is shaped like this ------------------------
+     THE SENTENCE TINTS THE PAGE, NOT THE INK. The first build recoloured the text,
+     which failed for a reason that is obvious once seen: the page's own ink is
+     rgb(239,230,212) — a warm tan at hue ~40 — and the warm half of the ramp sat at
+     hues 26–44. A warm tint ON warm ink is not a tint. So every cold sentence read
+     blue and every warm one read like ordinary text, and the whole feature looked
+     like it only had one colour. Tinting the PAPER instead fixes it at the root: the
+     wash is measured against the dark ground rather than against the ink, so both
+     ends of the scale carry equally.
+
+     It also settles a collision. The Living Page's own graded dimming paints
+     `lp-d0..lp-d5` as ::highlight COLOUR over settled paragraphs, and two highlights
+     both setting `color` are decided by registration order — so the dim, which
+     re-registers on every keystroke, kept winning and the kept tint kept vanishing.
+     Background and colour are different properties. Nothing has to win.
+
+     Only the counter-current words still colour the ink — they are the exception the
+     eye is meant to catch, and there are never more than five of them. */
+  var HUES = [214, 204, 194, 40, 30, 20, 10];          // cold → warm, by valence
+  var HMUL = [1, 0.8, 0.5, 0.12, 0.5, 0.8, 1];         // the middle of the ramp is meant to be quiet
+  /* Alpha, floored by what is actually legible. The first pass at the wash bottomed
+     out at 0.055, and a 5% wash on a dark ground is not a faint tint — it is nothing,
+     so a bleak-but-calm sentence sat next to a bleak-and-loud one looking untouched.
+     The bottom of the scale has to be the quietest mark a person can still SEE. */
+  var ALPHA = [0.10, 0.15, 0.20];                      // flat → charged, by arousal (the page wash)
+  var SATS = [34, 58, 80];                             // the same three steps, for the ink of a counter word
+  var LIGHT = 78;
+  var WASH_S = 62, WASH_L = 52;
   var DECAY = [1, 0.55, 0.24];                         // the three steps back to the page
   var WDECAY = [1, 0.45];                              // a word gets two, and goes quicker
+
+  /* ---- where the scale sits, measured rather than assumed -----------------
+     The old mapping spread valence 2→8 evenly over the seven hues and treated 5.2 as
+     the middle. Real prose does not sit there. Measured over eighteen sentences —
+     six deliberately warm, six deliberately plain, six deliberately bleak — plain
+     narration averages 5.57, warm 6.57 and bleak 3.84. So 5.6 is the middle, the
+     quiet band is ±0.6 around it, and each further step is another 0.6. Written as a
+     band rather than a rounding so a sentence has to actually MEAN something before
+     it takes a colour: with the old `round(v - 2)` an ordinary line about a kettle
+     landed a step off neutral, which is how a page ends up tinted end to end. */
+  var VMID = 5.6, VSTEP = 0.6;
+  function hueOf(v){
+    var d = v - VMID, m = Math.abs(d);
+    if (m < VSTEP) return 3;
+    var k = Math.min(3, 1 + Math.floor((m - VSTEP) / VSTEP));
+    return 3 + (d < 0 ? -k : k);
+  }
+  /* Arousal, likewise: the old thresholds put everything real prose does into the
+     bottom bucket and the top one never fired at all. */
+  function chargeOf(a){ return a < 4.1 ? 0 : (a < 4.8 ? 1 : 2); }
   var LPT = window.LPTINT = window.LPTINT || {};
-  var state = { lastSent:'', lastWord:'', primed:false, painted:'', timers:[], names:[], wtimers:[], wnames:[] };
+  var state = { lastSent:'', lastWord:'', primed:false, painted:'', timers:[], names:[], wtimers:[], wnames:[], alive:null };
 
   function reduced(){ try{ return window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches; }catch(e){ return false; } }
   /* Three positions, not two. "Fading" is the sentence as a beat — it lights, it lets go,
@@ -62243,11 +62294,24 @@ body.ember:not(.eink) #scCard .sc-btn.sc-go, body.lp-live #scCard .sc-btn.sc-go{
   function ensureCSS(){
     if (document.getElementById('lptCSS')) return;
     var s = document.createElement('style'); s.id = 'lptCSS'; var out = [];
+    /* e-ink is black on white by choice and a coloured wash in it would be a bug, not a
+       theme — the same line v.392 drew for the AI drawers. */
+    var EINK = 'body:not(.eink) ';
+    // the sentence: a wash on the paper
     for (var h = 0; h < HUES.length; h++){
-      for (var sIdx = 0; sIdx < SATS.length; sIdx++){
+      for (var sIdx = 0; sIdx < ALPHA.length; sIdx++){
         for (var d = 0; d < DECAY.length; d++){
-          var sat = Math.round(SATS[sIdx] * HMUL[h] * DECAY[d]);
-          out.push('::highlight(lpt-' + h + '-' + sIdx + '-' + d + '){color:hsl(' + HUES[h] + ',' + sat + '%,' + LIGHT + '%)}');
+          var al = (ALPHA[sIdx] * HMUL[h] * DECAY[d]).toFixed(4);
+          out.push(EINK + '::highlight(lpt-' + h + '-' + sIdx + '-' + d + '){background-color:hsla(' + HUES[h] + ',' + WASH_S + '%,' + WASH_L + '%,' + al + ')}');
+        }
+      }
+    }
+    // a counter-current word: the ink itself, because it is the thing to notice
+    for (var h3 = 0; h3 < HUES.length; h3++){
+      for (var s3 = 0; s3 < SATS.length; s3++){
+        for (var d3 = 0; d3 < DECAY.length; d3++){
+          var cs = Math.round(SATS[s3] * HMUL[h3] * DECAY[d3]);
+          out.push(EINK + '::highlight(lpc-' + h3 + '-' + s3 + '-' + d3 + '){color:hsl(' + HUES[h3] + ',' + cs + '%,' + LIGHT + '%)}');
         }
       }
     }
@@ -62257,15 +62321,15 @@ body.ember:not(.eink) #scCard .sc-btn.sc-go, body.lp-live #scCard .sc-btn.sc-go{
       for (var s2 = 0; s2 < SATS.length; s2++){
         for (var d2 = 0; d2 < WDECAY.length; d2++){
           var ws = Math.round(SATS[s2] * HMUL[h2] * WDECAY[d2] * 0.8);
-          out.push('::highlight(lpw-' + h2 + '-' + s2 + '-' + d2 + '){color:hsl(' + HUES[h2] + ',' + ws + '%,' + LIGHT + '%)}');
+          out.push(EINK + '::highlight(lpw-' + h2 + '-' + s2 + '-' + d2 + '){color:hsl(' + HUES[h2] + ',' + ws + '%,' + LIGHT + '%)}');
         }
       }
     }
     // The glow is its own overlapping highlight, so it composes with whatever tint
     // the sentence already has instead of needing a colour of its own.
-    out.push('::highlight(lpt-glow){text-shadow:0 0 7px rgba(224,164,74,.5)}');
-    out.push('::highlight(lpt-glow-1){text-shadow:0 0 5px rgba(224,164,74,.28)}');
-    out.push('::highlight(lpt-glow-2){text-shadow:0 0 4px rgba(224,164,74,.12)}');
+    out.push(EINK + '::highlight(lpt-glow){text-shadow:0 0 7px rgba(224,164,74,.5)}');
+    out.push(EINK + '::highlight(lpt-glow-1){text-shadow:0 0 5px rgba(224,164,74,.28)}');
+    out.push(EINK + '::highlight(lpt-glow-2){text-shadow:0 0 4px rgba(224,164,74,.12)}');
     s.textContent = out.join('');
     document.head.appendChild(s);
   }
@@ -62329,12 +62393,25 @@ body.ember:not(.eink) #scCard .sc-btn.sc-go, body.lp-live #scCard .sc-btn.sc-go{
     });
     if (!n) return null;
     var v = 5.2 + (vwt ? vw / vwt : 0), a = 4.2 + (awt ? aw / awt : 0);
-    // 2→8 across the hue ramp and 3→7 across the charge, which is where ordinary
-    // prose actually sits: almost nothing averages below 3 or above 7.
-    var h = Math.max(0, Math.min(HUES.length - 1, Math.round((v - 2) / 6 * (HUES.length - 1))));
-    var s = Math.max(0, Math.min(SATS.length - 1, Math.round((a - 3) / 4 * (SATS.length - 1))));
-    return { h:h, s:s, v:v, a:a, n:n, unusual:unusual };
+    return { h:hueOf(v), s:chargeOf(a), v:v, a:a, n:n, unusual:unusual };
   }
+
+  /* Read each sentence ONCE. Kept mode rebuilds the whole section whenever a sentence
+     closes, and without this that meant re-analysing every earlier sentence — every
+     word looked up, every lemma laddered — to arrive at the answer it already had.
+     The text of a sentence is its own cache key: if it has not changed, neither has
+     its colour. Bounded, because a long session should not grow a table forever. */
+  var memo = Object.create(null), memoN = 0;
+  var stats = { fresh:0, cached:0 };
+  function readCached(txt){
+    var hit = memo[txt];
+    if (hit !== undefined){ stats.cached++; return hit; }
+    if (memoN > 800){ memo = Object.create(null); memoN = 0; }
+    var r = read(txt);
+    memo[txt] = r; memoN++; stats.fresh++;
+    return r;
+  }
+  LPT.stats = function(){ return { fresh:stats.fresh, cached:stats.cached, held:memoN }; };
 
   /* A sentence glows when it is doing something a stock phrase cannot: no
      ready-made phrasing anywhere in it, and at least one word a reader does not
@@ -62361,9 +62438,17 @@ body.ember:not(.eink) #scCard .sc-btn.sc-go, body.lp-live #scCard .sc-btn.sc-go{
     state.wnames = [];
   }
   function clearAll(){ clearSent(); clearWord(); }
-  function put(name, range, bag){
+  /* Priority, so an ink tint is not at the mercy of who registered last. The Living
+     Page's dimming re-registers `lp-d*` on every keystroke; anything of ours that also
+     sets `color` has to out-rank it explicitly or it will be overwritten mid-sentence. */
+  function put(name, range, bag, prio){
     bag = bag || state.names;
-    try{ var hl = new Highlight(range); CSS.highlights.set(name, hl); if (bag.indexOf(name) < 0) bag.push(name); }catch(e){}
+    try{
+      var hl = new Highlight(range);
+      if (prio) { try{ hl.priority = prio; }catch(e1){} }
+      CSS.highlights.set(name, hl);
+      if (bag.indexOf(name) < 0) bag.push(name);
+    }catch(e){}
   }
   function drop(name){ try{ CSS.highlights.delete(name); }catch(e){} }
 
@@ -62383,18 +62468,18 @@ body.ember:not(.eink) #scCard .sc-btn.sc-go, body.lp-live #scCard .sc-btn.sc-go{
     var paint = function(){
       for (var d = 0; d < DECAY.length; d++){
         drop('lpt-' + r.h + '-' + r.s + '-' + d);
-        counter.forEach(function(c){ drop('lpt-' + c.h + '-' + c.s + '-' + d); });
+        counter.forEach(function(c){ drop('lpc-' + c.h + '-' + c.s + '-' + d); });
       }
       drop('lpt-glow'); drop('lpt-glow-1'); drop('lpt-glow-2');
       if (step >= DECAY.length) return;
-      put('lpt-' + r.h + '-' + r.s + '-' + step, range.cloneRange());
-      if (glow) put(step === 0 ? 'lpt-glow' : ('lpt-glow-' + step), range.cloneRange());
+      put('lpt-' + r.h + '-' + r.s + '-' + step, range.cloneRange(), null, 1);
+      if (glow) put(step === 0 ? 'lpt-glow' : ('lpt-glow-' + step), range.cloneRange(), null, 3);
       // the counter-current words, painted over the sentence they sit in
       counter.forEach(function(c){
         try{
           var sl = info.loc(c.a), el = info.loc(c.z);
           var wr = document.createRange(); wr.setStart(sl.node, sl.offset); wr.setEnd(el.node, el.offset);
-          if (!wr.collapsed) put('lpt-' + c.h + '-' + c.s + '-' + step, wr);
+          if (!wr.collapsed) put('lpc-' + c.h + '-' + c.s + '-' + step, wr, null, 2);
         }catch(e){}
       });
       step++;
@@ -62407,11 +62492,22 @@ body.ember:not(.eink) #scCard .sc-btn.sc-go, body.lp-live #scCard .sc-btn.sc-go{
      counter-current when it sits on the OPPOSITE side of neutral from the sentence
      as a whole and is far enough out to be doing it on purpose — so an ordinary word
      in a dark line stays dark, and only a genuinely warm one lights up inside it. */
+  var cmemo = Object.create(null), cmemoN = 0;
   function counterWords(buf, b, sentV){
+    var seg = buf.slice(b[0], b[1]);
+    var key = Math.round(sentV * 4) + ' ' + seg;      // same words, same sentence value, same answer
+    var hit = cmemo[key];
+    if (hit === undefined){
+      if (cmemoN > 800){ cmemo = Object.create(null); cmemoN = 0; }
+      hit = cmemo[key] = counterIn(seg, sentV); cmemoN++;
+    }
+    if (!hit.length) return hit;
+    return hit.map(function(c){ return { a: b[0] + c.a, z: b[0] + c.z, h: c.h, s: c.s }; });
+  }
+  function counterIn(seg, sentV){
     var A = null; try{ A = window.LEX && LEX.affect; }catch(e){}
     if (!A) return [];
     var out = [], re = /[A-Za-z'\u2019]{3,}/g, m;
-    var seg = buf.slice(b[0], b[1]);
     re.lastIndex = 0;
     while ((m = re.exec(seg))){
       var w = m[0].toLowerCase().replace(/[^a-z']/g, '').replace(/'s$/, '');
@@ -62424,9 +62520,7 @@ body.ember:not(.eink) #scCard .sc-btn.sc-go, body.lp-live #scCard .sc-btn.sc-go{
          was warm and someone had left him bread" nets out at 4.9, dead centre, because
          the two halves cancel. That sentence has the most to show, not the least. */
       if (Math.abs(rr[0] - sentV) < 1.5) continue;
-      var h = Math.max(0, Math.min(HUES.length - 1, Math.round((rr[0] - 2) / 6 * (HUES.length - 1))));
-      var sIdx = Math.max(0, Math.min(SATS.length - 1, Math.round((rr[1] - 3) / 4 * (SATS.length - 1))));
-      out.push({ a: b[0] + m.index, z: b[0] + m.index + m[0].length, h:h, s:sIdx });
+      out.push({ a: m.index, z: m.index + m[0].length, h: hueOf(rr[0]), s: chargeOf(rr[1]) });
       if (out.length >= 5) break;               // a sentence pulling five ways is a mess, not a mixture
     }
     return out;
@@ -62441,7 +62535,7 @@ body.ember:not(.eink) #scCard .sc-btn.sc-go, body.lp-live #scCard .sc-btn.sc-go{
     var paint = function(){
       for (var d = 0; d < WDECAY.length; d++) drop('lpw-' + r.h + '-' + r.s + '-' + d);
       if (step >= WDECAY.length) return;
-      put('lpw-' + r.h + '-' + r.s + '-' + step, range.cloneRange(), state.wnames);
+      put('lpw-' + r.h + '-' + r.s + '-' + step, range.cloneRange(), state.wnames, 2);
       step++;
       state.wtimers.push(setTimeout(paint, 360));
     };
@@ -62459,9 +62553,7 @@ body.ember:not(.eink) #scCard .sc-btn.sc-go, body.lp-live #scCard .sc-btn.sc-go{
     // Only speak up when the word actually carries something — otherwise every third
     // word on the page would flicker and the effect would be noise, not feeling.
     if (Math.abs(r[0] - 5.2) < 1.15 && (r[1] - 4.2) < 1.15) return null;
-    var h = Math.max(0, Math.min(HUES.length - 1, Math.round((r[0] - 2) / 6 * (HUES.length - 1))));
-    var s = Math.max(0, Math.min(SATS.length - 1, Math.round((r[1] - 3) / 4 * (SATS.length - 1))));
-    return { h:h, s:s, v:r[0], a:r[1] };
+    return { h:hueOf(r[0]), s:chargeOf(r[1]), v:r[0], a:r[1] };
   }
 
   /* ---- kept mode: the whole section at once -----------------------------
@@ -62485,9 +62577,9 @@ body.ember:not(.eink) #scCard .sc-btn.sc-go, body.lp-live #scCard .sc-btn.sc-go{
       var buf = bufOf(info);
       var closedOnly = info.bounds.filter(function(b){ return isClosed(buf, b); });
       if (closedOnly.length > KEEP_MAX) closedOnly = closedOnly.slice(closedOnly.length - KEEP_MAX);
-      var bags = Object.create(null), glow = null;
-      var addTo = function(name, range){
-        if (!bags[name]) bags[name] = new Highlight();
+      var bags = Object.create(null), prio = Object.create(null), glow = null;
+      var addTo = function(name, range, p){
+        if (!bags[name]){ bags[name] = new Highlight(); prio[name] = p || 0; }
         bags[name].add(range);
       };
       closedOnly.forEach(function(b){
@@ -62496,14 +62588,14 @@ body.ember:not(.eink) #scCard .sc-btn.sc-go, body.lp-live #scCard .sc-btn.sc-go{
         try{ rr.setStart(sl.node, sl.offset); rr.setEnd(el.node, el.offset); }catch(e){ return; }
         if (rr.collapsed) return;
         var txt = rr.toString(); if (txt.trim().length < 12) return;
-        var r = read(txt); if (!r || r.n < 1) return;
-        addTo('lpt-' + r.h + '-' + r.s + '-0', rr.cloneRange());
+        var r = readCached(txt); if (!r || r.n < 1) return;
+        addTo('lpt-' + r.h + '-' + r.s + '-0', rr.cloneRange(), 1);
         if (isOwn(txt, r)){ if (!glow) glow = new Highlight(); glow.add(rr.cloneRange()); }
         counterWords(buf, b, r.v).forEach(function(c){
           try{
             var csl = info.loc(c.a), cel = info.loc(c.z);
             var cr = document.createRange(); cr.setStart(csl.node, csl.offset); cr.setEnd(cel.node, cel.offset);
-            if (!cr.collapsed) addTo('lpt-' + c.h + '-' + c.s + '-0', cr);
+            if (!cr.collapsed) addTo('lpc-' + c.h + '-' + c.s + '-0', cr, 2);
           }catch(e){}
         });
       });
@@ -62511,15 +62603,52 @@ body.ember:not(.eink) #scCard .sc-btn.sc-go, body.lp-live #scCard .sc-btn.sc-go{
          page for a frame before the colours came back — which is the flicker. Set the new
          set over the old, then delete only the names that are no longer used. */
       var live = [];
-      Object.keys(bags).forEach(function(nm){ CSS.highlights.set(nm, bags[nm]); live.push(nm); });
-      if (glow){ CSS.highlights.set('lpt-glow', glow); live.push('lpt-glow'); }
+      Object.keys(bags).forEach(function(nm){
+        try{ bags[nm].priority = prio[nm]; }catch(e1){}
+        CSS.highlights.set(nm, bags[nm]); live.push(nm);
+      });
+      if (glow){ try{ glow.priority = 3; }catch(e1){} CSS.highlights.set('lpt-glow', glow); live.push('lpt-glow'); }
       state.names.forEach(function(nm){ if (live.indexOf(nm) < 0){ try{ CSS.highlights.delete(nm); }catch(e){} } });
       state.names = live;
+      state.alive = live.length ? firstNodeOf(bags, live) : null;
     }catch(e){}
+  }
+  function firstNodeOf(bags, live){
+    for (var i = 0; i < live.length; i++){
+      var got = null;
+      try{ bags[live[i]].forEach(function(r){ if (!got) got = r.startContainer; }); }catch(e){}
+      if (got) return got;
+    }
+    return null;
   }
   var repaintT = null;
   function repaintSoon(){ clearTimeout(repaintT); repaintT = setTimeout(repaintAll, 260); }
   LPT.repaintAll = repaintAll;
+
+  /* ---- and repaint when the ground moves --------------------------------
+     A Range survives typing inside its own text node, and does NOT survive that node
+     being replaced — which the editor does whenever a paragraph is split, merged,
+     pasted into, or restored from a save. The kept tint's signature only counts closed
+     sentences, so none of those touch it: the highlights quietly went dead and the
+     colour was simply gone until the writer happened to finish another sentence.
+     Watching for removed nodes catches every one of those cases, and because the
+     readings are cached the repaint it triggers costs almost nothing. */
+  var mo = null, moEd = null;
+  function watch(){
+    var ed = document.getElementById('editor'); if (!ed || ed === moEd) return;
+    try{ if (mo) mo.disconnect(); }catch(e){}
+    try{
+      mo = new MutationObserver(function(recs){
+        if (LPT.mode() !== 'keep') return;
+        for (var i = 0; i < recs.length; i++){
+          if (recs[i].removedNodes && recs[i].removedNodes.length){ repaintSoon(); return; }
+        }
+        if (state.alive && !state.alive.isConnected) repaintSoon();
+      });
+      mo.observe(ed, { childList:true, subtree:true });
+      moEd = ed;
+    }catch(e){}
+  }
 
   /* ---- the settle detector ----------------------------------------------
      The sentence that settled is the one the caret just LEFT. lpAllSentences is
@@ -62543,6 +62672,7 @@ body.ember:not(.eink) #scCard .sc-btn.sc-go, body.lp-live #scCard .sc-btn.sc-go{
       if (!LPT.enabled() || !LPT.available()) return;
       if (!window.LP || !LP.on){ if (state.names.length || state.wnames.length) clearAll(); return; }
       var ed = document.getElementById('editor'); if (!ed) return;
+      watch();
       if (typeof lpAllSentences !== 'function' || typeof lpCaretGlobal !== 'function') return;
       var info = lpAllSentences(ed); if (!info.bounds.length) return;
       var cg = lpCaretGlobal(info); if (cg < 0) return;
@@ -62583,7 +62713,7 @@ body.ember:not(.eink) #scCard .sc-btn.sc-go, body.lp-live #scCard .sc-btn.sc-go{
             if (txt.trim().length >= 12){
               if (LPT.mode() === 'keep'){ clearWord(); repaintAll(); state.painted = ''; }
               else {
-                var r = read(txt);
+                var r = readCached(txt);
                 if (r && r.n >= 1) tint(info, b, rr, r, isOwn(txt, r), counterWords(buf, b, r.v));
               }
             }
@@ -62656,7 +62786,7 @@ body.ember:not(.eink) #scCard .sc-btn.sc-go, body.lp-live #scCard .sc-btn.sc-go{
       var next = function(){ var r = orig.apply(this, arguments); try{ after(); }catch(e){} return r; };
       next.__lptWrapped = true; window[name] = next;
     };
-    wrapFn('lpStart', function(){ state.lastSent = ''; state.lastWord = ''; state.primed = false; state.painted = ''; if (LPT.enabled() && LPT.available()) load().then(function(){ if (LPT.mode() === 'keep') repaintAll(); }); });
+    wrapFn('lpStart', function(){ state.lastSent = ''; state.lastWord = ''; state.primed = false; state.painted = ''; state.alive = null; watch(); if (LPT.enabled() && LPT.available()) load().then(function(){ if (LPT.mode() === 'keep') repaintAll(); }); });
     wrapFn('lpStop', function(){ clearAll(); state.lastSent = ''; state.lastWord = ''; state.primed = false; });
   }catch(e){}
 
