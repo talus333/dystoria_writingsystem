@@ -47875,8 +47875,13 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.388';
+  var APP_VERSION = '2026.07.20.389';
   var APP_CHANGELOG = [
+    { v:'2026.07.20.389', date:'August 8, 2026', notes:[
+      'Sentence tinting, rebuilt around what Jeremy actually wanted from it. Each word now takes a colour as you finish typing it — a brief flicker of its own feeling — and then, when you close the sentence, the whole line tints from everything in it together. So you get the temperature of what you are laying down word by word, and then a look at the shape of the whole thing.',
+      'And a sentence is rarely one feeling. The words that pull AGAINST the line keep their own colour on top of it, so “he was tired and ignored and sad, but the kitchen was warm and someone had left him bread” shows you cold and warm in the same breath, in the places they actually sit. That is the emotional complexity of the sentence made visible — not a mood, a mixture.',
+      'Three fixes behind that. The tint used to wait until your cursor crossed into the NEXT sentence, so finishing a line and sitting back to look at it produced nothing at all — it now fires on the full stop. The first sentence of a session never tinted. And the emotion lookup only knew whole dictionary words, so “ignored”, “deeply”, “burning” and “laughed” were all invisible to it; it reads word endings now, which is most of the feeling in real prose.'
+    ]},
     { v:'2026.07.20.388', date:'August 8, 2026', notes:[
       'Sentence tinting on the Living Page. As you finish each sentence it takes on a colour for a moment and then lets go — the hue from how pleasant its words are, the strength from how charged they are, and a faint glow when the line is doing something no stock phrase could. Then it fades and leaves nothing behind. It is off until you turn it on, from the ＋ menu while you write, and it stays off if your system is set to reduce motion.',
       'It only ever marks the good. Dystoria can already find ready-made phrasing by position, so a version of this that dimmed or reddened a stale line was one line of code away — and it is deliberately not there. A correction delivered while you are mid-paragraph is a scold, and the writing page is the one place in the app where you are meant to be unguarded. Nothing ever appears to tell you a sentence is bad.',
@@ -62174,8 +62179,9 @@ body.ember:not(.eink) #scCard .sc-btn.sc-go, body.lp-live #scCard .sc-btn.sc-go{
   var SATS = [22, 46, 70];                             // flat → charged, by arousal
   var LIGHT = 74;
   var DECAY = [1, 0.55, 0.24];                         // the three steps back to the page
+  var WDECAY = [1, 0.45];                              // a word gets two, and goes quicker
   var LPT = window.LPTINT = window.LPTINT || {};
-  var state = { last:-1, timers:[], names:[] };
+  var state = { lastSent:'', lastWord:'', primed:false, timers:[], names:[], wtimers:[], wnames:[] };
 
   function reduced(){ try{ return window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches; }catch(e){ return false; } }
   LPT.enabled = function(){ try{ return localStorage.getItem(LS) === '1'; }catch(e){ return false; } };
@@ -62224,6 +62230,16 @@ body.ember:not(.eink) #scCard .sc-btn.sc-go, body.lp-live #scCard .sc-btn.sc-go{
         }
       }
     }
+    /* A second, quieter grid for single words. Same hues, less of them: a word is a
+       flicker as you pass it, a sentence is the statement. Two decay steps, ~0.7s. */
+    for (var h2 = 0; h2 < HUES.length; h2++){
+      for (var s2 = 0; s2 < SATS.length; s2++){
+        for (var d2 = 0; d2 < WDECAY.length; d2++){
+          var ws = Math.round(SATS[s2] * HMUL[h2] * WDECAY[d2] * 0.8);
+          out.push('::highlight(lpw-' + h2 + '-' + s2 + '-' + d2 + '){color:hsl(' + HUES[h2] + ',' + ws + '%,' + LIGHT + '%)}');
+        }
+      }
+    }
     // The glow is its own overlapping highlight, so it composes with whatever tint
     // the sentence already has instead of needing a colour of its own.
     out.push('::highlight(lpt-glow){text-shadow:0 0 7px rgba(224,164,74,.5)}');
@@ -62238,6 +62254,34 @@ body.ember:not(.eink) #scCard .sc-btn.sc-go, body.lp-live #scCard .sc-btn.sc-go{
   ('the and for with that this into from your you are was were will would they them their have has had not but she his her him its our who what when where which while then than there here been being over upon onto about after before could should down each other some such only also just like more most much many a an of to in it is on at as by or if so we he i my me do did does done all one two very really quite')
     .split(' ').forEach(function(w){ STOPA[w] = 1; });
 
+  /* The norms are LEMMAS. Looking up only the surface form, with a bare plural fallback,
+     missed `ignored` (from `ignore`), `deeply` (from `deep`), `burning`, `laughed` — which
+     is most of the emotionally loaded vocabulary in real prose, because feeling in a
+     sentence is usually carried by a verb or an adverb rather than by a bare noun. */
+  function look(A, b){
+    if (!b) return null;
+    var v = A[b]; if (v) return v;
+    var tries = [];
+    if (/'s$/.test(b)) tries.push(b.slice(0, -2));
+    if (/ies$/.test(b)) tries.push(b.slice(0, -3) + 'y');
+    if (/s$/.test(b) && !/ss$/.test(b)) tries.push(b.slice(0, -1));
+    if (/ed$/.test(b)){ tries.push(b.slice(0, -1)); tries.push(b.slice(0, -2));
+      if (/ied$/.test(b)) tries.push(b.slice(0, -3) + 'y');
+      if (/([bdgklmnprt])\1ed$/.test(b)) tries.push(b.slice(0, -3)); }
+    if (/ing$/.test(b)){ tries.push(b.slice(0, -3)); tries.push(b.slice(0, -3) + 'e');
+      if (/([bdgklmnprt])\1ing$/.test(b)) tries.push(b.slice(0, -4)); }
+    if (/ly$/.test(b)){ tries.push(b.slice(0, -2));
+      if (/ily$/.test(b)) tries.push(b.slice(0, -3) + 'y'); }
+    if (/ness$/.test(b)) tries.push(b.slice(0, -4));
+    if (/er$/.test(b)){ tries.push(b.slice(0, -2)); tries.push(b.slice(0, -1)); }
+    if (/est$/.test(b)){ tries.push(b.slice(0, -3)); tries.push(b.slice(0, -2)); }
+    for (var i = 0; i < tries.length; i++){
+      var t = tries[i];
+      if (t && t.length >= 3 && A[t]) return A[t];
+    }
+    return null;
+  }
+
   function read(text){
     var A = null; try{ A = window.LEX && LEX.affect; }catch(e){}
     if (!A) return null;
@@ -62250,7 +62294,7 @@ body.ember:not(.eink) #scCard .sc-btn.sc-go, body.lp-live #scCard .sc-btn.sc-go{
     var vw = 0, aw = 0, vwt = 0, awt = 0, n = 0, unusual = false;
     toks.forEach(function(b){
       if (b.length < 3 || STOPA[b]) return;
-      var r = A[b] || (/s$/.test(b) && !/ss$/.test(b) ? A[b.slice(0, -1)] : null);
+      var r = look(A, b);
       if (r){
         var wv = 0.35 + Math.abs(r[0] - 5.2);          // the floor keeps neutral words present, not silent
         var wa = 0.35 + Math.abs(r[1] - 4.2);
@@ -62285,64 +62329,229 @@ body.ember:not(.eink) #scCard .sc-btn.sc-go, body.lp-live #scCard .sc-btn.sc-go{
   }
 
   /* ---- painting --------------------------------------------------------- */
-  function clearAll(){
+  function clearSent(){
     state.timers.forEach(function(t){ clearTimeout(t); }); state.timers = [];
     try{ state.names.forEach(function(nm){ CSS.highlights.delete(nm); }); }catch(e){}
     state.names = [];
   }
-  function put(name, range){
-    try{ var hl = new Highlight(range); CSS.highlights.set(name, hl); if (state.names.indexOf(name) < 0) state.names.push(name); }catch(e){}
+  function clearWord(){
+    state.wtimers.forEach(function(t){ clearTimeout(t); }); state.wtimers = [];
+    try{ state.wnames.forEach(function(nm){ CSS.highlights.delete(nm); }); }catch(e){}
+    state.wnames = [];
+  }
+  function clearAll(){ clearSent(); clearWord(); }
+  function put(name, range, bag){
+    bag = bag || state.names;
+    try{ var hl = new Highlight(range); CSS.highlights.set(name, hl); if (bag.indexOf(name) < 0) bag.push(name); }catch(e){}
   }
   function drop(name){ try{ CSS.highlights.delete(name); }catch(e){} }
 
-  function tint(range, r, glow){
+  /* The sentence, plus the words inside it that disagree with it.
+
+     Jeremy's idea, and it is the best thing in the feature: a line is rarely one
+     feeling. "He was so tired of being ignored, it made him deeply sad" is cold all
+     through — but put "home" or "laughed" inside it and that word is doing something
+     the rest of the sentence is not. Those words keep their OWN colour on top of the
+     sentence's, so what you see is not a mood but a mixture: where the line pulls
+     against itself, and how much. Registered after the sentence range, so they win
+     the overlap; they fade on the same clock, so the whole thing lets go together. */
+  function tint(info, b, range, r, glow, counter){
     ensureCSS();
-    clearAll();
+    clearSent(); clearWord();     // the sentence supersedes the word flickers inside it
     var step = 0;
     var paint = function(){
-      for (var d = 0; d < DECAY.length; d++) drop('lpt-' + r.h + '-' + r.s + '-' + d);
+      for (var d = 0; d < DECAY.length; d++){
+        drop('lpt-' + r.h + '-' + r.s + '-' + d);
+        counter.forEach(function(c){ drop('lpt-' + c.h + '-' + c.s + '-' + d); });
+      }
       drop('lpt-glow'); drop('lpt-glow-1'); drop('lpt-glow-2');
       if (step >= DECAY.length) return;
       put('lpt-' + r.h + '-' + r.s + '-' + step, range.cloneRange());
       if (glow) put(step === 0 ? 'lpt-glow' : ('lpt-glow-' + step), range.cloneRange());
+      // the counter-current words, painted over the sentence they sit in
+      counter.forEach(function(c){
+        try{
+          var sl = info.loc(c.a), el = info.loc(c.z);
+          var wr = document.createRange(); wr.setStart(sl.node, sl.offset); wr.setEnd(el.node, el.offset);
+          if (!wr.collapsed) put('lpt-' + c.h + '-' + c.s + '-' + step, wr);
+        }catch(e){}
+      });
       step++;
       state.timers.push(setTimeout(paint, 800));
     };
     paint();
   }
 
+  /* Which words in a sentence are pulling the other way. A word counts as
+     counter-current when it sits on the OPPOSITE side of neutral from the sentence
+     as a whole and is far enough out to be doing it on purpose — so an ordinary word
+     in a dark line stays dark, and only a genuinely warm one lights up inside it. */
+  function counterWords(buf, b, sentV){
+    var A = null; try{ A = window.LEX && LEX.affect; }catch(e){}
+    if (!A) return [];
+    var out = [], re = /[A-Za-z'\u2019]{3,}/g, m;
+    var seg = buf.slice(b[0], b[1]);
+    re.lastIndex = 0;
+    while ((m = re.exec(seg))){
+      var w = m[0].toLowerCase().replace(/[^a-z']/g, '').replace(/'s$/, '');
+      if (w.length < 3 || STOPA[w]) continue;
+      var rr = look(A, w);
+      if (!rr) continue;
+      /* Distance from the SENTENCE, in either direction — not "the opposite side of
+         neutral". The first version required the word to cross neutral, which silenced
+         the one case this exists for: "he was tired and ignored and sad, but the kitchen
+         was warm and someone had left him bread" nets out at 4.9, dead centre, because
+         the two halves cancel. That sentence has the most to show, not the least. */
+      if (Math.abs(rr[0] - sentV) < 1.5) continue;
+      var h = Math.max(0, Math.min(HUES.length - 1, Math.round((rr[0] - 2) / 6 * (HUES.length - 1))));
+      var sIdx = Math.max(0, Math.min(SATS.length - 1, Math.round((rr[1] - 3) / 4 * (SATS.length - 1))));
+      out.push({ a: b[0] + m.index, z: b[0] + m.index + m[0].length, h:h, s:sIdx });
+      if (out.length >= 5) break;               // a sentence pulling five ways is a mess, not a mixture
+    }
+    return out;
+  }
+
+  /* A single word, as you finish typing it. Short and quiet — the point is a sense of
+     the temperature of what you are laying down, not a verdict on each word. */
+  function tintWord(range, r){
+    ensureCSS();
+    clearWord();
+    var step = 0;
+    var paint = function(){
+      for (var d = 0; d < WDECAY.length; d++) drop('lpw-' + r.h + '-' + r.s + '-' + d);
+      if (step >= WDECAY.length) return;
+      put('lpw-' + r.h + '-' + r.s + '-' + step, range.cloneRange(), state.wnames);
+      step++;
+      state.wtimers.push(setTimeout(paint, 360));
+    };
+    paint();
+  }
+  /* One word's own reading. No stop-list here: if a writer just typed "sad", the fact
+     that it is a common word is not a reason to stay silent about it. */
+  function readWord(w){
+    var A = null; try{ A = window.LEX && LEX.affect; }catch(e){}
+    if (!A) return null;
+    var b = String(w).toLowerCase().replace(/[^a-z']/g, '').replace(/'s$/, '');
+    if (b.length < 3) return null;
+    var r = look(A, b);
+    if (!r) return null;
+    // Only speak up when the word actually carries something — otherwise every third
+    // word on the page would flicker and the effect would be noise, not feeling.
+    if (Math.abs(r[0] - 5.2) < 1.15 && (r[1] - 4.2) < 1.15) return null;
+    var h = Math.max(0, Math.min(HUES.length - 1, Math.round((r[0] - 2) / 6 * (HUES.length - 1))));
+    var s = Math.max(0, Math.min(SATS.length - 1, Math.round((r[1] - 3) / 4 * (SATS.length - 1))));
+    return { h:h, s:s, v:r[0], a:r[1] };
+  }
+
   /* ---- the settle detector ----------------------------------------------
      The sentence that settled is the one the caret just LEFT. lpAllSentences is
      the Living Page's own tokenizer, complete with its node-offset mapper, so
      the ranges here land exactly where the dimming's do. */
+  function bufOf(info){
+    var b = ''; for (var i = 0; i < info.map.length; i++) b += info.map[i].node.nodeValue; return b;
+  }
+  var WCH = /[A-Za-z'\u2019]/;
+
   function tick(){
     try{
       if (!LPT.enabled() || !LPT.available()) return;
-      if (!window.LP || !LP.on) { if (state.names.length) clearAll(); return; }
+      if (!window.LP || !LP.on){ if (state.names.length || state.wnames.length) clearAll(); return; }
       var ed = document.getElementById('editor'); if (!ed) return;
       if (typeof lpAllSentences !== 'function' || typeof lpCaretGlobal !== 'function') return;
       var info = lpAllSentences(ed); if (!info.bounds.length) return;
       var cg = lpCaretGlobal(info); if (cg < 0) return;
-      var ai = -1, i;
-      for (i = 0; i < info.bounds.length; i++){ if (cg >= info.bounds[i][0] && cg < info.bounds[i][1]){ ai = i; break; } }
-      if (ai < 0) ai = info.bounds.length - 1;
-      if (state.last < 0){ state.last = ai; return; }           // first sighting is not a settle
-      if (ai === state.last) return;
-      var left = state.last; state.last = ai;
-      if (left < 0 || left >= info.bounds.length) return;
-      if (left > ai) return;                                     // moved backwards to edit — nothing settled
-      var b = info.bounds[left];
-      var txt = ''; try{
-        var sl = info.loc(b[0]), el = info.loc(b[1]);
-        var rr = document.createRange(); rr.setStart(sl.node, sl.offset); rr.setEnd(el.node, el.offset);
-        txt = rr.toString();
-        if (!txt.trim() || txt.trim().length < 12) return;        // too short to have a mood
-        var r = read(txt); if (!r || r.n < 2) return;
-        tint(rr, r, isOwn(txt, r));
-      }catch(e){}
+      var buf = bufOf(info);
+
+      /* ---- the sentence you just CLOSED ---------------------------------
+         Fired on the terminal punctuation, not on the caret crossing into the next
+         sentence. The first build waited for the crossing, so finishing a line and
+         sitting back to look at it produced nothing at all — which is precisely the
+         moment a writer wants to see what they just made. */
+      /* A bound is only a FINISHED sentence if it actually ends in terminal punctuation.
+         lpAllSentences also emits a trailing bound for whatever is after the last full
+         stop — the line you are in the middle of writing — and that bound's end is the
+         end of the buffer, which is where the caret is. So every single keystroke looked
+         like a completed sentence, and the sentence tint fired on each letter while the
+         per-word tint never got a turn at all. */
+      var closed = function(bb){
+        var k = bb[1] - 1;
+        while (k > bb[0] && /\s/.test(buf.charAt(k))) k--;
+        while (k > bb[0] && /["'\u201d\u2019)\]]/.test(buf.charAt(k))) k--;
+        return /[.!?\u2026]/.test(buf.charAt(k));
+      };
+      var doneIdx = -1, i;
+      for (i = 0; i < info.bounds.length; i++){ if (info.bounds[i][1] <= cg && closed(info.bounds[i])) doneIdx = i; else if (info.bounds[i][1] > cg) break; }
+      /* Prime once per session, on the first tick after the Living Page starts, so
+         whatever was already on the page does not tint on arrival. It has to be an
+         explicit flag rather than "lastSent is still empty": on a blank page there are
+         no finished sentences to record, so the empty string was still empty when the
+         writer closed their FIRST sentence, and that one silently never tinted. */
+      if (!state.primed){
+        state.primed = true;
+        state.lastSent = (doneIdx >= 0) ? (info.bounds[doneIdx][0] + ':' + info.bounds[doneIdx][1] + ':' + buf.length) : '\u0000none';
+        return;
+      }
+      if (doneIdx >= 0){
+        var b = info.bounds[doneIdx];
+        var key = b[0] + ':' + b[1] + ':' + buf.length;
+        if (key !== state.lastSent){
+          state.lastSent = key;
+          try{
+            var sl = info.loc(b[0]), el = info.loc(b[1]);
+            var rr = document.createRange(); rr.setStart(sl.node, sl.offset); rr.setEnd(el.node, el.offset);
+            var txt = rr.toString();
+            if (txt.trim().length >= 12){
+              var r = read(txt);
+              if (r && r.n >= 1) tint(info, b, rr, r, isOwn(txt, r), counterWords(buf, b, r.v));
+            }
+          }catch(e){}
+          return;                                                   // the sentence has the floor this tick
+        }
+      }
+
+      /* ---- the word you just FINISHED ------------------------------------
+         A word is finished when the caret has moved past it onto a space or a mark.
+         Only words carrying something get a flicker — see readWord. */
+      if (cg > 0 && !WCH.test(buf.charAt(cg - 1))){
+        var e = cg - 1;
+        while (e > 0 && !WCH.test(buf.charAt(e - 1))) e--;
+        var st = e;
+        while (st > 0 && WCH.test(buf.charAt(st - 1))) st--;
+        if (e > st){
+          var wkey = st + ':' + e;
+          if (state.lastWord !== wkey){
+            state.lastWord = wkey;
+            var rw = readWord(buf.slice(st, e));
+            if (rw){
+              try{
+                var wsl = info.loc(st), wel = info.loc(e);
+                var wr = document.createRange(); wr.setStart(wsl.node, wsl.offset); wr.setEnd(wel.node, wel.offset);
+                if (!wr.collapsed) tintWord(wr, rw);
+              }catch(e2){}
+            }
+          }
+        }
+      }
     }catch(e){}
   }
-  setInterval(tick, 220);
+  /* Driven by the typing, not by a clock. A 140ms poll landed mid-word about as often
+     as it landed on the space after one, so single-word tints fired erratically and the
+     sentence tint could arrive a beat after the full stop. `input` fires on the keystroke
+     itself; the interval stays as a backstop for caret moves that type nothing. */
+  var pending2 = false;
+  function soon(){
+    if (pending2) return; pending2 = true;
+    requestAnimationFrame(function(){ pending2 = false; try{ tick(); }catch(e){} });
+  }
+  try{
+    document.addEventListener('input', function(e){
+      if (e.target && (e.target.id === 'editor' || (e.target.closest && e.target.closest('#editor')))) soon();
+    }, true);
+    document.addEventListener('keyup', function(e){
+      if (e.key === ' ' || e.key === '.' || e.key === '!' || e.key === '?' || e.key === 'Enter') soon();
+    }, true);
+  }catch(e){}
+  setInterval(tick, 300);   // backstop: a caret moved with the mouse types nothing
 
   /* Warm the table when a writing session starts, and clear on the way out. */
   try{
@@ -62351,8 +62560,8 @@ body.ember:not(.eink) #scCard .sc-btn.sc-go, body.lp-live #scCard .sc-btn.sc-go{
       var next = function(){ var r = orig.apply(this, arguments); try{ after(); }catch(e){} return r; };
       next.__lptWrapped = true; window[name] = next;
     };
-    wrapFn('lpStart', function(){ state.last = -1; if (LPT.enabled() && LPT.available()) load(); });
-    wrapFn('lpStop', function(){ clearAll(); state.last = -1; });
+    wrapFn('lpStart', function(){ state.lastSent = ''; state.lastWord = ''; state.primed = false; if (LPT.enabled() && LPT.available()) load(); });
+    wrapFn('lpStop', function(){ clearAll(); state.lastSent = ''; state.lastWord = ''; state.primed = false; });
   }catch(e){}
 
   /* ---- the toggle, in the in-session ＋ menu ----------------------------- */
@@ -62387,6 +62596,8 @@ body.ember:not(.eink) #scCard .sc-btn.sc-go, body.lp-live #scCard .sc-btn.sc-go{
   }
   setInterval(mount, 700);
 
+  LPT.readWord = readWord;
+  LPT.counterWords = counterWords;
   LPT.read = read;             // for verification
   LPT.ensureCSS = ensureCSS;   // the palette is injected lazily by tint(); tests paint directly
 })();
