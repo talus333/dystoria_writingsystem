@@ -47875,8 +47875,12 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.393';
+  var APP_VERSION = '2026.07.20.394';
   var APP_CHANGELOG = [
+    { v:'2026.07.20.394', date:'August 8, 2026', notes:[
+      'Living Page tinting colours the words again rather than washing the page behind them — the wash read as highlighting, which is a different gesture. The warm end of the scale now runs to rose so it still separates from the page\u2019s own warm ink.',
+      'Faster while writing: the tint no longer rebuilds the section on ordinary typing, reads each sentence and its phrasing check once, and stopped walking the document twice per keystroke.'
+    ] },
     { v:'2026.07.20.393', date:'August 8, 2026', notes:[
       'Living Page tinting now colours the page under a sentence rather than the text itself, so warm sentences read as warm — the old version recoloured the ink, which is already a warm tan, and only the cold half of the scale ever showed.',
       'The kept tint holds. It no longer competes with the Living Page dimming for the same property, and it repaints when the editor rebuilds a paragraph instead of quietly going blank.',
@@ -62191,34 +62195,29 @@ body.ember:not(.eink) #scCard .sc-btn.sc-go, body.lp-live #scCard .sc-btn.sc-go{
 (function(){
   'use strict';
   var LS = 'dystoria.lptint';
-  /* ---- the palette, and why it is shaped like this ------------------------
-     THE SENTENCE TINTS THE PAGE, NOT THE INK. The first build recoloured the text,
-     which failed for a reason that is obvious once seen: the page's own ink is
-     rgb(239,230,212) — a warm tan at hue ~40 — and the warm half of the ramp sat at
-     hues 26–44. A warm tint ON warm ink is not a tint. So every cold sentence read
-     blue and every warm one read like ordinary text, and the whole feature looked
-     like it only had one colour. Tinting the PAPER instead fixes it at the root: the
-     wash is measured against the dark ground rather than against the ink, so both
-     ends of the scale carry equally.
+  /* ---- the palette, and the one thing that was actually wrong with it -------
+     THE TINT IS IN THE INK. It colours the words, at roughly the strength the first
+     build used, because that is what reads as writing rather than as a marker pen —
+     Jeremy tried the alternative (a wash on the paper behind the sentence) and it
+     looked like highlighting, which is a different gesture with a different meaning.
 
-     It also settles a collision. The Living Page's own graded dimming paints
-     `lp-d0..lp-d5` as ::highlight COLOUR over settled paragraphs, and two highlights
-     both setting `color` are decided by registration order — so the dim, which
-     re-registers on every keystroke, kept winning and the kept tint kept vanishing.
-     Background and colour are different properties. Nothing has to win.
+     What was actually broken was never the strength. It was the WARM END. The page's
+     own ink is rgb(239,230,212) — a warm tan at hue ~40 — and the warm half of the
+     ramp sat at hues 26–44, which is the same colour. A warm tint on warm ink is not
+     a tint, so warm sentences looked untouched and only the cold half of the scale
+     ever showed: hence "it is all coming out blue". The warm end now runs to ROSE
+     (40 → 30 → 20 → 10), far enough from the page's own ink to be a colour rather
+     than a slightly different shade of the same one. The cold end never had the
+     problem and has barely moved.
 
-     Only the counter-current words still colour the ink — they are the exception the
-     eye is meant to catch, and there are never more than five of them. */
+     The collision with the Living Page's dimming — which paints `lp-d0..lp-d5` as
+     ::highlight COLOUR over settled text and re-registers on every keystroke, so it
+     kept overwriting the tint — is settled by PRIORITY instead of by property.
+     Registration order is not a decision anyone wrote down; a priority is. */
   var HUES = [214, 204, 194, 40, 30, 20, 10];          // cold → warm, by valence
-  var HMUL = [1, 0.8, 0.5, 0.12, 0.5, 0.8, 1];         // the middle of the ramp is meant to be quiet
-  /* Alpha, floored by what is actually legible. The first pass at the wash bottomed
-     out at 0.055, and a 5% wash on a dark ground is not a faint tint — it is nothing,
-     so a bleak-but-calm sentence sat next to a bleak-and-loud one looking untouched.
-     The bottom of the scale has to be the quietest mark a person can still SEE. */
-  var ALPHA = [0.10, 0.15, 0.20];                      // flat → charged, by arousal (the page wash)
-  var SATS = [34, 58, 80];                             // the same three steps, for the ink of a counter word
-  var LIGHT = 78;
-  var WASH_S = 62, WASH_L = 52;
+  var HMUL = [1, 0.82, 0.5, 0.18, 0.5, 0.82, 1];       // the middle of the ramp is meant to be quiet
+  var SATS = [24, 48, 70];                             // flat → charged, by arousal
+  var LIGHT = 76;
   var DECAY = [1, 0.55, 0.24];                         // the three steps back to the page
   var WDECAY = [1, 0.45];                              // a word gets two, and goes quicker
 
@@ -62294,24 +62293,17 @@ body.ember:not(.eink) #scCard .sc-btn.sc-go, body.lp-live #scCard .sc-btn.sc-go{
   function ensureCSS(){
     if (document.getElementById('lptCSS')) return;
     var s = document.createElement('style'); s.id = 'lptCSS'; var out = [];
-    /* e-ink is black on white by choice and a coloured wash in it would be a bug, not a
+    /* e-ink is black on white by choice and a colour in it would be a bug, not a
        theme — the same line v.392 drew for the AI drawers. */
     var EINK = 'body:not(.eink) ';
-    // the sentence: a wash on the paper
+    // the sentence, and the counter-current words inside it: both in the ink.
+    // Identical grids under two names so the word can out-rank the sentence it sits in.
     for (var h = 0; h < HUES.length; h++){
-      for (var sIdx = 0; sIdx < ALPHA.length; sIdx++){
+      for (var sIdx = 0; sIdx < SATS.length; sIdx++){
         for (var d = 0; d < DECAY.length; d++){
-          var al = (ALPHA[sIdx] * HMUL[h] * DECAY[d]).toFixed(4);
-          out.push(EINK + '::highlight(lpt-' + h + '-' + sIdx + '-' + d + '){background-color:hsla(' + HUES[h] + ',' + WASH_S + '%,' + WASH_L + '%,' + al + ')}');
-        }
-      }
-    }
-    // a counter-current word: the ink itself, because it is the thing to notice
-    for (var h3 = 0; h3 < HUES.length; h3++){
-      for (var s3 = 0; s3 < SATS.length; s3++){
-        for (var d3 = 0; d3 < DECAY.length; d3++){
-          var cs = Math.round(SATS[s3] * HMUL[h3] * DECAY[d3]);
-          out.push(EINK + '::highlight(lpc-' + h3 + '-' + s3 + '-' + d3 + '){color:hsl(' + HUES[h3] + ',' + cs + '%,' + LIGHT + '%)}');
+          var col = 'color:hsl(' + HUES[h] + ',' + Math.round(SATS[sIdx] * HMUL[h] * DECAY[d]) + '%,' + LIGHT + '%)';
+          out.push(EINK + '::highlight(lpt-' + h + '-' + sIdx + '-' + d + '){' + col + '}');
+          out.push(EINK + '::highlight(lpc-' + h + '-' + sIdx + '-' + d + '){' + col + '}');
         }
       }
     }
@@ -62408,6 +62400,10 @@ body.ember:not(.eink) #scCard .sc-btn.sc-go, body.lp-live #scCard .sc-btn.sc-go{
     if (hit !== undefined){ stats.cached++; return hit; }
     if (memoN > 800){ memo = Object.create(null); memoN = 0; }
     var r = read(txt);
+    /* The glow test lives in here too. It runs a stock-phrase regex over the sentence,
+       which is the same shape of work as the reading and was being redone on every
+       repaint for every sentence on the page. */
+    if (r) r.own = isOwn(txt, r);
     memo[txt] = r; memoN++; stats.fresh++;
     return r;
   }
@@ -62587,10 +62583,13 @@ body.ember:not(.eink) #scCard .sc-btn.sc-go, body.lp-live #scCard .sc-btn.sc-go{
         var rr = document.createRange();
         try{ rr.setStart(sl.node, sl.offset); rr.setEnd(el.node, el.offset); }catch(e){ return; }
         if (rr.collapsed) return;
-        var txt = rr.toString(); if (txt.trim().length < 12) return;
+        /* From the buffer, not from `rr.toString()`. The buffer is already built and a
+           slice of it is free; Range.toString walks the DOM, and doing that once per
+           sentence on every repaint was most of the cost of a repaint. */
+        var txt = buf.slice(b[0], b[1]); if (txt.trim().length < 12) return;
         var r = readCached(txt); if (!r || r.n < 1) return;
         addTo('lpt-' + r.h + '-' + r.s + '-0', rr.cloneRange(), 1);
-        if (isOwn(txt, r)){ if (!glow) glow = new Highlight(); glow.add(rr.cloneRange()); }
+        if (r.own){ if (!glow) glow = new Highlight(); glow.add(rr.cloneRange()); }
         counterWords(buf, b, r.v).forEach(function(c){
           try{
             var csl = info.loc(c.a), cel = info.loc(c.z);
@@ -62638,12 +62637,20 @@ body.ember:not(.eink) #scCard .sc-btn.sc-go, body.lp-live #scCard .sc-btn.sc-go{
     var ed = document.getElementById('editor'); if (!ed || ed === moEd) return;
     try{ if (mo) mo.disconnect(); }catch(e){}
     try{
+      /* The cheap test, and the reason this is not a lag source. Typing churns nodes
+         constantly — the browser splits a text node, the editor closes a paragraph —
+         and repainting on every one of those was felt. But a mutation only MATTERS
+         here if it detached the ground the paint is standing on, and that is one
+         property read: the anchor of the first painted range. Everything else is
+         ignored, so ordinary writing triggers nothing at all. */
       mo = new MutationObserver(function(recs){
-        if (LPT.mode() !== 'keep') return;
+        if (LPT.mode() !== 'keep' || !state.alive) return;
         for (var i = 0; i < recs.length; i++){
-          if (recs[i].removedNodes && recs[i].removedNodes.length){ repaintSoon(); return; }
+          if (recs[i].removedNodes && recs[i].removedNodes.length){
+            if (!state.alive.isConnected) repaintSoon();
+            return;
+          }
         }
-        if (state.alive && !state.alive.isConnected) repaintSoon();
       });
       mo.observe(ed, { childList:true, subtree:true });
       moEd = ed;
@@ -62654,8 +62661,14 @@ body.ember:not(.eink) #scCard .sc-btn.sc-go, body.lp-live #scCard .sc-btn.sc-go{
      The sentence that settled is the one the caret just LEFT. lpAllSentences is
      the Living Page's own tokenizer, complete with its node-offset mapper, so
      the ranges here land exactly where the dimming's do. */
+  /* `lpAllSentences` builds this string and then throws it away, returning only its
+     length — so rebuilding it here is a second full concatenation of the section on
+     every keystroke. Cached on the info object it came from, which lives exactly as
+     long as it is useful. */
   function bufOf(info){
-    var b = ''; for (var i = 0; i < info.map.length; i++) b += info.map[i].node.nodeValue; return b;
+    if (info.__buf != null) return info.__buf;
+    var b = ''; for (var i = 0; i < info.map.length; i++) b += info.map[i].node.nodeValue;
+    info.__buf = b; return b;
   }
   var WCH = /[A-Za-z'\u2019]/;
   /* lpAllSentences also emits a bound for whatever follows the last full stop — the line
@@ -62709,12 +62722,12 @@ body.ember:not(.eink) #scCard .sc-btn.sc-go, body.lp-live #scCard .sc-btn.sc-go{
           try{
             var sl = info.loc(b[0]), el = info.loc(b[1]);
             var rr = document.createRange(); rr.setStart(sl.node, sl.offset); rr.setEnd(el.node, el.offset);
-            var txt = rr.toString();
+            var txt = buf.slice(b[0], b[1]);
             if (txt.trim().length >= 12){
               if (LPT.mode() === 'keep'){ clearWord(); repaintAll(); state.painted = ''; }
               else {
                 var r = readCached(txt);
-                if (r && r.n >= 1) tint(info, b, rr, r, isOwn(txt, r), counterWords(buf, b, r.v));
+                if (r && r.n >= 1) tint(info, b, rr, r, r.own, counterWords(buf, b, r.v));
               }
             }
           }catch(e){}
