@@ -10205,6 +10205,12 @@ function htmlToMd(html){
   x = x.replace(/<h3[^>]*>([\s\S]*?)<\/h3>/gi, '\n\n### $1\n\n');
   x = x.replace(/<hr[^>]*>/gi, '\n\n---\n\n');
   x = x.replace(/<div class="sec-mark"[^>]*>[\s\S]*?<span>(\d+)<\/span>[\s\S]*?<\/div>/gi, '\n\n\u25C6 $1\n\n');
+  // A scene divider is a `.scene-mark` div holding a `~`. It had NO rule here, so it fell
+  // through the generic <div> handling and reached every export as a bare tilde sitting in
+  // the body text — indented and justified like a paragraph. Give it its own token (the
+  // hollow diamond, sibling to the section mark's filled one) so each exporter can set it
+  // as a scene break instead of printing it.
+  x = x.replace(/<div class="scene-mark"[^>]*>[\s\S]*?<\/div>/gi, '\n\n\u25C7\n\n');
   x = x.replace(/<(b|strong)[^>]*>([\s\S]*?)<\/\1>/gi, '**$2**');
   x = x.replace(/<(i|em)[^>]*>([\s\S]*?)<\/\1>/gi, '*$2*');
   x = x.replace(/<br[^>]*>/gi, '\n');
@@ -31960,26 +31966,109 @@ function _dxZip(files){
   return out;
 }
 function _dxEsc(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
-function _dxRun(text, o){ o=o||{}; const pr=[]; if(o.font)pr.push('<w:rFonts w:ascii="'+o.font+'" w:hAnsi="'+o.font+'" w:cs="'+o.font+'"/>'); if(o.bold)pr.push('<w:b/>'); if(o.italic)pr.push('<w:i/>'); if(o.caps)pr.push('<w:smallCaps/>'); if(o.track!=null)pr.push('<w:spacing w:val="'+o.track+'"/>'); if(o.color)pr.push('<w:color w:val="'+o.color+'"/>'); if(o.sz)pr.push('<w:sz w:val="'+o.sz+'"/>'); const rPr=pr.length?('<w:rPr>'+pr.join('')+'</w:rPr>'):''; return '<w:r>'+rPr+'<w:t xml:space="preserve">'+_dxEsc(text)+'</w:t></w:r>'; }
+function _dxRun(text, o){
+  o = o || {}; const pr = [];
+  // CT_RPr has a fixed child ORDER — rFonts, b, i, caps/smallCaps, color, spacing, sz.
+  // Word forgives a wrong order; strict readers (and LibreOffice) do not always.
+  if (o.font) pr.push('<w:rFonts w:ascii="' + o.font + '" w:hAnsi="' + o.font + '" w:cs="' + o.font + '"/>');
+  if (o.bold) pr.push('<w:b/>');
+  if (o.italic) pr.push('<w:i/>');
+  if (o.underline) pr.push('<w:u w:val="single"/>');
+  if (o.caps) pr.push('<w:smallCaps/>');
+  if (o.color) pr.push('<w:color w:val="' + o.color + '"/>');
+  if (o.track != null) pr.push('<w:spacing w:val="' + o.track + '"/>');
+  if (o.sz) pr.push('<w:sz w:val="' + o.sz + '"/>');
+  const rPr = pr.length ? ('<w:rPr>' + pr.join('') + '</w:rPr>') : '';
+  return '<w:r>' + rPr + '<w:t xml:space="preserve">' + _dxEsc(text) + '</w:t></w:r>';
+}
 function _dxRuns(el, base){ base=base||{}; let out=''; el.childNodes.forEach(n=>{ if(n.nodeType===3){ if(n.textContent) out+=_dxRun(n.textContent, base); } else if(n.nodeType===1){ const t=n.tagName.toLowerCase(); if(t==='br'){ out+='<w:r><w:br/></w:r>'; return; } const o=Object.assign({},base); if(t==='em'||t==='i')o.italic=true; if(t==='strong'||t==='b')o.bold=true; out+=_dxRuns(n,o); } }); return out; }
-function _dxPara(runs, o){ o=o||{}; const pr=[]; if(o.pageBreak)pr.push('<w:pageBreakBefore/>'); if(o.keepNext)pr.push('<w:keepNext/>'); if(o.align)pr.push('<w:jc w:val="'+o.align+'"/>'); if(o.indent)pr.push('<w:ind w:firstLine="'+o.indent+'"/>'); const sp=[]; if(o.before!=null)sp.push('w:before="'+o.before+'"'); if(o.after!=null)sp.push('w:after="'+o.after+'"'); if(o.line!=null){ sp.push('w:line="'+o.line+'"'); sp.push('w:lineRule="auto"'); } if(sp.length)pr.push('<w:spacing '+sp.join(' ')+'/>'); const pPr=pr.length?('<w:pPr>'+pr.join('')+'</w:pPr>'):''; return '<w:p>'+pPr+(runs||'<w:r><w:t/></w:r>')+'</w:p>'; }
-// markdown inline → docx runs (parses **bold** / *italic*)
-function _dxMdRuns(s, base){
-  base = base || {}; let out = "", last = 0, m; const re = /\*\*([^*]+)\*\*|\*([^*]+)\*/g;
-  while (m = re.exec(s)){
-    if (m.index > last) out += _dxRun(s.slice(last, m.index), base);
-    if (m[1] != null) out += _dxRun(m[1], Object.assign({}, base, { bold:true }));
-    else out += _dxRun(m[2], Object.assign({}, base, { italic:true }));
-    last = re.lastIndex;
-  }
-  if (last < s.length) out += _dxRun(s.slice(last), base);
-  return out || _dxRun(s, base);
+function _dxPara(runs, o){
+  o = o || {}; const pr = [];
+  // pStyle FIRST — a paragraph that names a style is what makes the document editable in
+  // Word (select one chapter heading, restyle every chapter). Everything after it is the
+  // exception the style can't carry, and CT_PPr's order is: pStyle, keepNext,
+  // pageBreakBefore, spacing, ind, jc.
+  if (o.style) pr.push('<w:pStyle w:val="' + o.style + '"/>');
+  if (o.keepNext) pr.push('<w:keepNext/>');
+  if (o.pageBreak) pr.push('<w:pageBreakBefore/>');
+  const sp = [];
+  if (o.before != null) sp.push('w:before="' + o.before + '"');
+  if (o.after != null) sp.push('w:after="' + o.after + '"');
+  if (o.line != null){ sp.push('w:line="' + o.line + '"'); sp.push('w:lineRule="auto"'); }
+  if (sp.length) pr.push('<w:spacing ' + sp.join(' ') + '/>');
+  if (o.indent != null) pr.push('<w:ind w:firstLine="' + o.indent + '"/>');
+  if (o.align) pr.push('<w:jc w:val="' + o.align + '"/>');
+  const pPr = pr.length ? ('<w:pPr>' + pr.join('') + '</w:pPr>') : '';
+  return '<w:p>' + pPr + (runs || '<w:r><w:t/></w:r>') + '</w:p>';
+}
+/* ---------------------------------------------------------------------------
+   The Word stylesheet. This is the whole point of a "publish-grade" .docx:
+   the shape of the document lives in NAMED STYLES, not in direct formatting on
+   every paragraph, so the writer can select one chapter heading in Word, change
+   it, and change every chapter — and so Word's Navigation Pane, and its
+   automatic table of contents, have an outline to read.
+
+   The geometry is standard SUBMISSION MANUSCRIPT, because that is what a .docx
+   is for: it is the file you send to an agent, an editor or a beta reader, and
+   they expect Times New Roman 12pt, double-spaced, 1" margins, ragged right.
+   The typeset book — trade trim, Cormorant Garamond, justified — is what PDF
+   and ePub are for, and they still produce it.
+   ------------------------------------------------------------------------- */
+function _dxStyles(W){
+  var TNR = 'Times New Roman';
+  var S = function(id, name, opts){
+    opts = opts || {};
+    return '<w:style w:type="paragraph"' + (opts.deflt ? ' w:default="1"' : '') + ' w:styleId="' + id + '">'
+      + '<w:name w:val="' + name + '"/>'
+      + (opts.basedOn ? '<w:basedOn w:val="' + opts.basedOn + '"/>' : '')
+      + (opts.next ? '<w:next w:val="' + opts.next + '"/>' : '')
+      + (opts.qFormat === false ? '' : '<w:qFormat/>')
+      + (opts.uiPriority != null ? '<w:uiPriority w:val="' + opts.uiPriority + '"/>' : '')
+      + (opts.pPr ? '<w:pPr>' + opts.pPr + '</w:pPr>' : '')
+      + (opts.rPr ? '<w:rPr>' + opts.rPr + '</w:rPr>' : '')
+      + '</w:style>';
+  };
+  var dbl = '<w:spacing w:after="0" w:line="480" w:lineRule="auto"/>';   // double-spaced
+  var sgl = '<w:spacing w:after="0" w:line="240" w:lineRule="auto"/>';   // single-spaced
+  return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+    + '<w:styles xmlns:w="' + W + '">'
+    + '<w:docDefaults><w:rPrDefault><w:rPr>'
+    +   '<w:rFonts w:ascii="' + TNR + '" w:hAnsi="' + TNR + '" w:cs="' + TNR + '"/><w:sz w:val="24"/><w:szCs w:val="24"/>'
+    + '</w:rPr></w:rPrDefault><w:pPrDefault><w:pPr>' + dbl + '</w:pPr></w:pPrDefault></w:docDefaults>'
+    // Body. Manuscript convention: ragged right (justification hides uneven spacing an
+    // editor needs to see), 0.5" first line, no space between paragraphs.
+    + S('Normal', 'Normal', { deflt:true, pPr: dbl + '<w:ind w:firstLine="720"/><w:jc w:val="left"/>' })
+    // The first paragraph after a heading or a scene break takes no indent — the break
+    // itself already says "new thought", and an indent there reads as an error in print.
+    + S('FirstParagraph', 'First Paragraph', { basedOn:'Normal', next:'Normal', uiPriority:1, pPr: dbl + '<w:ind w:firstLine="0"/>' })
+    // Chapters. The page break lives HERE rather than on each paragraph, which is what
+    // makes "start every chapter on a new page" a property of the document rather than
+    // something re-decided at each heading.
+    + S('Heading1', 'heading 1', { basedOn:'Normal', next:'FirstParagraph', uiPriority:9,
+        pPr: '<w:keepNext/><w:pageBreakBefore/><w:spacing w:before="2160" w:after="480" w:line="480" w:lineRule="auto"/><w:ind w:firstLine="0"/><w:jc w:val="center"/><w:outlineLvl w:val="0"/>',
+        rPr: '<w:b w:val="0"/><w:sz w:val="24"/>' })
+    + S('Heading2', 'heading 2', { basedOn:'Normal', next:'FirstParagraph', uiPriority:9,
+        pPr: '<w:keepNext/><w:spacing w:before="0" w:after="480" w:line="480" w:lineRule="auto"/><w:ind w:firstLine="0"/><w:jc w:val="center"/><w:outlineLvl w:val="1"/>',
+        rPr: '<w:b w:val="0"/><w:sz w:val="24"/>' })
+    + S('SceneBreak', 'Scene Break', { basedOn:'Normal', next:'FirstParagraph', uiPriority:2,
+        pPr: dbl + '<w:ind w:firstLine="0"/><w:jc w:val="center"/>' })
+    + S('ManuscriptTitle', 'Manuscript Title', { basedOn:'Normal', next:'Normal', uiPriority:1,
+        pPr: dbl + '<w:ind w:firstLine="0"/><w:jc w:val="center"/>' })
+    + S('ContactBlock', 'Contact Block', { basedOn:'Normal', next:'ContactBlock', uiPriority:1,
+        pPr: sgl + '<w:ind w:firstLine="0"/><w:jc w:val="left"/>' })
+    + S('WordCount', 'Word Count', { basedOn:'Normal', next:'Normal', uiPriority:1,
+        pPr: sgl + '<w:ind w:firstLine="0"/><w:jc w:val="right"/>' })
+    + S('FrontMatter', 'Front Matter', { basedOn:'Normal', next:'FrontMatter', uiPriority:1,
+        pPr: dbl + '<w:ind w:firstLine="0"/><w:jc w:val="center"/>' })
+    + S('Header', 'header', { basedOn:'Normal', next:'Normal', qFormat:false, uiPriority:99,
+        pPr: sgl + '<w:ind w:firstLine="0"/><w:jc w:val="right"/>' })
+    + '</w:styles>';
 }
 function exportStoryDOCX(rootEl, storyName){
   const story = storyName || (state.session && state.session.name) || 'Dystoria story';
-  const isOpen = !rootEl;   // in-story export \u2192 the book config (page size, chapter style, front/back matter) applies
-  // Build from the story's SOURCE prose, not the live readBody \u2014 in Book view readBody is paginated (split
-  // paragraphs, folios) and would garble the doc. storyProseRoot gives clean, unpaginated prose either way.
+  const isOpen = !rootEl;
+  // Build from the story's SOURCE prose, not the live readBody — in Book view readBody is paginated
+  // (split paragraphs, folios) and would garble the doc.
   let src = rootEl;
   if (!src){
     if (typeof storyProseRoot === 'function' && state.session){
@@ -31999,96 +32088,192 @@ function exportStoryDOCX(rootEl, storyName){
     wrap.querySelectorAll('.ph, [class*="cmt"], .pub-anchored, .pub-copyright').forEach(n => n.remove());
     const proseEl = wrap.querySelector('.rd-prose');
     const md = (typeof htmlToMd === 'function' && proseEl) ? htmlToMd(proseEl.innerHTML) : '';
-    // ---- book geometry: trade-paperback page + serif type, mirroring the Book view ----
-    const bs = (typeof bookSizeObj === 'function') ? bookSizeObj() : { w: 5.5, h: 8.5 };
-    const FONT = 'Cormorant Garamond';   // Word substitutes a serif if it isn't installed
-    const pgW = Math.round(bs.w * 1440), pgH = Math.round(bs.h * 1440);
-    const marX = Math.round(bs.w * 0.14 * 1440), marY = Math.round(bs.h * 0.085 * 1440);
-    const bodyHp = Math.max(19, Math.round(1.95 * bs.w * 2));        // \u224810.7pt on a 5.5" trim
-    const headHp = Math.round(2.9 * bs.w * 2), titleHp = Math.round(5.2 * bs.w * 2);
-    const indent = Math.round(bodyHp * 14), lineTw = Math.round(bodyHp * 13.6);
-    const bookOn = isOpen && typeof bookHeadingOn === 'function' && bookHeadingOn();
-    // pre-scan section titles (for the table of contents)
+
+    // ---- manuscript geometry: US Letter, 1" margins. No book trim, no book font. ----
+    const pgW = 12240, pgH = 15840, mar = 1440, hdrDist = 720;
+    const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
+
+    let bcfg = null; try { if (isOpen && typeof bookCfg === 'function') bcfg = bookCfg(); } catch(e){}
+    const author = (isOpen && typeof bookAuthor === 'function' && bookAuthor())
+      || ((typeof cloud !== 'undefined' && cloud.username) ? cloud.username : '')
+      || ((typeof myDisplayName === 'function') ? myDisplayName() : '');
+    const email = (typeof cloud !== 'undefined' && cloud.user && cloud.user.email) ? cloud.user.email : '';
+    const surname = (author || '').trim().split(/\s+/).pop() || 'Author';
+
+    // Word count, rounded the way a cover letter rounds it.
+    const proseWords = md.split(/\n/).filter(l => { const t = l.trim(); return t && !/^#/.test(t) && !/^[◆◇]/.test(t) && !/^-{3,}$/.test(t); }).join(' ');
+    const wordN = (proseWords.trim() ? proseWords.trim().split(/\s+/).length : 0);
+    const wordsRounded = wordN >= 1000 ? (Math.round(wordN / 100) * 100) : wordN;
+    const wordsLabel = 'About ' + wordsRounded.toLocaleString('en-US') + ' word' + (wordsRounded === 1 ? '' : 's');
+
+    let xml = '';
+    const P = (runs, o) => { xml += _dxPara(runs, o || {}); };
+    const nl = t => String(t || '').replace(/\r/g, '').split('\n');
+    const pageBreakPara = () => { xml += '<w:p><w:r><w:br w:type="page"/></w:r></w:p>'; };
+
+    // ---- TITLE PAGE: contact block left, word count right, title a third down ----
+    P(_dxRun(author || 'Author'), { style:'ContactBlock' });
+    if (email) P(_dxRun(email), { style:'ContactBlock' });
+    P(_dxRun(wordsLabel), { style:'WordCount', before:240 });
+    P(_dxRun(story), { style:'ManuscriptTitle', before: 3600 });
+    P(_dxRun('by ' + (author || 'Author')), { style:'ManuscriptTitle' });
+
+    // ---- FRONT MATTER (whatever the writer switched on, set as manuscript, not as book) ----
     const secTitles = [];
     md.split(/\n/).forEach(raw => { const m = raw.trim().match(/^#{2,}\s+([\s\S]+)/); if (m) secTitles.push(m[1].replace(/\n/g, ' ').trim()); });
-    let xml = '', started = false, pendingBreak = false;
-    const P = (runs, o) => { o = Object.assign({}, o || {}); if (pendingBreak && started) o.pageBreak = true; pendingBreak = false; xml += _dxPara(runs, o); started = true; };
-    const newPage = () => { if (started) pendingBreak = true; };
-    const nl = t => String(t || '').replace(/\r/g, '').split('\n');
-    // ---- TITLE PAGE ----
-    P(_dxRun(story, { italic:true, sz:titleHp, font:FONT }), { align:'center', before: Math.round(pgH * 0.20), after:0 });
-    const author = (isOpen && typeof bookAuthor === 'function') ? bookAuthor() : ((typeof cloud !== 'undefined' && cloud.username) ? cloud.username : '');
-    if (author) P(_dxRun(author.toUpperCase(), { sz:22, track:36, font:FONT }), { align:'center', before:420 });
-    // ---- FRONT MATTER (open story only \u2014 the book config lives on the open session) ----
-    let bcfg = null; try { if (isOpen && typeof bookCfg === 'function') bcfg = bookCfg(); } catch(e){}
     if (bcfg){
       const f = bcfg.front || {};
       if (f.copyright && f.copyright.on){
         const t = (f.copyright.text && f.copyright.text.trim()) ? f.copyright.text : (typeof genCopyrightText === 'function' ? genCopyrightText() : '');
-        newPage(); const lines = nl(t).filter(x => x.trim().length); let firstLn = true;
-        lines.forEach(ln => { P(_dxRun(ln, { sz:18, font:FONT }), { align:'center', before: firstLn ? Math.round(pgH * 0.55) : 0, after:40 }); firstLn = false; });
+        const lines = nl(t).filter(x => x.trim().length);
+        if (lines.length){ pageBreakPara(); lines.forEach(ln => P(_dxRun(ln), { style:'FrontMatter' })); }
       }
       if (f.dedication && f.dedication.on && (f.dedication.text || '').trim()){
-        newPage(); P(_dxRun('DEDICATED TO', { sz:17, track:44, color:'888888', font:FONT }), { align:'center', before: Math.round(pgH * 0.34), after:200 });
-        nl(f.dedication.text).forEach((ln, i) => { if (ln.trim()) P(_dxRun(ln, { italic:true, sz:26, font:FONT }), { align:'center', after:40 }); });
+        pageBreakPara();
+        nl(f.dedication.text).forEach(ln => { if (ln.trim()) P(_dxRun(ln, { italic:true }), { style:'FrontMatter' }); });
       }
       if (f.epigraph && f.epigraph.on && (f.epigraph.text || '').trim()){
-        newPage(); let firstLn = true;
-        nl(f.epigraph.text).forEach(ln => { if (ln.trim()){ P(_dxRun(ln, { italic:true, sz:23, font:FONT }), { align:'center', before: firstLn ? Math.round(pgH * 0.22) : 0, after:40 }); firstLn = false; } });
-        if (f.epigraph.source) P(_dxRun('\u2014 ' + f.epigraph.source, { sz:20, font:FONT }), { align:'center', before:160 });
+        pageBreakPara();
+        nl(f.epigraph.text).forEach(ln => { if (ln.trim()) P(_dxRun(ln, { italic:true }), { style:'FrontMatter' }); });
+        if (f.epigraph.source) P(_dxRun('— ' + f.epigraph.source), { style:'FrontMatter' });
       }
       if (f.toc && f.toc.on && secTitles.length){
-        newPage(); P(_dxRun('Contents', { sz:headHp, font:FONT }), { align:'center', after:260, keepNext:true });
-        secTitles.forEach(t => P(_dxRun(t, { sz:bodyHp, font:FONT }), { align:'center', after:120 }));
+        pageBreakPara();
+        P(_dxRun('Contents'), { style:'Heading2' });
+        secTitles.forEach(t => P(_dxRun(t), { style:'FrontMatter' }));
       }
     }
-    // ---- PROSE: each section starts a fresh page, with book-style headings ----
-    let secNum = 0, pend = null;
+
+    // ---- PROSE ----
+    // Heading1 carries the page break in the STYLE, so a chapter starting a new page is a
+    // property of the document rather than something re-decided per heading. A section with
+    // both a book label and a title gets Heading1 + Heading2, which gives Word's Navigation
+    // Pane a real two-level outline.
+    const bookOn = isOpen && typeof bookHeadingOn === 'function' && bookHeadingOn();
+    let secNum = 0, pend = null, firstPara = false;
     const emitHeading = (title) => {
-      newPage(); secNum++;
-      if (bookOn){ const lbl = bookHeadingText(secNum); if (lbl) P(_dxRun(lbl.toUpperCase(), { sz:18, track:40, color:'9a7b1e', font:FONT }), { align:'center', after:110, keepNext:true }); }
-      P(_dxRun('\u25C6', { sz:26, font:FONT }), { align:'center', after: title ? 80 : 170, keepNext: !!title });
-      if (title) P(_dxMdRuns(title, { sz:headHp, caps:true, font:FONT }), { align:'center', after:220, keepNext:true });
+      secNum++;
+      let label = '';
+      if (bookOn && typeof bookHeadingText === 'function'){ try { label = bookHeadingText(secNum) || ''; } catch(e){} }
+      if (!label && !title) label = 'Chapter ' + secNum;
+      if (label){
+        P(_dxRun(label), { style:'Heading1' });
+        if (title) P(_dxMdRuns(title), { style:'Heading2' });
+      } else {
+        P(_dxMdRuns(title), { style:'Heading1' });
+      }
+      firstPara = true;
     };
     md.split(/\n/).forEach(raw => {
       const block = raw.trim(); if (!block) return; let m;
-      if (m = block.match(/^\u25C6\s*(\d+)?\s*$/)){ pend = true; return; }                       // section diamond
+      if (block.match(/^◆\s*(\d+)?\s*$/)){ pend = true; return; }                        // section diamond
       if (m = block.match(/^#{2,}\s+([\s\S]+)/)){ emitHeading(m[1].replace(/\n/g, ' ')); pend = false; return; }
-      if (pend){ emitHeading(null); pend = false; }                                              // diamond with no title
-      if (/^-{3,}$/.test(block)) return;
-      P(_dxMdRuns(block.replace(/\n/g, ' '), { sz:bodyHp, font:FONT }), { align:'both', indent:indent, after:0, line:lineTw });
+      if (pend){ emitHeading(null); pend = false; }
+      if (block === '◇' || /^-{3,}$/.test(block)){                                        // scene break (or an author's rule)
+        P(_dxRun('#'), { style:'SceneBreak' });
+        firstPara = true; return;
+      }
+      P(_dxMdRuns(block.replace(/\n/g, ' ')), { style: firstPara ? 'FirstParagraph' : 'Normal' });
+      firstPara = false;
     });
+
     // ---- BACK MATTER ----
     if (bcfg){
       const bk = bcfg.back || {};
       if (bk.about && bk.about.on && (bk.about.text || '').trim()){
-        newPage(); P(_dxRun('About the Author', { sz:headHp, font:FONT }), { align:'center', after:240, keepNext:true });
-        nl(bk.about.text).forEach(ln => { if (ln.trim()) P(_dxMdRuns(ln, { sz:bodyHp, font:FONT }), { align:'both', indent:indent, after:120, line:lineTw }); });
+        P(_dxRun('About the Author'), { style:'Heading1' });
+        let first = true;
+        nl(bk.about.text).forEach(ln => { if (ln.trim()){ P(_dxMdRuns(ln), { style: first ? 'FirstParagraph' : 'Normal' }); first = false; } });
       }
       if (bk.acks && bk.acks.on && (bk.acks.text || '').trim()){
-        newPage(); P(_dxRun('Acknowledgments', { sz:headHp, font:FONT }), { align:'center', after:240, keepNext:true });
-        nl(bk.acks.text).forEach(ln => { if (ln.trim()) P(_dxMdRuns(ln, { sz:bodyHp, font:FONT }), { align:'both', indent:indent, after:120, line:lineTw }); });
+        P(_dxRun('Acknowledgments'), { style:'Heading1' });
+        let first = true;
+        nl(bk.acks.text).forEach(ln => { if (ln.trim()){ P(_dxMdRuns(ln), { style: first ? 'FirstParagraph' : 'Normal' }); first = false; } });
       }
     }
-    const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
-    const doc = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="'+W+'"><w:body>' + xml
-      + '<w:sectPr><w:pgSz w:w="'+pgW+'" w:h="'+pgH+'"/><w:pgMar w:top="'+marY+'" w:right="'+marX+'" w:bottom="'+marY+'" w:left="'+marX+'"/></w:sectPr></w:body></w:document>';
-    const styles = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles xmlns:w="'+W+'"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="'+FONT+'" w:hAnsi="'+FONT+'" w:cs="'+FONT+'"/><w:sz w:val="'+bodyHp+'"/></w:rPr></w:rPrDefault></w:docDefaults></w:styles>';
-    const ct = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/></Types>';
-    const rels = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>';
-    const drels = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>';
+
+    // ---- running header: Surname / TITLE / page, suppressed on the title page ----
+    const hdrTitle = story.toUpperCase().slice(0, 34);
+    const header = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+      + '<w:hdr xmlns:w="' + W + '"><w:p><w:pPr><w:pStyle w:val="Header"/></w:pPr>'
+      + _dxRun(surname + ' / ' + hdrTitle + ' / ')
+      + '<w:r><w:fldChar w:fldCharType="begin"/></w:r>'
+      + '<w:r><w:instrText xml:space="preserve"> PAGE </w:instrText></w:r>'
+      + '<w:r><w:fldChar w:fldCharType="separate"/></w:r>'
+      + '<w:r><w:t>1</w:t></w:r>'
+      + '<w:r><w:fldChar w:fldCharType="end"/></w:r>'
+      + '</w:p></w:hdr>';
+
+    const doc = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+      + '<w:document xmlns:w="' + W + '" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body>' + xml
+      + '<w:sectPr><w:headerReference r:id="rId2" w:type="default"/><w:titlePg/>'
+      +   '<w:pgSz w:w="' + pgW + '" w:h="' + pgH + '"/>'
+      +   '<w:pgMar w:top="' + mar + '" w:right="' + mar + '" w:bottom="' + mar + '" w:left="' + mar + '" w:header="' + hdrDist + '" w:footer="' + hdrDist + '" w:gutter="0"/>'
+      + '</w:sectPr></w:body></w:document>';
+
+    const styles = _dxStyles(W);
+    const esc = s => _dxEsc(s);
+    // Document properties, so the story's title and author reach Word's File > Properties
+    // (and any tool that reads a .docx) rather than leaving it "Document1".
+    const core = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+      + '<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties"'
+      + ' xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/"'
+      + ' xmlns:dcmitype="http://purl.org/dc/dcmitype/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
+      + '<dc:title>' + esc(story) + '</dc:title>'
+      + (author ? '<dc:creator>' + esc(author) + '</dc:creator><cp:lastModifiedBy>' + esc(author) + '</cp:lastModifiedBy>' : '')
+      + '</cp:coreProperties>';
+    const app = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+      + '<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"'
+      + ' xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">'
+      + '<Application>Dystoria</Application><Words>' + wordN + '</Words>'
+      + '</Properties>';
+
+    const ct = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+      + '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+      + '<Default Extension="xml" ContentType="application/xml"/>'
+      + '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+      + '<Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>'
+      + '<Override PartName="/word/header1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/>'
+      + '<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>'
+      + '<Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>'
+      + '</Types>';
+    const rels = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+      + '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>'
+      + '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>'
+      + '<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/>'
+      + '</Relationships>';
+    const drels = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+      + '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>'
+      + '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/>'
+      + '</Relationships>';
+
     const zip = _dxZip([
       { name:'[Content_Types].xml', data:ct },
       { name:'_rels/.rels', data:rels },
+      { name:'docProps/core.xml', data:core },
+      { name:'docProps/app.xml', data:app },
       { name:'word/_rels/document.xml.rels', data:drels },
       { name:'word/document.xml', data:doc },
       { name:'word/styles.xml', data:styles },
+      { name:'word/header1.xml', data:header },
     ]);
     const blob = new Blob([zip], { type:'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = slug(story) + '.docx';
     document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 800);
-    flashStatus('Story exported (.docx)');
+    flashStatus('Manuscript exported (.docx)');
   } catch (e){ console.warn('docx export failed:', e); flashStatus('Could not build .docx — try PDF'); }
+}
+// markdown inline → docx runs (parses **bold** / *italic*)
+function _dxMdRuns(s, base){
+  base = base || {}; let out = "", last = 0, m; const re = /\*\*([^*]+)\*\*|\*([^*]+)\*/g;
+  while (m = re.exec(s)){
+    if (m.index > last) out += _dxRun(s.slice(last, m.index), base);
+    if (m[1] != null) out += _dxRun(m[1], Object.assign({}, base, { bold:true }));
+    else out += _dxRun(m[2], Object.assign({}, base, { italic:true }));
+    last = re.lastIndex;
+  }
+  if (last < s.length) out += _dxRun(s.slice(last), base);
+  return out || _dxRun(s, base);
 }
 async function exportStoryEPUB(rootEl, storyName){
   try{
@@ -32152,7 +32337,7 @@ async function exportStoryEPUB(rootEl, storyName){
       const block=raw.trim(); if(!block) return; let m;
       if(m=block.match(/^◆\s*(\d+)?\s*$/)){ start(null); pend=true; return; }
       if(m=block.match(/^#{2,}\s+([\s\S]+)/)){ const t=m[1].replace(/\n/g,' ').trim(); if(pend && cur && !cur.title && !cur.paras.length){ cur.title=t; } else { start(t); } pend=false; return; }
-      if(/^-{3,}$/.test(block)) return;
+      if(block==='\u25C7' || /^-{3,}$/.test(block)){ if(!cur) start(null); pend=false; cur.paras.push('\u25C7'); return; }   // scene break — a marked pause, not a dropped line
       if(!cur) start(null);
       pend=false; cur.paras.push(block.replace(/\n/g,' '));
     });
@@ -32185,7 +32370,11 @@ async function exportStoryEPUB(rootEl, storyName){
       if(bookOn && typeof bookHeadingText==='function'){ const lbl=bookHeadingText(n); if(lbl) h+='<p class="ch-label">'+esc(String(lbl).toUpperCase())+'</p>'; }
       h+='<p class="ch-dia">◆</p>';
       if(c.title) h+='<h2 class="ch-title">'+mdInline(c.title)+'</h2>';
-      c.paras.forEach(pp=>{ const only=pp.match(/^\[\[DYSTIMG:(\d+)\]\]$/); if(only){ h+='<div class="story-img">'+imgTag(+only[1])+'</div>'; } else { h+='<p>'+mdInline(pp)+'</p>'; } });
+      let _fp = true;
+      c.paras.forEach(pp=>{ const only=pp.match(/^\[\[DYSTIMG:(\d+)\]\]$/);
+        if(only){ h+='<div class="story-img">'+imgTag(+only[1])+'</div>'; _fp=false; }
+        else if(pp==='\u25C7'){ h+='<p class="scenebreak">* * *</p>'; _fp=true; }   // the book look uses the typographic form; the .docx manuscript uses '#'
+        else { h+='<p'+(_fp?' class="first"':'')+'>'+mdInline(pp)+'</p>'; _fp=false; } });
       const navLabel = c.title || (bookOn && typeof bookHeadingText==='function' ? (bookHeadingText(n)||'') : '') || ('Chapter '+n);
       docs.push({id:'chap'+i, href:'chap'+i+'.xhtml', nav:navLabel, xhtml:page(navLabel, '<div class="chapter">'+h+'</div>')});
     });
@@ -32214,6 +32403,8 @@ async function exportStoryEPUB(rootEl, storyName){
       + "h2.ch-title{text-align:center;font-weight:600;font-size:1.35em;letter-spacing:.02em;margin:.4em 0 1.6em}"
       + "p{margin:0;text-indent:1.4em;text-align:justify}"
       + "h2.ch-title + p, p.ch-dia + p, .matter p{text-indent:0}"
+      + "p.first{text-indent:0}"
+      + "p.scenebreak{text-indent:0;text-align:center;margin:1.1em 0;letter-spacing:.5em}"
       + ".story-img{margin:1em 0;text-align:center}.story-img img{max-width:100%;height:auto}";
     const uuid = (typeof crypto!=='undefined' && crypto.randomUUID) ? crypto.randomUUID() : ('dyst-'+Date.now()+'-'+Math.floor(Math.random()*1e9));
     const modified = new Date().toISOString().replace(/\.\d+Z$/,'Z');
@@ -47198,8 +47389,13 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.378';
+  var APP_VERSION = '2026.07.20.379';
   var APP_CHANGELOG = [
+    { v:'2026.07.20.379', date:'August 8, 2026', notes:[
+      'Word export is now a proper submission manuscript. Times New Roman 12pt, double-spaced, one-inch margins, ragged right, a title page with your contact details and word count, and a running header carrying your surname, the title and the page number. It is the file you send to an agent, an editor or a reader, and it now looks like one. The typeset book \u2014 your trim size, your serif, justified \u2014 is still what PDF and ePub give you.',
+      'And it is built on real Word styles rather than formatting stamped onto every paragraph. Change one chapter heading in Word and every chapter changes with it. Your chapters show up in Word\u2019s navigation pane, you can generate a table of contents from them, and every chapter starts on a fresh page because the document says so \u2014 not because each heading was told to. Your story\u2019s title and your name now reach Word\u2019s document properties too.',
+      'Fixed scene breaks reaching your exports as a stray \u201c~\u201d sitting in the middle of the prose. A scene break is now a centred # in the Word manuscript and a centred * * * in the ePub, with the paragraph after it left unindented \u2014 the way a break is set in print.'
+    ]},
     { v:'2026.07.20.378', date:'August 8, 2026', notes:[
       'Evened out the spacing of Revise\u2019s side tabs. Patterns, Checks and Research each had a fixed position set by hand, but a vertical tab is as tall as its label \u2014 so Patterns and Checks had grown into each other while Checks and Research nearly touched. They now sit themselves one under another with the same gap between each, measured rather than guessed, so they stay even however the labels change and close ranks neatly when one of them is hidden.'
     ]},
