@@ -4758,7 +4758,7 @@ body.eink #consentBar #cbAccept{background:#000; color:#fff; border-color:#000}
 </div>
 <div id="wikiPanel">
   <div class="wk-head"><div class="mode-pills"><button data-mode="notepad">Plan</button><button data-mode="write">Write</button><button data-mode="edit">Revise</button><button data-mode="read">Review</button><button data-mode="wiki" class="on">Wiki</button></div><span class="wk-guide">Your whole world, organized — press Update Wiki to rebuild it from your writing.</span><div class="wk-head-actions"></div></div>
-  <div class="mode-subbar" id="wkSubbar"><button id="wikiUpdate" title="Read all your prose and notes and rebuild the whole wiki in one pass">Update Wiki <span class="ai-star">✦</span></button><button id="wikiExport" title="Export the wiki as an HTML file — opens in any browser, Word, Pages or Google Docs, and prints to PDF">Export</button></div>
+  <div class="mode-subbar" id="wkSubbar"><button id="wikiUpdate" title="Read what you have written since the last update and fold it into the wiki — additive, and it only rewrites an entry when the story has changed what is true about it"><span class="ai-star">✦</span> Update Wiki</button><button id="wikiExport" title="Export the wiki as an HTML file — opens in any browser, Word, Pages or Google Docs, and prints to PDF">Export</button></div>
   <div id="wikiScroll">
     <div id="wikiTitle" class="wk-doctitle">Story Wiki</div>
     <div id="wikiMeta"></div>
@@ -24145,7 +24145,23 @@ async function cloudPull(){
       d._baton = r.planning_baton || r.owner;
       d._isPublic = !!r.is_public; d._publicToken = r.public_token || '';
       d._cloudUpdatedAt = r.updated_at || '';   // the base this device last saw (see cloudSave's guard)
-      if (!byId[d.id] || (d.updated || '') >= (byId[d.id].updated || '')) byId[d.id] = d;
+      if (!byId[d.id] || (d.updated || '') >= (byId[d.id].updated || '')){
+        // The wiki is an expensive derived document, and a cloud doc can legitimately arrive WITHOUT one:
+        // a build whose save hadn't landed yet, a doc last written by a device that had it trimmed, or a
+        // conflict resolved the other way. Replacing the local entry wholesale then wiped the wiki locally
+        // AND on the next save, leaving a full regeneration as the only way back. Carry it across instead:
+        // a sync may replace a story's contents, but it must never DELETE a wiki that exists.
+        var _loc = byId[d.id];
+        if (_loc && _loc.wikiDoc && !d.wikiDoc){
+          d.wikiDoc = _loc.wikiDoc;
+          if (_loc.wikiSig != null) d.wikiSig = _loc.wikiSig;
+          if (_loc.wikiProseLen != null) d.wikiProseLen = _loc.wikiProseLen;
+          if (_loc.wikiSecLens) d.wikiSecLens = _loc.wikiSecLens;
+          if (_loc.wikiSecSigs) d.wikiSecSigs = _loc.wikiSecSigs;
+          if (_loc.wikiQuestions != null) d.wikiQuestions = _loc.wikiQuestions;
+        }
+        byId[d.id] = d;
+      }
     });
     const merged = Object.values(byId).sort((a, b) => (b.updated || '').localeCompare(a.updated || ''));
     persistSessions(merged);
@@ -27638,6 +27654,59 @@ function wikiSectionLabel(fi){
   return label;
 }
 // cheap signature of the prose + notepad — to tell whether the wiki is out of date
+/* ---- The wiki mirror + the section content hash ------------------------------------------------
+   A built wiki is minutes of AI work, so it gets a SECOND home: its own per-story localStorage key,
+   independent of the story document. If the wiki ever goes missing from the session (a doc-level
+   clobber from a sync, a conflict resolved the other way, a local copy trimmed while signed out),
+   the Wiki tab refills from the mirror and re-saves it into the story instead of showing an empty
+   page whose only cure is a full rebuild. Bounded to the 12 most recent stories so it can never
+   crowd the cache. ---------------------------------------------------------------------------- */
+var LS_WIKI_MIRROR = 'dystoria.wiki.';
+function wikiMirrorSave(sess){
+  try{
+    if (!sess || !sess.id || !sess.wikiDoc) return;
+    localStorage.setItem(LS_WIKI_MIRROR + sess.id, JSON.stringify({
+      doc: sess.wikiDoc, sig: sess.wikiSig || '', proseLen: sess.wikiProseLen || 0,
+      secLens: sess.wikiSecLens || null, secSigs: sess.wikiSecSigs || null,
+      questions: sess.wikiQuestions || '', at: new Date().toISOString()
+    }));
+    wikiMirrorPrune();
+  }catch(e){}
+}
+function wikiMirrorPrune(){
+  try{
+    var keys = [];
+    for (var i = 0; i < localStorage.length; i++){ var k = localStorage.key(i); if (k && k.indexOf(LS_WIKI_MIRROR) === 0) keys.push(k); }
+    if (keys.length <= 12) return;
+    var at = function(k){ try{ return JSON.parse(localStorage.getItem(k)).at || ''; }catch(e){ return ''; } };
+    keys.sort(function(a, b){ return at(a).localeCompare(at(b)); });
+    keys.slice(0, keys.length - 12).forEach(function(k){ try{ localStorage.removeItem(k); }catch(e){} });
+  }catch(e){}
+}
+function wikiMirrorRestore(sess){
+  try{
+    if (!sess || !sess.id || sess.wikiDoc) return false;               // only ever fills a GAP; never clobbers a live wiki
+    var raw = localStorage.getItem(LS_WIKI_MIRROR + sess.id); if (!raw) return false;
+    var m = JSON.parse(raw); if (!m || typeof m.doc !== 'string' || !m.doc) return false;
+    sess.wikiDoc = m.doc;
+    if (m.sig) sess.wikiSig = m.sig;
+    if (m.proseLen) sess.wikiProseLen = m.proseLen;
+    if (m.secLens) sess.wikiSecLens = m.secLens;
+    if (m.secSigs) sess.wikiSecSigs = m.secSigs;
+    if (m.questions) sess.wikiQuestions = m.questions;
+    try{ if (typeof scheduleAutosave === 'function') scheduleAutosave(800); }catch(e){}   // write it back into the story doc so it stops being the mirror's job alone
+    return true;
+  }catch(e){ return false; }
+}
+/* A section's CONTENT hash, not its length: an in-place rewrite that happens to keep the same
+   character count is a real change to what the wiki should say, and the old length-only test
+   (>12 chars different) was blind to exactly that. */
+function wikiSecHash(str){
+  var t = String(str == null ? '' : str).replace(/\s+/g, ' ').trim();
+  var h = 2166136261;
+  for (var i = 0; i < t.length; i++){ h ^= t.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return (h >>> 0).toString(36) + ':' + t.length;
+}
 function wikiSig(){
   const prose = (typeof editorText === 'function') ? editorText() : '';
   let np = '';
@@ -27656,6 +27725,7 @@ function updateWikiBtnState(){
 }
 function renderWiki(){
   const body = $('wikiBody'); if (!body) return;
+  if (state.session && !state.session.wikiDoc) wikiMirrorRestore(state.session);   // a wiki that went missing from the story doc comes back from its mirror rather than making the writer rebuild it
   const titEl = $('wikiTitle');
   if (titEl){ const nm = (state.session && state.session.name) || (($('storyName').value || '').trim()) || ''; titEl.textContent = nm ? (nm + ' — Wiki') : 'Story Wiki'; }
   updateWikiBtnState();
@@ -27843,11 +27913,16 @@ async function runWikiAll(opts){
     _secNow[frame] = (_secNow[frame] || '') + ' ' + (node.textContent || '');
   });
   const _secLenNow = {}; Object.keys(_secNow).forEach(k => { _secLenNow[k] = _secNow[k].trim().length; });
-  const _prevSecLens = (state.session && state.session.wikiSecLens) || null;
+  const _secSigNow = {}; Object.keys(_secNow).forEach(k => { _secSigNow[k] = wikiSecHash(_secNow[k]); });
+  const _prevSecSigs = (state.session && state.session.wikiSecSigs) || null;   // content hashes: catch an in-place rewrite that keeps the same length
+  const _prevSecLens = (state.session && state.session.wikiSecLens) || null;   // wikis built before hashes recorded lengths only — fall back once, then hashes take over
   let changedProse = '', changedChars = 0;
-  if (_prevSecLens){
+  if (_prevSecSigs || _prevSecLens){
     Object.keys(_secNow).forEach(k => { const t = _secNow[k].trim(); if (!t) return;
-      if (_prevSecLens[k] == null || Math.abs((_prevSecLens[k] || 0) - t.length) > 12){   // a new or materially-changed section
+      const _changed = _prevSecSigs
+        ? (_prevSecSigs[k] !== _secSigNow[k])                                            // exact: any edit to this section's words, however length-neutral
+        : (_prevSecLens[k] == null || Math.abs((_prevSecLens[k] || 0) - t.length) > 12);  // legacy: length moved materially
+      if (_changed){
         changedProse += (changedProse ? '\n\n' : '') + 'Section ' + (parseInt(k, 10) + 1) + ':\n' + t;
       }
     });
@@ -27857,7 +27932,7 @@ async function runWikiAll(opts){
   }
   // Incremental whenever a COMPLETE wiki already exists and the change is bounded: send the wiki + only what changed.
   // (With a per-section record we can update even for in-place edits; a huge addition still triggers a full chunked rebuild.)
-  const incremental = !_rebuild && !!prevDoc && prevDoc.length < 12000 && !wikiIncomplete && changedChars < 18000 && (!!_prevSecLens || changedChars > 0);   // guard: the update re-emits the whole doc in one pass, so cap the size to avoid truncation (bigger wikis use the safe chunked rebuild). Regenerate forces the full chunked rebuild so the AI can restructure freely.
+  const incremental = !_rebuild && !!prevDoc && prevDoc.length < 12000 && !wikiIncomplete && changedChars < 18000 && (!!_prevSecSigs || !!_prevSecLens || changedChars > 0);   // guard: the update re-emits the whole doc in one pass, so cap the size to avoid truncation (bigger wikis use the safe chunked rebuild). Regenerate forces the full chunked rebuild so the AI can restructure freely.
   const _gc = (typeof goalContext === 'function') ? (goalContext() || '') : '';
   const _pf = (typeof getProfileContext === 'function') ? getProfileContext() : '';
   const _rb = (typeof getReadBooksContext === 'function') ? getReadBooksContext() : '';
@@ -27880,7 +27955,7 @@ async function runWikiAll(opts){
       // cheaper update: send the existing wiki + only the writing that CHANGED since it was last built
       const newProse = changedProse;
       const usedNames = used.map(u => u.el.name ? (u.el.word + ' “' + u.el.name + '”') : u.el.word);
-      sys = 'You UPDATE an existing story wiki. You are given the current wiki and the writing that has been ADDED OR REVISED since it was last built (only the changed sections are shown). Fold that material into the EXISTING wiki: extend, add, or correct the "### <name>" element entries it affects, refresh the "## Overview" for any new patterns, update "## Questions the story raises", and keep — refining only if warranted — the "## Suggested Reading List" section (real published books that fit this story’s goal and themes: classics, seminal and acclaimed works, plus craft, criticism, psychology, mythology or symbolism where they enrich it; never invent titles or authors, and never recommend a book listed under BOOKS THE WRITER HAS ALREADY READ). If no Suggested Reading List exists yet, add one. KEEP everything that still holds — do not rewrite unchanged parts or drop existing entries — and keep the same structure and headings. For all sections EXCEPT the Reading List use ONLY the given material and never invent; never mention the author/writer/reader, refer to story parts as "Section N". Output the FULL updated document.';
+      sys = 'You UPDATE an existing story wiki. You are given the current wiki and the writing that has been ADDED OR REVISED since it was last built (only the changed sections are shown).\n\nTHE GOVERNING RULE \u2014 BE ADDITIVE. The existing wiki is the baseline and is presumed correct. Reproduce it VERBATIM except where the new writing makes something wrong, incomplete or misleading. Do not reword, tighten, re-order or otherwise improve a sentence the new writing did not touch: an untouched passage must come back exactly as it was, word for word.\n\nWHAT TO CHANGE, in this order of preference: (1) ADD a sentence to an existing \u201c### <name>\u201d entry when the new writing shows us something new about that element; (2) ADD a new \u201c### <name>\u201d entry when an element earns one for the first time; (3) REWRITE an existing sentence \u2014 or, if coherence demands it, a whole entry \u2014 ONLY where the new writing has changed what is TRUE: a fact contradicted, a relationship reversed, a meaning shifted. When you do rewrite, rewrite only as far as coherence requires and no further. NEVER drop an entry, a section or a heading.\n\nRefresh \u201c## Overview\u201d only if a genuinely new pattern has emerged, and update \u201c## Questions the story raises\u201d. Refine the \u201c## Suggested Reading List\u201d only if warranted (real published books that fit this story\u2019s goal and themes: classics, seminal and acclaimed works, plus craft, criticism, psychology, mythology or symbolism where they enrich it; never invent titles or authors, and never recommend a book listed under BOOKS THE WRITER HAS ALREADY READ). If no Suggested Reading List exists yet, add one.\n\nKeep the same structure and headings. For every section EXCEPT the Reading List use ONLY the given material and never invent; never mention the author/writer/reader, and refer to story parts as \u201cSection N\u201d. Output the FULL updated document.';
       prompt = (_pf ? (_pf + '\n\n') : '') + (_gc ? (_gc + '\n\n') : '') + (_rb ? (_rb + '\n\n') : '') + 'CURRENT WIKI:\n\n' + prevDoc
         + '\n\nELEMENTS IN THE STORY: ' + (usedNames.join(', ') || '(none)')
         + (unusedNames.length ? ('\nELEMENTS NOT YET IN THE STORY (questions only): ' + unusedNames.join(', ')) : '')
@@ -27902,8 +27977,9 @@ async function runWikiAll(opts){
     const out = incremental
       ? await aiCall(sys, prompt, { feature:'wiki_build', maxTokens: 4096 })
       : await buildWikiChunked(used, unused, npAll, { _pf: _pf, _gc: _gc, _rb: _rb }, body);   // full rebuild: read the whole story in cycles so a long story isn't cut off by the 4096-token output cap
-    state.session.wikiDoc = out; state.session.wikiProseLen = prose.length; state.session.wikiSecLens = _secLenNow; state.session.wikiSig = wikiSig(); scheduleAutosave(500);   // record per-section lengths so the next Update only re-reads what changed
+    state.session.wikiDoc = out; state.session.wikiProseLen = prose.length; state.session.wikiSecLens = _secLenNow; state.session.wikiSecSigs = _secSigNow; state.session.wikiSig = wikiSig(); scheduleAutosave(500);
     try { const qm = out.match(/##\s*Questions[^\n]*\n([\s\S]*?)(?:\n##\s|$)/i); if (qm && typeof captureElementQuestions === 'function'){ const qtext = qm[1].replace(/^\s*[-*]\s+/gm, '').trim(); captureElementQuestions(qtext); state.session.wikiQuestions = qtext; } } catch(e){}
+    try{ wikiMirrorSave(state.session); }catch(e){}   // second home for the wiki — a sync may replace the story doc, but it must never cost the writer a rebuild
     renderWikiDoc(out);
     if (typeof updateWikiBtnState === 'function') updateWikiBtnState();   // up to date now → hide the button until prose/notes change
     flashStatus(incremental ? 'Wiki updated with new writing' : 'Wiki built');
@@ -45310,7 +45386,7 @@ body.eink #expMenu{background:#fff; border-color:#000}
       var row = pr.side === 'E'
         ? document.querySelector('#expERows .xb-row[data-ci="' + pr.id + '"]')   // events (right strip, top)
         : pr.side === 'L'
-        ? document.querySelector('#expLeft .xb-row[data-ci="' + pr.id + '"]')   // concepts (#expLRows) or organizations (#expLORows)
+        ? (document.querySelector('#expLRows .xb-row[data-ci="' + pr.id + '"]') || document.querySelector('#expLORows .xb-row[data-ci="' + pr.id + '"]'))   // concepts + organizations \u2014 both inside #expRight since the accordion consolidation, not #expLeft
         : document.querySelector('#expRRows .xb-row[data-th="' + pr.id + '"]');
       var port = portForRow(row);
       if (port){ suppressRowClick = true; portDragStart(pr.side, pr.id, port, e); if (portDrag) portDrag.moved = true; }
@@ -45366,7 +45442,7 @@ body.eink #expMenu{background:#fff; border-color:#000}
       var direct = el && el.closest ? (el.closest('#expLRows .xb-row') || el.closest('#expLORows .xb-row') || el.closest('#expERows .xb-row') || el.closest('#expRRows .xb-row')) : null;
       if (!direct && el && el.classList && el.classList.contains('xb-port')){
         direct = el.dataset.ci != null
-          ? (document.querySelector('#expLeft .xb-row[data-ci="' + el.dataset.ci + '"]') || document.querySelector('#expERows .xb-row[data-ci="' + el.dataset.ci + '"]'))
+          ? (document.querySelector('#expLRows .xb-row[data-ci="' + el.dataset.ci + '"]') || document.querySelector('#expLORows .xb-row[data-ci="' + el.dataset.ci + '"]') || document.querySelector('#expERows .xb-row[data-ci="' + el.dataset.ci + '"]'))
           : document.querySelector('#expRRows .xb-row[data-th="' + el.dataset.th + '"]');
       }
       if (direct) return direct;
@@ -46833,6 +46909,7 @@ body.eink #expMenu{background:#fff; border-color:#000}
           if (links3 ? links3[j] : conceptLinks(j)[ci3]) members.push(j);
         });
       }
+      members = members.filter(function(j){ return !!document.querySelector('#skySvg g.node[data-node="' + j + '"]'); });   // same rule as above: only elements actually drawn on this map get a map line; sidebar-dwelling ones (events, mental spaces) are drawn as sidebar arcs below
       members.forEach(function(j){
         var pt2 = labelAnchor(j, 'R', sr) || nodeScreen(j); if (!pt2) return;   // all sidebar ports are on the right now → anchor the line to the right edge of the label
         var midx2 = (pt2.x + px2) / 2;
@@ -46845,7 +46922,7 @@ body.eink #expMenu{background:#fff; border-color:#000}
       if (members.length){ var dot2 = document.createElementNS('http://www.w3.org/2000/svg', 'circle'); dot2.setAttribute('cx', px2); dot2.setAttribute('cy', py2); dot2.setAttribute('r', '3'); dot2.setAttribute('fill', col2); web.appendChild(dot2); }
       // arcs to connected SIDEBAR elements: concept↔concept/org, org↔org, and concept/org↔thread
       var sideRows = [];
-      var _rowForCi = function(oi){ return document.querySelector('#expLeft .xb-row[data-ci="' + oi + '"]') || document.querySelector('#expERows .xb-row[data-ci="' + oi + '"]'); };
+      var _rowForCi = function(oi){ return document.querySelector('#expLRows .xb-row[data-ci="' + oi + '"]') || document.querySelector('#expLORows .xb-row[data-ci="' + oi + '"]') || document.querySelector('#expERows .xb-row[data-ci="' + oi + '"]'); };   // all four row-lists moved into #expRight with the accordion; #expLeft is the Story Legend and holds no .xb-row, so the old lookup returned null and concept/group arcs silently stopped drawing
       if (xbSel.side === 'L' || xbSel.side === 'E'){
         var selW2 = state.prompt.words[+xbSel.id];
         ((state.prompt.links) || []).forEach(function(l){
@@ -46894,6 +46971,7 @@ body.eink #expMenu{background:#fff; border-color:#000}
     ((state.prompt.links) || []).forEach(function(l){
       var oj = (l.a === i) ? l.b : ((l.b === i) ? l.a : -1); if (oj < 0) return;
       var ow = state.prompt.words[oj]; if (!ow || !MAP[ow.cat] || (ow.role !== 'being' && ow.role !== 'word') || ow.needsPlace) return;
+      if (!document.querySelector('#skySvg g.node[data-node="' + oj + '"]')) return;   // NOT drawn on this map. Events live in the side panel and off-scale places in the mental-space overlay, yet both keep map coordinates in state.nodes \u2014 drawing to one left a line ending at a dot in empty space (plus an orphan type pill). Anchor on what is RENDERED, never on a category list, which goes stale the next time something moves off the map. The sidebar pass below draws the real line to its row.
       var oc = nodeScreenN(oj); if (!oc) return;
       var toRight = oc.x >= nx;
       var endA = labelAnchor(oj, toRight ? 'L' : 'R', sr) || oc;                 // stop at the connected element's near label edge (don't overlap letters)
@@ -46940,7 +47018,7 @@ body.eink #expMenu{background:#fff; border-color:#000}
     targets.forEach(function(row){
       row.classList.add('on');
       var port = window.__expPortForRow ? window.__expPortForRow(row) : null; if (!port || !port.offsetParent) return;
-      var side = (row.closest && row.closest('#expLeft')) ? 'L' : 'R';   // left-strip rows leave the node's left edge; right-strip (threads + events) leave the right
+      var side = 'R';   // every sidebar row-list lives in #expRight now, so all of these leave the node's right edge (this tested row.closest('#expLeft'), unreachable since the accordion consolidation)
       var a = labelAnchor(i, side, sr) || { x: nx, y: ny };
       var pr = port.getBoundingClientRect();
       var px = pr.left + pr.width / 2 - sr.left, py = pr.top + pr.height / 2 - sr.top;
@@ -47120,8 +47198,15 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.375';
+  var APP_VERSION = '2026.07.20.376';
   var APP_CHANGELOG = [
+    { v:'2026.07.20.376', date:'August 8, 2026', notes:[
+      'Fixed connections on the map that led nowhere. When events moved into the side panel they stopped being drawn on the map \u2014 but the web still drew a line to where each one used to sit, so a linked event gave you two lines: the real one to its row, and a phantom one ending at a dot in empty space with a stray type pill attached. Off-scale places had the same problem. The web now draws only to elements that are actually on the map, and everything else gets its line to its sidebar row, where it belongs.',
+      'Concept and group connections are back. Selecting a concept or a group in the side panel drew nothing at all \u2014 it was still looking for those rows on the left, where they lived before the panels were combined. Their links to other concepts, to groups and to each other now light up again, and you can once more drag from a concept or group row to make a connection.',
+      'One button for the wiki: \u2726 Update Wiki, as a pill beside Export rather than a menu. Regenerate is gone as a choice \u2014 it ran the same thing with a bigger hammer, and Dystoria already rebuilds from scratch by itself whenever an update genuinely cannot do the job. One less decision to make about your own wiki.',
+      'And Update Wiki is now properly additive. It keeps what your wiki already says word for word, adds what your new writing has revealed, and rewrites an entry only where the story has actually changed what is true \u2014 a fact contradicted, a relationship reversed, a meaning shifted. It also notices a revision that replaced words without changing the length, which it used to read straight past.',
+      'Your wiki should stop disappearing. A sync that arrived without one could quietly replace the copy on your device \u2014 and then save that emptiness back \u2014 leaving a full rebuild as the only way to get it back. A sync can now change a story, but it can never delete a wiki that exists, and every wiki is kept in a second place besides the story itself, so the Wiki tab refills from that if the story\u2019s own copy ever goes missing.'
+    ]},
     { v:'2026.07.20.375', date:'August 8, 2026', notes:[
       'Artifacts now have a Transportation family. Twenty-two conveyances across land, water, air and beyond \u2014 cart, carriage, wagon, chariot, sled, skis, bicycle, automobile, train, palanquin, boat, ship, raft, canoe, submarine, hot-air balloon, airship, aircraft, starship and escape pod \u2014 each drawn by hand in the same woodcut style as the rest of the artifact set. The vehicle is the artifact; the animal that draws it is still a character you link to, and the road it travels is still a place. Saddle moved across from Tools & Gear and brought a Harness with it.'
     ]},
@@ -49533,6 +49618,18 @@ body.pad-open #npElements{ display:flex !important; }
 .hm-star:hover, .hm-dots:hover{ color:#fa9a31; }
 /* Export pill (replaces the ⋯ for export-only menus in Review & Wiki) — matches the Refine Notes/Style buttons */
 .hm-exportpill{ font-family:var(--sans) !important; font-size:10px !important; font-weight:700 !important; letter-spacing:.1em !important; text-transform:uppercase !important; color:#2b2926 !important; background:rgba(251,250,248,.94) !important; border:1px solid var(--line,#d8d2c4) !important; border-radius:999px !important; padding:4px 13px !important; line-height:1.3 !important; cursor:pointer; white-space:nowrap; display:inline-flex; align-items:center; gap:5px; box-shadow:none !important; min-height:0 !important; }
+/* .hm-aipill — an AI action rendered as a sub-bar pill (✦ + label), the twin of .hm-exportpill so the two
+   sit as a matched pair rather than one pill and one loose glyph. Same parchment palette on purpose: the
+   gold ✦ carries the "this is AI" signal, so the pill itself does not need to shout. */
+.hm-aipill{ font-family:var(--sans) !important; font-size:10px !important; font-weight:700 !important; letter-spacing:.1em !important; text-transform:uppercase !important; color:#2b2926 !important; background:rgba(251,250,248,.94) !important; border:1px solid var(--line,#d8d2c4) !important; border-radius:999px !important; padding:4px 13px !important; line-height:1.3 !important; cursor:pointer; white-space:nowrap; display:inline-flex; align-items:center; gap:6px; box-shadow:none !important; min-height:0 !important; }
+.hm-aipill .ai-star{ color:var(--gold,#c8791f); font-size:1.05em; line-height:1; }
+.hm-aipill:hover{ color:#000 !important; border-color:var(--gold,#c8791f) !important; background:#fff !important; opacity:1; }
+.hm-aipill.wk-uptodate{ opacity:.55; }   /* nothing new to fold in — still available, just quieter */
+.hm-aipill.wk-uptodate:hover{ opacity:1; }
+body.ember:not(.eink) .hm-aipill{ color:#5b4a2c !important; background:rgba(255,255,255,.55) !important; border-color:rgba(138,99,32,.36) !important; }
+body.ember:not(.eink) .hm-aipill:hover{ color:#241405 !important; border-color:#c8791f !important; background:#fff !important; }
+body.eink .hm-aipill{ background:#fff !important; border:1px solid #000 !important; color:#000 !important; }
+body.eink .hm-aipill .ai-star{ color:#000; }
 .hm-exportpill:hover{ color:#000 !important; border-color:var(--gold,#c8791f) !important; background:#fff !important; }
 .hm-exportpill .hm-caret{ font-size:.82em; opacity:.72; }
 body.ember:not(.eink) .hm-exportpill{ color:#5b4a2c !important; background:rgba(255,255,255,.55) !important; border-color:rgba(138,99,32,.36) !important; }
@@ -55012,16 +55109,15 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     if(wk && !wk.querySelector('.hm-exportpill')){
       var upd=document.getElementById('wikiUpdate'), exp=document.getElementById('wikiExport');
       if(upd && exp){
-        upd.classList.add('hm-hidden'); exp.classList.add('hm-hidden');
-        wk.appendChild(wrap(star(), mkMenu([
-          ['Update Wiki', function(){ trigger('wikiUpdate'); }],
-          ['Regenerate wiki', async function(){
-            if (typeof runWikiAll !== 'function') return;
-            var ok = true;
-            if (typeof siteConfirm === 'function'){ try{ ok = await siteConfirm('Rebuild the whole wiki from scratch? This reads your current story and notes and restructures the wiki from the ground up, instead of updating the existing one — best when the story has changed a lot. Your writing isn’t touched.', 'Regenerate', { cancelText:'Cancel' }); }catch(e){ ok = true; } }
-            if (ok){ try{ markGuideDone('wiki', document.querySelector('.wk-guide')); }catch(e){} runWikiAll({ rebuild:true }); }
-          }]
-        ])));
+        // ONE action, as a pill: ✦ Update Wiki. There is no longer a "Regenerate wiki" menu item — it called the
+        // SAME function with {rebuild:true}, and runWikiAll already falls back to a from-scratch rebuild on its own
+        // whenever an update can't do the job (no wiki yet, the wiki is missing >25% of the elements, the doc is
+        // over 12k chars, or more than 18k chars of prose changed). Keeping it as a choice asked the writer to
+        // second-guess a decision the code already makes correctly, and invited a needless full regeneration.
+        // The real button is reused rather than re-created, so the ✦ the AI-access sweep keys on stays put.
+        exp.classList.add('hm-hidden');
+        upd.classList.remove('hm-hidden'); upd.classList.add('hm-aipill');
+        wk.appendChild(upd);
         wk.appendChild(wrap(exportPill(), mkMenu([['Export as Markdown (.md)', function(){ trigger('wikiExport'); }]])));
       }
     }
@@ -57987,7 +58083,8 @@ body.ai-capped .pt-grouphd.ai-grouphd-empty{ display:none !important; }
     '.dossier-writeabout',                  // ✦ Explore, from an element or thread card
     '#qaBtn',                               // the toolbar's ✦ explore
     '#ecSurprise',                          // ✦ Surprise Me
-    '#helpAskBtn', '#helpAsk'               // in-app Ask
+    '#helpAskBtn', '#helpAsk',              // in-app Ask
+    '#wikiUpdate'                           // ✦ Update Wiki — the Wiki tab's only action; as a deep-tier control it vanished when signed out, leaving the tab with an Export button and no way in. Entry tier keeps it visible and lets the click explain itself.
   ];
 
   /* AI controls with no ✦ of their own. The Patterns picker builds its cards from
