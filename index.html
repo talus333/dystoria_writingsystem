@@ -47875,8 +47875,14 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.387';
+  var APP_VERSION = '2026.07.20.388';
   var APP_CHANGELOG = [
+    { v:'2026.07.20.388', date:'August 8, 2026', notes:[
+      'Sentence tinting on the Living Page. As you finish each sentence it takes on a colour for a moment and then lets go — the hue from how pleasant its words are, the strength from how charged they are, and a faint glow when the line is doing something no stock phrase could. Then it fades and leaves nothing behind. It is off until you turn it on, from the ＋ menu while you write, and it stays off if your system is set to reduce motion.',
+      'It only ever marks the good. Dystoria can already find ready-made phrasing by position, so a version of this that dimmed or reddened a stale line was one line of code away — and it is deliberately not there. A correction delivered while you are mid-paragraph is a scold, and the writing page is the one place in the app where you are meant to be unguarded. Nothing ever appears to tell you a sentence is bad.',
+      'And it never touches your prose. Every mark is drawn over the text rather than into it, the same way the page already dims the lines around you, so your document, your saves and every export are identical with it on or off.',
+      'Fixed: clicking a word in Revise could show “Open card” for words that are not elements at all. The bar was keeping buttons from whatever you had selected before; each one is now set from what is actually true of the word you clicked.'
+    ]},
     { v:'2026.07.20.387', date:'August 8, 2026', notes:[
       'Fixed: opening the Patterns drawer could highlight your prose before you had chosen a lens. The word datasets refresh the drawer when they finish loading, and the refresh was rendering whichever lens was last active even while the panel was still showing the list — so the Hemingway marks appeared over your page uninvited. Nothing paints now until you pick a lens, and it all clears again when you go back to the list.'
     ]},
@@ -60999,10 +61005,26 @@ body.ai-signedout .pt-rh-hint, body.ai-capped .pt-rh-hint, body.ai-off .pt-rh-hi
         WB._caret = sel ? null : caretWord();
         if (b) b.style.display = (sel || WB._caret) ? '' : 'none';
         if (WB._caret && bar){
-          // the bar hides its Refract button for a collapsed caret; with a word under the
-          // caret there IS something to refract, so it comes back — nothing is selected,
-          // and the range is built from the caret's own word when the button is pressed
-          var rf = bar.querySelector('[data-sg="rephrase"]'); if (rf) rf.style.display = '';
+          /* onEditSelect RETURNS before it configures the bar when the caret is not at a
+             word gap — which is exactly the case this path re-enabled — so every button
+             kept whatever it was showing for the last selection. "Open card" stayed lit
+             for words that are not elements at all. Nothing here inherits: each button is
+             set from what is actually true of the word under the caret.
+
+             Refract comes back because there IS something to refract; Replace, Delete and
+             Note need a real selection and there isn't one; Insert is already off in
+             direct edit. Open card is asked the same question the selection branch asks. */
+          var show = function(k, on, label){
+            var el = bar.querySelector('[data-sg="' + k + '"]');
+            if (!el) return; el.style.display = on ? '' : 'none';
+            if (on && label) el.textContent = label;
+          };
+          var hit = null;
+          try{ hit = (typeof elLinkMatch === 'function') ? elLinkMatch(WB._caret.word) : null; }catch(e2){}
+          show('elcard', !!hit, hit ? ('Open ' + (hit.label.length > 22 ? hit.label.slice(0, 21) + '…' : hit.label)) : '');
+          show('rephrase', true);
+          show('word', true);
+          show('replace', false); show('delete', false); show('note', false); show('insert', false);
           bar.classList.add('show');
           placeOverCaretWord(bar);
         }
@@ -62107,6 +62129,266 @@ body.ember:not(.eink) #scCard .sc-btn.sc-go, body.lp-live #scCard .sc-btn.sc-go{
     card.appendChild(b);
   }
   setInterval(mountFp, 900);
+})();
+</script>
+
+<script id="dyst-lptint-js">
+/* ============================================================================
+   Dystoria — Living Page sentence tinting (#23).
+
+   When you finish a sentence it takes on a colour for a moment and then lets go:
+   HUE from how pleasant its words are, SATURATION from how activating they are,
+   and a faint GLOW when the line is distinctly yours. Then it fades back to the
+   page and leaves nothing behind.
+
+   Three things it is careful about, and they are the whole design:
+
+   • IT MARKS ONLY THE GOOD. `_fpStockMatcher()` can find ready-made phrasing by
+     offset, so a version of this that dimmed or reddened a stale line was one
+     line of code away. It is not here on purpose: a correction delivered while
+     someone is mid-paragraph is a scold, and the Living Page is the one surface
+     in the app where a writer is supposed to be unguarded. The glow appears when
+     a sentence carries no stock phrasing AND reaches for an unusual word. Nothing
+     ever appears to say a sentence is bad.
+   • IT NEVER TOUCHES THE PROSE. Every mark is a CSS Custom Highlight over a Range
+     — the same instrument as the shipped Living Page dimming — so the document,
+     the autosave and every export are byte-identical with it on or off.
+   • IT IS TRANSIENT, AND OFF BY DEFAULT. Three decay steps over ~2.4 seconds and
+     it is gone. Under `prefers-reduced-motion` it does not run at all, and the
+     toggle says why rather than quietly doing nothing.
+
+   The reading is deterministic: Warriner, Kuperman & Brysbaert (2013) valence and
+   arousal norms for 13,812 words, `data/affect-en.txt`, 115KB. No AI, no account.
+   ========================================================================== */
+(function(){
+  'use strict';
+  var LS = 'dystoria.lptint';
+  /* Cold slate through parchment to warm amber. The first build ramped through the
+     greens on its way from blue to gold, which reads as sickly on prose rather than
+     as a mood — and at 9% saturation on 82% lightness the whole scale was invisible
+     against the page's own warm grey. Hues stay in ink territory, and saturation is
+     scaled DOWN toward the middle of the ramp so a neutral sentence looks like
+     ordinary text rather than like a decision. */
+  var HUES = [212, 206, 198, 44, 38, 32, 26];          // cold → warm, by valence
+  var HMUL = [1, 0.82, 0.5, 0.22, 0.5, 0.82, 1];       // the middle of the ramp is meant to be quiet
+  var SATS = [22, 46, 70];                             // flat → charged, by arousal
+  var LIGHT = 74;
+  var DECAY = [1, 0.55, 0.24];                         // the three steps back to the page
+  var LPT = window.LPTINT = window.LPTINT || {};
+  var state = { last:-1, timers:[], names:[] };
+
+  function reduced(){ try{ return window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches; }catch(e){ return false; } }
+  LPT.enabled = function(){ try{ return localStorage.getItem(LS) === '1'; }catch(e){ return false; } };
+  LPT.setEnabled = function(v){ try{ localStorage.setItem(LS, v ? '1' : '0'); }catch(e){} if(!v) clearAll(); };
+  LPT.available = function(){ return !!(window.CSS && CSS.highlights && window.Highlight && window.Range) && !reduced(); };
+
+  /* ---- the table -------------------------------------------------------- */
+  var pending = null;
+  function load(){
+    var L = window.LEX; if (!L) return Promise.resolve(false);
+    if (L.affect || L._affDead) return Promise.resolve(!!L.affect);
+    if (pending) return pending;
+    pending = fetch('data/affect-en.txt', { cache:'force-cache' })
+      .then(function(r){ if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); })
+      .then(function(t){
+        var m = Object.create(null), n = 0;
+        t.split('\n').forEach(function(line){
+          line = line.trim(); if (!line || line.charAt(0) === '#') return;
+          var i = line.indexOf('='); if (i < 1) return;
+          var kv = line.slice(0, i).split('|'); if (kv.length !== 2) return;
+          var v = +kv[0], a = +kv[1]; if (v !== v || a !== a) return;
+          line.slice(i + 1).split(',').forEach(function(w){ if (w){ m[w] = [v, a]; n++; } });
+        });
+        if (!n) throw new Error('empty');
+        L.affect = m;
+        try{ console.log('[lexicon] affect: ' + n + ' words'); }catch(e){}
+        return true;
+      })
+      .catch(function(e){ L.affect = null; L._affDead = 1; try{ console.warn('[lexicon] affect unavailable:', e && e.message); }catch(_){} return false; })
+      .then(function(ok){ pending = null; return ok; });
+    return pending;
+  }
+  LPT.load = load;
+
+  /* ---- the palette ------------------------------------------------------
+     ::highlight() can only be styled by static rules, so the whole grid is
+     written out once: seven hues, three charges, three decay steps. */
+  function ensureCSS(){
+    if (document.getElementById('lptCSS')) return;
+    var s = document.createElement('style'); s.id = 'lptCSS'; var out = [];
+    for (var h = 0; h < HUES.length; h++){
+      for (var sIdx = 0; sIdx < SATS.length; sIdx++){
+        for (var d = 0; d < DECAY.length; d++){
+          var sat = Math.round(SATS[sIdx] * HMUL[h] * DECAY[d]);
+          out.push('::highlight(lpt-' + h + '-' + sIdx + '-' + d + '){color:hsl(' + HUES[h] + ',' + sat + '%,' + LIGHT + '%)}');
+        }
+      }
+    }
+    // The glow is its own overlapping highlight, so it composes with whatever tint
+    // the sentence already has instead of needing a colour of its own.
+    out.push('::highlight(lpt-glow){text-shadow:0 0 7px rgba(224,164,74,.5)}');
+    out.push('::highlight(lpt-glow-1){text-shadow:0 0 5px rgba(224,164,74,.28)}');
+    out.push('::highlight(lpt-glow-2){text-shadow:0 0 4px rgba(224,164,74,.12)}');
+    s.textContent = out.join('');
+    document.head.appendChild(s);
+  }
+
+  /* ---- reading one sentence --------------------------------------------- */
+  var STOPA = {};
+  ('the and for with that this into from your you are was were will would they them their have has had not but she his her him its our who what when where which while then than there here been being over upon onto about after before could should down each other some such only also just like more most much many a an of to in it is on at as by or if so we he i my me do did does done all one two very really quite')
+    .split(' ').forEach(function(w){ STOPA[w] = 1; });
+
+  function read(text){
+    var A = null; try{ A = window.LEX && LEX.affect; }catch(e){}
+    if (!A) return null;
+    var toks = (String(text).toLowerCase().match(/[a-z'’]{2,}/g) || []).map(function(t){ return t.replace(/[^a-z]/g, ''); });
+    /* Weighted by CHARGE, not averaged flat. A plain mean read "he was murdered in
+       the dark and the whole street heard him scream" as 4.8 — dead neutral — because
+       eight ordinary words diluted the one that matters. A sentence carrying `murder`
+       does not feel neutral to a reader, so each word pulls in proportion to how far
+       from neutral it already is, and the furniture stops outvoting the meaning. */
+    var vw = 0, aw = 0, vwt = 0, awt = 0, n = 0, unusual = false;
+    toks.forEach(function(b){
+      if (b.length < 3 || STOPA[b]) return;
+      var r = A[b] || (/s$/.test(b) && !/ss$/.test(b) ? A[b.slice(0, -1)] : null);
+      if (r){
+        var wv = 0.35 + Math.abs(r[0] - 5.2);          // the floor keeps neutral words present, not silent
+        var wa = 0.35 + Math.abs(r[1] - 4.2);
+        vw += (r[0] - 5.2) * wv; vwt += wv;
+        aw += (r[1] - 4.2) * wa; awt += wa;
+        n++;
+      }
+      if (!unusual){
+        try{ var t = window.WORDBOOK && WORDBOOK.tierOf(b); if (t && t.key !== 'standard') unusual = true; }catch(e){}
+      }
+    });
+    if (!n) return null;
+    var v = 5.2 + (vwt ? vw / vwt : 0), a = 4.2 + (awt ? aw / awt : 0);
+    // 2→8 across the hue ramp and 3→7 across the charge, which is where ordinary
+    // prose actually sits: almost nothing averages below 3 or above 7.
+    var h = Math.max(0, Math.min(HUES.length - 1, Math.round((v - 2) / 6 * (HUES.length - 1))));
+    var s = Math.max(0, Math.min(SATS.length - 1, Math.round((a - 3) / 4 * (SATS.length - 1))));
+    return { h:h, s:s, v:v, a:a, n:n, unusual:unusual };
+  }
+
+  /* A sentence glows when it is doing something a stock phrase cannot: no
+     ready-made phrasing anywhere in it, and at least one word a reader does not
+     meet every day. Both halves are required — an unusual word inside a worn
+     frame is not the writer reaching, it is the frame wearing a hat. */
+  function isOwn(text, r){
+    if (!r || !r.unusual) return false;
+    try{
+      var re = (typeof _fpStockMatcher === 'function') ? _fpStockMatcher() : null;
+      if (re){ re.lastIndex = 0; if (re.test(text)) return false; }
+    }catch(e){}
+    return true;
+  }
+
+  /* ---- painting --------------------------------------------------------- */
+  function clearAll(){
+    state.timers.forEach(function(t){ clearTimeout(t); }); state.timers = [];
+    try{ state.names.forEach(function(nm){ CSS.highlights.delete(nm); }); }catch(e){}
+    state.names = [];
+  }
+  function put(name, range){
+    try{ var hl = new Highlight(range); CSS.highlights.set(name, hl); if (state.names.indexOf(name) < 0) state.names.push(name); }catch(e){}
+  }
+  function drop(name){ try{ CSS.highlights.delete(name); }catch(e){} }
+
+  function tint(range, r, glow){
+    ensureCSS();
+    clearAll();
+    var step = 0;
+    var paint = function(){
+      for (var d = 0; d < DECAY.length; d++) drop('lpt-' + r.h + '-' + r.s + '-' + d);
+      drop('lpt-glow'); drop('lpt-glow-1'); drop('lpt-glow-2');
+      if (step >= DECAY.length) return;
+      put('lpt-' + r.h + '-' + r.s + '-' + step, range.cloneRange());
+      if (glow) put(step === 0 ? 'lpt-glow' : ('lpt-glow-' + step), range.cloneRange());
+      step++;
+      state.timers.push(setTimeout(paint, 800));
+    };
+    paint();
+  }
+
+  /* ---- the settle detector ----------------------------------------------
+     The sentence that settled is the one the caret just LEFT. lpAllSentences is
+     the Living Page's own tokenizer, complete with its node-offset mapper, so
+     the ranges here land exactly where the dimming's do. */
+  function tick(){
+    try{
+      if (!LPT.enabled() || !LPT.available()) return;
+      if (!window.LP || !LP.on) { if (state.names.length) clearAll(); return; }
+      var ed = document.getElementById('editor'); if (!ed) return;
+      if (typeof lpAllSentences !== 'function' || typeof lpCaretGlobal !== 'function') return;
+      var info = lpAllSentences(ed); if (!info.bounds.length) return;
+      var cg = lpCaretGlobal(info); if (cg < 0) return;
+      var ai = -1, i;
+      for (i = 0; i < info.bounds.length; i++){ if (cg >= info.bounds[i][0] && cg < info.bounds[i][1]){ ai = i; break; } }
+      if (ai < 0) ai = info.bounds.length - 1;
+      if (state.last < 0){ state.last = ai; return; }           // first sighting is not a settle
+      if (ai === state.last) return;
+      var left = state.last; state.last = ai;
+      if (left < 0 || left >= info.bounds.length) return;
+      if (left > ai) return;                                     // moved backwards to edit — nothing settled
+      var b = info.bounds[left];
+      var txt = ''; try{
+        var sl = info.loc(b[0]), el = info.loc(b[1]);
+        var rr = document.createRange(); rr.setStart(sl.node, sl.offset); rr.setEnd(el.node, el.offset);
+        txt = rr.toString();
+        if (!txt.trim() || txt.trim().length < 12) return;        // too short to have a mood
+        var r = read(txt); if (!r || r.n < 2) return;
+        tint(rr, r, isOwn(txt, r));
+      }catch(e){}
+    }catch(e){}
+  }
+  setInterval(tick, 220);
+
+  /* Warm the table when a writing session starts, and clear on the way out. */
+  try{
+    var wrapFn = function(name, after){
+      var orig = window[name]; if (typeof orig !== 'function' || orig.__lptWrapped) return;
+      var next = function(){ var r = orig.apply(this, arguments); try{ after(); }catch(e){} return r; };
+      next.__lptWrapped = true; window[name] = next;
+    };
+    wrapFn('lpStart', function(){ state.last = -1; if (LPT.enabled() && LPT.available()) load(); });
+    wrapFn('lpStop', function(){ clearAll(); state.last = -1; });
+  }catch(e){}
+
+  /* ---- the toggle, in the in-session ＋ menu ----------------------------- */
+  function mount(){
+    var fam = document.getElementById('fsAddMenu');
+    if (!fam || !fam.classList.contains('show')) return;
+    if (fam.querySelector('[data-lpt]')) return;
+    var b = document.createElement('button'); b.type = 'button'; b.setAttribute('data-lpt', '1');
+    var ic = document.createElement('span'); ic.className = 'fsam-ic';
+    var l = document.createElement('span');
+    var paint = function(){
+      var on = LPT.enabled(), ok = LPT.available();
+      ic.textContent = ok ? (on ? '◉' : '◌') : '◌';
+      l.textContent = ok ? ('Sentence tint' + (on ? ' · on' : '')) : 'Sentence tint · off (reduced motion)';
+      b.title = ok
+        ? 'As you finish each sentence it takes a colour for a moment — warmer and stronger for the more charged lines — then fades. Never marks anything as wrong, and never changes your text.'
+        : 'Your system is set to reduce motion, so this stays off.';
+    };
+    b.appendChild(ic); b.appendChild(l); paint();
+    b.addEventListener('click', function(e){
+      e.stopPropagation();
+      if (!LPT.available()) return;
+      var on = !LPT.enabled();
+      LPT.setEnabled(on);
+      if (on) load();
+      paint();
+      try{ if (typeof track === 'function') track('lp_tint_toggled', { on:on }); }catch(e2){}
+      try{ if (typeof flashStatus === 'function') flashStatus(on ? 'Sentence tint on' : 'Sentence tint off'); }catch(e2){}
+      try{ fam.classList.remove('show'); fam.hidden = true; document.body.classList.remove('fsadd-open'); }catch(e2){}
+    });
+    fam.appendChild(b);
+  }
+  setInterval(mount, 700);
+
+  LPT.read = read;             // for verification
+  LPT.ensureCSS = ensureCSS;   // the palette is injected lazily by tint(); tests paint directly
 })();
 </script>
 
