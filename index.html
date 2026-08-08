@@ -27271,6 +27271,7 @@ function confirmNotesImport(){
         state.autoPlace = _prevAP;
         if (typeof goMode === 'function') goMode('notepad');
         requestAnimationFrame(function(){ try { if (typeof fitViewToNodes === 'function') fitViewToNodes(); } catch(e){} });
+        try { if (typeof window.__frProfileOffer === 'function') window.__frProfileOffer(); } catch(e){}   // #10b — offer to keep what they said about themselves
       } else {
         var _mm = { map:'notepad', write:'write', refine:'edit', read:'read', wiki:'wiki' };
         if (typeof goMode === 'function') goMode(_mm[_qaEntryMode] || 'notepad');
@@ -31039,6 +31040,7 @@ function sgMeta(span, grp){
 function sgSpanText(cls, text, grp){ const s = document.createElement('span'); s.className = cls; sgMeta(s, grp); s.textContent = text; return s; }
 function sgWrap(range, cls, grp){ const s = document.createElement('span'); s.className = cls; sgMeta(s, grp); s.appendChild(range.extractContents()); range.insertNode(s); return s; }
 let _edClick = { x: 0, y: 0 };
+let _edDown = null;                                                    // where the mouse went down, so a drag-select is never mistaken for a tap
 function onEditSelect(){
   const sb = $('sgBar'), body = $('editBody'); if (!sb || !body) return;
   closeColorPanel();   // a fresh selection starts with the colour popover closed
@@ -31080,8 +31082,14 @@ function onEditSelect(){
 // Phone Suggest mode: a single tap selects the whole tapped word and shows the suggestion bar — no long-press needed.
 // The browser's native selection handles stay in place, so you can drag them to stretch the highlight. Tapping a gap/punctuation leaves the caret (so Insert still works).
 function edTapSelectWord(ev){
-  if (!_phone500() || editDirectOn()) return;                         // phones only; in direct-edit a tap should place the caret to type
+  if (editDirectOn()) return;                                         // direct-edit: a click places the caret to type (double-click still selects a word natively)
   if (!$('editMode').classList.contains('show')) return;
+  var _dt = !_phone500();                                             // desktop is stricter than the phone — see below
+  if (_dt){
+    if (ev.detail && ev.detail > 1) return;                           // double/triple click: the browser's own word/paragraph selection is better
+    var _d = _edDown;                                                 // a drag that happens to end on a word is a selection, not a tap
+    if (_d && (Math.abs((ev.clientX||0) - _d.x) > 3 || Math.abs((ev.clientY||0) - _d.y) > 3)) return;
+  }
   if (ev.target && ev.target.closest && ev.target.closest('.sg-ins,.sg-del,.nt,img,a,button,select')) return;   // let existing handlers act
   const x = ev.clientX, y = ev.clientY; if (x == null || y == null) return;
   let range = null;
@@ -31096,6 +31104,10 @@ function edTapSelectWord(ev){
   while (a > 0 && isW(text[a - 1])) a--;
   while (b < text.length && isW(text[b])) b++;
   if (b <= a) return;                                                  // tapped whitespace/punctuation → leave the caret (Insert flow stays)
+  // On a desktop, only a click INSIDE the word counts: a word character on BOTH sides of the
+  // caret. At the end of a word, in the gap between two, or on an empty line, the caret is
+  // left exactly where the click put it — so Insert and ordinary caret placement still work.
+  if (_dt && !(isW(text[i - 1]) && isW(text[i]))) return;
   const sel = window.getSelection(); if (!sel) return;
   const r = document.createRange(); r.setStart(node, a); r.setEnd(node, b);
   sel.removeAllRanges(); sel.addRange(r);
@@ -37012,6 +37024,7 @@ function init(){
   });
   $('editTop').addEventListener('click', () => { $('editScroll').scrollTo({ top: 0, behavior: 'smooth' }); });
   $('editScroll').addEventListener('scroll', () => { updateEditTop(); $('sgBar').classList.remove('show'); closeSgPop(); edHideImgSize(); scheduleRememberAnchor($('editScroll')); });
+  $('editBody').addEventListener('mousedown', ev => { _edDown = { x: ev.clientX, y: ev.clientY }; });
   $('editBody').addEventListener('mouseup', ev => { _edClick = { x: ev.clientX, y: ev.clientY }; setTimeout(onEditSelect, 0); });
   $('editBody').addEventListener('keyup', () => { const s = window.getSelection(); if (s && !s.isCollapsed) onEditSelect(); else $('sgBar').classList.remove('show'); });
   $('editBody').addEventListener('input', () => { markGuideDone('refine'); clearTimeout(_edCommitT); _edCommitT = setTimeout(commitEdit, 800); });
@@ -43020,7 +43033,8 @@ function beingRenderOpts(nd){ if(!nd) return null;
         // Wait until the landing / welcome page is dismissed before starting the tour — otherwise the full-screen
         // landing iframe (z-index 9000) sits behind the spotlight and the mode-bar highlights reveal IT, not the app.
         var _tries=0;
-        var _tryStart=function(){ if(document.getElementById('landingFrame')){ if(_tries++ < 600){ setTimeout(_tryStart, 500); } return; } startOverview(); };
+        var _WAIT_FOR = ['landingFrame','firstRunDoors','planningDoors','planWizard','apCard'];   // #10 — never start the tour over another first-run surface
+        var _tryStart=function(){ if(_WAIT_FOR.some(function(id){ var e=document.getElementById(id); return e && (id!=='apCard' || e.classList.contains('show')); })){ if(_tries++ < 600){ setTimeout(_tryStart, 500); } return; } startOverview(); };
         setTimeout(_tryStart, 1100);
       } else { onbDone(); }   // no tour for this visitor (guest / off / already seen) → release the held cookie/privacy notice
     }
@@ -46159,6 +46173,9 @@ body.eink #expMenu{background:#fff; border-color:#000}
     }
     // ---- Story Q&A: planning as a conversation (button lives left of the ⋯ menu) ----
     var qaLog = [];   // {role:'q'|'a', text}
+    // Read-only accessor for the transcript. The first-run profile pass (#10b) needs what the
+    // AUTHOR said about themselves, and the log is otherwise sealed inside this closure.
+    try{ window.__qaTranscript = function(){ return qaLog.slice(); }; }catch(e){}
     var qaFocus = null;   // wordKey of the element the Q&A is currently about (null = whole story) — switchable mid-session
     var qaSet = null;   // Explore mode: {label, raw:[els], detail:[exploreDetail]} when exploring a plot card's linked elements (overrides qaFocus)
     var qaProvisional = [];   // {name,cat} discovered from answers \u2014 provisional context, finalised at End & organize
@@ -47834,8 +47851,16 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.382';
+  var APP_VERSION = '2026.07.20.383';
   var APP_CHANGELOG = [
+    { v:'2026.07.20.383', date:'August 8, 2026', notes:[
+      'The guided planning wizard now suggests where to start. Its Elements step used to offer six add buttons and an empty list — correct, and not much of an invitation if you do not yet know what a “driving concept” is. It now offers three: a character, a place and an idea, each one you can take, roll again, or ignore completely. They follow whatever genre and concepts you set on the step before, so they are suggestions about YOUR story rather than random words, and none of them is applied until you press Add.',
+      'And your planning survives a reload. Goals and narrative layers set in the wizard lived only in memory, so refreshing the page — or closing the tab to look something up — lost the lot. They are now kept, and offered back with a quiet “your planning is where you left it” when you return. Picking it up puts you on the step you were on. It is never forced back open on you.',
+      'Plan mode has a How to plan button. The six ways in — guided, characters first, places first, plot first — were reachable once, on your very first story, and never again. Now they are one click away whenever you are planning, whether you skipped them at the start or want a different approach on book two.',
+      'In Revise, clicking inside a word now selects it and brings up the bar — so looking a word up, or reworking just that word, is one click instead of a careful drag. It is deliberately fussy about where you clicked: only the middle of a word counts. Click at the end of a word, in the gap between two, or on an empty line and the cursor simply lands there, the way it always did, so inserting and ordinary editing are untouched. Dragging a selection and double-clicking still behave exactly as before. In direct Edit mode a click still places the cursor to type; double-click selects the word there.',
+      'And the guided tour no longer opens on top of the doors. On a first run the welcome walkthrough started as soon as the landing page cleared — which could be while you were still choosing where to begin, or halfway through the planning wizard. It now waits until you are through them.',
+      'The Find an Idea conversation now remembers you, if you let it. Its first questions are about you — what draws you to writing, what you read, how you want to sound — and every one of those answers used to be thrown away the moment the interview ended. Now it reads back over what you said and offers it to your profile, where it shapes the questions you are asked and the suggestions you are given in every story from then on. You see exactly what it proposes, you can edit or delete any line of it, nothing already in your profile is overwritten, and nothing is saved unless you say so.'
+    ]},
     { v:'2026.07.20.382', date:'August 8, 2026', notes:[
       'Select a single word anywhere in Revise and a new Word button appears beside Refract. It opens a small card telling you two things about that word. The first is how often a reader actually meets it — standard, unusual, or very unusual — said as a rate rather than a verdict: “about once in every novel-length book”, “about once in every few books”, “rarer than once in a million words”. You can read that, disagree with it, and be right. Neither end is better than the other, and nothing here says a word is wrong.',
       'The second is a definition, and it comes from Webster’s Dictionary of 1913 — 98,000 words, the last great English dictionary written before the language was tidied. It still carries gloaming and fen and thole and susurrus, marked where they are Scots or dialect or obsolete, which is exactly why it is here: the words a modern dictionary has quietly dropped are the ones worth handing back. It understands what you actually selected, too — highlight “labyrinths” or “travelled” or “colour” and it finds the entry and tells you which word it looked up.',
@@ -60911,6 +60936,520 @@ body.ai-signedout .pt-rh-hint, body.ai-capped .pt-rh-hint, body.ai-off .pt-rh-hi
       next.__wbWrapped = true; window.renderAiSug = next;
     }
   }catch(e){}
+})();
+</script>
+
+<style id="dyst-firstrun-css">
+/* First-run polish (#10). Three surfaces, all deliberately quiet: a suggestion row
+   inside the wizard, a resume pill, and a review card for the author profile.
+   Colours go through block-local variables, redefined once for Ember — the lesson
+   from v.382, where a card's children named var(--ink) and vanished on a dark theme. */
+
+/* ---- the wizard's "not sure where to start" row (the wizard is always dark) ---- */
+#planWizard .pw-sugg{margin:18px 0 4px; padding-top:16px; border-top:1px solid rgba(200,170,110,.18)}
+#planWizard .pw-sugg-h{font-family:var(--sans,system-ui,sans-serif); font-size:11px; letter-spacing:.14em;
+  text-transform:uppercase; color:#c8961f; margin:0 0 4px}
+#planWizard .pw-sugg-sub{font-family:var(--sans,system-ui,sans-serif); font-size:12.5px; line-height:1.5;
+  color:rgba(240,232,212,.6); margin:0 0 12px}
+#planWizard .pw-sugg-row{display:grid; grid-template-columns:repeat(3,1fr); gap:10px}
+@media (max-width:620px){ #planWizard .pw-sugg-row{grid-template-columns:1fr} }
+#planWizard .pw-sg{display:flex; flex-direction:column; gap:7px; padding:13px 13px 11px; border-radius:12px;
+  border:1px solid rgba(200,170,110,.2); background:rgba(255,247,230,.04); min-width:0}
+#planWizard .pw-sg-k{font-family:var(--sans,system-ui,sans-serif); font-size:10px; letter-spacing:.14em;
+  text-transform:uppercase; color:rgba(240,232,212,.45)}
+#planWizard .pw-sg-w{font-family:var(--serif,Georgia,serif); font-size:19px; line-height:1.15; color:#f6efdd;
+  overflow:hidden; text-overflow:ellipsis}
+#planWizard .pw-sg-s{font-family:var(--sans,system-ui,sans-serif); font-size:11px; color:rgba(240,232,212,.5); min-height:14px}
+#planWizard .pw-sg-btns{display:flex; gap:7px; margin-top:3px}
+#planWizard .pw-sg-add,#planWizard .pw-sg-roll{font-family:var(--sans,system-ui,sans-serif); font-size:11.5px;
+  border:1px solid rgba(200,170,110,.32); border-radius:20px; padding:5px 12px; color:#f0e8d4;
+  background:rgba(255,247,230,.05); cursor:pointer}
+#planWizard .pw-sg-add{background:linear-gradient(180deg,rgba(200,150,31,.26),rgba(200,150,31,.1)); border-color:rgba(200,150,31,.5)}
+#planWizard .pw-sg-add:hover,#planWizard .pw-sg-roll:hover{border-color:rgba(200,170,110,.62)}
+#planWizard .pw-sg-roll{flex:none; padding:5px 10px}
+#planWizard .pw-sg.done .pw-sg-w{opacity:.45; text-decoration:line-through}
+
+/* ---- the resume pill ---- */
+#pwResume{position:fixed; left:18px; bottom:18px; z-index:140; display:none; align-items:center; gap:10px;
+  font-family:var(--sans,system-ui,sans-serif); font-size:12.5px; color:#f0e8d4; background:rgba(30,25,17,.94);
+  border:1px solid rgba(200,170,110,.34); border-radius:24px; padding:9px 10px 9px 16px;
+  box-shadow:0 10px 28px -8px rgba(0,0,0,.55)}
+#pwResume.show{display:flex}
+#pwResume .pwr-go{font:inherit; color:#f6efdd; background:linear-gradient(180deg,rgba(200,150,31,.3),rgba(200,150,31,.12));
+  border:1px solid rgba(200,150,31,.5); border-radius:20px; padding:5px 13px; cursor:pointer}
+#pwResume .pwr-x{font-size:17px; line-height:1; color:rgba(240,232,212,.5); background:none; border:none; cursor:pointer; padding:2px 6px}
+#pwResume .pwr-x:hover{color:#f6efdd}
+
+/* ---- "How to plan" in the Plan sub-bar ---- */
+#planHowBtn{font-family:var(--sans,system-ui,sans-serif); font-size:11px; letter-spacing:.05em;
+  color:var(--ink-faint); border:1px solid transparent; border-radius:16px; padding:5px 11px; background:none;
+  cursor:pointer; white-space:nowrap}
+#planHowBtn:hover{color:var(--gold); border-color:var(--gold)}
+
+/* ---- the author-profile review card ---- */
+#apCard{--ap-paper:var(--paper); --ap-ink:var(--ink); --ap-soft:var(--ink-soft); --ap-faint:var(--ink-faint); --ap-line:var(--line);
+  position:fixed; inset:0; z-index:9750; display:none; align-items:center; justify-content:center; padding:24px;
+  background:rgba(12,9,6,.6); backdrop-filter:blur(2px)}
+#apCard.show{display:flex}
+body.ember:not(.eink) #apCard{--ap-paper:#241c12; --ap-ink:#e9dcc4; --ap-soft:#c3b394; --ap-faint:#9a8a6f; --ap-line:#4a3a22}
+#apCard .apo-box{width:min(94vw,560px); max-height:86vh; display:flex; flex-direction:column;
+  background:var(--ap-paper); color:var(--ap-ink); border:1px solid var(--ap-line); border-radius:16px;
+  box-shadow:0 30px 70px -18px rgba(0,0,0,.6); overflow:hidden}
+/* Explicit display, and a prefix of its own. The first build used .ap-head, which the app
+   ALREADY defines as a flex row elsewhere — so the kicker, title and blurb laid out side by
+   side and overlapped. A new surface does not get to borrow an existing class prefix. */
+#apCard .apo-head{display:block; padding:20px 22px 0; position:relative}
+#apCard .apo-kick{font:700 10px/1 var(--sans); letter-spacing:.16em; text-transform:uppercase; color:var(--gold); margin-bottom:8px}
+#apCard .apo-h{font-family:var(--serif); font-size:23px; line-height:1.2; color:var(--ap-ink)}
+#apCard .apo-sub{font:400 13px/1.55 var(--sans); color:var(--ap-faint); margin-top:8px}
+#apCard .apo-x{position:absolute; top:14px; right:16px; font-size:21px; line-height:1; color:var(--ap-faint); background:none; border:none; cursor:pointer}
+#apCard .apo-x:hover{color:var(--gold)}
+#apCard .apo-body{overflow:auto; padding:16px 22px 6px; flex:1 1 auto}
+#apCard .apo-f{display:block; padding:11px 0; border-top:1px solid var(--ap-line)}
+#apCard .apo-f:first-child{border-top:none}
+#apCard .apo-fl{font:700 9.5px/1 var(--sans); letter-spacing:.13em; text-transform:uppercase; color:var(--ap-faint); margin-bottom:6px}
+#apCard .apo-ft{width:100%; font-family:var(--serif); font-size:14.5px; line-height:1.5; color:var(--ap-ink);
+  background:transparent; border:1px solid var(--ap-line); border-radius:8px; padding:8px 10px; resize:vertical; min-height:52px}
+#apCard .apo-ft:focus{outline:none; border-color:var(--gold)}
+#apCard .apo-had{font:400 11px/1.4 var(--sans); color:var(--ap-faint); font-style:italic; margin-top:5px}
+#apCard .apo-foot{display:flex; align-items:center; gap:10px; padding:14px 22px 18px; border-top:1px solid var(--ap-line); flex-wrap:wrap}
+#apCard .apo-save{font:600 12px/1 var(--sans); letter-spacing:.04em; color:var(--paper); background:var(--ink);
+  border:1px solid var(--ink); border-radius:20px; padding:9px 18px; cursor:pointer}
+body.ember:not(.eink) #apCard .apo-save{color:#241c12; background:#e0a44a; border-color:#e0a44a}
+#apCard .apo-skip{font:400 12px/1 var(--sans); color:var(--ap-faint); background:none; border:none; cursor:pointer; text-decoration:underline}
+#apCard .apo-skip:hover{color:var(--ap-ink)}
+#apCard .apo-note{font:400 11px/1.5 var(--sans); color:var(--ap-faint); flex:1 1 200px; min-width:160px; font-style:italic}
+#apCard .apo-wait{display:flex; align-items:center; gap:9px; font:400 13px/1.4 var(--sans); color:var(--ap-faint); padding:8px 0 18px}
+</style>
+<script id="dyst-firstrun-js">
+/* ============================================================================
+   Dystoria — first-run polish (#10).
+
+   Four pieces, all on surfaces that already exist. Nothing here rebuilds the
+   wizard or the doors; everything wraps or appends, so their own logic is
+   untouched — the same patch-don't-edit rule the lexicon loader follows.
+
+   (a1) The wizard's Elements step SUGGESTS a starting character, place and idea.
+        Six add buttons and an empty list is a correct UI and a bad invitation:
+        a writer who does not yet know what a "driving concept" is has nothing to
+        push against. The suggestions are deterministic — the same pools and the
+        same genre weighting the map's roll uses — and every one is offered, never
+        applied. No AI: a first-run surface must work signed out.
+   (a2) Wizard progress SURVIVES A RELOAD. The drafts lived in state._goalDraft
+        and state._layerDraft, which is to say in memory, which is to say a writer
+        who refreshed mid-plan lost the lot. Now mirrored to localStorage and
+        offered back through a quiet pill rather than by forcing the overlay open
+        on boot — recovering the work should not also seize the screen.
+   (b)  The Find-an-Idea interview FILLS THE AUTHOR PROFILE. The profile already
+        exists (8 fields, feeding AI context across the app) and was only ever
+        filled by the writer typing into the account card — while the interview's
+        opening phase asks them, in as many words, to talk about themselves. Every
+        one of those answers was thrown away when the interview closed. The pass
+        proposes values and shows them for review: profile data is personal, so it
+        is never written silently, and existing text is never overwritten.
+   (c)  Plan mode can REOPEN the planning doors. showPlanningDoors was exposed on
+        window for exactly this and nothing ever called it, so the six ways to
+        plan were reachable once, on the first story, and never again.
+   (e)  The wizard reports STEP-BY-STEP, not just that it opened — the question
+        worth answering is which step people abandon, and "opened" cannot answer it.
+   ========================================================================== */
+(function(){
+  'use strict';
+  var LS_PW = 'dystoria.planwizard';
+  function T(name, props){ try{ if(typeof track==='function') track(name, props||{}); }catch(e){} }
+  function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+
+  /* ================= (a1) suggestions ==================================== */
+
+  /* One row per slot. "Idea" is a concept rather than a theme because a concept is
+     an element the writer can open, connect and build on; a theme is a frame word. */
+  var SLOTS = [
+    { cat:'being',   kick:'A character', hint:'Someone for the story to happen to.' },
+    { cat:'setting', kick:'A place',     hint:'Somewhere for it to happen.' },
+    { cat:'concept', kick:'An idea',     hint:'Something the story is about.' }
+  ];
+
+  /* A suggestion has to be an IDENTITY word, not a characteristic. The being category
+     carries both — Type, Archetype and Occupation sit in the same subcategory list as
+     Motivation and Mood — so the first build offered "a character: Equality", which is
+     not a character. Beings are restricted to the app's own identity triad; the other
+     categories are denied their trait subs in case those ever move into the list. */
+  var ID_SUBS = { being: { Type:1, Archetype:1, Occupation:1 } };
+  var NOT_ID = { setting:['Condition','Control','Population','Origin','Function','Scale','Atmosphere','Climate','Symbolism','Adjective'],
+                 concept:['Charge','Counter-idea','Expression','Scope','Adjective'] };
+
+  /* Flatten a category's subcategories into the shape pickWeighted expects, keeping
+     a word → subcategory index so the commit knows where the word came from. */
+  function poolFor(catId){
+    var cat=null; try{ cat=(typeof getCat==='function') ? getCat(catId) : null; }catch(e){}
+    if(!cat || !cat.subcategories) return null;
+    var allow=ID_SUBS[catId]||null, deny=Object.create(null);
+    (NOT_ID[catId]||[]).forEach(function(nm){ deny[nm]=1; });
+    var pool=[], subOf=Object.create(null);
+    cat.subcategories.forEach(function(sb){
+      if(!sb || sb.retired) return;
+      if(allow ? !allow[sb.name] : deny[sb.name]) return;
+      (sb.words||[]).forEach(function(it){
+        var w = (typeof it==='string') ? it : (it && it.w);
+        if(!w) return;
+        pool.push(it); if(subOf[w]==null) subOf[w]=sb.name;
+      });
+    });
+    return pool.length ? { pool:pool, subOf:subOf } : null;
+  }
+
+  /* The genres the writer has chosen IN THIS WIZARD — the layer draft, not the
+     committed story, because in the wizard nothing is committed yet. Falls back to
+     the story's own genres if the draft is empty. */
+  function draftGenres(){
+    var out=[];
+    try{
+      var d=(window.state && state._layerDraft) || null;
+      if(d){ (d.genre||[]).forEach(function(x){ if(x && x.word && out.indexOf(x.word)<0) out.push(x.word); });
+        (d.period||[]).forEach(function(x){ var h=(typeof CONTEXT_GENRE_HINTS!=='undefined' && CONTEXT_GENRE_HINTS[x && x.word])||[];
+          h.forEach(function(g){ if(out.indexOf(g)<0) out.push(g); }); }); }
+    }catch(e){}
+    if(!out.length){ try{ if(typeof narrativeGenresFor==='function') out=narrativeGenresFor(state.activeSet||0)||[]; }catch(e){} }
+    return out;
+  }
+  function draftThemes(){
+    var out=[]; try{ var d=(window.state && state._layerDraft)||null;
+      if(d) (d.theme||[]).forEach(function(x){ if(x && x.word) out.push(x.word); }); }catch(e){}
+    return out;
+  }
+
+  var SUGG = {};                                   // cat -> {word, sub}
+  var suggUsed = null;                             // words already offered this session, so a reroll actually rerolls
+  function rollSlot(catId){
+    var p=poolFor(catId); if(!p) return null;
+    if(!suggUsed) suggUsed=new Set();
+    var already=Object.create(null);
+    try{ ((state.prompt&&state.prompt.words)||[]).forEach(function(w){ if(w&&w.word) already[w.word]=1; }); }catch(e){}
+    var w=null;
+    for(var attempt=0; attempt<3 && !w; attempt++){
+      var used=new Set(suggUsed);
+      Object.keys(already).forEach(function(k){ used.add(k); });          // never suggest what they already have
+      try{ w = (typeof pickWeighted==='function') ? pickWeighted(p.pool, draftGenres(), used, draftThemes()) : null; }catch(e){ w=null; }
+      if(w && already[w]) w=null;
+      if(!w && suggUsed.size) suggUsed=new Set();                          // pool exhausted → let it repeat rather than show nothing
+    }
+    if(!w) return null;
+    suggUsed.add(w);
+    return { word:w, sub:p.subOf[w]||'' };
+  }
+
+  /* Commit through the app's own add path so an added suggestion is in every way
+     an ordinary element — icon assignment, autosave, roster, the lot. autoPlace is
+     forced on for the call because the wizard is a full-screen overlay and the
+     click-to-place flow has nowhere to happen; the interview import does the same. */
+  function addSuggestion(catId, pick){
+    if(!pick) return false;
+    var prevCat=null, prevMode=null, prevAuto=null, ok=false;
+    try{
+      if(typeof EC!=='undefined'){ prevCat=EC.cat; prevMode=EC.mode; EC.cat=catId; EC.mode='add'; }
+      prevAuto = state.autoPlace; state.autoPlace = true;
+      if(typeof commitWord==='function'){ commitWord(pick.word, pick.sub, catId); ok=true; }
+    }catch(e){ ok=false; }
+    try{ state.autoPlace = (prevAuto==null?true:prevAuto);
+      if(typeof EC!=='undefined'){ EC.cat=prevCat; EC.mode=prevMode||'add'; } }catch(e){}
+    try{ if(typeof closeElemCard==='function') closeElemCard(); }catch(e){}   // commitWord leaves the add card open by design
+    return ok;
+  }
+
+  function renderSuggestions(){
+    var step=document.querySelector('#planWizard .pw-step[data-step="2"]'); if(!step) return;
+    var box=step.querySelector('.pw-sugg');
+    if(!box){
+      box=document.createElement('div'); box.className='pw-sugg';
+      box.innerHTML='<div class="pw-sugg-h">Not sure where to start?</div>'
+        + '<div class="pw-sugg-sub">Three to push against — take one, roll for another, or ignore them entirely. '
+        + 'They follow whatever genre and concepts you set on the last step.</div>'
+        + '<div class="pw-sugg-row"></div>';
+      step.appendChild(box);
+    }
+    var row=box.querySelector('.pw-sugg-row'); row.innerHTML='';
+    SLOTS.forEach(function(sl){
+      if(!SUGG[sl.cat]) SUGG[sl.cat]=rollSlot(sl.cat);
+      var pick=SUGG[sl.cat];
+      var c=document.createElement('div'); c.className='pw-sg';
+      if(!pick){ c.innerHTML='<div class="pw-sg-k">'+esc(sl.kick)+'</div><div class="pw-sg-s">Nothing to suggest here.</div>'; row.appendChild(c); return; }
+      c.innerHTML='<div class="pw-sg-k">'+esc(sl.kick)+'</div>'
+        + '<div class="pw-sg-w">'+esc(pick.word)+'</div>'
+        + '<div class="pw-sg-s">'+esc(pick.sub||sl.hint)+'</div>'
+        + '<div class="pw-sg-btns"><button type="button" class="pw-sg-add">Add</button>'
+        + '<button type="button" class="pw-sg-roll" title="Suggest another">↻</button></div>';
+      c.querySelector('.pw-sg-roll').addEventListener('click', function(e){ e.stopPropagation();
+        SUGG[sl.cat]=rollSlot(sl.cat); renderSuggestions(); T('plan_suggest_roll', { cat:sl.cat }); });
+      c.querySelector('.pw-sg-add').addEventListener('click', function(e){ e.stopPropagation();
+        var p=SUGG[sl.cat]; if(!p) return;
+        if(addSuggestion(sl.cat, p)){
+          T('plan_suggest_added', { cat:sl.cat, word:p.word });
+          SUGG[sl.cat]=rollSlot(sl.cat);                       // keep the row useful — offer the next one
+          try{ if(typeof pwRenderElements==='function') pwRenderElements(); }catch(e2){}
+          renderSuggestions();
+        }
+      });
+      row.appendChild(c);
+    });
+  }
+
+  /* ================= (a2) persistence ==================================== */
+
+  function storyId(){ try{ return (state.session && state.session.id) || null; }catch(e){ return null; } }
+  function saveDraft(){
+    try{
+      if(!document.getElementById('planWizard')) return;
+      var g=(state._goalDraft||null), l=(state._layerDraft||null);
+      var step=(typeof PW!=='undefined' && PW) ? (PW.step||0) : 0;
+      if(!g && !l && !step) return;
+      localStorage.setItem(LS_PW, JSON.stringify({ story:storyId(), step:step, goals:g, layers:l, at:Date.now() }));
+    }catch(e){}
+  }
+  function readDraft(){
+    try{
+      var d=JSON.parse(localStorage.getItem(LS_PW)||'null');
+      if(!d || d.story!==storyId()) return null;
+      if(!d.at || Date.now()-d.at > 7*24*3600*1000) return null;          // a week-old plan is not a plan
+      var n=(d.goals?d.goals.length:0) + layerCount(d.layers);
+      return (n||d.step) ? d : null;
+    }catch(e){ return null; }
+  }
+  function clearDraft(){ try{ localStorage.removeItem(LS_PW); }catch(e){} hideResume(); }
+  function layerCount(l){ var n=0; try{ if(l) Object.keys(l).forEach(function(k){ n += (l[k]||[]).length; }); }catch(e){} return n; }
+
+  var saveTimer=null;
+  function startSaving(){ stopSaving(); saveTimer=setInterval(saveDraft, 4000); }   // the drafts mutate outside our reach (a goal added from the add card), so poll rather than guess at hooks
+  function stopSaving(){ if(saveTimer){ clearInterval(saveTimer); saveTimer=null; } }
+  try{ window.addEventListener('beforeunload', saveDraft); }catch(e){}
+  try{ document.addEventListener('visibilitychange', function(){ if(document.hidden) saveDraft(); }); }catch(e){}
+
+  /* The pill, not the overlay. A writer who reloaded may have reloaded to get AWAY
+     from the wizard; reopening it full-screen on boot would take the choice back. */
+  function hideResume(){ var p=document.getElementById('pwResume'); if(p) p.classList.remove('show'); }
+  function showResume(){
+    var d=readDraft(); if(!d) return;
+    if(document.getElementById('planWizard')) return;
+    var p=document.getElementById('pwResume');
+    if(!p){
+      p=document.createElement('div'); p.id='pwResume';
+      var n=(d.goals?d.goals.length:0)+layerCount(d.layers);
+      p.innerHTML='<span>Your planning is where you left it'+(n?(' — '+n+' thing'+(n===1?'':'s')+' set'):'')+'.</span>'
+        + '<button type="button" class="pwr-go">Pick it up</button><button type="button" class="pwr-x" title="Dismiss">×</button>';
+      document.body.appendChild(p);
+      p.querySelector('.pwr-go').addEventListener('click', function(){ hideResume();
+        T('plan_wizard_resumed', { step:d.step||0 });
+        try{ if(typeof openPlanWizard==='function') openPlanWizard({ step:d.step||0 }); }catch(e){} });
+      p.querySelector('.pwr-x').addEventListener('click', function(){ hideResume(); T('plan_wizard_resume_dismissed'); });
+    }
+    p.classList.add('show');
+  }
+
+  /* ================= (c) "How to plan" in Plan mode ====================== */
+
+  function mountHowToPlan(){
+    if(document.getElementById('planHowBtn')) return true;
+    var tabs=document.getElementById('planTabs'); if(!tabs || !tabs.parentNode) return false;
+    var b=document.createElement('button'); b.type='button'; b.id='planHowBtn';
+    b.textContent='How to plan';
+    b.title='The six ways in — guided, characters, places, plot';
+    b.addEventListener('click', function(e){ e.stopPropagation();
+      T('planning_doors_reopened');
+      try{ if(typeof window.showPlanningDoors==='function') window.showPlanningDoors(); }catch(e2){} });
+    tabs.parentNode.insertBefore(b, tabs.nextSibling);
+    return true;
+  }
+
+  /* ================= (b) the interview → the author profile ============== */
+
+  /* `label` is what the WRITER reads on the card, so it is second person; `ask` is what the
+     model is told to look for, so it is third. Getting those the same way round put "Their
+     writing voice" in front of the person whose voice it was.
+     Only fields the interview can actually have learned. "aims" is included because
+     the opening phase asks what they want to get better at; the rest of
+     PROFILE_FIELDS (favourite books and so on) is left to the account card, since
+     inventing them from an oblique remark is worse than leaving them blank. */
+  var AP_FIELDS = [
+    { k:'about',      label:'About you',              ask:'who they are and what draws them to writing' },
+    { k:'interests',  label:'Interests & passions',   ask:'subjects, fields or obsessions that fuel their work' },
+    { k:'genres',     label:'Genres & forms they love', ask:'what they most like to read and write' },
+    { k:'influences', label:'Influences & touchstones', ask:'writers, films, art or traditions they named' },
+    { k:'style',      label:'Your writing voice',     ask:'how they write or aspire to — tone, rhythm, sensibility' },
+    { k:'aims',       label:'What you want to grow in', ask:'craft goals they mentioned' }
+  ];
+
+  function transcript(){
+    var log=null;
+    try{ if(typeof window.__qaTranscript==='function') log=window.__qaTranscript(); }catch(e){}
+    if(!log || !log.length){                                    // the interview may already have closed — fall back to its saved draft
+      try{ var d=JSON.parse(localStorage.getItem('dystoria.qaDraft')||'null'); if(d && d.log) log=d.log; }catch(e){}
+    }
+    if(!log || !log.length) return '';
+    return log.filter(function(m){ return m && m.text; })
+      .map(function(m){ return (m.role==='q'?'Interviewer: ':'Author: ')+m.text; }).join('\n');
+  }
+
+  function apClose(){ var c=document.getElementById('apCard'); if(c) c.classList.remove('show'); }
+  function apBox(){
+    var c=document.getElementById('apCard');
+    if(c) return c;
+    c=document.createElement('div'); c.id='apCard';
+    c.innerHTML='<div class="apo-box">'
+      + '<div class="apo-head"><button type="button" class="apo-x" title="Not now">×</button>'
+      +   '<div class="apo-kick">From your conversation</div>'
+      +   '<div class="apo-h">Shall I remember this about you?</div>'
+      +   '<div class="apo-sub">You told me a few things while we were talking. Saved to your profile, they carry into every '
+      +   'story — the questions you get asked, the suggestions you are offered, the tone of it. Edit anything, clear what '
+      +   'you would rather I did not keep, and nothing is saved until you say so.</div></div>'
+      + '<div class="apo-body"></div>'
+      + '<div class="apo-foot"><button type="button" class="apo-save">Save to my profile</button>'
+      +   '<button type="button" class="apo-skip">Not now</button>'
+      +   '<span class="apo-note">This stays on your device.</span></div>';
+    document.body.appendChild(c);
+    c.querySelector('.apo-x').addEventListener('click', function(){ apClose(); T('interview_profile_skipped'); });
+    c.querySelector('.apo-skip').addEventListener('click', function(){ apClose(); T('interview_profile_skipped'); });
+    c.addEventListener('mousedown', function(e){ if(e.target===c){ apClose(); T('interview_profile_skipped'); } });
+    return c;
+  }
+
+  async function offerProfile(){
+    var convo=transcript();
+    if(!convo || convo.length<200) return;                       // too short to have learned anything
+    if(typeof aiAuthed!=='function' || !aiAuthed()) return;       // silently skip — this is a bonus, not a step
+    var existing={}; try{ existing=(typeof loadProfile==='function')?loadProfile():{}; }catch(e){}
+
+    var c=apBox(), body=c.querySelector('.apo-body');
+    body.innerHTML='<div class="apo-wait"><span class="spin"></span> Reading back over what you said…</div>';
+    c.classList.add('show');
+    T('interview_profile_offered');
+
+    var sys='You read a conversation between a writing companion and an author, and extract ONLY what the AUTHOR said about THEMSELVES — '
+      + 'their background, taste, interests, influences, voice and craft aims. You are not summarising the story they are planning; '
+      + 'ignore everything about characters, plot and world. '
+      + 'Return STRICT JSON with these keys, each a string: '
+      + AP_FIELDS.map(function(f){ return '"'+f.k+'" ('+f.ask+')'; }).join(', ') + '. '
+      + 'Write each value in the SECOND PERSON as a note the author would recognise ("You come to writing from..."), 1-2 sentences, plain and specific. '
+      + 'Use ONLY what they actually said or clearly implied — never infer a taste from the genre of the story they are planning, and never invent. '
+      + 'If they said nothing that fits a key, return an EMPTY STRING for it. An empty string is the correct and expected answer for most keys in a short conversation.';
+    var prompt='CONVERSATION:\n\n'+convo.slice(0,12000)+'\n\nReturn the JSON object:';
+
+    var o=null;
+    try{
+      var out=await aiCall(sys, prompt, { maxTokens:600, json:true, feature:'profile_seed' });
+      try{ o=JSON.parse(out); }catch(e){ if(typeof parseJsonLoose==='function'){ try{ o=parseJsonLoose(out); }catch(_){} } }
+    }catch(e){ o=null; }
+    o=o||{};
+
+    var rows=AP_FIELDS.filter(function(f){ return String(o[f.k]||'').trim().length>2; });
+    if(!rows.length){ apClose(); T('interview_profile_empty'); return; }
+
+    body.innerHTML='';
+    rows.forEach(function(f){
+      var d=document.createElement('div'); d.className='apo-f';
+      var had=String(existing[f.k]||'').trim();
+      d.innerHTML='<div class="apo-fl">'+esc(f.label)+'</div>'
+        + '<textarea class="apo-ft" data-k="'+f.k+'" rows="2"></textarea>'
+        + (had ? '<div class="apo-had">You already have something here — this will be added underneath it, not over it.</div>' : '');
+      d.querySelector('.apo-ft').value=String(o[f.k]).trim();
+      body.appendChild(d);
+    });
+
+    var saveBtn=c.querySelector('.apo-save');
+    var handler=function(){
+      var p={}; try{ p=(typeof loadProfile==='function')?loadProfile():{}; }catch(e){}
+      var n=0;
+      Array.prototype.forEach.call(body.querySelectorAll('.apo-ft'), function(ta){
+        var k=ta.getAttribute('data-k'), v=String(ta.value||'').trim();
+        if(!v) return;
+        var had=String(p[k]||'').trim();
+        p[k] = had ? (had + '\n' + v) : v;                       // never overwrite what the writer wrote themselves
+        n++;
+      });
+      try{ if(typeof saveProfile==='function') saveProfile(p); }catch(e){}
+      apClose();
+      T('interview_profile_saved', { fields:n });
+      try{ if(typeof flashStatus==='function') flashStatus(n?('Saved to your profile — '+n+' note'+(n===1?'':'s')):'Nothing saved'); }catch(e){}
+      saveBtn.removeEventListener('click', handler);
+    };
+    saveBtn.addEventListener('click', handler);
+  }
+  window.__frProfileOffer = function(){ setTimeout(function(){ try{ offerProfile(); }catch(e){} }, 900); };   // let the map settle first
+
+  /* ================= wiring ============================================== */
+
+  function wrap(name, before, after){
+    var orig=window[name]; if(typeof orig!=='function' || orig.__frWrapped) return false;
+    var next=function(){
+      if(before){ try{ before.apply(null, arguments); }catch(e){} }
+      var r=orig.apply(this, arguments);
+      if(after){ try{ after.apply(null, arguments); }catch(e){} }
+      return r;
+    };
+    next.__frWrapped=true; window[name]=next; return true;
+  }
+
+  function install(){
+    var n=0;
+    // the suggestions ride on the step change, so they follow Back/Next and a deep link alike
+    if(wrap('pwGoStep', null, function(step){
+      var s=Math.max(0, Math.min(3, +step||0));
+      T('plan_wizard_step', { step:s });
+      if(s===2){ try{ renderSuggestions(); }catch(e){} }
+      saveDraft();
+    })) n++;
+    if(wrap('openPlanWizard', function(opts){
+      // restore BEFORE the wizard builds its drafts fresh — it overwrites _goalDraft on open
+      try{
+        var d=readDraft();
+        if(d && !document.getElementById('planWizard')){
+          window.__frRestore = d;
+        }
+      }catch(e){}
+    }, function(opts){
+      try{
+        var d=window.__frRestore; window.__frRestore=null;
+        if(d){
+          if(d.goals) state._goalDraft=d.goals;
+          if(d.layers) state._layerDraft=d.layers;
+          try{ if(typeof renderStartCard==='function') renderStartCard(); }catch(e){}
+          var want=(opts && opts.step!=null) ? opts.step : (d.step||0);
+          if(typeof pwGoStep==='function') pwGoStep(want);
+        }
+      }catch(e){}
+      hideResume(); startSaving();
+      SUGG={}; suggUsed=null;                                   // a new wizard gets fresh suggestions
+      if(PW && PW.step===2){ try{ renderSuggestions(); }catch(e){} }
+    })) n++;
+    if(wrap('pwFinish', function(mode){
+      var g=0,l=0,e2=0;
+      try{ g=(state._goalDraft||[]).length; l=layerCount(state._layerDraft);
+        var C={being:1,setting:1,object:1,org:1,event:1,concept:1};
+        e2=((state.prompt&&state.prompt.words)||[]).filter(function(w){ return w && C[w.cat]; }).length; }catch(e){}
+      T('plan_wizard_finish', { mode:mode||'plan', step:(PW&&PW.step)||0, goals:g, layers:l, elements:e2 });
+    }, function(){ stopSaving(); clearDraft(); })) n++;
+    if(wrap('showPlanningDoors', null, function(){ hideResume(); })) n++;
+    if(wrap('showFirstRunDoors', null, function(){
+      // the doors' own skip only stores a flag; report it so drop-off at the very first screen is visible
+      try{
+        var w=document.getElementById('firstRunDoors'); if(!w) return;
+        var sk=w.querySelector('.fr-skip');
+        if(sk && !sk.__frT){ sk.__frT=1; sk.addEventListener('click', function(){ T('firstrun_doors_skipped'); }); }
+      }catch(e){}
+    })) n++;
+    return n;
+  }
+
+  var tries=0;
+  var iv=setInterval(function(){
+    var done = install() >= 5;
+    var mounted = mountHowToPlan();
+    if((done && mounted) || ++tries>60) clearInterval(iv);
+  }, 300);
+  install(); mountHowToPlan();
+
+  // offer the resume pill once the app has settled and a story is actually open
+  setTimeout(function(){ try{ showResume(); }catch(e){} }, 2500);
+
+  window.__frRenderSuggestions = renderSuggestions;   // for verification
 })();
 </script>
 
