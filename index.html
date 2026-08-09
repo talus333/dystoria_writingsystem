@@ -47915,8 +47915,14 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.401';
+  var APP_VERSION = '2026.07.20.402';
   var APP_CHANGELOG = [
+    { v:'2026.07.20.402', date:'August 9, 2026', notes:[
+      '**A family tree is laid out like a family tree now.** Generations run downward, and **siblings and spouses sit in the same row** \u2014 levelled to the same generation even when only one of them has a parent on the map. Children sit under their own parents, siblings sit beside each other in the order they are related, and the gap between two people joined side by side is widened so “Sibling of” has somewhere to be written. A cousin with nobody above him still lands in his own generation rather than at the top.',
+      '**“Parent of” now reads as “Father of” or “Mother of”**, taken from that character\u2019s sex. It is a **reading, not a rewrite**: the connection is still stored as Parent of, so if you change a character\u2019s sex in revision the tree simply says the other word \u2014 nothing has to be corrected. Grandparent and step-parent read the same way. If the sex is unspecified, or is one of the identities the app offers beyond male and female, it stays the plain word. And **Father of and Mother of are now real connection types** as well, if you would rather set one deliberately; the bond card shows the specific word with the stored one beside it.',
+      '**Bonds moves like the Map.** A two-finger swipe on a trackpad **pans** instead of zooming; **pinch zooms** (as does ctrl/\u2318 with the wheel); shift-scroll nudges the view; and a real mouse wheel still zooms, which is what a mouse expects. The rules are the Map\u2019s own, unchanged \u2014 two surfaces that scroll differently are two surfaces the hand has to learn twice.',
+      'The dot grid is gone from the Bonds paper.'
+    ] },
     { v:'2026.07.20.401', date:'August 9, 2026', notes:[
       '**Sets \u2014 a second filter level under every kind of map.** Under Family tree you now have your family trees as pills, and a **+ Family** to start another; under Social web your social groups and a **+ Social group**, and so on. A set is a name and a list of members \u2014 nothing more. It never holds a relationship; those still live in your story where the Map reads them. Each set keeps its own arrangement, its own zoom and its own membership, so arranging the Vance family cannot disturb the Kader line, and neither disturbs **All**, which is still the whole story of that kind drawn from what you have written. The old kind-wide dropdown is a **search** now, narrowing the sets by name.',
       '**A new set starts empty, and offers rather than assumes.** If your story already holds people related that way, it says so and offers *\u201cStart from the 6 already connected\u201d* as one click you can decline \u2014 it never fills itself in. Once it is yours it stays yours, and does not drift as the story changes. The \u00d7 on an element means membership on a set, and \u201coff this map\u201d everywhere else.',
@@ -62966,6 +62972,7 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
   var INV = {
     /* kinship (character ↔ character) */
     'Parent of':'Child of', 'Child of':'Parent of',
+    'Father of':'Child of', 'Mother of':'Child of',
     'Grandparent of':'Grandchild of', 'Grandchild of':'Grandparent of',
     'Aunt/Uncle of':'Niece/Nephew of', 'Niece/Nephew of':'Aunt/Uncle of',
     'Ancestor of':'Descendant of', 'Descendant of':'Ancestor of',
@@ -63019,7 +63026,10 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
 
   /* ---- 2 · the vocabulary ------------------------------------------------ */
   var KINSHIP_NEW = [
-    'Parent of','Child of','Sibling of','Half-sibling of','Twin of','Spouse of','Betrothed to',
+    /* `Parent of` stays, and is the one the app fills in automatically. Father/Mother
+       are here so a writer can be specific on purpose — and so a tree can READ them
+       from the parent's sex without ever rewriting what was stored. */
+    'Parent of','Father of','Mother of','Child of','Sibling of','Half-sibling of','Twin of','Spouse of','Betrothed to',
     'Widow(er) of','Grandparent of','Grandchild of','Aunt/Uncle of','Niece/Nephew of','Cousin of',
     'Guardian of','Ward of','Adopts','Adopted by','Step-parent of','Step-child of',
     'Ancestor of','Descendant of'
@@ -63883,7 +63893,54 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
      nonsense for the dossier's small one, where half the ring landed outside
      the element. A layout constant that encodes a measurement should be
      measured. */
-  function layered(g, rankOf, box){
+  /* Peers next to each other, not merely in the same row. Three siblings ordered
+     Bex · Halda · Oro leave the Bex–Oro line reaching over Halda's head with its
+     label stranded in the middle; walking the peer graph as a path puts every
+     directly-linked pair side by side, where the gap has been widened for them.
+     Greedy from an endpoint — good enough for a family, and deterministic. */
+  function peerRun(g, row){
+    if (row.length < 3) return row;
+    var idx = {}; row.forEach(function(n, i){ idx[n.key] = i; });
+    var adj = {}; row.forEach(function(n){ adj[n.key] = []; });
+    g.edges.forEach(function(e){
+      if (!isPeerEdge(e)) return;
+      if (idx[e.akey] == null || idx[e.bkey] == null) return;
+      adj[e.akey].push(e.bkey); adj[e.bkey].push(e.akey);
+    });
+    if (!Object.keys(adj).some(function(k){ return adj[k].length; })) return row;
+    var seen = {}, out = [];
+    var byBary = row.slice().sort(function(a, b){ return (a.__bary - b.__bary) || a.label.localeCompare(b.label); });
+    var pick = function(pool){                 // an endpoint first, so the walk is a path
+      var best = null;
+      pool.forEach(function(n){ if (seen[n.key]) return;
+        if (!best || adj[n.key].length < adj[best.key].length) best = n; });
+      return best;
+    };
+    while (out.length < row.length){
+      var start = pick(byBary); if (!start) break;
+      var cur = start;
+      while (cur && !seen[cur.key]){
+        seen[cur.key] = 1; out.push(cur);
+        var next = null;
+        adj[cur.key].forEach(function(k){
+          if (seen[k]) return;
+          var cand = row[idx[k]];
+          var left = adj[k].filter(function(x){ return !seen[x]; }).length;
+          if (!next || left < next.__left){ next = cand; next.__left = left; }
+        });
+        cur = next;
+      }
+    }
+    return out;
+  }
+  function peerBetween(g, ka, kb){
+    for (var i = 0; i < g.edges.length; i++){
+      var e = g.edges[i];
+      if (((e.akey === ka && e.bkey === kb) || (e.akey === kb && e.bkey === ka)) && isPeerEdge(e)) return true;
+    }
+    return false;
+  }
+  function layered(g, rankOf, box, order){
     var W = (box && box.w) || 920;
     var rows = {};
     g.nodes.forEach(function(n){ var r = rankOf(n); (rows[r] = rows[r] || []).push(n); });
@@ -63893,15 +63950,29 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
        "Sibling of" nowhere to sit but on top of one of them */
     var gapx = Math.max(18, Math.min(GAPX, GAPX * W / 920));
     Object.keys(rows).map(Number).sort(function(a,b){ return a-b; }).forEach(function(r){
-      var row = rows[r].sort(function(a,b){ return a.label.localeCompare(b.label); });
+      var row = rows[r].sort(order
+        ? function(a,b){ return (order[a.key] - order[b.key]) || a.label.localeCompare(b.label); }
+        : function(a,b){ return a.label.localeCompare(b.label); });
       /* rows are measured from the names, not from one average node width — a row
          holding "The Ember Pact" needs more room than a row holding "Tam" */
-      var ws = row.map(estW), total = 0;
-      ws.forEach(function(w){ total += w + gapx; }); total -= gapx;
-      if (total > W - 24) gapx = Math.max(8, gapx - (total - (W - 24)) / Math.max(1, row.length - 1));
-      total = 0; ws.forEach(function(w){ total += w + gapx; }); total -= gapx;
+      var ws = row.map(estW);
+      /* Two people side by side joined by "Sibling of" or "Spouse of" need room
+         for that label BETWEEN them — an ordinary gap leaves a horizontal edge
+         with nowhere to write on, and three squeezed siblings is what a crowded
+         family row actually looks like. */
+      var gaps = [];
+      for (var gi = 0; gi < row.length - 1; gi++){
+        gaps.push(peerBetween(g, row[gi].key, row[gi+1].key) ? gapx + 74 : gapx);
+      }
+      var span = function(){ var t = 0; ws.forEach(function(w, i){ t += w + (gaps[i] || 0); }); return t - (gaps[gaps.length-1] || 0) + (gaps.length ? 0 : 0); };
+      var total = 0; ws.forEach(function(w, i){ total += w + (i < gaps.length ? gaps[i] : 0); });
+      if (total > W - 24){
+        var over = total - (W - 24), each = over / Math.max(1, gaps.length);
+        gaps = gaps.map(function(gp){ return Math.max(10, gp - each); });
+        total = 0; ws.forEach(function(w, i){ total += w + (i < gaps.length ? gaps[i] : 0); });
+      }
       var x = Math.max(8, W / 2 - total / 2);
-      row.forEach(function(n, i){ pos[n.key] = { x:Math.round(x), y:y }; x += ws[i] + gapx; });
+      row.forEach(function(n, i){ pos[n.key] = { x:Math.round(x), y:y }; x += ws[i] + (i < gaps.length ? gaps[i] : 0); });
       y += NH + Math.max(46, Math.min(GAPY, GAPY * ((box && box.h) || 580) / 580));
     });
     return pos;
@@ -63961,15 +64032,89 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
     }
     return depth;
   }
-  var DOWN = { 'Parent of':1, 'Grandparent of':1, 'Guardian of':1, 'Adopts':1, 'Ancestor of':1,
-    'Step-parent of':1, 'Aunt/Uncle of':1, 'Mentors':1, 'Commands':1, 'Oversees':1, 'Superior of':1,
-    'Contains':1, 'Comprises':1, 'Caused':1, 'Led to':1, 'Triggered':1, 'Set the stage for':1,
-    'Gives rise to':1, 'Underlies':1, 'Above':1, 'Built atop':1 };
+  var DOWN = { 'Parent of':1, 'Father of':1, 'Mother of':1, 'Grandparent of':1, 'Guardian of':1,
+    'Adopts':1, 'Ancestor of':1, 'Step-parent of':1, 'Aunt/Uncle of':1, 'Mentors':1, 'Commands':1,
+    'Oversees':1, 'Superior of':1, 'Contains':1, 'Comprises':1, 'Caused':1, 'Led to':1,
+    'Triggered':1, 'Set the stage for':1, 'Gives rise to':1, 'Underlies':1, 'Above':1, 'Built atop':1 };
+  /* Two people the same distance from the root, whatever the graph says: a family
+     tree that puts a sister one row below her brother is not a family tree.
+     [Jeremy: "siblings in the same row"] */
+  var PEER = { 'Sibling of':1, 'Half-sibling of':1, 'Twin of':1, 'Separated twin of':1,
+    'Step-sibling of':1, 'Spouse of':1, 'Betrothed to':1, 'Widow(er) of':1, 'Cousin of':1,
+    'Married to':1, 'Partners with':0 };
+  function isPeerEdge(e){
+    var t = e.kindType || e.type || '', r = revType(e);
+    return !!(PEER[t] || PEER[r]);
+  }
+  function isDownEdge(e){
+    var t = e.kindType || e.type || '';
+    if (DOWN[t]) return 1;                     // a → b points down
+    if (DOWN[revType(e)]) return -1;           // b → a points down
+    return 0;
+  }
+  /* Generations, properly.
+
+     BFS depth alone gets the parents above the children and stops there. Two more
+     rules make it read as a tree: peers are levelled to the same row, and a child
+     is then pushed strictly below every one of its parents — which can break a peer
+     tie, so the two run alternately until nothing moves. Bounded, because a story
+     is allowed to contain a contradiction and the drawing still has to appear. */
+  function generations(g){
+    var depth = bfsDepth(g, function(e, rev){ return rev ? DOWN[revType(e)] : DOWN[e.kindType || e.type]; });
+    g.nodes.forEach(function(n){ if (depth[n.key] == null) depth[n.key] = 0; });
+    for (var pass = 0; pass < 12; pass++){
+      var moved = false;
+      g.edges.forEach(function(e){                       // peers share a row
+        if (!isPeerEdge(e)) return;
+        var a = depth[e.akey], b = depth[e.bkey];
+        if (a == null || b == null || a === b) return;
+        var lv = Math.max(a, b);
+        depth[e.akey] = lv; depth[e.bkey] = lv; moved = true;
+      });
+      g.edges.forEach(function(e){                       // a child sits below its parent
+        var d = isDownEdge(e); if (!d) return;
+        var up = d > 0 ? e.akey : e.bkey, dn = d > 0 ? e.bkey : e.akey;
+        if (depth[dn] <= depth[up]){ depth[dn] = depth[up] + 1; moved = true; }
+      });
+      if (!moved) break;
+    }
+    return depth;
+  }
+  /* Within a row, sit under your parents. Ordering each row by the average
+     position of its parents in the row above puts siblings side by side without
+     any explicit notion of a family — which is right, because the story has no
+     such notion either. */
+  function orderRows(g, depth){
+    var rows = {};
+    g.nodes.forEach(function(n){ (rows[depth[n.key]] = rows[depth[n.key]] || []).push(n); });
+    var levels = Object.keys(rows).map(Number).sort(function(a,b){ return a-b; });
+    var order = {};
+    levels.forEach(function(lv, li){
+      var row = rows[lv];
+      if (!li){ row.sort(function(a,b){ return a.label.localeCompare(b.label); }); }
+      else {
+        row.forEach(function(nd){
+          var ps = [];
+          g.edges.forEach(function(e){
+            var d = isDownEdge(e); if (!d) return;
+            var up = d > 0 ? e.akey : e.bkey, dn = d > 0 ? e.bkey : e.akey;
+            if (dn === nd.key && order[up] != null && depth[up] === lv - 1) ps.push(order[up]);
+          });
+          nd.__bary = ps.length ? ps.reduce(function(a,b){ return a+b; }, 0) / ps.length : 1e6;
+        });
+        row.sort(function(a, b){ return (a.__bary - b.__bary) || a.label.localeCompare(b.label); });
+      }
+      rows[lv] = row = peerRun(g, row);
+      row.forEach(function(nd, i){ order[nd.key] = i; });
+    });
+    return order;
+  }
   function autoLayout(g, box){
     var L = g.layout;
     if (L === 'generational' || L === 'hierarchy' || L === 'blueprint'){
-      var depth = bfsDepth(g, function(e, rev){ return rev ? DOWN[revType(e)] : DOWN[e.kindType || e.type]; });
-      return layered(g, function(n){ return depth[n.key] || 0; }, box);
+      var depth = generations(g);
+      var order = orderRows(g, depth);
+      return layered(g, function(n){ return depth[n.key] || 0; }, box, order);
     }
     if (L === 'timeline'){
       return layered(g, function(n){ return firstSection(g, n.key); }, box);
@@ -63977,6 +64122,29 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
     return ringLayout(g, box);
   }
   function revType(e){ var a = e.aspects && e.aspects.rev; return (a && a.type) || ''; }
+  /* "Parent of" is what the app can safely write; "Father of" is what the writer
+     means. The sex is already on the element, so the tree READS the specific word
+     without ever rewriting the stored one — which matters, because a character's
+     sex can change in revision and a stored word would then be a lie.
+     [Jeremy: "which can be interpreted by the sex of the parent"] */
+  var SEX_M = { 'Male':1 }, SEX_F = { 'Female':1 };
+  function sexOf(key){
+    var by = {}; try{ by = BONDS.roster(); }catch(e){ return ''; }
+    var w = by[key] && by[key].w; if (!w) return '';
+    var a = (w.attrs || []).find(function(x){ return x && x.sub === 'Sex'; });
+    var v = (a && a.word) || '';
+    if (!v && w.identity) (w.identity || []).forEach(function(id){ if (id && id.sub === 'Sex') v = id.word || v; });
+    return v;
+  }
+  var GENDERED = { 'Parent of':['Father of','Mother of'], 'Grandparent of':['Grandfather of','Grandmother of'],
+                   'Step-parent of':['Step-father of','Step-mother of'] };
+  function readAs(type, fromKey){
+    var pair = GENDERED[type]; if (!pair) return type;
+    var sx = sexOf(fromKey);
+    if (SEX_M[sx]) return pair[0];
+    if (SEX_F[sx]) return pair[1];
+    return type;
+  }
   function firstSection(g, key){
     var best = 999;
     g.edges.forEach(function(e){
@@ -64130,12 +64298,26 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
       cam.y = cy - (cy - cam.y) * (nz / cam.z);
       cam.z = nz; applyCam(world, cam); show(); save();
     };
+    /* The Map's own wheel rules, unchanged — because two surfaces that scroll
+       differently are two surfaces the hand has to learn twice. [Jeremy: "two
+       finger is zooming when it should be moving the page. zooming should be
+       pinch. copy the Map behavior."] A trackpad pinch arrives as ctrl+wheel;
+       a two-finger swipe arrives as a pixel-mode wheel with a horizontal
+       component or small fractional deltas; a real mouse wheel sends big whole
+       notches with no deltaX and still zooms, which is what a mouse expects. */
+    var panBy = function(dx, dy){ cam.x -= dx; cam.y -= dy; applyCam(world, cam); save(); };
     canvas.addEventListener('wheel', function(ev){
       ev.preventDefault();
       var r = canvas.getBoundingClientRect();
-      if (ev.ctrlKey || ev.metaKey || !ev.shiftKey){
-        m._zoomTo(cam.z * (ev.deltaY > 0 ? 0.9 : 1.111), ev.clientX - r.left, ev.clientY - r.top);
-      } else { cam.x -= ev.deltaX; cam.y -= ev.deltaY; applyCam(world, cam); save(); }
+      if (ev.ctrlKey || ev.metaKey){                       // pinch, or ctrl/⌘ + wheel
+        m._zoomTo(cam.z * Math.exp(-ev.deltaY * 0.01), ev.clientX - r.left, ev.clientY - r.top);
+        return;
+      }
+      if (ev.shiftKey){ panBy(0, ev.deltaY || ev.deltaX); return; }
+      var trackpad = ev.deltaMode === 0 &&
+          (ev.deltaX !== 0 || Math.abs(ev.deltaY) < 40 || (ev.deltaY % 1) !== 0);
+      if (trackpad) panBy(ev.deltaX, ev.deltaY);
+      else m._zoomTo(cam.z * Math.exp(-ev.deltaY * 0.0016), ev.clientX - r.left, ev.clientY - r.top);
     }, { passive:false });
     canvas.addEventListener('pointerdown', function(ev){
       if (ev.target.closest && ev.target.closest('.bn-node, .bn-lab, .bn-card')) return;
@@ -64591,10 +64773,12 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
          The stored pair is ordered by key, not by generation, so half the tree
          would otherwise say "Child of" where the line clearly descends. */
       var head = e.kindType || e.type || '—';
+      var headFrom = e.akey;
       if (LAYERED && fwd && rev){
-        if (ca.y < cb.y - 18) head = fwd;
-        else if (cb.y < ca.y - 18) head = rev;
-      }
+        if (ca.y < cb.y - 18){ head = fwd; headFrom = e.akey; }
+        else if (cb.y < ca.y - 18){ head = rev; headFrom = e.bkey; }
+      } else if (head === (rev || '\u0000') && head !== fwd) headFrom = e.bkey;
+      head = readAs(head, headFrom);
       var lab = el('div','bn-lab' + (m.ui.sel === idx ? ' on' : ''), head);
       if (e.types && e.types.length > 1) lab.appendChild(el('i','bn-more','+' + (e.types.length - 1)));
       lab.title = describe(e);
@@ -64675,8 +64859,10 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
 
     var line = function(lbl, val){ if (!val) return; var r = el('div','bn-row');
       r.appendChild(el('span','bn-row-l', lbl)); r.appendChild(el('span','bn-row-v', val)); c.appendChild(r); };
-    line(nA.label + ' →', (e.aspects.fwd && e.aspects.fwd.type) || '—');
-    line(nB.label + ' →', (e.aspects.rev && e.aspects.rev.type) || '—');
+    var say = function(t, from){ if (!t) return '—';
+      var r = readAs(t, from); return r === t ? t : r + '  (' + t + ')'; };
+    line(nA.label + ' →', say((e.aspects.fwd && e.aspects.fwd.type) || '', e.akey));
+    line(nB.label + ' →', say((e.aspects.rev && e.aspects.rev.type) || '', e.bkey));
     if (e.types && e.types.length > 1) line('Has been', e.types.join(', '));
 
     /* Where this bond lives — the question the "lens, not a store" decision
@@ -65099,8 +65285,7 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
       '.bn-wrap{ position:relative; }',
       /* the viewport never moves; the world inside it does */
       '.bn-canvas{ position:relative; flex:1 1 auto; width:100%; min-height:380px; overflow:hidden;',
-      '  margin:0; padding:0; cursor:grab; touch-action:none; background:#fff;',
-      '  background-image:radial-gradient(circle, #e9e3d5 1px, transparent 1px); background-size:34px 34px; }',
+      '  margin:0; padding:0; cursor:grab; touch-action:none; background:#fff; }',
       '.bn-canvas.bn-panning{ cursor:grabbing; }',
       '.bn-world{ position:absolute; left:0; top:0; width:5200px; height:3600px; transform-origin:0 0; }',
       '.bn-svg{ position:absolute; inset:0; width:100%; height:100%; pointer-events:none; overflow:visible; }',
@@ -65260,7 +65445,7 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
       '.bn-mini .bn-wrap{ display:block; width:100%; }',
       '.bn-mini .bn-headwrap{ position:static; padding:9px 13px 7px; background:#fbf7ee; }',
       '.bn-mini .bn-lede{ font-size:11.5px; padding-top:5px; }',
-      '.bn-mini .bn-canvas{ height:268px; min-height:268px; flex:0 0 268px; background-size:26px 26px; }',
+      '.bn-mini .bn-canvas{ height:268px; min-height:268px; flex:0 0 268px; }',
       '.bn-mini .bn-wrap{ display:block; }',
       '.bn-mini .bn-empty{ padding:34px 16px; font-size:13px; }',
       '.bn-mini-t{ font-family:var(--serif,Georgia,serif); font-size:14px; font-weight:600; color:#2b2419; }',
