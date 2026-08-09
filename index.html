@@ -47915,8 +47915,16 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.400';
+  var APP_VERSION = '2026.07.20.401';
   var APP_CHANGELOG = [
+    { v:'2026.07.20.401', date:'August 9, 2026', notes:[
+      '**Sets \u2014 a second filter level under every kind of map.** Under Family tree you now have your family trees as pills, and a **+ Family** to start another; under Social web your social groups and a **+ Social group**, and so on. A set is a name and a list of members \u2014 nothing more. It never holds a relationship; those still live in your story where the Map reads them. Each set keeps its own arrangement, its own zoom and its own membership, so arranging the Vance family cannot disturb the Kader line, and neither disturbs **All**, which is still the whole story of that kind drawn from what you have written. The old kind-wide dropdown is a **search** now, narrowing the sets by name.',
+      '**A new set starts empty, and offers rather than assumes.** If your story already holds people related that way, it says so and offers *\u201cStart from the 6 already connected\u201d* as one click you can decline \u2014 it never fills itself in. Once it is yours it stays yours, and does not drift as the story changes. The \u00d7 on an element means membership on a set, and \u201coff this map\u201d everywhere else.',
+      '**The bond creator.** Drawing a connection no longer opens a bare list of words \u2014 it opens a card. It names the pair and which way round it reads (with a \u21c4 to flip it), offers the types as a **searchable list grouped by family**, with the families of the map you are on first and a way to **use a word of your own**. Change type on an existing bond opens the same card, prefilled.',
+      '**And it finally exposes what the Map has been drawing all along.** Every connection in Dystoria has carried a weight, a warmth, a secret flag and a stake since the beginning \u2014 the Map has been reading them as line thickness, colour and the dashed line for a secret \u2014 and until now there was no way to set any of them. There is now, along with a note on the bond itself. The reverse direction is proposed from the type you chose and shown before it is written, so you can correct it rather than discover it later.',
+      '**A real bug behind all of it:** the type picker was resolving the two elements against **the section you happen to be looking at**, so two elements that are a genuine pair in the story but not both present in that section got an empty list or the wrong words. The vocabulary depends on the two categories, not on where the elements are standing today.',
+      'Smaller: element pills show the name only \u2014 the role label competed with it \u2014 and the link mark now fits inside the pill instead of standing taller than it.'
+    ] },
     { v:'2026.07.20.400', date:'August 9, 2026', notes:[
       '**Bonds is now an endless sheet of paper.** Drag anywhere on the background to move around it, scroll to zoom in and out under your cursor, and use the \u2212 / + in the header for finer control. Click the percentage to fit everything back on screen. Where you left the view is remembered for each map, so coming back to a family tree you had scrolled out to the far cousins does not reset it.',
       '**Connecting is its own gesture now.** The little dot in front of every element is gone. Hover an element instead and the Map\u2019s own link mark appears at its edge \u2014 drag from there onto another element and the type picker opens; the element you are about to connect to lights up as you cross it. Dragging the element itself just moves it, as it always did. (Drawing a link from anywhere on the pill was tried first and rejected: on a crowded map there is little empty paper to drop onto, so moving something would keep opening the picker.)',
@@ -63675,6 +63683,7 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
              onOpen: opts.onOpen || null,
              ui: { kind: opts.kind || 'social',
                    scope: opts.scope || { type:'all' },
+                   set: opts.set || null, setQ:'',
                    loose: !!opts.loose, sel:null } };
   }
   var MAIN = mount({});
@@ -63692,7 +63701,9 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
     try{ return JSON.parse(localStorage.getItem(LS + storyId()) || '{}') || {}; }catch(e){ return {}; }
   }
   function saveStore(s){ try{ localStorage.setItem(LS + storyId(), JSON.stringify(s)); }catch(e){} }
-  function slot(m){ return m.ui.kind + '|' + scopeKey(m.ui.scope); }
+  /* One slot per map. A set gets its own, so arranging the Vance family cannot
+     disturb the Kader family or the All view. */
+  function slot(m){ return m.ui.kind + '|' + (m.ui.set ? 'set:' + m.ui.set : scopeKey(m.ui.scope)); }
   function scopeKey(sc){
     if (!sc || sc.type === 'all') return 'all';
     if (sc.type === 'element') return 'el:' + sc.key + ':' + (sc.depth || 1);
@@ -63757,6 +63768,11 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
           var p = s.layouts[k];
           if (p && p[oldKey]){ p[newKey] = p[oldKey]; delete p[oldKey]; touched = true; }
         });
+        (s.sets || []).forEach(function(set){
+          var arr = set.members || [];
+          var i = arr.indexOf(oldKey);
+          if (i >= 0){ arr[i] = newKey; touched = true; }
+        });
         ['pins','hide'].forEach(function(which){
           Object.keys(s[which] || {}).forEach(function(k){
             var arr = s[which][k] || [];
@@ -63786,6 +63802,7 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
   }
   function writeBond(akey, bkey, type, opts){
     opts = opts || {};
+    var sub = null; try{ sub = poolFor(akey, bkey).sub; }catch(e){}
     var frs = framesOf(), from = opts.fromSection != null ? opts.fromSection : 0;
     var hit = 0;
     frs.forEach(function(fr, fi){
@@ -63813,12 +63830,25 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
       var side = (ia < ib) ? 'fwd' : 'rev';
       if (!link[side]) link[side] = blank();
       link[side].type = type || '';
+      /* The link record has always carried intensity, valence, secret and stake —
+         the Map has been drawing them as stroke weight, opacity, hue and a dashed
+         line since long before anything let a writer set them. The bond creator
+         does, so they travel with the type. */
+      if (opts.dims){
+        if (opts.dims.intensity != null) link[side].intensity = opts.dims.intensity;
+        if (opts.dims.valence) link[side].valence = opts.dims.valence;
+        if (opts.dims.secret != null) link[side].secret = !!opts.dims.secret;
+        if (opts.dims.stake != null) link[side].stake = opts.dims.stake;
+        if (opts.dims.note != null) link[side].note = opts.dims.note;
+        if (sub && sub.name && !link[side].sub) link[side].sub = sub.name;
+      }
       hit++;
     });
     /* The reverse fills itself through the same path the picker uses, so a
        kinship bond drawn here reads correctly from both cards (v.396). */
     if (!opts.remove && type){
-      var inv = ''; try{ inv = window.relInverse(type) || ''; }catch(e){}
+      var inv = opts.reverse != null ? opts.reverse : '';
+      if (opts.reverse == null){ try{ inv = window.relInverse(type) || ''; }catch(e){} }
       if (inv) framesOf().forEach(function(fr, fi){
         if (fi < from) return;
         var ws = (fr.prompt && fr.prompt.words) || [], ia = -1, ib = -1;
@@ -63829,7 +63859,7 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
         var link = (fr.prompt.links || []).find(function(L){ return L && L.a === lo && L.b === hiI; });
         if (!link) return;
         var far = (ia < ib) ? 'rev' : 'fwd';
-        if (link[far] && link[far].type) return;    // never overwrite a hand-set reverse
+        if (link[far] && link[far].type && link[far].type !== opts.prevInverse) return;   // never overwrite a hand-set reverse
         if (!link[far]) link[far] = blank();
         link[far].type = inv;
       });
@@ -64004,9 +64034,13 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
     host.appendChild(wrap);
 
     addPins(g, m);
+    narrowToSet(g, m);
     dropHidden(g, m);
     if (!g.nodes.length){
-      canvas.appendChild(el('div','bn-empty', emptyLine(g, m)));
+      if (activeSet(m)) seedOffer(m, canvas);
+      else canvas.appendChild(el('div','bn-empty', emptyLine(g, m)));
+      installCamera(m, canvas, world, cam, zoomLbl);
+      m._cam = cam; m._graph = g;
       return;
     }
 
@@ -64033,11 +64067,17 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
       });
       d.appendChild(handle);
       d.appendChild(el('span','bn-name', n.label));
-      if (n.bucket) d.appendChild(el('span','bn-role', n.bucket));
+      /* the name and nothing else — a role printed on every pill is a second
+         label competing with the one you are reading [Jeremy, 2026-08-09] */
       var x = el('span','bn-unpin','×');
-      x.title = 'Take this off the map. The element and its connections are untouched.';
+      x.title = m.ui.set ? 'Take this off this set. The element and its connections are untouched.'
+                         : 'Take this off the map. The element and its connections are untouched.';
       x.addEventListener('pointerdown', function(ev){ ev.stopPropagation(); });
-      x.addEventListener('click', function(ev){ ev.stopPropagation(); hide(n.key, m); V.render(m); });
+      /* the same gesture, the honest meaning in each case: on a set it is
+         membership, on a derived map it is a refusal the reader honours */
+      x.addEventListener('click', function(ev){ ev.stopPropagation();
+        if (!removeFromSet(n.key, m)) hide(n.key, m);
+        V.render(m); });
       d.appendChild(x);
       world.appendChild(d);
       nodeEls[n.key] = d;
@@ -64166,6 +64206,183 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
     return 'No connections of this kind yet. Draw one on the Map, or in the notepad’s Connections list, and it will appear here.';
   }
 
+  /* ---- Sets -------------------------------------------------------------
+     Jeremy, 2026-08-09: "have the filter level which is the Type of Bonds …
+     and then include all the created Sets within that type. Under families you
+     have the Pills for the family trees that have been created and a +Family."
+
+     A SET is a name and a list of members. It is the third and last thing Bonds
+     owns, and the line it must not cross is exactly the line pins already draw:
+     a set says WHO IS ON THIS PIECE OF PAPER. It never holds a relationship. If a
+     field called `edges` ever appears on one, this design has gone wrong.
+
+     Because `slot()` keys off the set, the layout, the pins, the hidden list and
+     the camera all follow a set for free — arranging the Vance family cannot
+     disturb the Kader family, and neither can disturb the "All" view. */
+  var KIND_NOUN = { family:'Family', social:'Social group', faction:'Faction',
+                    place:'Blueprint', concept:'Concept map', causal:'Chain', free:'Set' };
+  function sets(m){
+    var s = store();
+    return (s.sets || []).filter(function(x){ return x && x.kind === m.ui.kind; });
+  }
+  function setById(id){ var s = store(); return (s.sets || []).find(function(x){ return x && x.id === id; }) || null; }
+  function saveSet(set){
+    var s = store(); s.sets = s.sets || [];
+    var i = -1; for (var j = 0; j < s.sets.length; j++) if (s.sets[j].id === set.id){ i = j; break; }
+    if (i < 0) s.sets.push(set); else s.sets[i] = set;
+    saveStore(s);
+  }
+  function dropSet(id){
+    var s = store(); s.sets = (s.sets || []).filter(function(x){ return x.id !== id; });
+    ['layouts','pins','hide','views'].forEach(function(w){
+      if (!s[w]) return;
+      Object.keys(s[w]).forEach(function(k){ if (k.indexOf('|set:' + id) >= 0) delete s[w][k]; });
+    });
+    saveStore(s);
+  }
+  function newSetId(){
+    var s = store(), n = ((s.sets || []).length) + 1;
+    var id = 'bs' + n;
+    while (setById(id)) id = 'bs' + (++n);
+    return id;
+  }
+  /* The members of the set you are looking at, or null when you are on All. */
+  function activeSet(m){
+    if (!m.ui.set) return null;
+    var set = setById(m.ui.set);
+    if (!set || set.kind !== m.ui.kind){ m.ui.set = null; return null; }
+    return set;
+  }
+
+  /* A set draws its members and the bonds between them, and nothing else. */
+  function narrowToSet(g, m){
+    var set = activeSet(m); if (!set) return;
+    var keep = {}; (set.members || []).forEach(function(k){ keep[k] = 1; });
+    var by = {}; try{ by = BONDS.roster(); }catch(e){}
+    g.nodes = g.nodes.filter(function(n){ return keep[n.key]; });
+    g.edges = g.edges.filter(function(e){ return keep[e.akey] && keep[e.bkey]; });
+    var have = {}; g.nodes.forEach(function(n){ have[n.key] = 1; });
+    (set.members || []).forEach(function(k){
+      if (have[k] || !by[k]) return;
+      var n = by[k];
+      g.nodes.push({ key:k, cat:n.cat, label:n.label, bucket:n.bucket, threads:n.threads, group:n.group, w:n.w, pinned:true });
+      have[k] = 1;
+    });
+    g.nodes.sort(function(a, b){ return a.label.localeCompare(b.label); });
+  }
+  function addToSet(key, m){
+    var set = activeSet(m); if (!set) return false;
+    set.members = set.members || [];
+    if (set.members.indexOf(key) < 0) set.members.push(key);
+    saveSet(set); return true;
+  }
+  function removeFromSet(key, m){
+    var set = activeSet(m); if (!set) return false;
+    set.members = (set.members || []).filter(function(k){ return k !== key; });
+    saveSet(set); return true;
+  }
+
+  /* The second filter level: the sets of this kind, as pills, with a search that
+     narrows them by name — the shape the notepad already uses. */
+  function setBar(m){
+    var row = el('div','bn-sets');
+    var mine = sets(m);
+    var q = (m.ui.setQ || '').trim().toLowerCase();
+
+    var all = el('button','bn-set' + (m.ui.set ? '' : ' on'), 'All'); all.type='button';
+    all.title = 'Everything of this kind in the story, drawn from what you have written';
+    all.addEventListener('click', function(){ m.ui.set = null; m.ui.sel = null; V.render(m); });
+    row.appendChild(all);
+
+    mine.forEach(function(set){
+      if (q && set.name.toLowerCase().indexOf(q) < 0 && m.ui.set !== set.id) return;
+      var b = el('button','bn-set' + (m.ui.set === set.id ? ' on' : ''), set.name); b.type='button';
+      b.title = (set.members || []).length + ' on this one — double-click to rename';
+      b.appendChild(el('i','bn-set-n', String((set.members || []).length)));
+      b.addEventListener('click', function(){ m.ui.set = set.id; m.ui.sel = null; V.render(m); });
+      b.addEventListener('dblclick', function(ev){ ev.preventDefault(); renameSet(set, m); });
+      row.appendChild(b);
+    });
+
+    var add = el('button','bn-set-add','+ ' + (KIND_NOUN[m.ui.kind] || 'Set')); add.type='button';
+    add.title = 'Start a new one, empty';
+    add.addEventListener('click', function(){ makeSet(m); });
+    row.appendChild(add);
+
+    if (m.ui.set){
+      var del = el('button','bn-set-del','Delete this ' + (KIND_NOUN[m.ui.kind] || 'set').toLowerCase());
+      del.type='button';
+      del.title = 'Removes the set. The elements and their bonds are untouched.';
+      del.addEventListener('click', function(){
+        var set = activeSet(m); if (!set) return;
+        if (typeof window.confirm === 'function' && !window.confirm('Delete “' + set.name + '”? The elements and their connections stay in your story.')) return;
+        dropSet(set.id); m.ui.set = null; V.render(m);
+      });
+      row.appendChild(del);
+    }
+
+    /* the search replaces the scope dropdown, per Jeremy */
+    var sb = el('div','bn-set-search');
+    var si = document.createElement('input');
+    si.type = 'text'; si.placeholder = 'Search…'; si.value = m.ui.setQ || '';
+    si.addEventListener('input', function(){
+      m.ui.setQ = si.value;
+      Array.prototype.slice.call(row.querySelectorAll('.bn-set')).forEach(function(p){
+        if (p.textContent.replace(/\d+$/,'') === 'All') return;
+        var nm = p.textContent.toLowerCase();
+        p.style.display = (!si.value.trim() || nm.indexOf(si.value.trim().toLowerCase()) >= 0 || p.classList.contains('on')) ? '' : 'none';
+      });
+    });
+    sb.appendChild(si);
+    row.appendChild(sb);
+    return row;
+  }
+
+  function makeSet(m){
+    var noun = KIND_NOUN[m.ui.kind] || 'Set';
+    var name = '';
+    try{ name = window.prompt('Name this ' + noun.toLowerCase(), ''); }catch(e){}
+    if (name == null) return;
+    name = String(name).trim() || (noun + ' ' + (sets(m).length + 1));
+    var set = { id:newSetId(), kind:m.ui.kind, name:name, members:[] };
+    saveSet(set);
+    m.ui.set = set.id; m.ui.sel = null;
+    V.render(m);
+  }
+  function renameSet(set, m){
+    var name = '';
+    try{ name = window.prompt('Rename', set.name); }catch(e){}
+    if (name == null) return;
+    set.name = String(name).trim() || set.name;
+    saveSet(set); V.render(m);
+  }
+
+  /* The seed offer. It appears once, on an empty set, and it never fires itself.
+     [Jeremy: offer, never auto-seed] — a set that fills itself in stops being the
+     writer's and starts drifting under them as the story changes. */
+  function seedOffer(m, canvas){
+    var set = activeSet(m); if (!set || (set.members || []).length) return;
+    var g = null;
+    try{ g = BONDS.graph({ kind:m.ui.kind, scope:{ type:'all' }, loose:false }); }catch(e){ return; }
+    var box = el('div','bn-seed');
+    box.appendChild(el('div','bn-seed-t', 'Nothing on “' + set.name + '” yet.'));
+    if (g && g.nodes.length){
+      var noun = (KIND_NOUN[m.ui.kind] || 'set').toLowerCase();
+      box.appendChild(el('div','bn-seed-l',
+        'Your story already holds ' + g.nodes.length + (g.nodes.length === 1 ? ' element' : ' elements') +
+        ' connected this way. Start from them, or add your own with + Element.'));
+      var go = el('button','bn-seed-go','Start from the ' + g.nodes.length + ' already connected'); go.type='button';
+      go.addEventListener('click', function(){
+        set.members = g.nodes.map(function(n){ return n.key; });
+        saveSet(set); V.render(m);
+      });
+      box.appendChild(go);
+    } else {
+      box.appendChild(el('div','bn-seed-l','Add the first one with + Element, then drag from its link mark to connect them.'));
+    }
+    canvas.appendChild(box);
+  }
+
   /* ---- the chooser ------------------------------------------------------- */
   function chooser(m){
     var bar = el('div','bn-head');
@@ -64197,13 +64414,14 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
     BONDS.kinds().forEach(function(k){
       var b = el('button','bn-kind' + (k.id === m.ui.kind ? ' on' : ''), k.name);
       b.type = 'button'; b.title = k.lede;
-      b.addEventListener('click', function(){ m.ui.kind = k.id; m.ui.sel = null; V.render(m); });
+      b.addEventListener('click', function(){ m.ui.kind = k.id; m.ui.set = null; m.ui.sel = null; V.render(m); });
       kinds.appendChild(b);
     });
     bar.appendChild(kinds);
 
     var right = el('div','bn-headright');
     var sc = document.createElement('select'); sc.className = 'bn-scope';
+    if (m.ui.set) sc.style.display = 'none';   // a set IS the scope
     var add = function(label, val){ var o = document.createElement('option'); o.textContent = label; o.value = val; sc.appendChild(o); };
     add('Everything', 'all');
     var S = {};
@@ -64236,8 +64454,10 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
     bar.appendChild(right);
 
     var lede = el('div','bn-lede', (BONDS.KINDS[m.ui.kind] || {}).lede || '');
-    var out = el('div','bn-headwrap'); out.appendChild(bar); out.appendChild(lede);
-    var h = hidden(m);
+    var out = el('div','bn-headwrap'); out.appendChild(bar);
+    out.appendChild(setBar(m));
+    out.appendChild(lede);
+    var h = m.ui.set ? [] : hidden(m);
     if (h.length){
       var back = el('button','bn-back', h.length + (h.length === 1 ? ' element is' : ' elements are') + ' off this map — show them again');
       back.type = 'button';
@@ -64290,7 +64510,7 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
       rows.slice(0, 60).forEach(function(n){
         var b = el('button','bn-add-row', n.label); b.type = 'button';
         b.appendChild(el('span','bn-add-cat', n.cat));
-        b.addEventListener('click', function(){ pin(n.key, m); box.parentNode.removeChild(box); V.render(m); });
+        b.addEventListener('click', function(){ if (!addToSet(n.key, m)) pin(n.key, m); box.parentNode.removeChild(box); V.render(m); });
         list.appendChild(b);
       });
     };
@@ -64486,42 +64706,295 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
     (hostOf(m) || document.body).appendChild(c);
   }
 
+  /* ---- the bond creator ---------------------------------------------------
+     Jeremy: "It would be great if it opened a connection card which allowed you
+     to add dimensions and notes right away, kind of like you do for the character
+     creator. It would be a bond creator card."
+
+     One editor for a bond, opened both when you draw a new one and when you change
+     an old one — because two editors for the same thing always drift apart. It is
+     the first surface in the app to expose intensity, valence, secret and stake:
+     the link record has carried them since the beginning and the Map has been
+     drawing them all along as stroke weight, opacity, hue and a dashed line. There
+     has never been a way to set them. */
+  var VALENCE = [['warm','Warm'],['neutral','Neutral'],['cold','Cold']];
+  function nameOfWord(w){ return typeof w === 'string' ? w : (w && (w.w || w.word)) || ''; }
+  function famOfWord(w, groups){
+    var nm = nameOfWord(w);
+    for (var i = 0; i < (groups||[]).length; i++){
+      var g = groups[i];
+      if ((g.words || []).indexOf(nm) >= 0) return g.name || '';
+    }
+    return '';
+  }
+  function labelOf(m, key){
+    var by = {}; try{ by = BONDS.roster(); }catch(e){}
+    return (by[key] && by[key].label) || (m && m._graph && (m._graph.nodes.find(function(n){ return n.key === key; })||{}).label) || '?';
+  }
+
+  function openBondCreator(o){
+    var m = o.m;
+    var old = document.getElementById('bnMake'); if (old) old.parentNode.removeChild(old);
+    var akey = o.akey, bkey = o.bkey;
+    var pg = poolFor(akey, bkey);
+    /* a kind's families are keyed by the category PAIR ('being|being': ['Kinship']),
+       not a flat list — flatten the ones that could apply to this pair */
+    var kindFams = (function(){
+      var f = (BONDS.KINDS[m.ui.kind] || {}).families;
+      if (!f) return null;
+      var out = [];
+      Object.keys(f).forEach(function(k){ (f[k] || []).forEach(function(nm){ if (out.indexOf(nm) < 0) out.push(nm); }); });
+      return out.length ? out : null;
+    })();
+
+    var draft = {
+      type: o.type || '', reverse: o.reverse == null ? null : o.reverse,
+      intensity: o.dims && o.dims.intensity != null ? o.dims.intensity : 2,
+      valence: (o.dims && o.dims.valence) || 'neutral',
+      secret: !!(o.dims && o.dims.secret),
+      stake: (o.dims && o.dims.stake) || '',
+      note: (o.dims && o.dims.note) || ''
+    };
+    var proposeReverse = function(){
+      if (draft.reverse != null) return draft.reverse;
+      var inv = ''; try{ inv = window.relInverse(draft.type) || ''; }catch(e){}
+      return inv;
+    };
+
+    var back = el('div','bn-mk-back'); back.id = 'bnMake';
+    var c = el('div','bn-mk');
+    back.appendChild(c);
+    back.addEventListener('pointerdown', function(ev){ if (ev.target === back) close(); });
+    function close(){ if (back.parentNode) back.parentNode.removeChild(back); }
+
+    /* -- head: the pair, and which way round it reads -- */
+    var head = el('div','bn-mk-head');
+    var ttl = el('div','bn-mk-pair');
+    var draw = function(){
+      ttl.innerHTML = '';
+      ttl.appendChild(el('b','', labelOf(m, akey)));
+      ttl.appendChild(el('span','bn-mk-arrow','→'));
+      ttl.appendChild(el('b','', labelOf(m, bkey)));
+    };
+    draw();
+    head.appendChild(ttl);
+    var flip = el('button','bn-mk-flip','⇄'); flip.type='button';
+    flip.title = 'Read it the other way round';
+    flip.addEventListener('click', function(){
+      var t = akey; akey = bkey; bkey = t;
+      var ty = draft.type; draft.type = proposeReverse(); draft.reverse = ty;
+      draw(); renderType(); renderRev();
+    });
+    head.appendChild(flip);
+    var xb = el('button','bn-mk-x','×'); xb.type='button'; xb.addEventListener('click', close);
+    head.appendChild(xb);
+    c.appendChild(head);
+
+    var sublbl = el('div','bn-mk-sub', pg.sub ? pg.sub.name : 'Connection');
+    c.appendChild(sublbl);
+
+    /* -- the type: a searchable list, its families, and a way to coin a word -- */
+    var typeRow = el('div','bn-mk-typerow');
+    var typeVal = el('div','bn-mk-typeval');
+    typeRow.appendChild(typeVal); c.appendChild(typeRow);
+
+    var search = document.createElement('input');
+    search.className = 'bn-mk-search'; search.placeholder = 'Search connection types, or type a new one…';
+    c.appendChild(search);
+    var list = el('div','bn-mk-list'); c.appendChild(list);
+
+    function renderType(){
+      typeVal.innerHTML = '';
+      typeVal.appendChild(el('span','bn-mk-tlabel','Reads as'));
+      typeVal.appendChild(el('span','bn-mk-tval', draft.type || 'not set yet'));
+      if (!draft.type) typeVal.classList.add('empty'); else typeVal.classList.remove('empty');
+    }
+    function renderList(){
+      list.innerHTML = '';
+      var q = search.value.trim().toLowerCase();
+      var groups = pg.groups || [];
+      // the kind you are on gets its families first: a family tree should not have to
+      // scroll past every rivalry to reach "Parent of"
+      var order = groups.slice().sort(function(a, b){
+        var ka = kindFams && kindFams.indexOf(a.name) >= 0 ? 0 : 1;
+        var kb = kindFams && kindFams.indexOf(b.name) >= 0 ? 0 : 1;
+        return ka - kb;
+      });
+      var seen = {}, any = 0;
+      var addRow = function(w){
+        var nm = nameOfWord(w); if (!nm || seen[nm]) return; seen[nm] = 1;
+        if (q && nm.toLowerCase().indexOf(q) < 0) return;
+        any++;
+        var b = el('button','bn-mk-row' + (nm === draft.type ? ' on' : ''), nm); b.type='button';
+        b.addEventListener('click', function(){ draft.type = nm; draft.reverse = null; renderType(); renderList(); renderRev(); });
+        list.appendChild(b);
+      };
+      order.forEach(function(g){
+        var names = (g.words || []).filter(function(nm){ return !q || nm.toLowerCase().indexOf(q) >= 0; });
+        if (!names.length) return;
+        list.appendChild(el('div','bn-mk-fam', g.name));
+        names.forEach(addRow);
+      });
+      var rest = (pg.pool || []).filter(function(w){ return !seen[nameOfWord(w)]; });
+      if (rest.length){
+        var head2 = groups.length ? 'Everything else' : 'Connection types';
+        var shown = rest.filter(function(w){ return !q || nameOfWord(w).toLowerCase().indexOf(q) >= 0; });
+        if (shown.length){ list.appendChild(el('div','bn-mk-fam', head2)); shown.forEach(addRow); }
+      }
+      /* if a type is already chosen, show it — a list that opens on Romance while
+         the bond says "Mentors" makes the writer hunt for what they just picked */
+      if (draft.type){
+        var on = list.querySelector('.bn-mk-row.on');
+        if (on) setTimeout(function(){ try{ on.scrollIntoView({ block:'nearest' }); }catch(e){} }, 0);
+      }
+      if (q && !seen[search.value.trim()]){
+        var mk = el('button','bn-mk-new','Use “' + search.value.trim() + '”'); mk.type='button';
+        mk.title = 'Your own word for this connection';
+        mk.addEventListener('click', function(){ draft.type = search.value.trim(); draft.reverse = null; renderType(); renderList(); renderRev(); });
+        list.appendChild(mk);
+      } else if (!any){
+        list.appendChild(el('div','bn-mk-none','No types match.'));
+      }
+    }
+    search.addEventListener('input', renderList);
+
+    /* -- the reverse: proposed, shown, and editable before it is written -- */
+    var rev = el('div','bn-mk-rev'); c.appendChild(rev);
+    function renderRev(){
+      rev.innerHTML = '';
+      var inv = proposeReverse();
+      var lab = el('span','bn-mk-rlabel', labelOf(m, bkey) + ' → ' + labelOf(m, akey));
+      rev.appendChild(lab);
+      var inp = document.createElement('input');
+      inp.className = 'bn-mk-rinput'; inp.value = inv;
+      inp.placeholder = draft.type ? 'nothing the other way' : '—';
+      inp.addEventListener('input', function(){ draft.reverse = inp.value; });
+      rev.appendChild(inp);
+      if (draft.reverse == null && inv) rev.appendChild(el('span','bn-mk-rnote','suggested'));
+    }
+
+    /* -- the dimensions the Map has been drawing all along -- */
+    var dims = el('div','bn-mk-dims'); c.appendChild(dims);
+    var row = function(label, node){ var r = el('div','bn-mk-drow');
+      r.appendChild(el('span','bn-mk-dlbl', label)); r.appendChild(node); dims.appendChild(r); return r; };
+
+    var ints = el('div','bn-mk-ints');
+    [1,2,3,4].forEach(function(v){
+      var b = el('button','bn-mk-int' + (draft.intensity === v ? ' on' : ''), ['Faint','Steady','Strong','Defining'][v-1]);
+      b.type='button'; b.title = 'How much this bond weighs — it sets the line’s weight on the Map';
+      b.addEventListener('click', function(){ draft.intensity = v;
+        Array.prototype.slice.call(ints.children).forEach(function(x, i){ x.classList.toggle('on', i+1 === v); }); });
+      ints.appendChild(b);
+    });
+    row('Weight', ints);
+
+    var vals = el('div','bn-mk-vals');
+    VALENCE.forEach(function(p){
+      var b = el('button','bn-mk-val bn-v-' + p[0] + (draft.valence === p[0] ? ' on' : ''), p[1]);
+      b.type='button'; b.title = 'The colour this bond is drawn in';
+      b.addEventListener('click', function(){ draft.valence = p[0];
+        Array.prototype.slice.call(vals.children).forEach(function(x){ x.classList.toggle('on', x === b); }); });
+      vals.appendChild(b);
+    });
+    row('Warmth', vals);
+
+    var sec = el('button','bn-mk-sw' + (draft.secret ? ' on' : ''), draft.secret ? 'Hidden from the reader' : 'Known');
+    sec.type='button'; sec.title = 'A secret bond is drawn as a dashed line';
+    sec.addEventListener('click', function(){ draft.secret = !draft.secret;
+      sec.classList.toggle('on', draft.secret); sec.textContent = draft.secret ? 'Hidden from the reader' : 'Known'; });
+    row('Secret', sec);
+
+    var stake = document.createElement('input'); stake.className='bn-mk-text'; stake.value = draft.stake;
+    stake.placeholder = 'What is at stake between them…';
+    stake.addEventListener('input', function(){ draft.stake = stake.value; });
+    row('Stake', stake);
+
+    var note = document.createElement('textarea'); note.className='bn-mk-note'; note.value = draft.note;
+    note.placeholder = 'Anything you want to remember about this bond…';
+    note.addEventListener('input', function(){ draft.note = note.value; });
+    c.appendChild(el('div','bn-mk-dlbl bn-mk-notelbl','Note'));
+    c.appendChild(note);
+
+    /* -- out -- */
+    var acts = el('div','bn-mk-acts');
+    if (o.existing){
+      var del = el('button','bn-mk-btn bn-mk-del','Remove bond'); del.type='button';
+      del.addEventListener('click', function(){ writeBond(akey, bkey, '', { remove:true }); close(); V.render(m); });
+      acts.appendChild(del);
+    }
+    var cancel = el('button','bn-mk-btn','Cancel'); cancel.type='button';
+    cancel.addEventListener('click', close); acts.appendChild(cancel);
+    var save = el('button','bn-mk-btn bn-mk-go', o.existing ? 'Save' : 'Draw the bond'); save.type='button';
+    save.addEventListener('click', function(){
+      if (!draft.type){ search.focus(); search.classList.add('bn-mk-need');
+        setTimeout(function(){ search.classList.remove('bn-mk-need'); }, 900); return; }
+      var wrote = writeBond(akey, bkey, draft.type, {
+        reverse: proposeReverse(),
+        dims: { intensity:draft.intensity, valence:draft.valence, secret:draft.secret, stake:draft.stake, note:draft.note }
+      });
+      if (!wrote) flash('Those two are not in the same section yet — put them on one map first.');
+      close(); V.render(m);
+    });
+    acts.appendChild(save);
+    c.appendChild(acts);
+
+    renderType(); renderList(); renderRev();
+    (hostOf(m) || document.body).appendChild(back);
+    /* focus without scrolling — focusing a control below the fold scrolled the
+       card and hid the pair the writer is about to connect */
+    setTimeout(function(){ try{ search.focus({ preventScroll:true }); }catch(e){ try{ search.focus(); }catch(e2){} } }, 0);
+  }
+
   /* ---- creating and retyping, through the app's own picker --------------- */
   function idxIn(words, key){
     for (var i = 0; i < words.length; i++){ var k; try{ k = wordKey(words[i]); }catch(e){ continue; } if (k === key) return i; }
     return -1;
   }
-  function poolFor(akey, bkey){
-    try{
-      var ws = (state.prompt && state.prompt.words) || [];
-      var i = idxIn(ws, akey), j = idxIn(ws, bkey);
-      if (i >= 0 && j >= 0) return { pool: relPool(i, j), groups: (window.relGroups ? window.relGroups(i, j) : null) };
-    }catch(e){}
-    return { pool: [], groups: null };
+  /* THE POOL BUG (Jeremy, 2026-08-09: "the connection type doesn't pull from the
+     pool for the Bond and group category you are in").
+
+     `relPool(i,j)` takes indices into `state.prompt.words` — the section you happen
+     to be looking at. Bonds is a STANDING view: two elements can be a real pair in
+     the story and not both be present in the current section, and then this handed
+     the picker an empty list. The vocabulary depends on the two CATEGORIES, not on
+     where the elements are standing today, so it is resolved from the roster.  */
+  function catKeyOf(nd){
+    if (!nd) return '';
+    try{ if (nd.w && nd.w.role === 'being') return 'being'; }catch(e){}
+    return (nd.cat === 'being' ? 'being' : nd.cat) || '';
   }
+  function subForCats(ka, kb){
+    var relCat = null; try{ relCat = getCat('relationship'); }catch(e){}
+    var subs = (relCat && relCat.subcategories) || [];
+    var find = function(fn){ for (var i = 0; i < subs.length; i++) if (fn(subs[i])) return subs[i]; return null; };
+    if (!ka || !kb) return null;
+    if (ka === 'being' || kb === 'being'){
+      var other = ka === 'being' ? kb : ka;
+      return find(function(s){ return s.target === other; });
+    }
+    if (ka === 'setting' && kb === 'setting') return find(function(s){ return s.source === 'setting'; });
+    return find(function(s){ return s.pair && ((s.pair[0] === ka && s.pair[1] === kb) || (s.pair[0] === kb && s.pair[1] === ka)); });
+  }
+  function poolFor(akey, bkey){
+    var by = {}; try{ by = BONDS.roster(); }catch(e){}
+    var sub = subForCats(catKeyOf(by[akey]), catKeyOf(by[bkey]));
+    if (sub && sub.words && sub.words.length) return { pool: sub.words, groups: sub.groups || null, sub: sub };
+    /* Falling back to the app's generic pool is the honest failure: a short list of
+       real words beats an empty one, which reads as "this pair cannot be connected". */
+    var gen = []; try{ gen = GENERIC_REL || []; }catch(e){}
+    return { pool: gen, groups: null, sub: null };
+  }
+  /* Editing an existing bond opens the SAME card, prefilled — one editor for a
+     bond, because two always drift apart. */
   function pickType(e, x, y, m){
-    var pg = poolFor(e.akey, e.bkey);
-    if (typeof window.openConnTypePicker !== 'function') return;
-    window.openConnTypePicker({
-      x:x || 320, y:y || 200,
-      cur: (e.aspects.fwd && e.aspects.fwd.type) || '',
-      pool: pg.pool, groups: pg.groups,
-      onPick: function(t){ writeBond(e.akey, e.bkey, t); V.render(m); },
-      onRemove: function(){ writeBond(e.akey, e.bkey, '', { remove:true }); V.render(m); }
-    });
+    var f = (e.aspects && e.aspects.fwd) || {}, r = (e.aspects && e.aspects.rev) || {};
+    openBondCreator({ akey:e.akey, bkey:e.bkey, m:m, existing:true,
+      type: f.type || '', reverse: r.type || '',
+      dims: { intensity:f.intensity, valence:f.valence, secret:f.secret, stake:f.stake, note:f.note } });
   }
   /* Offered when a drag ends on top of another element. */
   function connectTo(akey, bkey, x, y, m){
-    var pg = poolFor(akey, bkey);
-    if (typeof window.openConnTypePicker !== 'function') return;
-    window.openConnTypePicker({
-      x: x, y: y, cur:'', pool: pg.pool, groups: pg.groups,
-      onPick: function(type){
-        var wrote = writeBond(akey, bkey, type);
-        if (!wrote) flash('Those two are not in the same section yet — put them on one map first.');
-        V.render(m);
-      }
-    });
+    openBondCreator({ akey:akey, bkey:bkey, m:m });
   }
   function flash(msg){
     try{ if (typeof flashStatus === 'function'){ flashStatus(msg); return; } }catch(e){}
@@ -64641,11 +65114,11 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
       '.bn-cat-setting{ background:#2f3a2c; } .bn-cat-object{ background:#3a2f22; }',
       '.bn-cat-org{ background:#382a2a; } .bn-cat-concept{ background:#2b2c3a; } .bn-cat-event{ background:#3a3520; }',
       /* the link mark appears when the pointer is on the pill, and nowhere else */
-      '.bn-link{ width:0; overflow:hidden; opacity:0; flex:0 0 auto; display:flex; align-items:center;',
-      '  justify-content:center; align-self:stretch; margin:-7px 0 -7px -13px; color:#e8b06a;',
-      '  cursor:crosshair; transition:width .12s ease, opacity .12s ease; }',
-      '.bn-link svg{ width:14px; height:14px; display:block; pointer-events:none; }',
-      '.bn-node:hover .bn-link{ width:30px; opacity:.95; }',
+      '.bn-link{ width:0; height:18px; overflow:hidden; opacity:0; flex:0 0 auto; display:flex;',
+      '  align-items:center; justify-content:center; margin-left:-4px; border-radius:6px;',
+      '  color:#e8b06a; cursor:crosshair; transition:width .12s ease, opacity .12s ease; }',
+      '.bn-link svg{ width:11px; height:11px; display:block; pointer-events:none; }',
+      '.bn-node:hover .bn-link{ width:22px; opacity:.95; }',
       '.bn-node:hover .bn-link:hover{ color:#f5c98a; background:rgba(200,150,60,.22); }',
       '.bn-node.bn-drop{ box-shadow:0 0 0 3px rgba(200,150,60,.75); }',
       '.bn-node.bn-linking{ opacity:.55; }',
@@ -64692,6 +65165,92 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
       '.bn-add-row:hover{ background:#f6f1e6; }',
       '.bn-add-cat{ font-size:10px; letter-spacing:.05em; text-transform:uppercase; color:#a49c88; }',
       '.bn-add-none{ font-size:12px; color:#9a9484; font-style:italic; padding:8px; }',
+      /* the second filter level: the sets of this kind */
+      '.bn-sets{ display:flex; align-items:center; gap:6px; flex-wrap:wrap; padding-top:9px; }',
+      '.bn-set{ display:inline-flex; align-items:center; gap:6px; border:1px solid #e4dece; background:#fff;',
+      '  color:#5d5647; border-radius:999px; padding:4px 11px; font-size:12px; cursor:pointer; font-family:inherit; }',
+      '.bn-set:hover{ border-color:#c8963c; color:#2b2419; }',
+      '.bn-set.on{ background:#f3e7cd; border-color:#c8963c; color:#4a3a12; font-weight:600; }',
+      '.bn-set-n{ font-style:normal; font-size:9.5px; opacity:.6; }',
+      '.bn-set-add{ border:1px dashed rgba(200,150,60,.6); background:none; color:#8a6b23; border-radius:999px;',
+      '  padding:4px 11px; font-size:12px; cursor:pointer; font-family:inherit; }',
+      '.bn-set-add:hover{ background:#faf3e4; }',
+      '.bn-set-del{ border:none; background:none; color:#b09a72; font-size:11.5px; cursor:pointer;',
+      '  font-family:inherit; text-decoration:underline; }',
+      '.bn-set-del:hover{ color:#b0402f; }',
+      '.bn-set-search{ margin-left:auto; }',
+      '.bn-set-search input{ font-family:inherit; font-size:12px; padding:4px 10px; width:150px;',
+      '  border:1px solid #e6e0d1; border-radius:999px; background:#fff; color:#3b3529; }',
+      '.bn-seed{ position:absolute; left:50%; top:44%; transform:translate(-50%,-50%); width:390px; max-width:86%;',
+      '  text-align:center; background:#fffdf8; border:1px solid #ece5d5; border-radius:14px; padding:20px 22px; }',
+      '.bn-seed-t{ font-family:var(--serif,Georgia,serif); font-size:16px; color:#2b2419; }',
+      '.bn-seed-l{ font-size:12.5px; color:#8a8271; line-height:1.5; margin-top:7px; }',
+      '.bn-seed-go{ margin-top:13px; border:1px solid #2b2419; background:#2b2419; color:#f3ecdc;',
+      '  border-radius:9px; padding:7px 15px; font-size:12.5px; cursor:pointer; font-family:inherit; }',
+      '.bn-seed-go:hover{ background:#3a3122; }',
+      '.bn-mini .bn-sets{ display:none; }',
+      /* the bond creator */
+      '.bn-mk-back{ position:fixed; inset:0; z-index:70; background:rgba(40,32,18,.34);',
+      '  display:flex; align-items:center; justify-content:center; padding:24px; }',
+      '.bn-mk{ width:430px; max-width:100%; max-height:86vh; overflow:auto; background:#fffdf8;',
+      '  border:1px solid #ded7c7; border-radius:15px; box-shadow:0 26px 66px -18px rgba(80,60,25,.5);',
+      '  padding:16px 18px 15px; font-family:inherit; }',
+      '.bn-mk-head{ display:flex; align-items:center; gap:9px; position:sticky; top:-16px;',
+      '  background:#fffdf8; padding-top:2px; z-index:2; }',
+      '.bn-mk-pair{ font-family:var(--serif,Georgia,serif); font-size:17px; color:#2b2419; flex:1 1 auto; }',
+      '.bn-mk-arrow{ color:#c8963c; margin:0 7px; }',
+      '.bn-mk-flip,.bn-mk-x{ border:none; background:none; color:#9a9484; cursor:pointer; font-size:16px; line-height:1; padding:2px 4px; }',
+      '.bn-mk-flip:hover,.bn-mk-x:hover{ color:#2b2419; }',
+      '.bn-mk-x{ font-size:21px; }',
+      '.bn-mk-sub{ font-size:10px; letter-spacing:.09em; text-transform:uppercase; color:#a49c88; margin:2px 0 11px; }',
+      '.bn-mk-typerow{ margin-bottom:8px; }',
+      '.bn-mk-typeval{ display:flex; align-items:baseline; gap:9px; }',
+      '.bn-mk-tlabel{ font-size:10px; letter-spacing:.08em; text-transform:uppercase; color:#a49c88; }',
+      '.bn-mk-tval{ font-family:var(--serif,Georgia,serif); font-size:16px; color:#2b2419; }',
+      '.bn-mk-typeval.empty .bn-mk-tval{ color:#b3aa94; font-style:italic; }',
+      '.bn-mk-search{ width:100%; box-sizing:border-box; font-family:inherit; font-size:12.5px;',
+      '  padding:7px 10px; border:1px solid #e6e0d1; border-radius:8px; }',
+      '.bn-mk-search.bn-mk-need{ border-color:#b0402f; }',
+      '.bn-mk-list{ max-height:168px; overflow:auto; margin:7px 0 11px; padding-right:2px; }',
+      '.bn-mk-fam{ font-size:9.5px; letter-spacing:.09em; text-transform:uppercase; color:#a49c88; margin:8px 0 3px; }',
+      '.bn-mk-row{ display:block; width:100%; text-align:left; border:none; background:none; font-family:inherit;',
+      '  font-size:13px; color:#3b3529; padding:5px 8px; border-radius:7px; cursor:pointer; }',
+      '.bn-mk-row:hover{ background:#f6f1e6; }',
+      '.bn-mk-row.on{ background:#2b2419; color:#f3ecdc; }',
+      '.bn-mk-new{ display:block; width:100%; text-align:left; border:1px dashed rgba(200,150,60,.55);',
+      '  background:none; font-family:inherit; font-size:13px; color:#8a6b23; padding:6px 8px; border-radius:7px;',
+      '  cursor:pointer; margin-top:7px; }',
+      '.bn-mk-new:hover{ background:#faf3e4; }',
+      '.bn-mk-none{ font-size:12px; color:#9a9484; font-style:italic; padding:8px; }',
+      '.bn-mk-rev{ display:flex; align-items:center; gap:8px; padding:9px 0 11px; border-top:1px solid #efeade; }',
+      '.bn-mk-rlabel{ font-size:11.5px; color:#8a8271; flex:0 0 auto; }',
+      '.bn-mk-rinput{ flex:1 1 auto; min-width:0; font-family:inherit; font-size:12.5px; padding:5px 8px;',
+      '  border:1px solid #e6e0d1; border-radius:7px; }',
+      '.bn-mk-rnote{ font-size:10px; color:#b3aa94; font-style:italic; flex:0 0 auto; }',
+      '.bn-mk-dims{ border-top:1px solid #efeade; padding-top:10px; }',
+      '.bn-mk-drow{ display:flex; align-items:center; gap:10px; margin-bottom:7px; }',
+      '.bn-mk-dlbl{ flex:0 0 62px; font-size:10px; letter-spacing:.08em; text-transform:uppercase; color:#a49c88; }',
+      '.bn-mk-ints,.bn-mk-vals{ display:flex; gap:4px; flex:1 1 auto; }',
+      '.bn-mk-int,.bn-mk-val,.bn-mk-sw{ border:1px solid #ded7c7; background:#fbfaf8; color:#5d5647;',
+      '  border-radius:999px; padding:4px 10px; font-size:11.5px; cursor:pointer; font-family:inherit; }',
+      '.bn-mk-int.on{ background:#2b2419; border-color:#2b2419; color:#f3ecdc; }',
+      '.bn-mk-val.on{ border-color:#c8963c; background:#f8f1e2; color:#2b2419; }',
+      '.bn-v-warm.on{ border-color:#c07a3a; background:#fbeedd; }',
+      '.bn-v-cold.on{ border-color:#4f78c2; background:#e9eefa; }',
+      '.bn-mk-sw.on{ border-color:#8f6bbf; background:#f0eafa; color:#3b2f52; }',
+      '.bn-mk-text{ flex:1 1 auto; min-width:0; font-family:inherit; font-size:12.5px; padding:5px 8px;',
+      '  border:1px solid #e6e0d1; border-radius:7px; }',
+      '.bn-mk-notelbl{ flex:none; margin:9px 0 4px; }',
+      '.bn-mk-note{ width:100%; box-sizing:border-box; min-height:56px; resize:vertical; font-family:inherit;',
+      '  font-size:12.5px; padding:7px 9px; border:1px solid #e6e0d1; border-radius:8px; }',
+      '.bn-mk-acts{ display:flex; gap:8px; justify-content:flex-end; margin-top:13px; }',
+      '.bn-mk-btn{ border:1px solid #ded7c7; background:#fbfaf8; color:#5d5647; border-radius:9px;',
+      '  padding:7px 14px; font-size:12.5px; cursor:pointer; font-family:inherit; }',
+      '.bn-mk-btn:hover{ border-color:#c8963c; color:#2b2419; }',
+      '.bn-mk-go{ background:#2b2419; border-color:#2b2419; color:#f3ecdc; }',
+      '.bn-mk-go:hover{ background:#3a3122; color:#fff; }',
+      '.bn-mk-del{ margin-right:auto; }',
+      '.bn-mk-del:hover{ border-color:#b0402f; color:#b0402f; }',
       'body.eink .bn-node{ background:#000; color:#fff; } body.eink .bn-lab{ border-color:#000; }',
       /* the dossier's small panel: same instrument, a smaller room */
       /* declare the box explicitly — a mount lands inside someone else's layout
@@ -64711,6 +65270,8 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
     document.head.appendChild(s);
   }
 
+  V.__open = openBondCreator;
+  V.__poolFor = poolFor;   /* the harness asserts the WORDS that come back, not that a picker opened (lesson 19) */
   V.ui = MAIN.ui;
   V.mount = mount;
   V.main = MAIN;
