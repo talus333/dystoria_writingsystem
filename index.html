@@ -47915,8 +47915,14 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.399';
+  var APP_VERSION = '2026.07.20.400';
   var APP_CHANGELOG = [
+    { v:'2026.07.20.400', date:'August 9, 2026', notes:[
+      '**Bonds is now an endless sheet of paper.** Drag anywhere on the background to move around it, scroll to zoom in and out under your cursor, and use the \u2212 / + in the header for finer control. Click the percentage to fit everything back on screen. Where you left the view is remembered for each map, so coming back to a family tree you had scrolled out to the far cousins does not reset it.',
+      '**Connecting is its own gesture now.** The little dot in front of every element is gone. Hover an element instead and the Map\u2019s own link mark appears at its edge \u2014 drag from there onto another element and the type picker opens; the element you are about to connect to lights up as you cross it. Dragging the element itself just moves it, as it always did. (Drawing a link from anywhere on the pill was tried first and rejected: on a crowded map there is little empty paper to drop onto, so moving something would keep opening the picker.)',
+      '**An \u00d7 on every element takes it off the map** \u2014 the element and all its connections stay exactly as they were in your story; it just stops being drawn here. The header tells you how many you have set aside and offers them back in one click.',
+      'The Map\u2019s own \u22ef options button \u2014 with Clear map and the grid toggle \u2014 was showing through on top of Bonds, where neither means anything. It is gone, along with the map\u2019s zoom, terrain and full-screen controls.'
+    ] },
     { v:'2026.07.20.399', date:'August 9, 2026', notes:[
       'Bonds now has its two doors. On the planning page, \u201cMap it as a web\u201d \u2014 the way in for anyone who thinks by scattering pieces and drawing the lines between them \u2014 finally goes somewhere. It used to drop you on the Map, which shows one section at a time; it now opens Bonds on Everything, with your whole story already drawn.',
       'And every element\u2019s dossier carries its own small Bonds panel, under the sentence about who it is tied to. A sentence can tell you that Mara leads the Ember Pact and is married to Tam; only a drawing shows you the shape of it. It shows everything one step out, and it is the real thing rather than a picture of it \u2014 drag a node to arrange it, drag from a dot to connect two elements, and what you draw is written into your story the same way the Map writes it. \u201cOpen in Bonds\u201d takes the same view full-size.',
@@ -49225,7 +49231,10 @@ body.plan-view-bonds #skySvg, body.plan-view-bonds #expLeft, body.plan-view-bond
 body.plan-view-bonds #expMapSecWrap, body.plan-view-bonds #expMapLeft, body.plan-view-bonds #expMapRight,
 body.plan-view-bonds #expLTab, body.plan-view-bonds #expRTab,
 body.plan-view-bonds #storyLibWin, body.plan-view-bonds #undoWrap, body.plan-view-bonds #rail,
-body.plan-view-bonds #mapTools, body.plan-view-bonds #mapLegend, body.plan-view-bonds #mapHead{ display:none !important; }
+body.plan-view-bonds #mapTools, body.plan-view-bonds #mapLegend, body.plan-view-bonds #mapHead,
+body.plan-view-bonds #expMenuBtn, body.plan-view-bonds #expMenu,
+body.plan-view-bonds #zoomWrap, body.plan-view-bonds #mapTerrainWrap,
+body.plan-view-bonds #mapFullToggle{ display:none !important; }
 
 /* Sub-view panels fill the sky below the header */
 .plan-panel{ position:absolute; left:0; right:0; top:40px; bottom:0; z-index:22; overflow:auto;
@@ -49258,7 +49267,7 @@ body.plan-view-narrative #planNarrative{ display:block; }
 body.eink #planNarrative .pl-nfilter{ background:#fff; border-bottom-color:#000; }
 body.plan-view-plot #planPlot{ display:block; }
 body.plan-view-arcs #planArcs{ display:block; }
-body.plan-view-bonds #planBonds{ display:block; }
+body.plan-view-bonds #planBonds{ display:flex; }
 /* NOT .dossier-bonds — that class already belongs to the bond-pill rows below. */
 .dossier-bondsmap{ display:block; width:100%; margin-top:8px; }
 
@@ -63669,6 +63678,12 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
                    loose: !!opts.loose, sel:null } };
   }
   var MAIN = mount({});
+  /* the Map's link control, as flat markup — same glyph, so the gesture reads the
+     same in both rooms */
+  var LINK_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" '
+    + 'stroke-linecap="round" stroke-linejoin="round">'
+    + '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>'
+    + '<path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>';
   function hostOf(m){ return m.host || document.getElementById(m.hostId); }
 
   /* ---- persistence: only positions, and only ours --------------------- */
@@ -63702,6 +63717,29 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
     s.pins[slot(m)] = s.pins[slot(m)].filter(function(k){ return k !== key; });
     saveStore(s);
   }
+  /* Taking something off a map is not the same as removing it from the story, and
+     a derived view has no other way to say so — the bond that put it here is still
+     true. So the × records a refusal, per map, that the reader honours. */
+  function hidden(m){ var s = store(); return (s.hide && s.hide[slot(m)]) || []; }
+  function hide(key, m){
+    var s = store(); s.hide = s.hide || {};
+    var arr = s.hide[slot(m)] = s.hide[slot(m)] || [];
+    if (arr.indexOf(key) < 0) arr.push(key);
+    if (s.pins && s.pins[slot(m)]) s.pins[slot(m)] = s.pins[slot(m)].filter(function(k){ return k !== key; });
+    saveStore(s);
+  }
+  function unhideAll(m){ var s = store(); if (s.hide) delete s.hide[slot(m)]; saveStore(s); }
+  /* Where the camera is looking. Per map, like the positions — coming back to a
+     family tree you had scrolled to the far cousins should not reset it. */
+  function camera(m){
+    var s = store(); var c = (s.views && s.views[slot(m)]) || null;
+    return { z: (c && c.z) || 1, x: (c && c.x) || 0, y: (c && c.y) || 0 };
+  }
+  function saveCamera(m, c){
+    var s = store(); s.views = s.views || {};
+    s.views[slot(m)] = { z: Math.round(c.z * 1000) / 1000, x: Math.round(c.x), y: Math.round(c.y) };
+    saveStore(s);
+  }
   function savePos(key, x, y, m){
     var s = store(); s.layouts = s.layouts || {};
     var p = s.layouts[slot(m)] = s.layouts[slot(m)] || {};
@@ -63719,10 +63757,12 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
           var p = s.layouts[k];
           if (p && p[oldKey]){ p[newKey] = p[oldKey]; delete p[oldKey]; touched = true; }
         });
-        Object.keys(s.pins || {}).forEach(function(k){
-          var arr = s.pins[k] || [];
-          var i = arr.indexOf(oldKey);
-          if (i >= 0){ arr[i] = newKey; touched = true; }
+        ['pins','hide'].forEach(function(which){
+          Object.keys(s[which] || {}).forEach(function(k){
+            var arr = s[which][k] || [];
+            var i = arr.indexOf(oldKey);
+            if (i >= 0){ arr[i] = newKey; touched = true; }
+          });
         });
         if (touched) saveStore(s);
       }catch(e){}
@@ -63943,19 +63983,28 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
     if (!window.BONDS){ host.appendChild(el('div','bn-empty','The relationship reader has not loaded.')); return; }
 
     host.appendChild(chooser(m));
+    var cam = camera(m);
+    var zoomLbl = host.querySelector('.bn-zlbl');
     var g;
     try{ g = BONDS.graph({ kind:m.ui.kind, scope:m.ui.scope, loose:m.ui.loose }); }
     catch(err){ host.appendChild(el('div','bn-empty','Could not read the relationships: ' + err.message)); return; }
 
+    /* Two layers, and the distinction matters everywhere below: the CANVAS is the
+       window you look through and never moves; the WORLD is the sheet of paper the
+       elements are pinned to, and panning and zooming move that. Node positions are
+       world coordinates, so a bond drawn at 40% zoom lands where you dropped it. */
     var wrap = el('div','bn-wrap');
     var canvas = el('div','bn-canvas');
+    var world = el('div','bn-world');
     var svg = document.createElementNS('http://www.w3.org/2000/svg','svg');
     svg.setAttribute('class','bn-svg');
-    canvas.appendChild(svg);
+    world.appendChild(svg);
+    canvas.appendChild(world);
     wrap.appendChild(canvas);
     host.appendChild(wrap);
 
     addPins(g, m);
+    dropHidden(g, m);
     if (!g.nodes.length){
       canvas.appendChild(el('div','bn-empty', emptyLine(g, m)));
       return;
@@ -63972,24 +64021,30 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
       var d = el('div','bn-node bn-cat-' + (n.cat || 'word'));
       d.style.left = pos[n.key].x + 'px'; d.style.top = pos[n.key].y + 'px';
       d.dataset.key = n.key;
-      var handle = el('i','bn-handle'); handle.title = 'Drag to another element to connect them';
+      /* the Map's own link glyph, and only while the pointer is over the pill —
+         a permanent dot on every element is decoration; a mark that appears when
+         you reach for it is an instruction */
+      var handle = el('i','bn-link');
+      handle.innerHTML = LINK_SVG;
+      handle.title = 'Drag from here onto another element to connect them';
+      handle.addEventListener('pointerdown', function(ev){
+        ev.stopPropagation(); ev.preventDefault();
+        linkFrom(n, d, ev, cam, canvas, svg, world, pos, nodeEls, m, function(){ paint(); });
+      });
       d.appendChild(handle);
       d.appendChild(el('span','bn-name', n.label));
       if (n.bucket) d.appendChild(el('span','bn-role', n.bucket));
-      if (n.pinned){
-        var x = el('span','bn-unpin','×');
-        x.title = 'Take off this map (the element and its connections are untouched)';
-        x.addEventListener('pointerdown', function(ev){ ev.stopPropagation(); });
-        x.addEventListener('click', function(ev){ ev.stopPropagation(); unpin(n.key, m); V.render(m); });
-        d.appendChild(x);
-      }
-      canvas.appendChild(d);
+      var x = el('span','bn-unpin','×');
+      x.title = 'Take this off the map. The element and its connections are untouched.';
+      x.addEventListener('pointerdown', function(ev){ ev.stopPropagation(); });
+      x.addEventListener('click', function(ev){ ev.stopPropagation(); hide(n.key, m); V.render(m); });
+      d.appendChild(x);
+      world.appendChild(d);
       nodeEls[n.key] = d;
-      dragNode(d, n, pos, function(){ paint(); }, m);
-      handle.addEventListener('pointerdown', function(ev){ ev.stopPropagation(); connectFrom(n, canvas, svg, pos, nodeEls, g, m); });
+      dragNode(d, n, pos, function(){ paint(); }, m, cam, canvas, svg, world, nodeEls, g);
     });
 
-    function paint(){ drawEdges(svg, canvas, g, pos, nodeEls, m); }
+    function paint(){ drawEdges(svg, world, g, pos, nodeEls, m); }
     paint();
     /* the nodes are measured after they are in the DOM, so the first paint of a
        fresh layout is one frame late rather than wrong — and a mount can be
@@ -64006,7 +64061,90 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
     });
     m._repaint = paint;
     m._graph = g;
+    m._cam = cam;
+    installCamera(m, canvas, world, cam, zoomLbl);
+    /* first time on this map: frame it, rather than leaving the writer looking at
+       the top-left corner of a very large sheet of paper */
+    if (!(store().views || {})[slot(m)]) requestAnimationFrame(function(){ fitCam(m); });
   };
+
+  /* ---- the camera: an endless sheet, panned and zoomed like the Map -------
+     The Map moves an SVG viewBox; this canvas is real DOM, so the same gesture is
+     a transform on the world layer. Node positions never change when you zoom —
+     only what you are looking at does. */
+  var ZMIN = 0.25, ZMAX = 2.2;
+  function applyCam(world, cam){
+    world.style.transform = 'translate(' + cam.x + 'px,' + cam.y + 'px) scale(' + cam.z + ')';
+  }
+  function installCamera(m, canvas, world, cam, zoomLbl){
+    applyCam(world, cam);
+    var save = function(){ clearTimeout(m._camT); m._camT = setTimeout(function(){ saveCamera(m, cam); }, 350); };
+    var show = function(){ if (zoomLbl) zoomLbl.textContent = Math.round(cam.z * 100) + '%'; };
+    show();
+    m._zoomTo = function(z, cx, cy){
+      var r = canvas.getBoundingClientRect();
+      if (cx == null){ cx = r.width / 2; cy = r.height / 2; }
+      var nz = Math.max(ZMIN, Math.min(ZMAX, z));
+      // keep the point under the cursor fixed: it is the only zoom that does not feel like a jump
+      cam.x = cx - (cx - cam.x) * (nz / cam.z);
+      cam.y = cy - (cy - cam.y) * (nz / cam.z);
+      cam.z = nz; applyCam(world, cam); show(); save();
+    };
+    canvas.addEventListener('wheel', function(ev){
+      ev.preventDefault();
+      var r = canvas.getBoundingClientRect();
+      if (ev.ctrlKey || ev.metaKey || !ev.shiftKey){
+        m._zoomTo(cam.z * (ev.deltaY > 0 ? 0.9 : 1.111), ev.clientX - r.left, ev.clientY - r.top);
+      } else { cam.x -= ev.deltaX; cam.y -= ev.deltaY; applyCam(world, cam); save(); }
+    }, { passive:false });
+    canvas.addEventListener('pointerdown', function(ev){
+      if (ev.target.closest && ev.target.closest('.bn-node, .bn-lab, .bn-card')) return;
+      ev.preventDefault();
+      var sx = ev.clientX, sy = ev.clientY, ox = cam.x, oy = cam.y;
+      canvas.classList.add('bn-panning');
+      var move = function(e2){ cam.x = ox + (e2.clientX - sx); cam.y = oy + (e2.clientY - sy); applyCam(world, cam); };
+      var up = function(){
+        document.removeEventListener('pointermove', move, true);
+        document.removeEventListener('pointerup', up, true);
+        canvas.classList.remove('bn-panning'); save();
+      };
+      document.addEventListener('pointermove', move, true);
+      document.addEventListener('pointerup', up, true);
+    });
+  }
+  /* Bring everything into view — the way back when you have panned into the dark. */
+  function fitCam(m){
+    var g = m._graph, cam = m._cam; if (!g || !cam) return;
+    var host = hostOf(m); if (!host) return;
+    var canvas = host.querySelector('.bn-canvas'), world = host.querySelector('.bn-world');
+    if (!canvas || !world) return;
+    var x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+    Array.prototype.slice.call(world.querySelectorAll('.bn-node')).forEach(function(d){
+      var l = d.offsetLeft, t = d.offsetTop;
+      if (l < x0) x0 = l; if (t < y0) y0 = t;
+      if (l + d.offsetWidth > x1) x1 = l + d.offsetWidth;
+      if (t + d.offsetHeight > y1) y1 = t + d.offsetHeight;
+    });
+    if (x1 < x0) return;
+    var r = canvas.getBoundingClientRect(), pad = 46;
+    /* fit means "get it all on screen", never "fill the screen with it" — blowing a
+       six-person family up to 160% because there is room reads as a zoom bug */
+    var z = Math.min(1, (r.width - pad*2) / Math.max(1, x1-x0), (r.height - pad*2) / Math.max(1, y1-y0));
+    z = Math.max(ZMIN, Math.min(ZMAX, z));
+    cam.z = z;
+    cam.x = (r.width - (x1-x0) * z) / 2 - x0 * z;
+    cam.y = (r.height - (y1-y0) * z) / 2 - y0 * z;
+    applyCam(world, cam); saveCamera(m, cam);
+    var lb = host.querySelector('.bn-zlbl'); if (lb) lb.textContent = Math.round(cam.z * 100) + '%';
+  }
+
+  /* Elements the writer has taken off this map stay off it, edges and all. */
+  function dropHidden(g, m){
+    var h = hidden(m); if (!h.length) return;
+    var gone = {}; h.forEach(function(k){ gone[k] = 1; });
+    g.nodes = g.nodes.filter(function(n){ return !gone[n.key]; });
+    g.edges = g.edges.filter(function(e){ return !gone[e.akey] && !gone[e.bkey]; });
+  }
 
   /* A pinned element joins the drawing even with nothing attached to it yet. */
   function addPins(g, m){
@@ -64043,6 +64181,7 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
         var st = store(); if (st.layouts) delete st.layouts[slot(m)]; saveStore(st); V.render(m);
       });
       mr.appendChild(ma);
+      mr.appendChild(zoomBar(m));
       if (m.onOpen){
         var op = el('button','bn-arrange','Open in Bonds ↗'); op.type = 'button';
         op.title = 'See this in the full Bonds view, where you can change the kind of map';
@@ -64051,7 +64190,7 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
       }
       bar.appendChild(mr);
       var mo = el('div','bn-headwrap'); mo.appendChild(bar);
-      mo.appendChild(el('div','bn-lede','Everything this one is tied to, one step out. Drag from a dot to connect.'));
+      mo.appendChild(el('div','bn-lede','Everything this one is tied to, one step out. Hover an element and drag its link mark onto another to connect them.'));
       return mo;
     }
     var kinds = el('div','bn-kinds');
@@ -64090,14 +64229,36 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
     var arr = el('button','bn-arrange','Arrange'); arr.type = 'button';
     arr.title = 'Lay this out again from scratch';
     arr.addEventListener('click', function(){
-      var s = store(); if (s.layouts) delete s.layouts[slot(m)]; saveStore(s); V.render(m);
+      var s = store(); if (s.layouts) delete s.layouts[slot(m)]; delete (s.views||{})[slot(m)]; saveStore(s); V.render(m);
     });
     right.appendChild(arr);
+    right.appendChild(zoomBar(m));
     bar.appendChild(right);
 
     var lede = el('div','bn-lede', (BONDS.KINDS[m.ui.kind] || {}).lede || '');
     var out = el('div','bn-headwrap'); out.appendChild(bar); out.appendChild(lede);
+    var h = hidden(m);
+    if (h.length){
+      var back = el('button','bn-back', h.length + (h.length === 1 ? ' element is' : ' elements are') + ' off this map — show them again');
+      back.type = 'button';
+      back.addEventListener('click', function(){ unhideAll(m); V.render(m); });
+      lede.appendChild(back);
+    }
     return out;
+  }
+
+  /* Zoom reads as a number and a pair of steps, the way the Map's does. */
+  function zoomBar(m){
+    var z = el('div','bn-zoom');
+    var mk = function(t, title, fn){ var b = el('button','bn-zb', t); b.type='button'; b.title = title;
+      b.addEventListener('click', fn); return b; };
+    z.appendChild(mk('−','Zoom out', function(){ if (m._zoomTo) m._zoomTo(((m._cam||{}).z || 1) / 1.2); }));
+    var lbl = el('span','bn-zlbl','100%');
+    lbl.title = 'Click to fit everything on screen';
+    lbl.addEventListener('click', function(){ fitCam(m); });
+    z.appendChild(lbl);
+    z.appendChild(mk('+','Zoom in', function(){ if (m._zoomTo) m._zoomTo(((m._cam||{}).z || 1) * 1.2); }));
+    return z;
   }
   /* The element picker. Offers what this KIND can hold, and says so when the kind
      is the reason something is missing — otherwise "where is my character" has no
@@ -64170,10 +64331,10 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
     var s = Math.min(hw / Math.abs(dx || 1e-6), hh / Math.abs(dy || 1e-6));
     return { x: from.x + dx * s, y: from.y + dy * s };
   }
-  function drawEdges(svg, canvas, g, pos, nodeEls, m){
+  function drawEdges(svg, world, g, pos, nodeEls, m){
     var lane = [];
     while (svg.firstChild) svg.removeChild(svg.firstChild);
-    Array.prototype.slice.call(canvas.querySelectorAll('.bn-lab')).forEach(function(n){ n.parentNode.removeChild(n); });
+    Array.prototype.slice.call(world.querySelectorAll('.bn-lab')).forEach(function(n){ n.parentNode.removeChild(n); });
     var defs = document.createElementNS('http://www.w3.org/2000/svg','defs');
     ['#8f8a9c','#c98a3e','#4f78c2','#b0402f'].forEach(function(c, i){
       var m = document.createElementNS('http://www.w3.org/2000/svg','marker');
@@ -64218,7 +64379,7 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
       if (e.types && e.types.length > 1) lab.appendChild(el('i','bn-more','+' + (e.types.length - 1)));
       lab.title = describe(e);
       lab.addEventListener('click', function(ev){ ev.stopPropagation(); m.ui.sel = idx; openCard(e, idx, m); });
-      canvas.appendChild(lab);
+      world.appendChild(lab);
       lane.push({ el:lab, pa:pa, pb:pb });
     });
     place(lane, nodeEls);
@@ -64253,7 +64414,7 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
     };
     var placed = [];
     lane.forEach(function(it){
-      var r = it.el.getBoundingClientRect(), w = r.width + 6, h = r.height + 4;
+      var w = it.el.offsetWidth + 6, h = it.el.offsetHeight + 4;
       var best = null;
       for (var i = 0; i < STOPS.length; i++){
         var t = STOPS[i];
@@ -64349,52 +64510,40 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
       onRemove: function(){ writeBond(e.akey, e.bkey, '', { remove:true }); V.render(m); }
     });
   }
-  function connectFrom(n, canvas, svg, pos, nodeEls, g, m){
-    var temp = document.createElementNS('http://www.w3.org/2000/svg','path');
-    temp.setAttribute('class','bn-temp'); svg.appendChild(temp);
-    var from = centre(nodeEls[n.key]);
-    var rect = canvas.getBoundingClientRect();
-    var move = function(ev){
-      var x = ev.clientX - rect.left + canvas.scrollLeft, y = ev.clientY - rect.top + canvas.scrollTop;
-      temp.setAttribute('d','M'+from.x+' '+from.y+' L '+x+' '+y);
-    };
-    var up = function(ev){
-      document.removeEventListener('pointermove', move, true);
-      document.removeEventListener('pointerup', up, true);
-      if (temp.parentNode) temp.parentNode.removeChild(temp);
-      var t = document.elementFromPoint(ev.clientX, ev.clientY);
-      t = t && t.closest ? t.closest('.bn-node') : null;
-      if (!t || t.dataset.key === n.key) return;
-      var other = t.dataset.key;
-      var pg = poolFor(n.key, other);
-      if (typeof window.openConnTypePicker !== 'function') return;
-      window.openConnTypePicker({
-        x: ev.clientX, y: ev.clientY, cur:'', pool: pg.pool, groups: pg.groups,
-        onPick: function(type){
-          var wrote = writeBond(n.key, other, type);
-          if (!wrote) flash('Those two are not in the same section yet — put them on one map first.');
-          V.render(m);
-        }
-      });
-    };
-    document.addEventListener('pointermove', move, true);
-    document.addEventListener('pointerup', up, true);
+  /* Offered when a drag ends on top of another element. */
+  function connectTo(akey, bkey, x, y, m){
+    var pg = poolFor(akey, bkey);
+    if (typeof window.openConnTypePicker !== 'function') return;
+    window.openConnTypePicker({
+      x: x, y: y, cur:'', pool: pg.pool, groups: pg.groups,
+      onPick: function(type){
+        var wrote = writeBond(akey, bkey, type);
+        if (!wrote) flash('Those two are not in the same section yet — put them on one map first.');
+        V.render(m);
+      }
+    });
   }
   function flash(msg){
     try{ if (typeof flashStatus === 'function'){ flashStatus(msg); return; } }catch(e){}
     try{ console.warn('[bonds] ' + msg); }catch(e){}
   }
 
-  /* ---- dragging a node --------------------------------------------------- */
-  function dragNode(d, n, pos, after, m){
+  /* ---- dragging a node: one gesture, and the drop decides what it meant ----
+     Drag a pill and let go on empty paper and you have moved it. Let go on top of
+     another pill and you have connected the two. This is the whole interaction —
+     no handle to find, no mode to be in. Which is right for a room called Bonds:
+     the commonest thing you want to do should be the easiest thing to do. */
+  function dragNode(d, n, pos, after, m, cam, canvas, svg, world, nodeEls, g){
     d.addEventListener('pointerdown', function(ev){
-      if (ev.target.classList.contains('bn-handle')) return;
-      ev.preventDefault();
+      if (ev.target.closest && ev.target.closest('.bn-unpin, .bn-link')) return;
+      ev.preventDefault(); ev.stopPropagation();
       var sx = ev.clientX, sy = ev.clientY, ox = pos[n.key].x, oy = pos[n.key].y, moved = false;
       var move = function(e2){
-        var nx = ox + (e2.clientX - sx), ny = oy + (e2.clientY - sy);
         if (Math.abs(e2.clientX - sx) + Math.abs(e2.clientY - sy) > 3) moved = true;
-        pos[n.key] = { x:Math.max(0, nx), y:Math.max(0, ny) };
+        if (!moved) return;
+        // world coordinates: the pointer moves in screen pixels, the paper is scaled
+        var z = (cam && cam.z) || 1;
+        pos[n.key] = { x: Math.max(0, ox + (e2.clientX - sx) / z), y: Math.max(0, oy + (e2.clientY - sy) / z) };
         d.style.left = pos[n.key].x + 'px'; d.style.top = pos[n.key].y + 'px';
         after();
       };
@@ -64408,12 +64557,61 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
     });
   }
 
+  /* ---- drawing a link ----------------------------------------------------
+     Separate from moving, and the GRAB decides which you are doing rather than
+     the drop. [Jeremy, 2026-08-09: "if you can draw the link from anywhere,
+     moving the pill will be impossible."] He is right about the case that
+     matters — on a crowded map there is little empty paper to drop onto, so a
+     move that ends near a neighbour would keep opening the type picker, and a
+     gesture you cannot predict is worse than one you have to aim. So the link
+     zone is its own target — but a generous one, three times the glyph, because
+     this is the room where connecting things is the point. */
+  function linkFrom(n, d, ev, cam, canvas, svg, world, pos, nodeEls, m, after){
+    var from = centre(d), over = null;
+    var temp = document.createElementNS('http://www.w3.org/2000/svg','path');
+    temp.setAttribute('class','bn-temp'); svg.appendChild(temp);
+    d.classList.add('bn-linking');
+    var rect = canvas.getBoundingClientRect();
+    var toWorld = function(e2){
+      var z = (cam && cam.z) || 1;
+      return { x: (e2.clientX - rect.left - (cam ? cam.x : 0)) / z, y: (e2.clientY - rect.top - (cam ? cam.y : 0)) / z };
+    };
+    var setOver = function(t){
+      if (over === t) return;
+      if (over) over.classList.remove('bn-drop');
+      over = t; if (over) over.classList.add('bn-drop');
+    };
+    var move = function(e2){
+      var t = document.elementFromPoint(e2.clientX, e2.clientY);
+      t = t && t.closest ? t.closest('.bn-node') : null;
+      setOver(t && t !== d ? t : null);
+      var p = over ? centre(over) : toWorld(e2);
+      temp.setAttribute('d','M'+from.x+' '+from.y+' L '+p.x+' '+p.y);
+    };
+    var up = function(e2){
+      document.removeEventListener('pointermove', move, true);
+      document.removeEventListener('pointerup', up, true);
+      if (temp.parentNode) temp.parentNode.removeChild(temp);
+      d.classList.remove('bn-linking');
+      var target = over; setOver(null);
+      if (!target || !target.dataset.key || target.dataset.key === n.key) return;
+      connectTo(n.key, target.dataset.key, e2.clientX, e2.clientY, m);
+    };
+    move(ev);
+    document.addEventListener('pointermove', move, true);
+    document.addEventListener('pointerup', up, true);
+  }
+
   /* ---- style ------------------------------------------------------------- */
   function ensureCSS(){
     if (document.getElementById('bnCSS')) return;
     var s = document.createElement('style'); s.id = 'bnCSS';
     s.textContent = [
-      '#planBonds{ padding:0; }',
+      /* the panel is the whole room; the header takes what it needs and the canvas
+         takes the rest. Sizing the canvas off 100vh guessed at the header height and
+         hung 60px of paper below the window. */
+      '#planBonds{ padding:0; display:flex; flex-direction:column; overflow:hidden; }',
+      '#planBonds .bn-wrap{ flex:1 1 auto; min-height:0; display:flex; }',
       '.bn-headwrap{ position:sticky; top:0; z-index:5; background:#fff; padding:16px 26px 10px; border-bottom:1px solid #ece7db; }',
       '.bn-head{ display:flex; align-items:center; gap:14px; flex-wrap:wrap; }',
       '.bn-kinds{ display:flex; gap:6px; flex-wrap:wrap; }',
@@ -64426,7 +64624,12 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
       '.bn-loose.on{ background:#f3e7cd; border-color:#c8963c; color:#5a4212; }',
       '.bn-lede{ font-family:var(--serif,Georgia,serif); font-style:italic; font-size:12.5px; color:#8a8271; padding-top:8px; }',
       '.bn-wrap{ position:relative; }',
-      '.bn-canvas{ position:relative; min-height:620px; margin:0; padding:22px 26px 90px; }',
+      /* the viewport never moves; the world inside it does */
+      '.bn-canvas{ position:relative; flex:1 1 auto; width:100%; min-height:380px; overflow:hidden;',
+      '  margin:0; padding:0; cursor:grab; touch-action:none; background:#fff;',
+      '  background-image:radial-gradient(circle, #e9e3d5 1px, transparent 1px); background-size:34px 34px; }',
+      '.bn-canvas.bn-panning{ cursor:grabbing; }',
+      '.bn-world{ position:absolute; left:0; top:0; width:5200px; height:3600px; transform-origin:0 0; }',
       '.bn-svg{ position:absolute; inset:0; width:100%; height:100%; pointer-events:none; overflow:visible; }',
       '.bn-edge{ pointer-events:none; }',
       '.bn-edge.on{ opacity:1 !important; }',
@@ -64437,8 +64640,15 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
       '.bn-node:active{ cursor:grabbing; }',
       '.bn-cat-setting{ background:#2f3a2c; } .bn-cat-object{ background:#3a2f22; }',
       '.bn-cat-org{ background:#382a2a; } .bn-cat-concept{ background:#2b2c3a; } .bn-cat-event{ background:#3a3520; }',
-      '.bn-handle{ width:9px; height:9px; border-radius:50%; background:#c8963c; cursor:crosshair; flex:0 0 auto; }',
-      '.bn-handle:hover{ box-shadow:0 0 0 3px rgba(200,150,60,.3); }',
+      /* the link mark appears when the pointer is on the pill, and nowhere else */
+      '.bn-link{ width:0; overflow:hidden; opacity:0; flex:0 0 auto; display:flex; align-items:center;',
+      '  justify-content:center; align-self:stretch; margin:-7px 0 -7px -13px; color:#e8b06a;',
+      '  cursor:crosshair; transition:width .12s ease, opacity .12s ease; }',
+      '.bn-link svg{ width:14px; height:14px; display:block; pointer-events:none; }',
+      '.bn-node:hover .bn-link{ width:30px; opacity:.95; }',
+      '.bn-node:hover .bn-link:hover{ color:#f5c98a; background:rgba(200,150,60,.22); }',
+      '.bn-node.bn-drop{ box-shadow:0 0 0 3px rgba(200,150,60,.75); }',
+      '.bn-node.bn-linking{ opacity:.55; }',
       '.bn-role{ font-size:10px; letter-spacing:.06em; text-transform:uppercase; opacity:.6; }',
       '.bn-lab{ position:absolute; transform:translate(-50%,-50%); background:#fff; border:1px solid #e2dccd;',
       '  border-radius:7px; padding:2px 8px; font-size:11px; color:#5d5647; cursor:pointer; z-index:3; white-space:nowrap; }',
@@ -64459,8 +64669,18 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
       '.bn-act:hover{ border-color:#c8963c; color:#2b2419; }',
       '.bn-act-x:hover{ border-color:#b0402f; color:#b0402f; }',
       '.bn-note{ font-size:11.5px; color:#9a9484; font-style:italic; }',
-      '.bn-unpin{ font-size:14px; line-height:1; opacity:.45; cursor:pointer; margin-left:2px; }',
-      '.bn-unpin:hover{ opacity:1; color:#e8b06a; }',
+      '.bn-unpin{ width:0; overflow:hidden; opacity:0; font-size:15px; line-height:1; cursor:pointer;',
+      '  transition:width .12s ease, opacity .12s ease; }',
+      '.bn-node:hover .bn-unpin{ width:11px; opacity:.5; margin-left:3px; }',
+      '.bn-node .bn-unpin:hover{ opacity:1; color:#e8b06a; }',
+      '.bn-zoom{ display:flex; align-items:center; gap:2px; margin-left:4px; }',
+      '.bn-zb{ border:1px solid #ded7c7; background:#fbfaf8; color:#5d5647; border-radius:7px;',
+      '  width:24px; height:24px; font-size:14px; line-height:1; cursor:pointer; font-family:inherit; }',
+      '.bn-zb:hover{ border-color:#c8963c; color:#2b2419; }',
+      '.bn-zlbl{ font-size:11.5px; color:#8a8271; min-width:40px; text-align:center; cursor:pointer; }',
+      '.bn-zlbl:hover{ color:#2b2419; }',
+      '.bn-back{ display:inline-block; margin-left:10px; border:none; background:none; font-family:inherit;',
+      '  font-size:12px; color:#c8963c; cursor:pointer; text-decoration:underline; font-style:normal; }',
       '.bn-add-pop{ position:fixed; z-index:60; width:258px; background:#fff; border:1px solid #ded7c7;',
       '  border-radius:11px; box-shadow:0 16px 40px -14px rgba(80,60,25,.42); padding:9px; }',
       '.bn-add-search{ width:100%; box-sizing:border-box; font-family:inherit; font-size:12.5px;',
@@ -64481,7 +64701,8 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
       '.bn-mini .bn-wrap{ display:block; width:100%; }',
       '.bn-mini .bn-headwrap{ position:static; padding:9px 13px 7px; background:#fbf7ee; }',
       '.bn-mini .bn-lede{ font-size:11.5px; padding-top:5px; }',
-      '.bn-mini .bn-canvas{ min-height:268px; padding:16px 16px 24px; overflow:auto; }',
+      '.bn-mini .bn-canvas{ height:268px; min-height:268px; flex:0 0 268px; background-size:26px 26px; }',
+      '.bn-mini .bn-wrap{ display:block; }',
       '.bn-mini .bn-empty{ padding:34px 16px; font-size:13px; }',
       '.bn-mini-t{ font-family:var(--serif,Georgia,serif); font-size:14px; font-weight:600; color:#2b2419; }',
       '.bn-mini .bn-node{ font-size:12px; padding:5px 11px; }',
