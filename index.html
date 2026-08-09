@@ -47880,8 +47880,12 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.396';
+  var APP_VERSION = '2026.07.20.397';
   var APP_CHANGELOG = [
+    { v:'2026.07.20.397', date:'August 9, 2026', notes:[
+      'Groundwork for the Bonds view: the app can now read every relationship you have made \u2014 map connections across all sections, group charts and concept maps \u2014 as one standing picture, and say which sections each bond is alive in.',
+      'Nothing changes on screen yet; this is the engine the Bonds section will draw.'
+    ] },
     { v:'2026.07.20.396', date:'August 9, 2026', notes:[
       'Relationships now include real family words \u2014 parent, child, sibling, spouse, guardian, ancestor and the rest \u2014 so a family tree can be built anywhere, not just inside a group\u2019s chart.',
       'Setting a relationship fills in the other side for you: say one character is a parent of another and the reverse reads correctly from their card. A reverse you set yourself is never overwritten.',
@@ -63119,6 +63123,440 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
   }, 200);
   try{ apply(); hook(); }catch(e){}
   R.apply = apply;
+})();
+</script>
+<script id="dyst-bonds-reader-js">
+/* ============================================================================
+   Dystoria — the standing-graph reader (step 3 of Bonds / #24).
+
+   No UI. One function: given a KIND of map and a SCOPE, return the nodes and
+   edges that belong on it. Everything downstream — the panel, the arc of a
+   dossier, an export — reads this and nothing else.
+
+   The whole job is that the app's relationships live in four different places
+   with three different notions of identity, and a relational diagram needs one:
+
+   • MAP LINKS are per section and keyed by ARRAY INDEX into that section's word
+     list, so link {a:3,b:7} in section 1 and link {a:2,b:5} in section 4 can be
+     the same relationship between the same two people. They are resolved to
+     element keys and merged into ONE standing bond that remembers which sections
+     it was live in — which is the honest reading: a bond is a thing about the
+     story, its intensity and even its type are things about a moment in it.
+   • GROUP-CHART edges are story-wide and key-based already, in localStorage.
+   • CONCEPT-MAP edges likewise, in the same blob under a different shape.
+
+   Nothing here writes. The reader is pure, so it can be tested headless against
+   a fixture story, which is exactly what `t_bonds.js` does.
+   ========================================================================== */
+(function(){
+  'use strict';
+  var B = window.BONDS = window.BONDS || {};
+
+  /* ---- the kinds ---------------------------------------------------------
+     A kind is a constraint the writer chooses: which elements may appear, which
+     part of the vocabulary is on offer, and how it wants to be laid out. The
+     family names are the ones v.396 put on the subcategories, so this table and
+     the connection picker cannot drift apart. */
+  var KINDS = {
+    family: { name:'Family tree', lede:'Who is related to whom.',
+      cats:['being'], families:{ 'being|being':['Kinship'] }, layout:'generational' },
+    social: { name:'Social web', lede:'Who trusts, owes, loves and cannot forgive whom.',
+      cats:['being','org'], families:{ 'being|being':['Romance','Loyalty','Mentorship','Enmity','Debt & secrets'] }, layout:'web' },
+    faction: { name:'Faction chart', lede:'How the powers stand to each other.',
+      cats:['org','setting'], families:null, layout:'hierarchy' },
+    place: { name:'Place blueprint', lede:'What connects to what, and what is inside what.',
+      cats:['setting'], families:{ 'setting|setting':['Position','Passage'] }, layout:'blueprint' },
+    concept: { name:'Concept web', lede:'How the ideas of the story hold each other up.',
+      cats:['concept','org','setting'], families:null, layout:'web' },
+    causal: { name:'Causal chain', lede:'What caused what.',
+      cats:['event'], families:null, layout:'timeline' },
+    free: { name:'Everything', lede:'The whole relational shape, unfiltered.',
+      cats:null, families:null, layout:'web' }
+  };
+  B.KINDS = KINDS;
+  B.kinds = function(){ return Object.keys(KINDS).map(function(k){
+    return { id:k, name:KINDS[k].name, lede:KINDS[k].lede, layout:KINDS[k].layout }; }); };
+
+  /* ---- small reachable helpers ------------------------------------------
+     `state` is `let` at top level: reachable by bare name, absent from window.
+     Everything else here is a top-level function declaration. */
+  function S(){ try{ return state; }catch(e){ return null; } }
+  function frames(){
+    var s = S(); if (!s) return [];
+    if (s.frames && s.frames.length) return s.frames;
+    return s.prompt ? [{ prompt: s.prompt }] : [];
+  }
+  function keyOf(w){ try{ return wordKey(w); }catch(e){ return null; } }
+  function labelOf(w){ try{ return elDisplayName(w) || w.word || ''; }catch(e){ return (w && w.word) || ''; } }
+  function catOf(w){ return w ? (w.role === 'being' ? 'being' : w.cat) : ''; }
+
+  /* Every element in the story, by key, with the record the panel will want. */
+  function roster(){
+    var by = Object.create(null);
+    try{
+      npStoryElements().forEach(function(e){
+        var w = e.w;
+        by[e.key] = { key:e.key, cat:catOf(w), label:labelOf(w), w:w,
+          bucket:(w.bucket || ''), group:(w.group || null), threads:threadsOf(w) };
+      });
+    }catch(err){}
+    return by;
+  }
+  function threadsOf(w){ try{ return wordThreadIds(w) || []; }catch(e){ return []; } }
+
+  /* ---- 1 · the map links, resolved and merged --------------------------- */
+  function mapEdges(){
+    var out = Object.create(null);
+    frames().forEach(function(fr, fi){
+      var words = (fr.prompt && fr.prompt.words) || [];
+      var links = (fr.prompt && fr.prompt.links) || [];
+      links.forEach(function(l0){
+        var l = null; try{ l = normalizeLink(l0); }catch(e){ l = l0; }
+        if (!l) return;
+        var wa = words[l.a], wb = words[l.b]; if (!wa || !wb) return;
+        var ka = keyOf(wa), kb = keyOf(wb); if (!ka || !kb || ka === kb) return;
+        /* The pair is stored under a sorted key so the same bond found in two
+           sections lands in the same bucket. `fwd` means a→b in that frame's
+           index order, which is not the sorted-key order, so the aspects are
+           flipped when the sort disagrees — otherwise "Mara mentors Tam" and
+           "Tam is apprenticed to Mara" would be recorded as the same direction. */
+        var flip = ka > kb;
+        var pk = flip ? (kb + ' ' + ka) : (ka + ' ' + kb);
+        var fwd = flip ? l.rev : l.fwd, rev = flip ? l.fwd : l.rev;
+        var e = out[pk];
+        if (!e){
+          e = out[pk] = { akey: flip ? kb : ka, bkey: flip ? ka : kb,
+            aspects:{ fwd:null, rev:null }, seen:{ fwd:[], rev:[] },
+            sections:[], origin:'map', origins:['map'] };
+        }
+        if (e.sections.indexOf(fi) < 0) e.sections.push(fi);
+        /* EVERY aspect the bond has worn is kept, with the section it was worn in.
+           The first version took the first typed one and stopped, which quietly
+           threw away the most interesting case in the app: Mara is Tam's parent in
+           chapter one and betrays him in chapter three. That is not a correction of
+           the first fact, it is a second fact, and a standing map that shows only
+           one of them is lying by omission. The headline is the LATEST — the state
+           the relationship has reached — and the rest is on the bond card. */
+        if (fwd) e.seen.fwd.push({ section:fi, a:fwd });
+        if (rev) e.seen.rev.push({ section:fi, a:rev });
+      });
+    });
+    Object.keys(out).forEach(function(k){ settle(out[k]); });
+    return out;
+  }
+  /* Latest typed aspect wins the headline; every distinct type is remembered. */
+  function settle(e){
+    ['fwd','rev'].forEach(function(side){
+      var seen = (e.seen && e.seen[side]) || [];
+      var typed = seen.filter(function(x){ return x.a && x.a.type; });
+      var pick = typed.length ? typed[typed.length - 1].a : (seen.length ? seen[seen.length - 1].a : null);
+      e.aspects[side] = pick;
+      if (typed.length > 1){
+        e['history_' + side] = typed.map(function(x){ return { section:x.section, type:x.a.type }; });
+      }
+    });
+    var types = [];
+    ['fwd','rev'].forEach(function(side){
+      ((e.seen && e.seen[side]) || []).forEach(function(x){
+        if (x.a && x.a.type && types.indexOf(x.a.type) < 0) types.push(x.a.type); });
+    });
+    e.types = types;
+    delete e.seen;
+  }
+
+  /* ---- 2 · group-chart edges -------------------------------------------- */
+  function groupEdges(byKey){
+    var out = Object.create(null);
+    if (typeof window.__dystGroupConns !== 'function') return groupEdgesFromBlob(byKey);
+    Object.keys(byKey).forEach(function(k){
+      if (byKey[k].cat !== 'being') return;
+      var conns = [];
+      try{ conns = window.__dystGroupConns(k) || []; }catch(e){ return; }
+      conns.forEach(function(c){
+        if (!c || !c.otherKey) return;
+        var ka = k, kb = c.otherKey;
+        var flip = ka > kb;
+        var pk = (flip ? kb : ka) + ' ' + (flip ? ka : kb) + ' ' + (c.groupKey || '');
+        if (out[pk]) return;
+        /* `c.type` is already inverted for the reading side and `c.rawType` is
+           what is stored; the stored direction runs from whichever end was NOT
+           the reverse one. */
+        var stored = c.rawType || c.type || '';
+        var fromA = !c.reverse;
+        var asp = { type: stored, sub:'', intensity:2, valence:'neutral', secret:false, stake:'', hinge:null };
+        var e = { akey: flip ? kb : ka, bkey: flip ? ka : kb,
+          aspects:{ fwd:null, rev:null }, sections:null,
+          origin:'grouptree:' + (c.groupKey || ''), origins:['grouptree'],
+          groupLabel: c.groupLabel || '', types: stored ? [stored] : [] };
+        var aIsFirst = (flip ? kb : ka) === ka;
+        if (fromA === aIsFirst) e.aspects.fwd = asp; else e.aspects.rev = asp;
+        out[pk] = e;
+      });
+    });
+    /* The Plan layer holds `data` in memory and only writes the blob on save, so
+       the live path is preferred. But it is loaded lazily, and a reader that
+       returns nothing because a panel has not been opened yet is a reader nobody
+       can trust — so when the live path is empty, read the saved blob instead. */
+    if (!Object.keys(out).length) return groupEdgesFromBlob(byKey);
+    return out;
+  }
+  function groupEdgesFromBlob(byKey){
+    var out = Object.create(null), d = planBlob();
+    var trees = (d && d.groupTrees) || {};
+    Object.keys(trees).forEach(function(gk){
+      var t = trees[gk]; if (!t || !t.nodes || !t.edges) return;
+      var byId = {}; t.nodes.forEach(function(n){ byId[n.id] = n; });
+      var label = (byKey[gk] && byKey[gk].label) || '';
+      t.edges.forEach(function(ed){
+        var a = byId[ed.from], b = byId[ed.to];
+        if (!a || !b || !a.beingKey || !b.beingKey || a.beingKey === b.beingKey) return;
+        var ka = a.beingKey, kb = b.beingKey, flip = ka > kb;
+        var pk = (flip ? kb : ka) + ' ' + (flip ? ka : kb) + ' ' + gk;
+        if (out[pk]) return;
+        var asp = { type: ed.type || '', sub:'', intensity:2, valence:'neutral', secret:false, stake:'', hinge:null };
+        var e = { akey: flip ? kb : ka, bkey: flip ? ka : kb,
+          aspects:{ fwd:null, rev:null }, sections:null,
+          origin:'grouptree:' + gk, origins:['grouptree'], groupLabel:label,
+          types: ed.type ? [ed.type] : [] };
+        if (!flip) e.aspects.fwd = asp; else e.aspects.rev = asp;
+        out[pk] = e;
+      });
+    });
+    return out;
+  }
+
+  /* ---- 3 · concept-map edges --------------------------------------------
+     The Plan layer's `data` is closure-private, but it persists to a blob whose
+     key is derivable, and reading it is honest: the reader never writes. */
+  function planBlob(){
+    try{
+      var id = localStorage.getItem('dystoria.lastStory');
+      if (id != null){
+        var raw = localStorage.getItem('dystoria.plan.v1.' + id);
+        if (raw) return JSON.parse(raw) || {};
+      }
+      for (var i = 0; i < localStorage.length; i++){
+        var k = localStorage.key(i);
+        if (k && k.indexOf('dystoria.plan.v1.') === 0) return JSON.parse(localStorage.getItem(k) || '{}') || {};
+      }
+    }catch(e){}
+    return {};
+  }
+  function conceptEdges(){
+    var out = Object.create(null), d = planBlob();
+    var groups = (d && d.conceptGroups) || [];
+    groups.forEach(function(g){
+      var m = (g && g.map) || {}; var nodes = m.nodes || [], edges = m.edges || [];
+      var byId = {}; nodes.forEach(function(n){ byId[n.id] = n; });
+      edges.forEach(function(ed){
+        var a = byId[ed.from], b = byId[ed.to];
+        if (!a || !b || !a.conceptKey || !b.conceptKey || a.conceptKey === b.conceptKey) return;
+        var ka = a.conceptKey, kb = b.conceptKey, flip = ka > kb;
+        var pk = (flip ? kb : ka) + ' ' + (flip ? ka : kb) + ' cm' + (g.id || '');
+        if (out[pk]) return;
+        var asp = { type: ed.type || '', sub:'', intensity:2, valence:'neutral', secret:false, stake:'', hinge:null };
+        var e = { akey: flip ? kb : ka, bkey: flip ? ka : kb,
+          aspects:{ fwd:null, rev:null }, sections:null,
+          origin:'conceptmap:' + (g.id || ''), origins:['conceptmap'], groupLabel: g.name || '',
+          types: ed.type ? [ed.type] : [] };
+        if (!flip) e.aspects.fwd = asp; else e.aspects.rev = asp;
+        out[pk] = e;
+      });
+    });
+    return out;
+  }
+
+  /* ---- the kind filter ---------------------------------------------------
+     A family filter rejects an edge only when every type it carries is KNOWN and
+     none is admitted. An untyped bond, or one using a word the writer invented,
+     passes — the kind is a starting constraint, not a border guard. */
+  var famIndex = null;
+  function familyOf(catA, catB, type){
+    if (!type) return null;
+    if (!famIndex){
+      famIndex = Object.create(null);
+      try{
+        var cat = getCat('relationship');
+        (cat.subcategories || []).forEach(function(s){
+          if (!s.groups) return;
+          var pk = s.target === 'being' ? 'being|being' : (s.source === 'setting' ? 'setting|setting' : null);
+          if (!pk) return;
+          s.groups.forEach(function(g){ g.words.forEach(function(w){ famIndex[pk + ' ' + w] = g.name; }); });
+        });
+      }catch(e){}
+    }
+    var key = (catA < catB ? catA + '|' + catB : catB + '|' + catA);
+    return famIndex[key + ' ' + type] || null;
+  }
+  /* Returns the type that got this bond admitted, or '' for "admitted, nothing to
+     credit", or null for rejected. The distinction matters downstream: a bond that
+     is on the social web BECAUSE it has been `Betrays` should be labelled Betrays
+     there, even if its latest type is `Parent of`. The lens you asked for decides
+     which of a bond's faces you are shown. */
+  function admits(kind, e, ca, cb, loose){
+    if (kind.cats){
+      if (kind.cats.indexOf(ca) < 0 || kind.cats.indexOf(cb) < 0) return null;
+    }
+    if (loose || !kind.families) return '';
+    var pk = (ca < cb ? ca + '|' + cb : cb + '|' + ca);
+    var want = kind.families[pk];
+    if (!want) return '';                         // no opinion about this pair
+    /* Judged on every type the bond has worn across the story, not just its
+       headline — a bond that was "Parent of" in chapter one belongs on the family
+       tree even if it now reads "Betrays". */
+    var types = e.types || [];
+    if (!types.length) return '';                 // untyped: the writer has not said yet
+    var known = false, hit = null;
+    types.forEach(function(t){
+      var f = familyOf(ca, cb, t);
+      if (f){ known = true; if (!hit && want.indexOf(f) >= 0) hit = t; }
+    });
+    if (hit) return hit;
+    return known ? null : '';                     // an invented word is never excluded
+  }
+
+  /* ---- the scope filter -------------------------------------------------- */
+  function inScope(scope, byKey, edges){
+    if (!scope || !scope.type || scope.type === 'all') return null;   // null = everything
+    var keep = Object.create(null);
+    var add = function(k){ if (k && byKey[k]) keep[k] = 1; };
+    if (scope.type === 'category'){
+      Object.keys(byKey).forEach(function(k){ if (byKey[k].cat === scope.cat) add(k); });
+    } else if (scope.type === 'role'){
+      Object.keys(byKey).forEach(function(k){ var n = byKey[k];
+        if (n.bucket === scope.bucket && (!scope.cat || n.cat === scope.cat)) add(k); });
+    } else if (scope.type === 'thread'){
+      Object.keys(byKey).forEach(function(k){
+        if ((byKey[k].threads || []).indexOf(scope.id) >= 0) add(k); });
+    } else if (scope.type === 'group'){
+      add(scope.id);
+      edges.forEach(function(e){                       // anyone tied to the group element
+        if (e.akey === scope.id) add(e.bkey);
+        if (e.bkey === scope.id) add(e.akey); });
+      edges.forEach(function(e){                       // and anyone on that group's chart
+        if (e.origin === 'grouptree:' + scope.id){ add(e.akey); add(e.bkey); } });
+    } else if (scope.type === 'element'){
+      add(scope.key);
+      var depth = Math.max(1, Math.min(3, scope.depth || 1));
+      for (var d = 0; d < depth; d++){
+        var wave = Object.keys(keep);
+        edges.forEach(function(e){
+          if (wave.indexOf(e.akey) >= 0) add(e.bkey);
+          if (wave.indexOf(e.bkey) >= 0) add(e.akey);
+        });
+      }
+    } else return null;
+    return keep;
+  }
+
+  /* ---- the reader -------------------------------------------------------- */
+  B.graph = function(opts){
+    opts = opts || {};
+    var kindId = opts.kind || 'free';
+    var kind = KINDS[kindId] || KINDS.free;
+    var loose = !!opts.loose;
+    var byKey = roster();
+
+    var all = [];
+    var push = function(bag){ Object.keys(bag).forEach(function(k){ all.push(bag[k]); }); };
+    push(mapEdges());
+    if (opts.includeCharts !== false){ push(groupEdges(byKey)); push(conceptEdges()); }
+
+    /* An edge whose endpoints are not in the roster is a bond to something that
+       has been deleted; it is dropped rather than drawn to nowhere — the same
+       rule `rebuildEdges` applies on the Map. */
+    all = all.filter(function(e){ return byKey[e.akey] && byKey[e.bkey]; });
+
+    var kept = [];
+    all.forEach(function(e){
+      var credit = admits(kind, e, byKey[e.akey].cat, byKey[e.bkey].cat, loose);
+      if (credit === null) return;
+      e.kindType = credit || '';
+      kept.push(e);
+    });
+
+    var keep = inScope(opts.scope, byKey, kept);
+    if (keep) kept = kept.filter(function(e){ return keep[e.akey] && keep[e.bkey]; });
+
+    /* Nodes are the endpoints that survived, plus the focused element itself so a
+       character with no bonds yet still appears rather than showing a blank page. */
+    var used = Object.create(null);
+    kept.forEach(function(e){ used[e.akey] = 1; used[e.bkey] = 1; });
+    if (opts.scope && opts.scope.type === 'element' && byKey[opts.scope.key]) used[opts.scope.key] = 1;
+    if (opts.scope && opts.scope.type === 'group' && byKey[opts.scope.id]) used[opts.scope.id] = 1;
+
+    var nodes = Object.keys(used).map(function(k){
+      var n = byKey[k];
+      return { key:k, cat:n.cat, label:n.label, bucket:n.bucket, threads:n.threads, group:n.group, w:n.w };
+    }).sort(function(x, y){ return x.label.localeCompare(y.label); });
+
+    var edges = kept.map(function(e){
+      var t = (e.aspects.fwd && e.aspects.fwd.type) || (e.aspects.rev && e.aspects.rev.type) || '';
+      return {
+        akey:e.akey, bkey:e.bkey, aspects:e.aspects,
+        sections: e.sections ? e.sections.slice().sort(function(a,b){ return a-b; }) : null,
+        origin:e.origin, groupLabel:e.groupLabel || '',
+        type:t, kindType:(e.kindType || t), types:(e.types || []),
+        history:{ fwd:e.history_fwd || null, rev:e.history_rev || null },
+        conflict: conflictOf(e), intensity: intensityOf(e), valence: valenceOf(e)
+      };
+    });
+
+    return { kind:kindId, kindName:kind.name, layout:kind.layout,
+             scope:opts.scope || { type:'all' }, nodes:nodes, edges:edges };
+  };
+
+  /* The Map's own reading of an edge, borrowed rather than reinvented, so an
+     edge means the same thing in Bonds as it does on the Map. */
+  function conflictOf(e){
+    try{ return !!relIsConflict({ fwd:e.aspects.fwd, rev:e.aspects.rev }); }catch(err){ return false; }
+  }
+  function intensityOf(e){
+    try{ return relIntensity({ fwd:e.aspects.fwd, rev:e.aspects.rev }); }
+    catch(err){ return Math.max((e.aspects.fwd && e.aspects.fwd.intensity) || 0,
+                                (e.aspects.rev && e.aspects.rev.intensity) || 0) || 2; }
+  }
+  function valenceOf(e){
+    var f = e.aspects.fwd && e.aspects.fwd.valence, r = e.aspects.rev && e.aspects.rev.valence;
+    if (f && r && f !== r) return 'mixed';
+    return f || r || 'neutral';
+  }
+
+  /* What a bond says from one end. Uses v.396's inverse table, so a kinship bond
+     authored once reads correctly from both cards. */
+  B.readsAs = function(edge, fromKey){
+    var near = (edge.akey === fromKey) ? edge.aspects.fwd : edge.aspects.rev;
+    var far  = (edge.akey === fromKey) ? edge.aspects.rev : edge.aspects.fwd;
+    if (near && near.type) return near.type;
+    if (far && far.type){
+      var inv = ''; try{ inv = window.relInverse(far.type) || ''; }catch(e){}
+      return inv || '';
+    }
+    return '';
+  };
+
+  /* The scopes this story can actually offer — for the chooser to render. */
+  B.scopes = function(){
+    var byKey = roster(), out = { groups:[], threads:[], roles:[], categories:[] };
+    var seenRole = Object.create(null), seenCat = Object.create(null);
+    Object.keys(byKey).forEach(function(k){
+      var n = byKey[k];
+      if (n.cat === 'org') out.groups.push({ id:k, label:n.label });
+      if (n.bucket && !seenRole[n.cat + '|' + n.bucket]){
+        seenRole[n.cat + '|' + n.bucket] = 1;
+        out.roles.push({ cat:n.cat, bucket:n.bucket });
+      }
+      if (!seenCat[n.cat]){ seenCat[n.cat] = 1; out.categories.push(n.cat); }
+    });
+    try{
+      var th = (window.__dystPlan && window.__dystPlan.threads && window.__dystPlan.threads()) || [];
+      out.threads = th.map(function(t){ return { id:t.id, label:t.name || t.title || 'Thread' }; });
+    }catch(e){}
+    out.groups.sort(function(a,b){ return a.label.localeCompare(b.label); });
+    return out;
+  };
+
+  B.roster = roster;   // for verification
 })();
 </script>
 </body></html>
