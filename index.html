@@ -47915,9 +47915,9 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.411';
+  var APP_VERSION = '2026.07.20.412';
   var APP_CHANGELOG = [
-    { v:'2026.07.20.411', date:'August 9, 2026', notes:[
+    { v:'2026.07.20.412', date:'August 9, 2026', notes:[
       '**A bond can be more than one thing at once.** Two people can be spouses *and* rivals *and* owed — and those are not a history, they are one relationship with several faces. The bond creator now holds as many **dimensions** as you want, and **each carries its own weight, warmth, secret and stake**, because a marriage and a rivalry between the same two people do not share a weight.',
       '**The structure decides which face the map draws.** The same bond reads *Spouse of* on the family tree and *Rivals* on the social web, with no duplication and nothing to keep in step. Click it and the card names the one on this map and lists the others underneath with their own aspects.',
       'Underneath, the first dimension is still written the way every connection always has been, so the Map, the Wiki, the notepad and the AI context keep reading records they have always understood. Nothing else in the app had to learn what a dimension is.',
@@ -63420,6 +63420,45 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
     delete e.seen;
   }
 
+  /* ---- 1b · standing bonds — the ones that belong to no section ------------
+     [Jeremy, 2026-08-10] "the bonds mode does not care about the sections or map.
+     it is conceptual and the connections drawn between any elements should work
+     regardless of if they are ever in the same section or not."
+
+     A Map link lives inside a section, because that is what the Map is: a page,
+     with a word list, and a link is a pair of INDEXES into it. Two characters who
+     never share a page therefore could not be connected at all — which meant
+     Bonds, the one view that stands over the whole story, refused to write the one
+     kind of bond only it can see.
+
+     A standing bond is keyed by ELEMENT KEY rather than by index, so it needs no
+     page to exist on. It lives in `state.session.bonds` — with the story, so it
+     saves and syncs like every other fact — and NOT in Bonds' own blob, which
+     stays what it has always been: positions, groups and a camera. Bonds still
+     owns no relationships; the story does. */
+  function standingList(){
+    try{ var s = S(); return (s && s.session && Array.isArray(s.session.bonds)) ? s.session.bonds : []; }
+    catch(e){ return []; }
+  }
+  function standingEdges(){
+    var out = Object.create(null);
+    standingList().forEach(function(b){
+      if (!b || !b.a || !b.b || b.a === b.b) return;
+      var flip = b.a > b.b;
+      var ka = flip ? b.b : b.a, kb = flip ? b.a : b.b;
+      var pk = ka + ' ' + kb + ' standing';
+      var fwd = flip ? b.rev : b.fwd, rev = flip ? b.fwd : b.rev;
+      var e = out[pk];
+      if (!e) e = out[pk] = { akey:ka, bkey:kb, aspects:{ fwd:null, rev:null },
+                              seen:{ fwd:[], rev:[] }, sections:null,
+                              origin:'standing', origins:['standing'] };
+      if (fwd) e.seen.fwd.push({ section:null, a:fwd });
+      if (rev) e.seen.rev.push({ section:null, a:rev });
+    });
+    Object.keys(out).forEach(function(k){ settle(out[k]); });
+    return out;
+  }
+
   /* ---- 2 · group-chart edges -------------------------------------------- */
   function groupEdges(byKey){
     var out = Object.create(null);
@@ -63620,6 +63659,7 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
     var all = [];
     var push = function(bag){ Object.keys(bag).forEach(function(k){ all.push(bag[k]); }); };
     push(mapEdges());
+    push(standingEdges());
     if (opts.includeCharts !== false){ push(groupEdges(byKey)); push(conceptEdges()); }
 
     /* An edge whose endpoints are not in the roster is a bond to something that
@@ -63937,6 +63977,81 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
     try{ return blankRel(); }
     catch(e){ return { type:'', sub:'', intensity:2, valence:'neutral', secret:false, stake:'', hinge:null }; }
   }
+  /* DIMENSIONS. Two people can be several things to each other AT ONCE — spouses
+     and rivals and owed — and those are not a history, they are a bond with more
+     than one face. [Jeremy, 2026-08-09]
+
+     The FIRST dimension is also written flat onto the aspect, so the Map, the
+     wiki, the notepad and every other reader of a link record keep working on
+     records they have always understood. Nothing else in the app needs to learn
+     what a dimension is.
+
+     One writer for both homes: a bond that lives in a section and a bond that
+     lives nowhere must carry the same record, or the card would read differently
+     depending on where the writer happened to be standing. */
+  function applyAspect(link, side, type, opts, sub){
+    if (!link[side]) link[side] = blank();
+    var ds = opts.dims;
+    if (ds && !Array.isArray(ds)) ds = [ds];
+    if (ds && ds.length){
+      var clean = ds.filter(function(d){ return d && d.type; }).map(function(d){
+        return { type:d.type, intensity:(d.intensity != null ? d.intensity : 2),
+                 valence:(d.valence || 'neutral'), secret:!!d.secret,
+                 stake:(d.stake || ''), note:(d.note || '') };
+      });
+      if (clean.length){
+        link[side].dims = clean;
+        var head = clean[0];
+        link[side].type = head.type;
+        link[side].intensity = head.intensity;
+        link[side].valence = head.valence;
+        link[side].secret = head.secret;
+        link[side].stake = head.stake;
+        link[side].note = head.note;
+      } else { link[side].type = type || ''; delete link[side].dims; }
+    } else {
+      link[side].type = type || '';
+      if (link[side].dims && link[side].dims.length) link[side].dims[0].type = type || '';
+    }
+    if (sub && sub.name && !link[side].sub) link[side].sub = sub.name;
+  }
+
+  /* The standing store: bonds keyed by ELEMENT KEY, so they need no page to live
+     on. In `state.session` with the story rather than in Bonds' own blob — a
+     relationship is a fact about the story, not a view setting, and it has to
+     save and sync like one. */
+  function standingBonds(){
+    try{
+      if (!state.session) return null;
+      if (!Array.isArray(state.session.bonds)) state.session.bonds = [];
+      return state.session.bonds;
+    }catch(e){ return null; }
+  }
+  function writeStanding(akey, bkey, type, opts, sub){
+    var list = standingBonds(); if (!list) return 0;
+    var flip = akey > bkey, ka = flip ? bkey : akey, kb = flip ? akey : bkey;
+    var rec = null;
+    for (var i = 0; i < list.length; i++){ if (list[i] && list[i].a === ka && list[i].b === kb){ rec = list[i]; break; } }
+    if (opts.remove){
+      if (!rec) return 0;
+      state.session.bonds = list.filter(function(x){ return x !== rec; });
+      return 1;
+    }
+    if (!rec){ rec = { a:ka, b:kb, fwd:null, rev:null }; list.push(rec); }
+    var side = flip ? 'rev' : 'fwd', far = flip ? 'fwd' : 'rev';
+    applyAspect(rec, side, type, opts, sub);
+    /* the reverse, proposed on the same never-overwrite rule as everywhere else */
+    if (type){
+      var inv = opts.reverse != null ? opts.reverse : '';
+      if (opts.reverse == null){ try{ inv = window.relInverse(type) || ''; }catch(e){} }
+      if (inv && !(rec[far] && rec[far].type && rec[far].type !== opts.prevInverse)){
+        if (!rec[far]) rec[far] = blank();
+        rec[far].type = inv;
+      }
+    }
+    return 1;
+  }
+
   function writeBond(akey, bkey, type, opts){
     opts = opts || {};
     var sub = null; try{ sub = poolFor(akey, bkey).sub; }catch(e){}
@@ -63964,42 +64079,7 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
         hit++; return;
       }
       if (!link){ link = { a:lo, b:hiI, fwd:null, rev:null }; fr.prompt.links.push(link); }
-      var side = (ia < ib) ? 'fwd' : 'rev';
-      if (!link[side]) link[side] = blank();
-
-      /* DIMENSIONS. Two people can be several things to each other AT ONCE —
-         spouses and rivals and owed — and those are not a history, they are a
-         bond with more than one face. Each dimension carries its own weight,
-         warmth, secret and stake, because a marriage and a rivalry between the
-         same two people do not share a weight. [Jeremy, 2026-08-09]
-
-         The FIRST dimension is also written flat onto the aspect, so the Map, the
-         wiki, the notepad and every other reader of `state.prompt.links` keep
-         working on records they have always understood. Nothing else in the app
-         needs to learn what a dimension is. */
-      var ds = opts.dims;
-      if (ds && !Array.isArray(ds)) ds = [ds];
-      if (ds && ds.length){
-        var clean = ds.filter(function(d){ return d && d.type; }).map(function(d){
-          return { type:d.type, intensity:(d.intensity != null ? d.intensity : 2),
-                   valence:(d.valence || 'neutral'), secret:!!d.secret,
-                   stake:(d.stake || ''), note:(d.note || '') };
-        });
-        if (clean.length){
-          link[side].dims = clean;
-          var head = clean[0];
-          link[side].type = head.type;
-          link[side].intensity = head.intensity;
-          link[side].valence = head.valence;
-          link[side].secret = head.secret;
-          link[side].stake = head.stake;
-          link[side].note = head.note;
-        } else { link[side].type = type || ''; delete link[side].dims; }
-      } else {
-        link[side].type = type || '';
-        if (link[side].dims && link[side].dims.length) link[side].dims[0].type = type || '';
-      }
-      if (sub && sub.name && !link[side].sub) link[side].sub = sub.name;
+      applyAspect(link, (ia < ib) ? 'fwd' : 'rev', type, opts, sub);
       hit++;
     });
     /* The reverse fills itself through the same path the picker uses, so a
@@ -64022,6 +64102,13 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
         link[far].type = inv;
       });
     }
+    /* Nowhere sectional to put it — so it goes in the standing store rather than
+       being refused. Bonds is a view of the whole story and may not be limited to
+       the pairs that happen to share a page. [Jeremy, 2026-08-10] Removal always
+       sweeps both homes, so an × takes the bond away wherever it was written. */
+    if (opts.remove) hit += writeStanding(akey, bkey, '', opts, sub);
+    else if (!hit) hit = writeStanding(akey, bkey, type, opts, sub);
+
     try{ if (typeof rebuildEdges === 'function') rebuildEdges(); }catch(e){}
     try{ if (state.session){ state.session.links = state.prompt && state.prompt.links; } }catch(e){}
     try{ if (typeof scheduleAutosave === 'function') scheduleAutosave(); }catch(e){}
@@ -65563,6 +65650,7 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
     var bits = [];
     if (e.types && e.types.length > 1) bits.push('Has been: ' + e.types.join(', '));
     if (e.sections && e.sections.length) bits.push('Live in section ' + e.sections.map(function(s){ return s+1; }).join(', '));
+    else if (e.origin === 'standing') bits.push('Not tied to a section');
     else if (/^grouptree:/.test(e.origin)) bits.push('From ' + (e.groupLabel || 'a group chart') + ' — standing');
     else if (/^conceptmap:/.test(e.origin)) bits.push('From the concept map ' + (e.groupLabel || '') + ' — standing');
     return bits.join('  ·  ');
@@ -65798,13 +65886,16 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
        promised the card would answer out loud. */
     var where = e.sections && e.sections.length
       ? ('On the map, in section' + (e.sections.length > 1 ? 's ' : ' ') + sectionRun(e.sections))
+      : (e.origin === 'standing' ? 'Everywhere — this one is not tied to a section'
       : (/^grouptree:/.test(e.origin) ? ('In the ' + (e.groupLabel || 'group') + ' chart — standing')
-      : (/^conceptmap:/.test(e.origin) ? ('In the concept map' + (e.groupLabel ? ' “'+e.groupLabel+'”' : '') + ' — standing') : ''));
+      : (/^conceptmap:/.test(e.origin) ? ('In the concept map' + (e.groupLabel ? ' “'+e.groupLabel+'”' : '') + ' — standing') : '')));
     line('Where it lives', where);
     if (e.conflict) line('Reads as', 'conflict');
 
     var acts = el('div','bn-acts');
-    if (e.origin === 'map'){
+    /* A standing bond is Bonds' own — of course it can be changed and removed
+       here; there is nowhere else it could be. [v.412] */
+    if (e.origin === 'map' || e.origin === 'standing'){
       var re = el('button','bn-act','Change type'); re.type='button';
       re.addEventListener('click', function(ev){ pickType(e, ev.clientX, ev.clientY, m); });
       acts.appendChild(re);
@@ -66071,7 +66162,10 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
         return;
       }
       var wrote = writeBond(akey, bkey, real[0].type, { reverse: proposeReverse(), dims: real });
-      if (!wrote) flash('Those two are not in the same section yet — put them on one map first.');
+      /* The "not in the same section" refusal is gone [Jeremy, 2026-08-10]. It was
+         the Map's rule showing through: Bonds is conceptual and a pair that never
+         shares a page is exactly the pair it exists to draw. */
+      if (!wrote) flash('Could not write that bond.');
       close(); V.render(m);
     });
     acts.appendChild(save);
