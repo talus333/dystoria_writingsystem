@@ -47915,9 +47915,9 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.407';
+  var APP_VERSION = '2026.07.20.408';
   var APP_CHANGELOG = [
-    { v:'2026.07.20.407', date:'August 9, 2026', notes:[
+    { v:'2026.07.20.408', date:'August 9, 2026', notes:[
       '**A bond can be more than one thing at once.** Two people can be spouses *and* rivals *and* owed — and those are not a history, they are one relationship with several faces. The bond creator now holds as many **dimensions** as you want, and **each carries its own weight, warmth, secret and stake**, because a marriage and a rivalry between the same two people do not share a weight.',
       '**The structure decides which face the map draws.** The same bond reads *Spouse of* on the family tree and *Rivals* on the social web, with no duplication and nothing to keep in step. Click it and the card names the one on this map and lists the others underneath with their own aspects.',
       'Underneath, the first dimension is still written the way every connection always has been, so the Map, the Wiki, the notepad and the AI context keep reading records they have always understood. Nothing else in the app had to learn what a dimension is.',
@@ -63786,9 +63786,14 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
              host:   opts.host || null,
              mini:   !!opts.mini,
              onOpen: opts.onOpen || null,
+             /* `kind` is the LENS this surface is looking through; `type` is which
+                of the eight the group band is filtered to (null = all); `group` is
+                the container being drawn. `kind` keeps its old name because it is
+                still exactly what `BONDS.graph()` is asked for. */
              ui: { kind: opts.kind || 'social',
                    scope: opts.scope || { type:'all' },
-                   set: opts.set || null, setQ:'',
+                   type: opts.type || null,
+                   group: opts.group || null, setQ:'',
                    loose: !!opts.loose, sel:null } };
   }
   var MAIN = mount({});
@@ -63803,14 +63808,25 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
   /* ---- persistence: only positions, and only ours --------------------- */
   function storyId(){ try{ return localStorage.getItem('dystoria.lastStory') || ''; }catch(e){ return ''; } }
   function store(){
-    try{ return JSON.parse(localStorage.getItem(LS + storyId()) || '{}') || {}; }catch(e){ return {}; }
+    var s = {};
+    try{ s = JSON.parse(localStorage.getItem(LS + storyId()) || '{}') || {}; }catch(e){ s = {}; }
+    /* sets became groups in v.408; the conversion runs on read and writes itself
+       back, so a store from an older build comes across the first time it is
+       opened rather than needing a migration step nobody would run */
+    if (s.sets && s.sets.length){ s = ensureGroups(s); saveStore(s); }
+    else if (!s.groups) s.groups = [];
+    return s;
   }
   function saveStore(s){ try{ localStorage.setItem(LS + storyId(), JSON.stringify(s)); }catch(e){} }
-  /* One slot per map. A set gets its own, so arranging the Vance family cannot
-     disturb the Kader family or the All view. */
+  /* One slot per drawing — and a drawing is a GROUP seen through a LENS (v.408).
+     Both halves matter: a tree layout is not a web layout, so toggling the lens
+     must not scramble the arrangement of the one you came from. A scoped mount
+     keeps the shape it has always had. */
   function slot(m){
     var scoped = m.mini || (m.ui.scope && m.ui.scope.type !== 'all');
-    return m.ui.kind + '|' + ((!scoped && m.ui.set) ? 'set:' + m.ui.set : scopeKey(m.ui.scope));
+    if (scoped) return m.ui.kind + '|' + scopeKey(m.ui.scope);
+    var gp = activeGroup(m);
+    return gp ? ('group:' + gp.id + '|lens:' + m.ui.kind) : (m.ui.kind + '|none');
   }
   function scopeKey(sc){
     if (!sc || sc.type === 'all') return 'all';
@@ -64343,14 +64359,19 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
     world.appendChild(svg);
     canvas.appendChild(world);
     wrap.appendChild(canvas);
+    lensBar(m, wrap);
+    toolBar(m, wrap);
     host.appendChild(wrap);
 
-    addPins(g, m);
+    m._counts = {};
+    /* pins are only still needed where there is no group to be the node list —
+       the dossier's scoped mount */
+    if (!activeGroup(m)) addPins(g, m);
     narrowToSet(g, m);
     dropHidden(g, m);
     if (!g.nodes.length){
-      if (activeSet(m)) seedOffer(m, canvas);
-      else if (!sets(m).length) firstSetOffer(m, canvas);
+      if (activeGroup(m)) seedOffer(m, canvas);
+      else if (!groupsOf(m).length) firstSetOffer(m, canvas);
       else canvas.appendChild(el('div','bn-empty', emptyLine(g, m)));
       installCamera(m, canvas, world, cam);
       m._cam = cam; m._graph = g;
@@ -64360,7 +64381,7 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
     /* the canvas is in the DOM by now, so the engines are laid out against the
        room they actually have rather than a constant */
     var box = { w: Math.max(300, canvas.clientWidth - 48), h: Math.max(210, canvas.clientHeight - 48) };
-    m._elbow = (catOfSet(activeSet(m)) === 'species') && g.layout === 'generational';
+    m._elbow = (typeOf(activeGroup(m)) === 'species') && g.layout === 'generational';
     var stored = positions(m), auto = autoLayout(g, box), pos = {};
     g.nodes.forEach(function(n){ pos[n.key] = stored[n.key] || auto[n.key] || { x:40, y:40 }; });
 
@@ -64384,8 +64405,8 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
       /* the name and nothing else — a role printed on every pill is a second
          label competing with the one you are reading [Jeremy, 2026-08-09] */
       var x = el('span','bn-unpin','×');
-      x.title = m.ui.set ? 'Take this off this set. The element and its connections are untouched.'
-                         : 'Take this off the map. The element and its connections are untouched.';
+      x.title = activeGroup(m) ? 'Take this out of the group. The element and its connections are untouched.'
+                               : 'Take this off the map. The element and its connections are untouched.';
       x.addEventListener('pointerdown', function(ev){ ev.stopPropagation(); });
       /* the same gesture, the honest meaning in each case: on a set it is
          membership, on a derived map it is a refusal the reader honours */
@@ -64531,25 +64552,40 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
     return 'No connections of this kind yet. Draw one on the Map, or in the notepad’s Connections list, and it will appear here.';
   }
 
-  /* ---- Sets -------------------------------------------------------------
-     Jeremy, 2026-08-09: "have the filter level which is the Type of Bonds …
-     and then include all the created Sets within that type. Under families you
-     have the Pills for the family trees that have been created and a +Family."
+  /* ---- Groups ------------------------------------------------------------
+     Roadmap #37, phase 1. Jeremy, 2026-08-09: "I am trying to find a way to
+     elegantly unify the structure types, the sets and the existing element system
+     called Groups… maybe any group can be viewed through any of the structure
+     types."
 
-     A SET is a name and a list of members. It is the third and last thing Bonds
-     owns, and the line it must not cross is exactly the line pins already draw:
-     a set says WHO IS ON THIS PIECE OF PAPER. It never holds a relationship. If a
-     field called `edges` ever appears on one, this design has gone wrong.
+     So: a GROUP is the only container a writer names. It is a name, a type — one
+     of the eight — and a list of members, and it holds no relationships. A
+     STRUCTURE is no longer a thing you pick before you can see anything; it is a
+     LENS over a group, opening on the one the group's type implies and toggleable
+     to any other the group's cast can wear.
 
-     Because `slot()` keys off the set, the layout, the pins, the hidden list and
-     the camera all follow a set for free — arranging the Vance family cannot
-     disturb the Kader family, and neither can disturb the "All" view. */
+     Two things make this possible and neither existed a week ago. v.405 gave a
+     bond a LIST of dimensions, so there is something for a second lens to
+     reorganise around — with one type per bond, "show me this family as a social
+     web" would have drawn an empty page. And v.407 made the pair's temperature
+     the same in every lens, so a lens hides a shape and never the fact that there
+     is more to the pair than the shape.
+
+     The header keeps the two bands it already had; only the questions change
+     [Jeremy, 2026-08-10]: the TYPES on parchment on top, the GROUPS of the chosen
+     type on paper below. The tools that act on the drawing — + Element, Arrange,
+     and the lens toggle — moved onto the drawing, which is where they always
+     belonged.
+
+     The line a group must not cross is the line a set did not cross either: it
+     says WHO IS ON THIS PIECE OF PAPER. If a field called `edges` ever appears on
+     one, this design has gone wrong. */
   var KIND_NOUN = { family:'Family', social:'Social group', faction:'Faction',
                     place:'Blueprint', concept:'Concept map', causal:'Chain', free:'Set' };
-  /* What KIND OF INSTITUTION a set is. Not a structure — a set of any category can
-     be drawn under any structure, and should be: "a political group may have a bond
-     set under family, social web and faction if each reveals subtleties" [Jeremy].
-     So this is a label and a lens on the vocabulary, never a constraint. */
+  /* The eight. A type is a label, a default lens and — since v.408 — the top band's
+     filter. A filter on a LIST is not a filter on a THING: choosing Kinship narrows
+     which groups you can see, and never narrows what a kinship group is allowed to
+     be, which lens it may wear, or which words the creator offers. [Jeremy] */
   var SET_CATS = [
     { id:'commercial', name:'Commercial', hint:'Trade, money, the house that owns the docks.' },
     { id:'political',  name:'Political',  hint:'Who rules, who advises, who is owed.' },
@@ -64560,73 +64596,184 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
     { id:'kinship',    name:'Kinship',    hint:'A family, by blood or by choosing.' },
     { id:'species',    name:'Species',    hint:'Descent and branching — drawn as a cladogram.' }
   ];
+  /* Which structures a type opens on, and which it is at home in. Jeremy's own
+     mapping from v.403, unchanged — the first is the default. */
+  var TYPE_LENSES = {
+    commercial:['faction'], political:['social','faction'], martial:['faction'],
+    faith:['social','faction'], knowledge:['social','faction'], social:['social'],
+    kinship:['family'], species:['family']
+  };
   var CAT_DEFAULT = { family:'kinship', social:'social', faction:'political',
                       concept:'knowledge', place:'', causal:'', free:'' };
-  function catOfSet(set){ return (set && set.cat) || ''; }
-  function sets(m){
-    var s = store();
-    return (s.sets || []).filter(function(x){ return x && x.kind === m.ui.kind; });
+  function typeOf(gp){ return (gp && gp.type) || ''; }
+  function catOfSet(gp){ return typeOf(gp); }
+  function typeName(id){ var t = SET_CATS.find(function(x){ return x.id === id; }); return t ? t.name : ''; }
+  function lensOfGroup(gp){
+    if (!gp) return 'social';
+    if (gp.lens && BONDS.KINDS[gp.lens]) return gp.lens;
+    return (TYPE_LENSES[typeOf(gp)] || [])[0] || 'social';
   }
-  function setById(id){ var s = store(); return (s.sets || []).find(function(x){ return x && x.id === id; }) || null; }
-  function saveSet(set){
-    var s = store(); s.sets = s.sets || [];
-    var i = -1; for (var j = 0; j < s.sets.length; j++) if (s.sets[j].id === set.id){ i = j; break; }
-    if (i < 0) s.sets.push(set); else s.sets[i] = set;
+
+  /* The migration off sets, run on read and idempotent so a store written by an
+     older build — or by a test harness that still speaks `sets` — comes across the
+     first time it is opened.
+
+     Arrangements are NOT sacred here [Jeremy, 2026-08-10]: there are no real users
+     yet, so anything ambiguous is dropped and re-arranged rather than reconciled.
+     `Arrange` costs one click; a half-migrated layout costs an afternoon. The whole
+     old blob is kept under a v0 key — not to protect a layout, but so a botched
+     migration can be diagnosed against its own input instead of guessed at. */
+  function freshGroupId(s){
+    var n = ((s.groups || []).length) + 1, id = 'bg' + n;
+    var taken = {}; (s.groups || []).forEach(function(g){ taken[g.id] = 1; });
+    while (taken[id]) id = 'bg' + (++n);
+    return id;
+  }
+  function ensureGroups(s){
+    s.groups = s.groups || [];
+    if (!s.sets || !s.sets.length){ return s; }
+    try{ localStorage.setItem('dystoria.bonds.v0.' + storyId(), JSON.stringify(s)); }catch(e){}
+    var sig = function(x){ return (x.name || '') + '|' + ((x.members || []).slice().sort().join(',')); };
+    var seen = {}; s.groups.forEach(function(g){ seen[sig(g)] = g; });
+    var remap = {};
+    s.sets.forEach(function(set){
+      if (!set) return;
+      var k = sig(set), gp = seen[k];
+      if (!gp){
+        gp = { id:freshGroupId(s), name:set.name || 'Group',
+               type:set.cat || CAT_DEFAULT[set.kind] || 'social',
+               members:(set.members || []).slice(), lens:set.kind };
+        if (set.fromGroup) gp.fromGroup = set.fromGroup;
+        s.groups.push(gp); seen[k] = gp;
+      }
+      remap[set.kind + '|set:' + set.id] = 'group:' + gp.id + '|lens:' + set.kind;
+    });
+    ['layouts','hide','views'].forEach(function(bag){
+      var old = s[bag]; if (!old) return;
+      var out = {};
+      Object.keys(old).forEach(function(key){
+        if (remap[key]) out[remap[key]] = old[key];
+        else if (key.indexOf('|set:') < 0) out[key] = old[key];  /* a scoped slot keeps its shape */
+      });
+      s[bag] = out;
+    });
+    /* Pins retire on every slot a group now owns. They existed because a structure
+       derived its nodes from its edges, so an empty family tree had no people in
+       it — a group IS the node list, and the mechanism has nothing left to do
+       there. The dossier's scoped mount has no group, so its pins stay. */
+    if (s.pins){
+      var keptPins = {};
+      Object.keys(s.pins).forEach(function(k){ if (k.indexOf('|set:') < 0) keptPins[k] = s.pins[k]; });
+      s.pins = keptPins;
+    }
+    delete s.sets;
+    return s;
+  }
+
+  function groups(){ return store().groups || []; }
+  function groupsOf(m){
+    var all = groups();
+    if (!m.ui.type) return all;
+    return all.filter(function(gp){ return typeOf(gp) === m.ui.type; });
+  }
+  function groupById(id){ return groups().find(function(x){ return x && x.id === id; }) || null; }
+  function saveGroup(gp){
+    var s = store(); s.groups = s.groups || [];
+    var at = s.groups.findIndex(function(x){ return x && x.id === gp.id; });
+    if (at < 0) s.groups.push(gp); else s.groups[at] = gp;
     saveStore(s);
   }
-  function dropSet(id){
-    var s = store(); s.sets = (s.sets || []).filter(function(x){ return x.id !== id; });
-    ['layouts','pins','hide','views'].forEach(function(w){
-      if (!s[w]) return;
-      Object.keys(s[w]).forEach(function(k){ if (k.indexOf('|set:' + id) >= 0) delete s[w][k]; });
+  function dropGroup(id){
+    var s = store();
+    s.groups = (s.groups || []).filter(function(x){ return x && x.id !== id; });
+    ['layouts','hide','views'].forEach(function(bag){
+      if (!s[bag]) return;
+      Object.keys(s[bag]).forEach(function(k){ if (k.indexOf('group:' + id + '|') === 0) delete s[bag][k]; });
     });
     saveStore(s);
   }
-  function newSetId(){
-    var s = store(), n = ((s.sets || []).length) + 1;
-    var id = 'bs' + n;
-    while (setById(id)) id = 'bs' + (++n);
-    return id;
-  }
-  /* The set you are looking at. There is no "All" any more — a structure drawn
-     over every element in the story is a hairball, not a map, and it was the one
-     view nobody could read. [Jeremy, 2026-08-09] Opening a structure opens its
-     first set; a structure with no sets says so and offers to start one. */
-  function activeSet(m){
-    /* A scoped mount — the dossier's small panel — is already narrowed to one
-       element. Adopting a set on top of that would answer a question nobody asked,
-       and would key its layout to the set instead of to the element. */
+
+  /* The group you are looking at. A scoped mount — the dossier's small panel — is
+     already narrowed to one element; adopting a group on top of that would answer
+     a question nobody asked and would key its layout to the group instead of to
+     the element. */
+  function activeGroup(m){
     if (m.mini || (m.ui.scope && m.ui.scope.type !== 'all')) return null;
-    var mine = sets(m);
-    if (m.ui.set){
-      var set = setById(m.ui.set);
-      if (set && set.kind === m.ui.kind) return set;
-      m.ui.set = null;
+    var mine = groupsOf(m);
+    if (m.ui.group){
+      var gp = groupById(m.ui.group);
+      if (gp && (!m.ui.type || typeOf(gp) === m.ui.type)) return gp;
+      m.ui.group = null;
     }
-    if (mine.length){ m.ui.set = mine[0].id; return mine[0]; }
+    if (mine.length){ m.ui.group = mine[0].id; return mine[0]; }
     return null;
   }
+  function activeSet(m){ return activeGroup(m); }
 
-  /* A set draws its members and the bonds between them, and nothing else. */
+  /* What this group's members ARE, which is what decides which lenses it can wear.
+     Derived every time: a member can be deleted from the story, and a stored cast
+     would be a claim about elements that no longer exist. */
+  function castOf(gp){
+    var by = {}; try{ by = BONDS.roster(); }catch(e){ return {}; }
+    var cast = {};
+    ((gp && gp.members) || []).forEach(function(k){
+      var n = by[k]; if (!n) return;
+      cast[n.cat] = (cast[n.cat] || 0) + 1;
+    });
+    return cast;
+  }
+  /* Three tiers, and the difference between the last two is what stops the toggle
+     being a row of blank canvases. NATURAL — the lenses this type is at home in.
+     APPLICABLE — the cast gives the lens at least two elements to relate; shown
+     even with nothing to draw, dimmed, with its count, because that is where a
+     writer finds out a bond can hold more than one thing. And NOT APPLICABLE —
+     a blueprint over a family — which is absent rather than dimmed, because it is
+     not empty, it is a category error, and a door that goes nowhere is worse than
+     no door. */
+  function lensesFor(gp, m){
+    if (!gp) return [];
+    var cast = castOf(gp), nat = TYPE_LENSES[typeOf(gp)] || [], out = [];
+    m._counts = m._counts || {};
+    BONDS.kinds().forEach(function(k){
+      var cats = (BONDS.KINDS[k.id] || {}).cats, n = 0;
+      if (!cats) Object.keys(cast).forEach(function(c){ n += cast[c]; });
+      else cats.forEach(function(c){ n += (cast[c] || 0); });
+      if (n < 2) return;
+      out.push({ id:k.id, name:k.name, lede:k.lede,
+                 natural:nat.indexOf(k.id) >= 0, count:lensCount(gp, k.id, m) });
+    });
+    return out;
+  }
+  function lensCount(gp, kindId, m){
+    var ck = gp.id + '|' + kindId;
+    if (m._counts && m._counts[ck] != null) return m._counts[ck];
+    var n = 0;
+    try{
+      var keep = {}; (gp.members || []).forEach(function(k){ keep[k] = 1; });
+      var g = BONDS.graph({ kind:kindId, scope:{ type:'all' }, loose:false });
+      n = g.edges.filter(function(e){ return keep[e.akey] && keep[e.bkey]; }).length;
+    }catch(err){}
+    if (m._counts) m._counts[ck] = n;
+    return n;
+  }
+
+  /* A group draws its members and the bonds between them, and nothing else. */
   function narrowToSet(g, m){
-    var set = activeSet(m);
-    if (!set){
-      /* With no set there is nothing to draw. A structure over every element in the
-         story was the one view nobody could read [Jeremy], so the empty page says
-         so and offers the + rather than showing a hairball. The dossier's small
-         panel is exempt: it is scoped to one element, which IS its set. */
+    var gp = activeGroup(m);
+    if (!gp){
       if (!m.mini && (!m.ui.scope || m.ui.scope.type === 'all')){ g.nodes = []; g.edges = []; }
       return;
     }
-    var keep = {}; (set.members || []).forEach(function(k){ keep[k] = 1; });
+    var keep = {}; (gp.members || []).forEach(function(k){ keep[k] = 1; });
     var by = {}; try{ by = BONDS.roster(); }catch(e){}
     g.nodes = g.nodes.filter(function(n){ return keep[n.key]; });
     g.edges = g.edges.filter(function(e){ return keep[e.akey] && keep[e.bkey]; });
-    /* A set is a list of people, and a structure still only draws what it can hold —
-       a place on a family tree is a category error whoever put it in the set. */
+    /* the group is the node list — every member the lens can hold stands on the
+       page whether or not anything is attached to it yet, which is the whole
+       reason pins existed */
     var cats = (BONDS.KINDS[m.ui.kind] || {}).cats || null;
     var have = {}; g.nodes.forEach(function(n){ have[n.key] = 1; });
-    (set.members || []).forEach(function(k){
+    (gp.members || []).forEach(function(k){
       if (have[k] || !by[k]) return;
       var n = by[k];
       if (cats && cats.indexOf(n.cat) < 0) return;
@@ -64636,91 +64783,68 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
     g.nodes.sort(function(a, b){ return a.label.localeCompare(b.label); });
   }
   function addToSet(key, m){
-    var set = activeSet(m); if (!set) return false;
-    set.members = set.members || [];
-    if (set.members.indexOf(key) < 0) set.members.push(key);
-    saveSet(set); return true;
+    var gp = activeGroup(m); if (!gp) return false;
+    gp.members = gp.members || [];
+    if (gp.members.indexOf(key) < 0) gp.members.push(key);
+    saveGroup(gp); return true;
   }
   function removeFromSet(key, m){
-    var set = activeSet(m); if (!set) return false;
-    set.members = (set.members || []).filter(function(k){ return k !== key; });
-    saveSet(set); return true;
+    var gp = activeGroup(m); if (!gp) return false;
+    gp.members = (gp.members || []).filter(function(k){ return k !== key; });
+    saveGroup(gp); return true;
   }
 
-  /* The second filter level: the sets of this kind, as pills, with a search that
-     narrows them by name — the shape the notepad already uses. */
+  /* ---- band 2: the groups of the chosen type ----------------------------- */
   function setBar(m){
     var row = el('div','bn-sets');
-    var mine = sets(m);
+    var mine = groupsOf(m);
     var q = (m.ui.setQ || '').trim().toLowerCase();
 
-    mine.forEach(function(set){
-      if (q && set.name.toLowerCase().indexOf(q) < 0 && m.ui.set !== set.id) return;
-      var b = el('button','bn-set' + (m.ui.set === set.id ? ' on' : ''), set.name); b.type='button';
-      b.title = (set.members || []).length + ' on this one — double-click to rename';
-      var ct = SET_CATS.find(function(x){ return x.id === catOfSet(set); });
-      if (ct) b.appendChild(el('i','bn-set-cat', ct.name));
-      b.appendChild(el('i','bn-set-n', String((set.members || []).length)));
-      b.addEventListener('click', function(){ m.ui.set = set.id; m.ui.sel = null; V.render(m); });
-      b.addEventListener('dblclick', function(ev){ ev.preventDefault(); renameSet(set, m); });
-      var x = el('span','bn-set-x','×');
-      x.title = 'Delete this ' + (KIND_NOUN[m.ui.kind] || 'set').toLowerCase();
-      x.addEventListener('click', function(ev){
-        ev.stopPropagation(); ev.preventDefault();
-        askDelete(set, m);
+    mine.forEach(function(gp){
+      if (q && gp.name.toLowerCase().indexOf(q) < 0 && m.ui.group !== gp.id) return;
+      var b = el('button','bn-set' + (m.ui.group === gp.id ? ' on' : ''), gp.name); b.type='button';
+      b.title = (gp.members || []).length + ' in this one — double-click to rename';
+      /* the type shows on the pill only while the band is unfiltered; under a
+         chosen type it would repeat the answer to the question you just asked */
+      if (!m.ui.type && typeName(typeOf(gp))) b.appendChild(el('i','bn-set-cat', typeName(typeOf(gp))));
+      b.appendChild(el('i','bn-set-n', String((gp.members || []).length)));
+      b.addEventListener('click', function(){
+        m.ui.group = gp.id; m.ui.sel = null; m.ui.kind = lensOfGroup(gp); V.render(m);
       });
+      b.addEventListener('dblclick', function(ev){ ev.preventDefault(); renameSet(gp, m); });
+      var x = el('span','bn-set-x','×');
+      x.title = 'Delete this group';
+      x.addEventListener('click', function(ev){ ev.stopPropagation(); ev.preventDefault(); askDelete(gp, m); });
       b.appendChild(x);
       row.appendChild(b);
     });
 
-    var add = el('button','bn-set-add','+ ' + (KIND_NOUN[m.ui.kind] || 'Set')); add.type='button';
+    var add = el('button','bn-set-add','+ Group'); add.type='button';
     add.title = 'Start a new one, empty';
     add.addEventListener('click', function(){ makeSet(m); });
     row.appendChild(add);
-
-    /* The "This kind only / All connections" toggle is gone [Jeremy]. A structure
-       that shows the wrong vocabulary is not a structure, so the escape hatch was
-       an admission the filter might be wrong rather than a thing to reach for. */
-    var right = el('div','bn-headright');
-    var addb = el('button','bn-add','+ Element'); addb.type = 'button';
-    addb.title = 'Put an element on this map, whether or not it is connected yet';
-    addb.addEventListener('click', function(ev){ ev.stopPropagation(); openAdd(addb, m); });
-    right.appendChild(addb);
-
-    var arr = el('button','bn-arrange','Arrange'); arr.type = 'button';
-    arr.title = 'Lay this out again from scratch, and frame it';
-    arr.addEventListener('click', function(){
-      var s = store(); if (s.layouts) delete s.layouts[slot(m)]; delete (s.views||{})[slot(m)]; saveStore(s); V.render(m);
-    });
-    right.appendChild(arr);
-    row.appendChild(right);
     return row;
   }
 
-  /* The search lives with the structures now, but it narrows the SETS — so it is
-     built here, beside the pills it hides. */
+  /* The search lives with the types, and narrows the GROUPS. */
   function setSearch(m){
     var sb = el('div','bn-set-search');
-    var si = document.createElement('input');
-    si.type = 'text'; si.placeholder = 'Search…'; si.value = m.ui.setQ || '';
-    si.addEventListener('input', function(){
-      m.ui.setQ = si.value;
-      var host = hostOf(m); if (!host) return;
-      var q = si.value.trim().toLowerCase();
-      Array.prototype.slice.call(host.querySelectorAll('.bn-set')).forEach(function(p){
-        var nm = (p.childNodes[0] && p.childNodes[0].textContent || '').trim();
-        if (nm === 'All') return;
-        p.style.display = (!q || nm.toLowerCase().indexOf(q) >= 0 || p.classList.contains('on')) ? '' : 'none';
-      });
+    var i = document.createElement('input');
+    i.type = 'text'; i.value = m.ui.setQ || ''; i.placeholder = 'Search…';
+    i.addEventListener('input', function(){
+      m.ui.setQ = i.value;
+      var band = hostOf(m) && hostOf(m).querySelector('.bn-band-sets');
+      if (band){ var old = band.querySelector('.bn-sets'); if (old) band.replaceChild(setBar(m), old); }
     });
-    sb.appendChild(si);
+    sb.appendChild(i);
     return sb;
   }
 
-  /* Every group of people the story already holds, from the two places it keeps
-     them: the parties on the map, and the member charts hung off a guild or house.
-     [Jeremy: "+social group … gives you the option to bring in a group you've
-     already created, or to create a new one."] */
+  /* Groups a writer has already made elsewhere in the app — parties on the Map and
+     the member charts hanging off an org element. In phase 1 these stay where they
+     are and remain an IMPORT: a group is created FROM one and is thereafter its
+     own thing. One-way, so there is no second store and no question of which wins.
+     [v.403's rule, unchanged] */
   function existingGroups(){
     var out = [];
     try{
@@ -64731,8 +64855,8 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
       });
     }catch(e){}
     try{
-      var by = BONDS.roster(), conns = window.__dystGroupConns || null;
-      var blob = {}; 
+      var by = BONDS.roster();
+      var blob = {};
       try{
         var sid = localStorage.getItem('dystoria.lastStory') || '';
         blob = JSON.parse(localStorage.getItem('dystoria.plan.v1.' + sid) || '{}') || {};
@@ -64750,15 +64874,14 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
   }
 
   function makeSet(m){
-    var noun = KIND_NOUN[m.ui.kind] || 'Set';
-    var groups = existingGroups();
+    var existing = existingGroups();
     var box = el('div','bn-mk-back'); box.id = 'bnNewSet';
     var c = el('div','bn-new'); box.appendChild(c);
     box.addEventListener('pointerdown', function(ev){ if (ev.target === box) close(); });
     function close(){ if (box.parentNode) box.parentNode.removeChild(box); }
 
     var head = el('div','bn-new-head');
-    head.appendChild(el('span','bn-new-t','A new ' + noun.toLowerCase()));
+    head.appendChild(el('span','bn-new-t','A new group'));
     var xb = el('button','bn-mk-x','×'); xb.type='button'; xb.addEventListener('click', close);
     head.appendChild(xb); c.appendChild(head);
 
@@ -64766,26 +64889,25 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
     name.className = 'bn-new-name'; name.placeholder = 'Name it…';
     c.appendChild(name);
 
-    /* what kind of institution this is — a label and a lens, never a constraint */
     c.appendChild(el('div','bn-new-lbl','What kind'));
     var catRow = el('div','bn-new-cats');
-    var chosenCat = CAT_DEFAULT[m.ui.kind] || '';
+    var chosenCat = m.ui.type || CAT_DEFAULT[m.ui.kind] || 'social';
     SET_CATS.forEach(function(ct){
       var b = el('button','bn-new-cat' + (ct.id === chosenCat ? ' on' : ''), ct.name);
       b.type='button'; b.title = ct.hint;
       b.addEventListener('click', function(){
-        chosenCat = (chosenCat === ct.id) ? '' : ct.id;
-        Array.prototype.slice.call(catRow.children).forEach(function(x){ x.classList.toggle('on', x === b && chosenCat === ct.id); });
+        chosenCat = ct.id;
+        Array.prototype.slice.call(catRow.children).forEach(function(x){ x.classList.toggle('on', x === b); });
       });
       catRow.appendChild(b);
     });
     c.appendChild(catRow);
 
     var picked = null;
-    if (groups.length){
+    if (existing.length){
       c.appendChild(el('div','bn-new-lbl','Start from a group you have already made'));
       var list = el('div','bn-new-list');
-      groups.forEach(function(gp){
+      existing.forEach(function(gp){
         var b = el('button','bn-new-grp', gp.name); b.type='button';
         b.appendChild(el('i','bn-new-n', gp.keys.length + (gp.kind === 'party' ? ' in the party' : ' on its chart')));
         b.addEventListener('click', function(){
@@ -64796,8 +64918,7 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
         list.appendChild(b);
       });
       c.appendChild(list);
-      c.appendChild(el('div','bn-new-note','Its people come across as this ' + noun.toLowerCase() +
-        '’s starting members. From then on the ' + noun.toLowerCase() + ' is yours — if the group gains someone later, this asks before adding them.'));
+      c.appendChild(el('div','bn-new-note','Its people come across as this group’s starting members. From then on the group is yours — if the party or chart gains someone later, this asks before adding them.'));
     }
 
     var acts = el('div','bn-mk-acts');
@@ -64805,11 +64926,15 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
     acts.appendChild(cancel);
     var go = el('button','bn-mk-btn bn-mk-go','Create'); go.type='button';
     go.addEventListener('click', function(){
-      var nm = name.value.trim() || (picked && picked.name) || (noun + ' ' + (sets(m).length + 1));
-      var set = { id:newSetId(), kind:m.ui.kind, name:nm, cat:chosenCat, members:[] };
-      if (picked){ set.members = picked.keys.slice(); set.fromGroup = picked.id; }
-      saveSet(set);
-      m.ui.set = set.id; m.ui.sel = null;
+      var nm = name.value.trim() || (picked && picked.name) || ('Group ' + (groups().length + 1));
+      var s = store();
+      var gp = { id:freshGroupId(s), name:nm, type:chosenCat, members:[],
+                 lens:(TYPE_LENSES[chosenCat] || [])[0] || m.ui.kind };
+      if (picked){ gp.members = picked.keys.slice(); gp.fromGroup = picked.id; }
+      saveGroup(gp);
+      /* the band follows the thing you just made, or it disappears from under you */
+      if (m.ui.type && m.ui.type !== chosenCat) m.ui.type = chosenCat;
+      m.ui.group = gp.id; m.ui.kind = lensOfGroup(gp); m.ui.sel = null;
       close(); V.render(m);
     });
     acts.appendChild(go);
@@ -64818,69 +64943,60 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
     setTimeout(function(){ try{ name.focus({ preventScroll:true }); }catch(e){} }, 0);
   }
 
-  /* A set made from a group keeps a thread back to it — not to follow it, but so it
-     can ASK. The same rule as the seed offer and the reverse relationship: propose,
-     never apply. Without it a set quietly goes stale; as a sync it would stop being
-     the writer's. */
+  /* A group made from a party or a chart keeps a thread back to it — not to follow
+     it, but so it can ASK. Propose, never apply. */
   function groupNews(m){
-    var set = activeSet(m); if (!set || !set.fromGroup) return null;
-    var gp = existingGroups().find(function(g){ return g.id === set.fromGroup; });
-    if (!gp) return null;
-    var have = {}; (set.members || []).forEach(function(k){ have[k] = 1; });
-    var fresh = gp.keys.filter(function(k){ return !have[k]; });
-    return fresh.length ? { set:set, gp:gp, fresh:fresh } : null;
+    var gp = activeGroup(m); if (!gp || !gp.fromGroup) return null;
+    var src = existingGroups().find(function(g){ return g.id === gp.fromGroup; });
+    if (!src) return null;
+    var have = {}; (gp.members || []).forEach(function(k){ have[k] = 1; });
+    var fresh = src.keys.filter(function(k){ return !have[k]; });
+    return fresh.length ? { set:gp, gp:src, fresh:fresh } : null;
   }
-  /* Deleting a set costs the writer an arrangement, not a fact — but it is still a
-     thing they cannot get back, so it asks. The app's own confirm where there is
-     one, so it looks like the rest of Dystoria rather than like the browser. */
-  function askDelete(set, m){
-    var msg = 'Delete “' + set.name + '”? The elements and their connections stay in your story — only this ' +
-              (KIND_NOUN[m.ui.kind] || 'set').toLowerCase() + ' and how you arranged it go.';
-    var done = function(ok){ if (!ok) return; dropSet(set.id); if (m.ui.set === set.id) m.ui.set = null; V.render(m); };
+  function askDelete(gp, m){
+    var msg = 'Delete “' + gp.name + '”? The elements and their connections stay in your story — only this group and how you arranged it go.';
+    var done = function(ok){ if (!ok) return; dropGroup(gp.id); if (m.ui.group === gp.id) m.ui.group = null; V.render(m); };
     try{
-      if (typeof siteConfirm === 'function'){
-        Promise.resolve(siteConfirm(msg, 'Delete')).then(done); return;
-      }
+      if (typeof siteConfirm === 'function'){ Promise.resolve(siteConfirm(msg, 'Delete')).then(done); return; }
     }catch(e){}
     done(typeof window.confirm !== 'function' || window.confirm(msg));
   }
-
-  function renameSet(set, m){
+  function renameSet(gp, m){
     var name = '';
-    try{ name = window.prompt('Rename', set.name); }catch(e){}
+    try{ name = window.prompt('Rename', gp.name); }catch(e){}
     if (name == null) return;
-    set.name = String(name).trim() || set.name;
-    saveSet(set); V.render(m);
+    gp.name = String(name).trim() || gp.name;
+    saveGroup(gp); V.render(m);
   }
 
-  /* The seed offer. It appears once, on an empty set, and it never fires itself.
-     [Jeremy: offer, never auto-seed] — a set that fills itself in stops being the
-     writer's and starts drifting under them as the story changes. */
-  /* No sets of this structure yet — the honest empty page, with the one thing to
-     do on it. */
+  /* No groups yet — the honest empty page, with the one thing to do on it. Under a
+     chosen type it says what that kind of group is for, which is a better first
+     question than "what kind of diagram do you want": a writer knows their people
+     are a family before they know they want a tree. */
   function firstSetOffer(m, canvas){
-    var noun = (KIND_NOUN[m.ui.kind] || 'set').toLowerCase();
-    var kind = BONDS.KINDS[m.ui.kind] || {};
+    var t = m.ui.type ? SET_CATS.find(function(x){ return x.id === m.ui.type; }) : null;
+    var lens = BONDS.KINDS[m.ui.kind] || {};
     var g = null;
     try{ g = BONDS.graph({ kind:m.ui.kind, scope:{ type:'all' }, loose:false }); }catch(e){}
     var have = (g && g.nodes.length) || 0;
     var box = el('div','bn-seed');
-    box.appendChild(el('div','bn-seed-t', kind.name || 'This structure'));
-    box.appendChild(el('div','bn-seed-l', (kind.lede || '') + ' Start a ' + noun +
-      ' and put the people in it — a map of everyone at once is rarely a map of anything.'));
-    /* …but if the story already holds this shape, offer it in one click rather than
-       making the writer rebuild by hand what the app can already see. Still an
-       offer: the set is theirs from the moment it exists. */
+    box.appendChild(el('div','bn-seed-t', t ? t.name : 'No groups yet'));
+    box.appendChild(el('div','bn-seed-l', (t ? t.hint + ' ' : '') +
+      'Start a group and put its people in it — a map of everyone at once is rarely a map of anything. ' +
+      'You can look at any group through any structure that fits it.'));
     if (have){
       var seed = el('button','bn-seed-go','Start from the ' + have + ' already connected'); seed.type='button';
+      seed.title = 'Everyone the ' + (lens.name || 'current structure').toLowerCase() + ' can already see';
       seed.addEventListener('click', function(){
-        var set = { id:newSetId(), kind:m.ui.kind, name:(KIND_NOUN[m.ui.kind] || 'Set'),
-                    cat:(CAT_DEFAULT[m.ui.kind] || ''), members:g.nodes.map(function(n){ return n.key; }) };
-        saveSet(set); m.ui.set = set.id; V.render(m);
+        var s = store();
+        var gp = { id:freshGroupId(s), name:(t ? t.name : (lens.name || 'Group')),
+                   type:(m.ui.type || CAT_DEFAULT[m.ui.kind] || 'social'),
+                   lens:m.ui.kind, members:g.nodes.map(function(n){ return n.key; }) };
+        saveGroup(gp); m.ui.group = gp.id; V.render(m);
       });
       box.appendChild(seed);
     }
-    var go = el('button','bn-seed-alt', have ? 'Or start an empty one' : ('+ ' + (KIND_NOUN[m.ui.kind] || 'Set')));
+    var go = el('button','bn-seed-alt', have ? 'Or start an empty one' : '+ Group');
     go.type='button';
     go.addEventListener('click', function(){ makeSet(m); });
     box.appendChild(go);
@@ -64888,20 +65004,19 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
   }
 
   function seedOffer(m, canvas){
-    var set = activeSet(m); if (!set || (set.members || []).length) return;
+    var gp = activeGroup(m); if (!gp || (gp.members || []).length) return;
     var g = null;
     try{ g = BONDS.graph({ kind:m.ui.kind, scope:{ type:'all' }, loose:false }); }catch(e){ return; }
     var box = el('div','bn-seed');
-    box.appendChild(el('div','bn-seed-t', 'Nothing on “' + set.name + '” yet.'));
+    box.appendChild(el('div','bn-seed-t', 'Nothing on “' + gp.name + '” yet.'));
     if (g && g.nodes.length){
-      var noun = (KIND_NOUN[m.ui.kind] || 'set').toLowerCase();
       box.appendChild(el('div','bn-seed-l',
         'Your story already holds ' + g.nodes.length + (g.nodes.length === 1 ? ' element' : ' elements') +
         ' connected this way. Start from them, or add your own with + Element.'));
       var go = el('button','bn-seed-go','Start from the ' + g.nodes.length + ' already connected'); go.type='button';
       go.addEventListener('click', function(){
-        set.members = g.nodes.map(function(n){ return n.key; });
-        saveSet(set); V.render(m);
+        gp.members = g.nodes.map(function(n){ return n.key; });
+        saveGroup(gp); V.render(m);
       });
       box.appendChild(go);
     } else {
@@ -64910,12 +65025,9 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
     canvas.appendChild(box);
   }
 
-  /* ---- the chooser ------------------------------------------------------- */
+  /* ---- band 1: the eight types, and the chooser -------------------------- */
   function chooser(m){
     var bar = el('div','bn-head');
-    /* A mini mount is already answering one question — "who is this one tied to" —
-       so the seven kinds would be seven ways to ask a question nobody asked. It
-       gets a title, Arrange, and a door into the full panel. */
     if (m.mini){
       bar.appendChild(el('span','bn-mini-t', m.miniTitle || 'Bonds'));
       var mr = el('div','bn-headright');
@@ -64936,34 +65048,35 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
       mo.appendChild(el('div','bn-lede','Everything this one is tied to, one step out. Hover an element and drag its link mark onto another to connect them.'));
       return mo;
     }
+
     var kinds = el('div','bn-kinds');
-    BONDS.kinds().forEach(function(k){
-      var b = el('button','bn-kind' + (k.id === m.ui.kind ? ' on' : ''), k.name);
-      b.type = 'button'; b.title = k.lede;
-      b.addEventListener('click', function(){ m.ui.kind = k.id; m.ui.set = null; m.ui.sel = null; V.render(m); });
+    var all = groups();
+    /* "All" lists rather than draws, so it cannot make the hairball v.405 retired.
+       It is the unfiltered state of a LIST, which is a different thing entirely. */
+    var ab = el('button','bn-kind' + (m.ui.type ? '' : ' on'), 'All'); ab.type='button';
+    ab.title = 'Every group in the story';
+    ab.addEventListener('click', function(){ m.ui.type = null; m.ui.sel = null; V.render(m); });
+    kinds.appendChild(ab);
+    SET_CATS.forEach(function(t){
+      var n = all.filter(function(gp){ return typeOf(gp) === t.id; }).length;
+      var b = el('button','bn-kind' + (m.ui.type === t.id ? ' on' : '') + (n ? '' : ' bare'), t.name);
+      b.type = 'button'; b.title = t.hint + (n ? '' : ' — none yet');
+      if (n) b.appendChild(el('i','bn-kind-n', String(n)));
+      b.addEventListener('click', function(){
+        m.ui.type = t.id; m.ui.group = null; m.ui.sel = null;
+        m.ui.kind = (TYPE_LENSES[t.id] || [])[0] || m.ui.kind;
+        V.render(m);
+      });
       kinds.appendChild(b);
     });
     bar.appendChild(kinds);
 
     var right = el('div','bn-headright');
-    /* The scope dropdown is gone [Jeremy]. Sets are how a writer narrows a map now.
-       `ui.scope` stays in the model because the dossier mount is built on it.
-       The search sits up here with the structures; the tools that act on WHAT IS
-       DRAWN sit down with the sets, beside the thing they act on. */
-    var right = el('div','bn-headright');
     right.appendChild(setSearch(m));
     bar.appendChild(right);
 
-    /* Two bands, the notepad's shape: the STRUCTURE you are drawing on parchment,
-       and the SETS of that structure on paper below it. They answer different
-       questions, and reading them as one row made the second look like more of the
-       first. [Jeremy, 2026-08-09]
-
-       The lede is gone from the band — each structure's one line lives on its pill
-       as a title now. "It's good enough as a hover state" [Jeremy], and a sentence
-       that never changes costs a row of height every time you look at the map.
-       The occasional notices it used to carry moved down to the set band, where
-       they belong: they are about a set, not about a structure. */
+    /* Two bands, same shape as before, different questions [Jeremy, 2026-08-10]:
+       what kind of thing on parchment, which one on paper. */
     var lede = el('div','bn-lede');
     var out = el('div','bn-headwrap');
     var band1 = el('div','bn-band bn-band-kinds'); band1.appendChild(bar);
@@ -64978,11 +65091,11 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
       nb.type='button';
       nb.addEventListener('click', function(){
         news.set.members = (news.set.members || []).concat(news.fresh);
-        saveSet(news.set); V.render(m);
+        saveGroup(news.set); V.render(m);
       });
       lede.appendChild(nb);
     }
-    var h = m.ui.set ? [] : hidden(m);
+    var h = m.ui.group ? [] : hidden(m);
     if (h.length){
       var back = el('button','bn-back', h.length + (h.length === 1 ? ' element is' : ' elements are') + ' off this map — show them again');
       back.type = 'button';
@@ -64990,6 +65103,48 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
       lede.appendChild(back);
     }
     return out;
+  }
+
+  /* ---- what sits ON the drawing -----------------------------------------
+     The lens toggle at the top left, + Element and Arrange at the top right
+     [Jeremy, 2026-08-10]. Both act on the drawing rather than on the story, and
+     keeping them out of the bands is what lets the bands stay two clean questions.
+     What this drawing is on the left; what to do to it on the right. */
+  function lensBar(m, wrap){
+    var gp = activeGroup(m); if (!gp) return;
+    var lenses = lensesFor(gp, m);
+    if (lenses.length < 2) return;
+    var row = el('div','bn-lenses');
+    lenses.forEach(function(L){
+      var b = el('button','bn-lens' + (L.id === m.ui.kind ? ' on' : '') +
+                          (L.count ? '' : ' none') + (L.natural ? ' nat' : ''), L.name);
+      b.type = 'button';
+      b.title = L.count ? (L.lede + ' — ' + L.count + (L.count === 1 ? ' bond here' : ' bonds here'))
+                        : (L.lede + ' — nothing of this kind between these yet. Add a dimension to a bond and it will appear.');
+      b.appendChild(el('i','bn-lens-n', String(L.count)));
+      b.addEventListener('click', function(){
+        m.ui.kind = L.id; m.ui.sel = null;
+        gp.lens = L.id; saveGroup(gp);
+        V.render(m);
+      });
+      row.appendChild(b);
+    });
+    wrap.appendChild(row);
+  }
+  function toolBar(m, wrap){
+    if (m.mini) return;
+    var row = el('div','bn-tools');
+    var addb = el('button','bn-add','+ Element'); addb.type = 'button';
+    addb.title = 'Put an element in this group, whether or not it is connected yet';
+    addb.addEventListener('click', function(ev){ ev.stopPropagation(); openAdd(addb, m); });
+    row.appendChild(addb);
+    var arr = el('button','bn-arrange','Arrange'); arr.type = 'button';
+    arr.title = 'Lay this out again from scratch, and frame it';
+    arr.addEventListener('click', function(){
+      var s = store(); if (s.layouts) delete s.layouts[slot(m)]; delete (s.views||{})[slot(m)]; saveStore(s); V.render(m);
+    });
+    row.appendChild(arr);
+    wrap.appendChild(row);
   }
 
   /* The − / % / + controls are gone [Jeremy]. The wheel, the pinch and the drag do
@@ -65120,12 +65275,17 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
       /* parent and child always reads downward, on any map and however it happens
          to be stored [Jeremy, 2026-08-09] — a line that says "Child of" pointing
          down the page is asking the reader to invert it every time */
-      if (DOWNWARD[fwd]){ head = fwd; headFrom = e.akey; }
-      else if (DOWNWARD[rev]){ head = rev; headFrom = e.bkey; }
-      else if (LAYERED && fwd && rev){
+      /* …but only when the word the LENS is drawing is the parent-and-child one.
+         v.402 read this off the stored aspects, which was right when a bond had one
+         type; with v.405's dimensions a social web over a family would label every
+         line "Mother of" while drawing the betrayal underneath it — the picture said
+         one thing and the line said another. [found in the v.408 screenshot] */
+      if (DOWNWARD[fwd] && sameFace(head, fwd)){ head = fwd; headFrom = e.akey; }
+      else if (DOWNWARD[rev] && sameFace(head, rev)){ head = rev; headFrom = e.bkey; }
+      else if (LAYERED && fwd && rev && (sameFace(head, fwd) || sameFace(head, rev))){
         if (ca.y < cb.y - 18){ head = fwd; headFrom = e.akey; }
         else if (cb.y < ca.y - 18){ head = rev; headFrom = e.bkey; }
-      } else if (head === (rev || '\u0000') && head !== fwd) headFrom = e.bkey;
+      } else if (sameFace(head, rev) && !sameFace(head, fwd)) headFrom = e.bkey;
       head = readAs(head, headFrom);
       var lab = el('div','bn-lab' + (m.ui.sel === idx ? ' on' : '') + (st.conflict ? ' war' : ''), head);
       /* the Map's ⚔ as well as the Map's crimson: a signal carried by hue alone is a
@@ -66056,6 +66216,23 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
       '  font-family:inherit; font-size:12px; cursor:pointer; text-decoration:underline; }',
       '.bn-seed-alt:hover{ color:#2b2419; }',
       '.bn-mini .bn-sets{ display:none; }',
+      /* what this drawing is, top left; what to do to it, top right [Jeremy] */
+      '.bn-lenses{ position:absolute; left:14px; top:12px; z-index:6; display:flex; gap:5px;',
+      '  flex-wrap:wrap; max-width:58%; }',
+      '.bn-tools{ position:absolute; right:14px; top:12px; z-index:6; display:flex; gap:8px; align-items:center; }',
+      '.bn-lens{ display:inline-flex; align-items:center; gap:5px; border:1px solid #e4dece;',
+      '  background:rgba(255,255,255,.9); color:#5d5647; border-radius:999px; padding:3px 10px;',
+      '  font-size:11.5px; cursor:pointer; font-family:inherit; backdrop-filter:blur(2px); }',
+      '.bn-lens:hover{ border-color:#c8963c; color:#2b2419; }',
+      '.bn-lens.on{ background:#2b2419; border-color:#2b2419; color:#f3ecdc; }',
+      /* applicable, but nothing to draw yet — dimmed and still reachable, because
+         it is where a writer finds out a bond can hold more than one thing */
+      '.bn-lens.none{ opacity:.5; }',
+      '.bn-lens.none.on{ opacity:1; }',
+      '.bn-lens-n{ font-style:normal; font-size:9px; opacity:.6; }',
+      '.bn-kind-n{ font-style:normal; font-size:9px; margin-left:5px; opacity:.55; }',
+      '.bn-kind.bare{ opacity:.5; }',
+      '.bn-kind.bare:hover{ opacity:1; }',
       /* the bond creator */
       '.bn-mk-back{ position:fixed; inset:0; z-index:70; background:rgba(40,32,18,.34);',
       '  display:flex; align-items:center; justify-content:center; padding:24px; }',
