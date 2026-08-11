@@ -47820,9 +47820,9 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.414';
+  var APP_VERSION = '2026.07.20.415';
   var APP_CHANGELOG = [
-    { v:'2026.07.20.414', date:'August 9, 2026', notes:[
+    { v:'2026.07.20.415', date:'August 9, 2026', notes:[
       '**A bond can be more than one thing at once.** Two people can be spouses *and* rivals *and* owed — and those are not a history, they are one relationship with several faces. The bond creator now holds as many **dimensions** as you want, and **each carries its own weight, warmth, secret and stake**, because a marriage and a rivalry between the same two people do not share a weight.',
       '**The structure decides which face the map draws.** The same bond reads *Spouse of* on the family tree and *Rivals* on the social web, with no duplication and nothing to keep in step. Click it and the card names the one on this map and lists the others underneath with their own aspects.',
       'Underneath, the first dimension is still written the way every connection always has been, so the Map, the Wiki, the notepad and the AI context keep reading records they have always understood. Nothing else in the app had to learn what a dimension is.',
@@ -64630,7 +64630,12 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
     { id:'knowledge',  name:'Knowledge',  hint:'Schools, archives, who taught whom.' },
     { id:'social',     name:'Social',     hint:'Circles, salons, who is welcome where.' },
     { id:'kinship',    name:'Kinship',    hint:'A family, by blood or by choosing.' },
-    { id:'species',    name:'Species',    hint:'Descent and branching — drawn as a cladogram.' }
+    { id:'species',    name:'Species',    hint:'Descent and branching — drawn as a cladogram.' },
+    /* The eight were all people and institutions, which left a map of IDEAS with
+       no kind of its own — a concept group had to borrow "Knowledge", which is
+       about who taught whom rather than about how ideas hold each other up.
+       [Jeremy, 2026-08-11] */
+    { id:'concept',    name:'Concepts',   hint:'Ideas, and how they hold each other up.' }
   ];
   /* Which FAMILIES of the relation vocabulary each type is usually about. This is
      what the bond creator orders by from v.409 — the group's type, not the lens.
@@ -64646,17 +64651,33 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
     martial:['Loyalty','Enmity','Mentorship'],
     commercial:['Debt & secrets','Loyalty'],
     faith:['Mentorship','Loyalty','Romance'],
-    knowledge:['Mentorship','Loyalty']
+    knowledge:['Mentorship','Loyalty'],
+    concept:[]
   };
-  /* Which structures a type opens on, and which it is at home in. Jeremy's own
-     mapping from v.403, unchanged — the first is the default. */
+  /* Which structures a type may be seen through, in order — the FIRST is what it
+     opens on. From v.415 this is an allow-list rather than a list of favourites:
+     "filtering the structure types that don't make sense (i.e. blueprint for
+     kinship group)" [Jeremy, 2026-08-11].
+
+     Cast-applicability alone was not enough. A kinship group that happens to hold
+     two places was being offered a Place blueprint — the cast could technically
+     wear it and the answer was still nonsense, because what a group IS decides
+     what it is worth looking at it through. `free` (Everything) is always allowed:
+     it is the escape hatch, and it makes no claim about what the group is. */
   var TYPE_LENSES = {
-    commercial:['faction'], political:['social','faction'], martial:['faction'],
-    faith:['social','faction'], knowledge:['social','faction'], social:['social'],
-    kinship:['family'], species:['family']
+    kinship:['family','social'],
+    species:['family'],
+    social:['social','faction'],
+    political:['social','faction'],
+    martial:['faction','social'],
+    commercial:['faction','social'],
+    faith:['social','faction','concept'],
+    knowledge:['social','faction','concept'],
+    concept:['concept']
   };
+  var ALWAYS_LENS = 'free';
   var CAT_DEFAULT = { family:'kinship', social:'social', faction:'political',
-                      concept:'knowledge', place:'', causal:'', free:'' };
+                      concept:'concept', place:'', causal:'', free:'' };
   function typeOf(gp){ return (gp && gp.type) || ''; }
   function catOfSet(gp){ return typeOf(gp); }
   function typeName(id){ var t = SET_CATS.find(function(x){ return x.id === id; }); return t ? t.name : ''; }
@@ -64764,7 +64785,7 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
       (cg.map.nodes || []).forEach(function(n){ if (n && n.conceptKey && by[n.conceptKey] && ks.indexOf(n.conceptKey) < 0) ks.push(n.conceptKey); });
       if (ks.length < 2) return;
       out.push({ id:'src:concepts:' + cg.id, name:cg.name || 'Concepts',
-                 type:'knowledge', lens:'concept', members:ks,
+                 type:'concept', lens:'concept', members:ks,
                  source:{ kind:'concepts', key:cg.id } });
     });
     return out;
@@ -64874,17 +64895,28 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
      a blueprint over a family — which is absent rather than dimmed, because it is
      not empty, it is a category error, and a door that goes nowhere is worse than
      no door. */
+  /* Two gates, and they answer different questions. The TYPE says which structures
+     are worth looking at this group through at all; the CAST says whether there is
+     anything here for one of them to relate. A lens has to pass both — and an
+     untyped group falls back to the cast alone, because with no declared type
+     there is nothing to filter by. Order follows the type's own list, so a group
+     opens on the first thing it offers. */
   function lensesFor(gp, m){
     if (!gp) return [];
-    var cast = castOf(gp), nat = TYPE_LENSES[typeOf(gp)] || [], out = [];
+    var cast = castOf(gp), allow = TYPE_LENSES[typeOf(gp)] || null, out = [];
     m._counts = m._counts || {};
     BONDS.kinds().forEach(function(k){
+      if (allow && k.id !== ALWAYS_LENS && allow.indexOf(k.id) < 0) return;
       var cats = (BONDS.KINDS[k.id] || {}).cats, n = 0;
       if (!cats) Object.keys(cast).forEach(function(c){ n += cast[c]; });
       else cats.forEach(function(c){ n += (cast[c] || 0); });
       if (n < 2) return;
       out.push({ id:k.id, name:k.name, lede:k.lede,
-                 natural:nat.indexOf(k.id) >= 0, count:lensCount(gp, k.id, m) });
+                 natural:!!(allow && allow.indexOf(k.id) >= 0), count:lensCount(gp, k.id, m) });
+    });
+    if (allow) out.sort(function(a, b){
+      var ai = allow.indexOf(a.id), bi = allow.indexOf(b.id);
+      return (ai < 0 ? 99 : ai) - (bi < 0 ? 99 : bi);
     });
     return out;
   }
@@ -65309,26 +65341,52 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
      [Jeremy, 2026-08-10]. Both act on the drawing rather than on the story, and
      keeping them out of the bands is what lets the bands stay two clean questions.
      What this drawing is on the left; what to do to it on the right. */
+  /* One dropdown rather than a row of pills [Jeremy, 2026-08-11]. The row said the
+     same thing every time you looked at it — six names, one of them highlighted —
+     for a choice a writer changes rarely and never needs to compare across. A
+     dropdown says what you are looking through in one line and keeps the rest a
+     click away, which leaves the top of the drawing to the drawing. */
   function lensBar(m, wrap){
     var gp = activeGroup(m); if (!gp) return;
     var lenses = lensesFor(gp, m);
     if (lenses.length < 2) return;
-    var row = el('div','bn-lenses');
+    var here = lenses.find(function(L){ return L.id === m.ui.kind; }) || lenses[0];
+
+    var box = el('div','bn-lensbox');
+    var btn = el('button','bn-lenspick', here.name); btn.type = 'button';
+    btn.title = here.lede;
+    btn.appendChild(el('i','bn-lens-n', String(here.count)));
+    btn.appendChild(el('i','bn-lens-caret','▾'));
+    box.appendChild(btn);
+
+    var menu = el('div','bn-lensmenu');
     lenses.forEach(function(L){
-      var b = el('button','bn-lens' + (L.id === m.ui.kind ? ' on' : '') +
-                          (L.count ? '' : ' none') + (L.natural ? ' nat' : ''), L.name);
-      b.type = 'button';
-      b.title = L.count ? (L.lede + ' — ' + L.count + (L.count === 1 ? ' bond here' : ' bonds here'))
-                        : (L.lede + ' — nothing of this kind between these yet. Add a dimension to a bond and it will appear.');
-      b.appendChild(el('i','bn-lens-n', String(L.count)));
-      b.addEventListener('click', function(){
+      var it = el('button','bn-lensitem' + (L.id === here.id ? ' on' : '') + (L.count ? '' : ' none'), L.name);
+      it.type = 'button';
+      it.title = L.count ? (L.lede + ' — ' + L.count + (L.count === 1 ? ' bond here' : ' bonds here'))
+                         : (L.lede + ' — nothing of this kind between these yet. Add a dimension to a bond and it will appear.');
+      it.appendChild(el('i','bn-lens-n', String(L.count)));
+      it.addEventListener('click', function(ev){
+        ev.stopPropagation();
         m.ui.kind = L.id; m.ui.sel = null;
         gp.lens = L.id; saveGroup(gp);
         V.render(m);
       });
-      row.appendChild(b);
+      menu.appendChild(it);
     });
-    wrap.appendChild(row);
+    box.appendChild(menu);
+
+    var open = false;
+    var shut = function(){ open = false; box.classList.remove('open'); document.removeEventListener('pointerdown', away, true); };
+    var away = function(ev){ if (!box.contains(ev.target)) shut(); };
+    btn.addEventListener('click', function(ev){
+      ev.stopPropagation();
+      open = !open;
+      box.classList.toggle('open', open);
+      if (open) document.addEventListener('pointerdown', away, true);
+      else document.removeEventListener('pointerdown', away, true);
+    });
+    wrap.appendChild(box);
   }
   function toolBar(m, wrap){
     /* + Element puts something IN a group and Arrange re-lays one out; with no group
@@ -66431,18 +66489,26 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
       '.bn-seed-card-h{ display:block; font-style:normal; font-size:10.5px; color:#9a9484; margin-top:3px; }',
       '.bn-mini .bn-sets{ display:none; }',
       /* what this drawing is, top left; what to do to it, top right [Jeremy] */
-      '.bn-lenses{ position:absolute; left:14px; top:12px; z-index:6; display:flex; gap:5px;',
-      '  flex-wrap:wrap; max-width:58%; }',
+      '.bn-lensbox{ position:absolute; left:14px; top:12px; z-index:6; }',
+      '.bn-lenspick{ display:inline-flex; align-items:center; gap:6px; border:1px solid #e4dece;',
+      '  background:rgba(255,255,255,.92); color:#2b2419; border-radius:999px; padding:5px 12px;',
+      '  font-size:12.5px; cursor:pointer; font-family:inherit; backdrop-filter:blur(2px); }',
+      '.bn-lenspick:hover{ border-color:#c8963c; }',
+      '.bn-lens-caret{ font-style:normal; font-size:9px; opacity:.55; margin-left:1px; }',
+      '.bn-lensmenu{ display:none; position:absolute; left:0; top:calc(100% + 5px); min-width:190px;',
+      '  background:#fff; border:1px solid #e4dece; border-radius:11px; padding:5px;',
+      '  box-shadow:0 16px 40px -14px rgba(80,60,25,.42); }',
+      '.bn-lensbox.open .bn-lensmenu{ display:block; }',
+      '.bn-lensitem{ display:flex; width:100%; align-items:center; justify-content:space-between; gap:10px;',
+      '  border:none; background:none; text-align:left; font-family:inherit; font-size:12.5px;',
+      '  color:#3b3529; padding:6px 9px; border-radius:7px; cursor:pointer; }',
+      '.bn-lensitem:hover{ background:#f6f1e6; }',
+      '.bn-lensitem.on{ background:#2b2419; color:#f3ecdc; }',
       '.bn-tools{ position:absolute; right:14px; top:12px; z-index:6; display:flex; gap:8px; align-items:center; }',
-      '.bn-lens{ display:inline-flex; align-items:center; gap:5px; border:1px solid #e4dece;',
-      '  background:rgba(255,255,255,.9); color:#5d5647; border-radius:999px; padding:3px 10px;',
-      '  font-size:11.5px; cursor:pointer; font-family:inherit; backdrop-filter:blur(2px); }',
-      '.bn-lens:hover{ border-color:#c8963c; color:#2b2419; }',
-      '.bn-lens.on{ background:#2b2419; border-color:#2b2419; color:#f3ecdc; }',
       /* applicable, but nothing to draw yet — dimmed and still reachable, because
          it is where a writer finds out a bond can hold more than one thing */
-      '.bn-lens.none{ opacity:.5; }',
-      '.bn-lens.none.on{ opacity:1; }',
+      '.bn-lensitem.none{ opacity:.5; }',
+      '.bn-lensitem.none.on{ opacity:1; }',
       '.bn-lens-n{ font-style:normal; font-size:9px; opacity:.6; }',
       '.bn-kind-n{ font-style:normal; font-size:9px; margin-left:5px; opacity:.55; }',
       '.bn-kind.bare{ opacity:.5; }',
