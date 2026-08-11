@@ -47820,8 +47820,12 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.418';
+  var APP_VERSION = '2026.07.20.419';
   var APP_CHANGELOG = [
+    { v:'2026.07.20.419', date:'August 11, 2026', notes:[
+      'Groundwork, with nothing to see: **a Plot column now knows what kind of thing it is.** Every column has been a thread since the grid was built, which was true and would have stayed true right up until arcs arrive beside them. Columns, the ＋ that adds one, the header, the stake it inherits and the .xls export all ask a single table now instead of assuming.',
+      'Your grid is unchanged \u2014 threads are still the only kind, and old stories upgrade themselves the first time they are opened.'
+    ] },
     { v:'2026.07.20.418', date:'August 11, 2026', notes:[
       '**Your arcs were there all along.** When you were signed out \u2014 or in No-AI mode, or over the cap \u2014 the AI gating was hiding the arc pills themselves rather than just the \u2726 shortcut on them, so the Arcs page showed your characters with nothing on them. Same for the arc links on an element\u2019s page. The arcs are back; only the \u2726 goes now.',
       '**And the Arc Analysis page has its button back.** It used to disappear in the same states, leaving a page that said \u201cRun the analysis\u201d with nothing to run it with.',
@@ -52667,9 +52671,82 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     placeMenu(m, anchor);
   }
 
-  /* ---------- Plot sub-view: rows = real sections, columns = Main Plot + thread sub-plots ---------- */
+  /* ---------- Plot sub-view: rows = real sections, columns = strands through them ----------
+
+     A column has a KIND. Until v.419 every column was a thread and `plotColumns()`
+     wrote `thread:true` in one place, which was true and would have stayed true right
+     up until it wasn't. `COL_KINDS` declares what each kind of column IS — how to
+     name it, whether it is still alive, how to make one, what its setup surface is,
+     how to remove it, and what stake it carries — and every branch that used to test
+     `col.thread` asks the table instead.
+
+     Only `thread` is defined here. Arcs arrive as the second kind [#25 step 2], and
+     the reason to land the table with one entry and no visible change is that the
+     alternative — one `if (col.kind === 'arc')` at a time — is how a second kind
+     becomes eleven branches nobody can find. Bonds went through exactly this with
+     lenses in v.408.
+
+     THE KIND IS NEVER READ OFF THE ID. Thread ids begin `th`, arc ids begin `p`, and
+     inferring from that would work on every case in front of us and fail on the first
+     one after — v.415's mistake exactly. The kind is stored because it is a fact
+     about the column, not a pattern in its name. */
+  var COL_KINDS = {
+    thread: {
+      label:'Thread',
+      hint:'A storyline running through the sections.',
+      /* `live` decides whether a column survives the prune. It answers TRUE when it
+         cannot tell — the bridge may not be up yet on first paint, and a prune that
+         guesses "gone" empties the writer's grid silently. */
+      live:function(id){ var a=api(); if(!a || !a.threads) return true;
+        var ts=a.threads(); if(!ts) return true;
+        for(var i=0;i<ts.length;i++) if(ts[i] && ts[i].id===id) return true;
+        return false; },
+      name:function(id){ var a=api(); var t=(a&&a.threadById)?a.threadById(id):null; return (t&&t.name)||'unnamed'; },
+      create:function(){ var a=api(); return (a&&a.newThread)?a.newThread('unnamed'):null; },
+      setup:function(col){ openPlotCardPopup(col); },
+      stake:function(id){ var a=api(); return (a&&a.threadStake)?a.threadStake(id):''; },
+      /* Removing a THREAD column deletes the thread, everywhere — that is this kind's
+         own rule and it predates the table. A kind whose subject is not the grid's to
+         delete says so here instead; see #25 §8. */
+      remove:function(col, done){
+        (async function(){
+          if(typeof siteConfirm==='function' && !(await siteConfirm('Delete the "'+(col.name||'thread')+'" thread column and its cards? This can’t be undone.', 'Delete thread'))) return;
+          var a=api(); if(a) a.deleteThread(col.id);
+          dropPlotCol(col.id); done();
+        })();
+      }
+    }
+  };
+  function colKindsList(){ return Object.keys(COL_KINDS); }
+  function colKindOf(col){ return COL_KINDS[(col&&col.kind)||''] || COL_KINDS.thread; }
+  function colStake(col){ if(!col) return ''; try{ return colKindOf(col).stake(col.id)||''; }catch(e){ return ''; } }
+  /* One shape for a stored column entry: {kind, id}. A bare string is a pre-v.419
+     store and upgrades to a thread on read.
+
+     An entry naming a kind this build does not have is KEPT AS IT IS and simply not
+     drawn. The first draft coerced it to `thread`, which read as generous and was the
+     opposite: the thread prune then found no thread with that id and deleted the
+     column outright. **Do not convert what you do not understand into something you
+     do, because the next step will act on the conversion.** A store written by a newer
+     build — or synced from one — survives a trip through this one untouched. */
+  function colEntry(e){
+    if(typeof e==='string' && e) return { kind:'thread', id:e };
+    if(e && e.id) return { kind:(e.kind||'thread'), id:e.id };
+    return null;
+  }
+  function colPos(id){ var arr=data.plotCols||[]; for(var i=0;i<arr.length;i++) if(arr[i] && arr[i].id===id) return i; return -1; }
+  function hasPlotCol(id){ return colPos(id)>=0; }
+  function addPlotCol(kind, id, front){
+    if(!id) return;
+    data.plotCols=data.plotCols||[];
+    if(hasPlotCol(id)) data.plotCols=data.plotCols.filter(function(e){ return e.id!==id; });
+    var e={ kind:COL_KINDS[kind]?kind:'thread', id:id };
+    if(front) data.plotCols.unshift(e); else data.plotCols.push(e);
+  }
+  function dropPlotCol(id){ data.plotCols=(data.plotCols||[]).filter(function(e){ return e.id!==id; }); save(); }
   function ensurePlotCols(){
     if(!Array.isArray(data.plotCols)) data.plotCols=[];
+    data.plotCols=data.plotCols.map(colEntry).filter(Boolean);
     if(!data.plotCells || typeof data.plotCells!=='object') data.plotCells={};
     if(!data.sceneCards || typeof data.sceneCards!=='object') data.sceneCards={};   // stacked scene cards (s≥1), keyed col|sceneId — id-stable, no reindex on section moves
     if(!data.plotElems || typeof data.plotElems!=='object') data.plotElems={};
@@ -52677,7 +52754,14 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     if(!data.plotThreadElems || typeof data.plotThreadElems!=='object') data.plotThreadElems={};
     if(!data.plotCardsMade || typeof data.plotCardsMade!=='object') data.plotCardsMade={};
     if(!data.plotCardStakes || typeof data.plotCardStakes!=='object') data.plotCardStakes={};   // (legacy) per-card stake, keyed colId+'|'+section
-    var a=api(); if(a){ var live={}; (a.threads()||[]).forEach(function(t){ live[t.id]=1; }); data.plotCols=data.plotCols.filter(function(id){ return live[id]; }); }
+    /* Prune per kind. The old line asked one question — "is there a thread with this
+       id" — which an arc column would have failed on the first render after step 2,
+       silently and with nothing in the console. Each kind answers for itself, and
+       answers TRUE when it cannot tell. */
+    data.plotCols=data.plotCols.filter(function(e){
+      var K=COL_KINDS[e.kind]; if(!K) return true;      // a kind this build has never heard of — keep it, draw nothing
+      try{ return K.live(e.id)!==false; }catch(err){ return true; }
+    });
   }
   // A card is "at risk" when it links a Stakes element (added via the card's "+ link element"). No separate store —
   // we just read the card's linked elements and look for a stakes-category one; that drives the small flag on the card.
@@ -52694,7 +52778,7 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
   function resolveCardStake(i, col){
     var a=api();
     var own=cardStake(i,col); if(own) return { text:own, level:'card', own:true };
-    var ts=(a&&col&&col.thread)?a.threadStake(col.id):''; if(ts) return { text:ts, level:'thread', own:false };
+    var ts=colStake(col); if(ts) return { text:ts, level:'thread', own:false };
     var pid=a?a.partIdForSection(i):null; var ps=(a&&pid)?a.partStake(pid):''; if(ps) return { text:ps, level:'part', own:false };
     var ss=a?a.storyStake():''; if(ss) return { text:ss, level:'story', own:false };
     return null;
@@ -52797,8 +52881,7 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     if(hasMain){
       var tid=a.newThread('Main Plot');
       if(tid){
-        data.plotCols=(data.plotCols||[]).filter(function(x){ return x!==tid; });
-        data.plotCols.unshift(tid);   // Main Plot's replacement is the first column
+        addPlotCol('thread', tid, true);   // Main Plot's replacement is the first column
         for(i=0;i<nSec;i++){
           var note=((a.getPlainNote('section:'+i))||'').trim();
           var els=(data.plotElems && data.plotElems[i])||[];
@@ -52822,7 +52905,7 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     if((data.plotCols||[]).length){ data.starterThreadDone=1; save(); return; }   // already has a column (incl. a migrated Main Plot)
     if(((a.threads&&a.threads())||[]).length){ data.starterThreadDone=1; save(); return; }   // threads already exist elsewhere → don't seed
     var tid=a.newThread('Main Plot');
-    if(tid){ data.plotCols=data.plotCols||[]; if(data.plotCols.indexOf(tid)<0) data.plotCols.push(tid); }
+    if(tid) addPlotCol('thread', tid);
     data.starterThreadDone=1; data.mainPlotNamed=1;
     save();
   }
@@ -52831,12 +52914,24 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
   function ensureMainPlotName(){
     if(!data || data.mainPlotNamed) return; var a=api(); if(!a) return;
     data.mainPlotNamed=1;
-    var first=(data.plotCols||[])[0]; if(first){ var t=a.threadById?a.threadById(first):null; if(t && /^(plot)$/i.test((t.name||'').trim())){ if(a.renameThread) a.renameThread(first, 'Main Plot'); } }
+    var first=(data.plotCols||[])[0];
+    if(first && first.kind==='thread'){ var t=a.threadById?a.threadById(first.id):null; if(t && /^(plot)$/i.test((t.name||'').trim())){ if(a.renameThread) a.renameThread(first.id, 'Main Plot'); } }
     save();
   }
+  /* The rendered column: id, kind, and whatever the kind calls it today. `thread:true`
+     used to be hard-coded here — the one place a second kind was impossible. */
   function plotColumns(){
-    var a=api(); var cols=[];
-    (data.plotCols||[]).forEach(function(tid){ var t=a?a.threadById(tid):null; cols.push({ id:tid, name:(t&&t.name)||'unnamed', thread:true }); });
+    var cols=[];
+    (data.plotCols||[]).forEach(function(raw){
+      /* normalise here as well as in ensurePlotCols: this runs from the export and from
+         the section bridges, which can fire before the grid has ever been rendered, and a
+         pre-v.419 store would otherwise read as a list of columns with no ids — which is
+         to say, as no columns at all */
+      var e=colEntry(raw); if(!e) return;
+      var K=COL_KINDS[e.kind]; if(!K) return;            // stored, kept, and not drawn by a build that cannot draw it
+      var nm=''; try{ nm=K.name(e.id)||''; }catch(err){}
+      cols.push({ id:e.id, kind:e.kind, name:nm||'unnamed' });
+    });
     return cols;
   }
   function plotCellText(i, col){ var a=api(); if(col.id==='main') return a?a.getPlainNote('section:'+i):''; return (data.plotCells[col.id+'|'+i]||''); }
@@ -52861,7 +52956,7 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
   window.__planAddThreadCardForSection = function(threadId, sec){
     try{ if(typeof data==='undefined' || !data){ if(typeof load==='function') load(); }
       if(typeof ensurePlotCols==='function') ensurePlotCols();
-      data.plotCols=data.plotCols||[]; if(data.plotCols.indexOf(threadId)<0) data.plotCols.push(threadId);
+      if(!hasPlotCol(threadId)) addPlotCol('thread', threadId);
       data.plotCardsMade=data.plotCardsMade||{}; var k=threadId+'|'+sec; data.plotCardsMade[k]=1;
       var a=api();
       var members=(a && typeof a.threadMembers==='function') ? a.threadMembers(threadId, sec) : [];
@@ -53132,8 +53227,10 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
   var plotColDrag=null;   // thread id being dragged left/right by its grab handle
   var THREAD_GRAB_SVG='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8c3 0 3 8 6 8s3-8 6-8 3 8 6 8"/></svg>';
   function clearColDropMarks(){ var l=document.querySelectorAll('#planPlot .pl-pcolhd.pl-thdrop'); for(var i=0;i<l.length;i++) l[i].classList.remove('pl-thdrop'); }
-  function movePlotColTo(dragId, targetId){ var arr=data.plotCols||[]; var from=arr.indexOf(dragId), to=arr.indexOf(targetId); if(from<0||to<0||from===to) return; arr.splice(from,1); var t=arr.indexOf(targetId); arr.splice(from<to?t+1:t, 0, dragId); save(); scheduleReplot(); }
-  function movePlotColBy(id, delta){ var arr=data.plotCols||[]; var i=arr.indexOf(id); if(i<0) return; var j=i+delta; if(j<0||j>=arr.length) return; arr.splice(i,1); arr.splice(j,0,id); save(); scheduleReplot(); }
+  function movePlotColTo(dragId, targetId){ var arr=data.plotCols||[]; var from=colPos(dragId), to=colPos(targetId); if(from<0||to<0||from===to) return;
+    var moved=arr[from]; arr.splice(from,1); var t=colPos(targetId); arr.splice(from<to?t+1:t, 0, moved); save(); scheduleReplot(); }
+  function movePlotColBy(id, delta){ var arr=data.plotCols||[]; var i=colPos(id); if(i<0) return; var j=i+delta; if(j<0||j>=arr.length) return;
+    var moved=arr[i]; arr.splice(i,1); arr.splice(j,0,moved); save(); scheduleReplot(); }
   function movePartToIndex(pid, targetIdx){   // drop: move the whole Part block so it lands at targetIdx
     var a=api(); if(!a) return; var r=partRange(pid); var lo=r[0], hi=r[1], n=r[2]; if(lo<0) return;
     if(targetIdx>=lo && targetIdx<=hi+1) return; var block=[], rest=[], x, k;
@@ -53326,10 +53423,27 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     row.appendChild(ctrls);
     return row;
   }
+  /* One kind → a plain +. Two or more → the + asks which. A menu with one item in it
+     is a question with one answer, so the button does not become a menu until there is
+     something to choose between. [#25 step 1] */
+  function makePlotCol(kind){
+    var K=COL_KINDS[kind]; if(!K) return;
+    var id=null; try{ id=K.create(); }catch(e){}
+    if(id){ addPlotCol(kind, id); save(); }
+    scheduleReplot();
+  }
   function addThreadHeadCell(){
     var c=document.createElement('div'); c.className='pl-addthread-cell';
-    var b=document.createElement('button'); b.className='pl-plus'; b.textContent='+'; b.title='Add a thread column';
-    b.addEventListener('click', function(){ var a=api(); if(!a) return; var id=a.newThread('unnamed'); if(id){ data.plotCols.push(id); save(); } scheduleReplot(); });
+    var kinds=colKindsList();
+    var b=document.createElement('button'); b.className='pl-plus'; b.textContent='+';
+    b.title=(kinds.length>1) ? 'Add a column' : ('Add a '+COL_KINDS[kinds[0]].label.toLowerCase()+' column');
+    b.addEventListener('click', function(ev){
+      if(kinds.length<2){ makePlotCol(kinds[0]); return; }
+      ev.stopPropagation();
+      var r=b.getBoundingClientRect();
+      arcMenu(r.left, r.bottom, kinds.map(function(k){
+        return { label:COL_KINDS[k].label, on:function(){ makePlotCol(k); } }; }));
+    });
     c.appendChild(b); return c;
   }
   function cornerCell(){
@@ -53353,18 +53467,18 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
   }
   function colHeadCell(c){
     var h=document.createElement('div'); h.className='pl-pcolhd';
-    if(c.thread){
+    if(c.kind==='thread'){
       h.classList.add('pl-thcol');
       var head=document.createElement('div'); head.className='pl-thead';
       // the thread name is a charcoal PILL — click it to open this column's plot (stake · shape · elements · description).
       var pill=document.createElement('button'); pill.type='button'; pill.className='pl-threadpill'+(plotDefFilled(c)?' filled':'');
       pill.textContent=c.name||'name…'; pill.title='Open the plot for this column — stake, plot shape, key elements, description';
-      pill.addEventListener('click', function(e){ e.stopPropagation(); openPlotCardPopup(c); });
+      pill.addEventListener('click', function(e){ e.stopPropagation(); colKindOf(c).setup(c); });
       head.appendChild(pill);
       h.appendChild(head);
       // controls beneath, on hover: feather (thread GENERAL notes) · ◀ ▶ move the column · × (remove)
       var ctrls=document.createElement('div'); ctrls.className='pl-thctrls';
-      var idx=(data.plotCols||[]).indexOf(c.id), lastIdx=(data.plotCols||[]).length-1;
+      var idx=colPos(c.id), lastIdx=(data.plotCols||[]).length-1;
       var xpl=document.createElement('button'); xpl.type='button'; xpl.className='pl-partic'; xpl.innerHTML='\u2726'; xpl.title='Explore this thread \u2014 a Q&A about the storyline and the elements woven into it';
       xpl.addEventListener('click', function(e){ e.stopPropagation(); if(typeof window.openExplore==='function') window.openExplore(['thread:'+c.id], (c.name||'Thread'), 'thread'); });
       ctrls.appendChild(xpl);
@@ -53378,7 +53492,7 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
       rgt.addEventListener('click', function(e){ e.stopPropagation(); movePlotColBy(c.id,1); });
       ctrls.appendChild(rgt);
       var x=document.createElement('button'); x.type='button'; x.className='pl-partic pl-partdel'; x.innerHTML='×'; x.title='Remove this thread';
-      x.addEventListener('click', function(e){ e.stopPropagation(); (async function(){ if(typeof siteConfirm==='function' && !(await siteConfirm('Delete the "'+(c.name||'thread')+'" thread column and its cards? This can’t be undone.', 'Delete thread'))) return; var a=api(); if(a) a.deleteThread(c.id); data.plotCols=(data.plotCols||[]).filter(function(id){return id!==c.id;}); save(); scheduleReplot(); })(); });
+      x.addEventListener('click', function(e){ e.stopPropagation(); colKindOf(c).remove(c, scheduleReplot); });
       ctrls.appendChild(x);
       h.appendChild(ctrls);
       // (The thread stake used to sit here; it now lives inside this column's Plot card in the Plot-card row below.)
@@ -53578,7 +53692,7 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     if((c.title||'').trim()){ var ttl=document.createElement('div'); ttl.className='pl-pcard-ttl'; ttl.textContent=c.title; container.appendChild(ttl); }
     var body=document.createElement('div'); body.className='pl-pcard-body';
     if((c.text||'').trim()){ var g=document.createElement('div'); g.className='pl-pcard-gen'; g.textContent=c.text.trim(); body.appendChild(g); }
-    var _ssTxt=(a&&a.storyStake)?a.storyStake():''; var _tsTxt=(a&&a.threadStake&&col.thread)?a.threadStake(col.id):'';
+    var _ssTxt=(a&&a.storyStake)?a.storyStake():''; var _tsTxt=colStake(col);
     if((c.stakeNotes.story||'').trim() && _ssTxt) _mkStakeRow(body, _ssTxt, c.stakeNotes.story.trim());
     if((c.stakeNotes.thread||'').trim() && _tsTxt) _mkStakeRow(body, _tsTxt, c.stakeNotes.thread.trim());
     (c.els||[]).filter(function(el){ return (((el.cat||el.kind)||'')+'').toLowerCase()==='event'; }).forEach(function(el){ _mkElRow(body, el, (c.elNotes&&c.elNotes[el.nkey])||''); });
@@ -53597,7 +53711,7 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
   function _slotLeadRows(a, i, col, c){   // ordered content rows for a scene (general → stakes → elements)
     var rows=[];
     var gen=(c.text||'').trim(); if(gen){ var g=document.createElement('div'); g.className='pl-pcard-gen'; g.textContent=gen; rows.push(g); }
-    var _ssTxt=(a&&a.storyStake)?a.storyStake():''; var _tsTxt=(a&&a.threadStake&&col.thread)?a.threadStake(col.id):'';
+    var _ssTxt=(a&&a.storyStake)?a.storyStake():''; var _tsTxt=colStake(col);
     if((c.stakeNotes.story||'').trim() && _ssTxt){ var r1=document.createElement('div'); _mkStakeRow(r1, _ssTxt, c.stakeNotes.story.trim()); rows.push(r1.firstChild); }
     if((c.stakeNotes.thread||'').trim() && _tsTxt){ var r2=document.createElement('div'); _mkStakeRow(r2, _tsTxt, c.stakeNotes.thread.trim()); rows.push(r2.firstChild); }
     (c.els||[]).forEach(function(el){ var rw=document.createElement('div'); _mkElRow(rw, el, (c.elNotes&&c.elNotes[el.nkey])||''); rows.push(rw.firstChild); });
@@ -53666,7 +53780,7 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
   // its Stake, Motivation, Intention, Obstacle, Description and linked elements. The first column's Plot card is the
   // story's MAIN PLOT. Stake reuses the existing store (story stake for the main column, thread stake otherwise) so
   // it's the SAME stake that used to sit in the header; the other fields live in data.plotDefs[col.id]. ----
-  function _isMainCol(col){ var id=col&&col.id?col.id:col; return (data.plotCols||[])[0]===id; }
+  function _isMainCol(col){ var id=(col&&col.id)?col.id:col; var first=(data.plotCols||[])[0]; return !!(first && first.id===id); }
   function plotDef(colId){ if(!data.plotDefs) return null; return data.plotDefs[colId]||null; }
   function plotDefEnsure(colId){ data.plotDefs=data.plotDefs||{}; var r=data.plotDefs[colId]; if(!r){ r={motivation:'',intention:'',obstacle:'',description:'',els:[],elNotes:{}}; data.plotDefs[colId]=r; } return r; }
   function plotDefStake(col){ var a=api(); return _isMainCol(col) ? (a?a.storyStake():'') : (a?a.threadStake(col.id):''); }
@@ -54021,7 +54135,7 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
         }
         // stake pills FIRST (labelled with the actual stake name, shown only when that stake exists), then the
         // event pills (green), then the regular linked elements.
-        var _storyStk=(a&&a.storyStake)?a.storyStake():''; var _threadStk=(a&&a.threadStake&&col.thread)?a.threadStake(col.id):'';
+        var _storyStk=(a&&a.storyStake)?a.storyStake():''; var _threadStk=colStake(col);
         function _stakeChip(which, label){
           var c=mkChip0(label, active0.stake===which, function(){ active0.key=null; active0.stake=which; loadNote0(); renderPills0(); }, 'stk');
           var ft=document.createElement('span'); ft.className='pl-cpf'; ft.innerHTML=ICONS.feather; ft.title='Open this stake note under this thread in the notepad';
@@ -55564,7 +55678,8 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     var a=api(); if(!a) return;
     var n=a.sectionCount?a.sectionCount():0;
     var cols=plotColumns();
-    var head=['Section','Timeframe','Beat / main note'].concat(cols.map(function(c){ return c.name||'Thread'; }));
+    var head=['Section','Timeframe','Beat / main note'].concat(cols.map(function(c){
+      var K=colKindOf(c); return (c.name||K.label)+((colKindsList().length>1)?(' ('+K.label.toLowerCase()+')'):''); }));
     var rows=[head];
     for(var i=0;i<n;i++){
       var name=(a.sectionName?a.sectionName(i):'')||('Section '+(i+1));
