@@ -47820,8 +47820,13 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.421';
+  var APP_VERSION = '2026.07.20.422';
   var APP_CHANGELOG = [
+    { v:'2026.07.20.422', date:'August 12, 2026', notes:[
+      '**Show threads only, arcs only, or both.** In the Plot grid\u2019s \u22ef menu, once you have some of each. When a filter is on, a small gold badge sits in the bar so you can see it \u2014 and click it to clear \u2014 rather than wondering where your columns went.',
+      '**And the .xls now knows what an arc column holds.** It was exporting an arc cell as though it were a thread cell, so the goalposts that land in a section, your note against each change, and the cost note were all left out. The export writes what the grid is showing, and the filename says when a filter was on.',
+      'This finishes the move: arcs are a kind of Plot column, their analysis opens in Plot, and the two of them filter apart when you want to look at one at a time.'
+    ] },
     { v:'2026.07.20.421', date:'August 11, 2026', notes:[
       '**Arcs live in Plot now, and the Arcs tab is gone.** An arc is a column; its **Arc Analysis** opens right there in the Plot section, full width, with a **\u2190 Back to the grid** button \u2014 the same page it always was, in the place the rest of your plotting happens. **Compare arcs** moved to the \u22ef menu.',
       '**Nothing is lost and nothing has moved in your story.** Every arc, goalpost, beat and analysis is exactly where it was. Arcs you had made before are offered by name when you add an arc column, so none of them is stranded.',
@@ -49147,6 +49152,13 @@ body.plan-arcview #planPlotBar{ display:none !important; }
 #planPlotBar .ppb-ic:disabled{ opacity:.3; cursor:default; }
 #planPlotBar .ppb-ic svg{ width:14px; height:14px; }
 #planPlotBar .ppb-cols{ display:inline-flex; align-items:center; gap:4px; }
+/* the badge that says a filter is on — gold, because it is a state the writer chose
+   and has to be able to see they are still in */
+#planPlotBar .ppb-filter{ font-family:var(--sans); font-size:10px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; color:#8a6d1e; background:rgba(196,158,74,.14); border:1px solid rgba(196,158,74,.4); border-radius:999px; padding:3px 10px; cursor:pointer; }
+#planPlotBar .ppb-filter:hover{ background:rgba(196,158,74,.24); border-color:var(--gold,#c49e4a); }
+#planPlotBar .ppb-menuhd{ font-family:var(--sans); font-size:9px; font-weight:800; letter-spacing:.07em; text-transform:uppercase; color:#9a938a; padding:7px 12px 3px; }
+#planPlotBar .ppb-radio::before{ content:'·'; display:inline-block; width:12px; opacity:.35; }
+#planPlotBar .ppb-radio.on::before{ content:'✓'; opacity:1; color:var(--gold,#c49e4a); }
 #planPlotBar .ppb-step{ font-family:var(--sans); font-size:15px; font-weight:700; line-height:1; padding:1px 0; min-width:22px; }
 #planPlotBar .ppb-colnum{ font-family:var(--sans); font-size:10px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; color:var(--ink-soft); min-width:40px; text-align:center; white-space:nowrap; }
 #planPlotBar .ppb-dots{ border:none; background:none; color:var(--ink-faint); font-size:19px; line-height:1; padding:2px 6px; cursor:pointer; }
@@ -53368,6 +53380,39 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
 
   // How many thread columns are sized to fit across the page at once (2 = fewest/widest … 5 = most/narrowest).
   // Extra columns beyond this scroll horizontally. Stored per-story; default 3.
+  /* Threads only, arcs only, or both [Jeremy, #25]. Stored so it survives a reload,
+     because a filter that resets itself is one you have to re-apply every time you come
+     back to the page you were working on.
+
+     **This filters the DRAWING, not the grid.** `plotColumns()` still returns every
+     column, and everything that reasons about the grid — the section-merge fold, the
+     plot-definition digest the AI reads, the reindex paths — goes on using it. Only
+     `renderPlot` asks for the filtered list. A filter that reached those would quietly
+     drop a hidden column's content on the next section merge, which is the difference
+     between hiding something and losing it. */
+  function plotColFilter(){ var f=data && data.plotColFilter; return (f==='thread'||f==='arc')?f:null; }
+  function setPlotColFilter(f){
+    if(!data) return;
+    if(f==='thread'||f==='arc') data.plotColFilter=f; else delete data.plotColFilter;
+    save(); paintPlotFilter(); scheduleReplot();
+  }
+  function plotColumnsShown(){
+    var f=plotColFilter(), all=plotColumns();
+    if(!f) return all;
+    var out=all.filter(function(c){ return c.kind===f; });
+    /* A filter that empties the grid is a filter that has outlived its subject — the
+       last arc column was removed while "arcs only" was on. Answer with the whole grid
+       rather than a blank page, and clear it, because a blank page looks like loss. */
+    if(!out.length){ try{ delete data.plotColFilter; save(); paintPlotFilter(); }catch(e){} return all; }
+    return out;
+  }
+  /* Only worth offering when the grid actually holds more than one kind — otherwise
+     every option but one empties the page, which is the door-to-nowhere rule again. */
+  function plotFilterWorthIt(){
+    var k={}; plotColumns().forEach(function(c){ k[c.kind]=1; });
+    return Object.keys(k).length>1;
+  }
+  var paintPlotFilter=function(){};
   function plotColsVisible(){ var v=parseInt(data&&data.plotColsVisible,10); if(isNaN(v)) v=3; return Math.max(2, Math.min(5, v)); }
   function setPlotColsVisible(v){ v=Math.max(2, Math.min(5, v)); data.plotColsVisible=v; save(); if(typeof paintPlotColsBtns==='function') paintPlotColsBtns(); scheduleReplot(); }
   var paintPlotColsBtns=null;   // set when the plot bar is built
@@ -53401,7 +53446,8 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     ensurePlotCols(); migrateMainToThread(); ensureStarterThread(); ensureMainPlotName(); migratePlotElNotes(); host.innerHTML='';
     var a=api();
     var n=a?a.sectionCount():1;
-    var cols=plotColumns();
+    var cols=plotColumnsShown();
+    try{ paintPlotFilter(); }catch(e){}
     var wrap=document.createElement('div'); wrap.className='pl-grid-wrap';
     var grid=document.createElement('div'); grid.className='pl-pgrid';
     // fixed column width = the size columns take when NCOL fit the page (they no longer stretch; extras scroll).
@@ -53756,6 +53802,12 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
   function insertRow(i){
     var frag=document.createDocumentFragment();
     var a=api();
+    /* DRAWING, so it counts the columns being drawn. This read `plotColumns()` and was
+       missed when v.422 split the list in two: the insert row emitted a cell for every
+       column while the grid template had only the filtered ones, so auto-flow pulled the
+       next section's label into the overflow and **the whole spine walked diagonally
+       down the page**. The `.pl-rowend` spacer below has a comment warning about exactly
+       this; the invariant is that every row is label + drawn columns + end. */
     // label column: a single ＋ on the timeline — opens the insert menu (Add a section / scene row / Part / prologue / epilogue).
     // It carries a solid background so the gold spine reads UNDER it, not through it.
     var lab=document.createElement('div'); lab.className='pl-insrow pl-inscell';
@@ -53763,7 +53815,7 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     more.addEventListener('click', function(e){ e.stopPropagation(); openInsertMenu(more, i); });
     lab.appendChild(more); frag.appendChild(lab);
     // the thread columns get empty cells now (no per-column ＋) — inserts happen from the single ＋ on the timeline
-    var cols=plotColumns();
+    var cols=plotColumnsShown();
     cols.forEach(function(c){
       var cell=document.createElement('div'); cell.className='pl-insrow pl-inscell pl-insscene'; frag.appendChild(cell);
     });
@@ -55896,6 +55948,21 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     if(title) lines.push(title);
     var gen=(plotCellText(i, col)||'').trim();
     if(gen) lines.push(gen);
+    /* An arc cell holds four things a thread cell does not, and until v.422 the export
+       wrote none of them: the goalposts that land here, a note per change facet, and the
+       cost note. **A cell that reads as empty in a spreadsheet the writer sent to someone
+       else is worse than one that was never exported** — it says the section does nothing
+       for the arc, which is a claim about the story. */
+    if(col.kind==='arc'){
+      var gs=arcGoalsAt(col.id, i).map(function(g){ return (g.label||'goalpost'); });
+      if(gs.length) lines.push('▸ ' + gs.join(' · '));
+      arcFacets(col.id).forEach(function(f){
+        var n=(plotElGet(i, col.id, 'arcdim:'+f.id)||'').trim();
+        if(n) lines.push(f.label + ': ' + n);
+      });
+      var cst=(cardStakeNoteGet(i, col.id, 'thread')||'').trim();
+      if(cst) lines.push((colStake(col)||'Cost') + ': ' + cst);
+    }
     (cardEls(i, col)||[]).forEach(function(el){
       if(!el) return;
       var nkey=el.nkey||el.key||'';
@@ -55909,7 +55976,10 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
   function exportPlotXls(){
     var a=api(); if(!a) return;
     var n=a.sectionCount?a.sectionCount():0;
-    var cols=plotColumns();
+    /* The export writes what the grid is SHOWING. A filtered export that quietly
+       contained everything would be a different document from the one on screen — and
+       the filename says which, so a file opened next week explains itself. */
+    var cols=plotColumnsShown();
     var head=['Section','Timeframe','Beat / main note'].concat(cols.map(function(c){
       var K=colKindOf(c); return (c.name||K.label)+((colKindsList().length>1)?(' ('+K.label.toLowerCase()+')'):''); }));
     var rows=[head];
@@ -55924,7 +55994,8 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     rows.forEach(function(r,ri){ html+='<tr>'; r.forEach(function(c){ var tag=ri===0?'th':'td'; html+='<'+tag+' style="mso-number-format:\'\\@\';vertical-align:top;text-align:left;padding:4px 6px;'+(ri===0?'background:#2b2926;color:#fff;':'')+'">'+xesc(c).replace(/\n/g,'<br>')+'</'+tag+'>'; }); html+='</tr>'; });
     html+='</table></body></html>';
     var title='plot-grid'; try{ var st=(a&&a.getState)?a.getState():null; title=(st&&st.session&&st.session.name)||'plot-grid'; }catch(e){}
-    var fname=(title||'plot-grid').replace(/[^\w\- ]+/g,'').trim().replace(/\s+/g,'_')+'_plot.xls';
+    var _flt=plotColFilter();
+    var fname=(title||'plot-grid').replace(/[^\w\- ]+/g,'').trim().replace(/\s+/g,'_')+'_plot'+(_flt?('_'+_flt+'s'):'')+'.xls';
     try{
       var blob=new Blob(['﻿'+html], {type:'application/vnd.ms-excel;charset=utf-8'});
       var url=URL.createObjectURL(blob); var link=document.createElement('a'); link.href=url; link.download=fname;
@@ -55975,6 +56046,34 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
          to the whole grid rather than to any one column, which is what the ⋯ menu is for;
          and it is only offered when there are two arcs to compare, because a comparison
          of one is a graph you already have. */
+      /* The filter lives with the other whole-grid options, and a **badge on the bar
+         says when it is on**. A filter you cannot see is indistinguishable from columns
+         that have gone missing — the same reading failure as v.417's, one surface along. */
+      var fbadge=document.createElement('button'); fbadge.type='button'; fbadge.id='plotFilterBadge'; fbadge.className='ppb-filter';
+      fbadge.addEventListener('click', function(e){ e.stopPropagation(); setPlotColFilter(null); });
+      ppb.insertBefore(fbadge, ppb.firstChild);
+      var fhd=document.createElement('div'); fhd.className='ppb-menuhd'; fhd.textContent='Show'; fhd.id='plotFilterHd';
+      menu.appendChild(fhd);
+      var fbtns={};
+      [[null,'Threads and arcs'],['thread','Threads only'],['arc','Arcs only']].forEach(function(o){
+        var fb=document.createElement('button'); fb.type='button'; fb.className='ppb-radio';
+        fb.textContent=o[1];
+        fb.addEventListener('click', function(e){ e.stopPropagation(); menu.classList.remove('show'); setPlotColFilter(o[0]); });
+        fbtns[o[0]||'all']=fb; menu.appendChild(fb);
+      });
+      paintPlotFilter=function(){
+        try{
+          var f=plotColFilter(), worth=plotFilterWorthIt();
+          fhd.style.display = worth ? '' : 'none';
+          Object.keys(fbtns).forEach(function(k){
+            fbtns[k].style.display = worth ? '' : 'none';
+            fbtns[k].classList.toggle('on', (f||'all')===k);
+          });
+          fbadge.style.display = f ? '' : 'none';
+          fbadge.textContent = (f==='arc'?'Arcs only':'Threads only') + '  ×';
+          fbadge.title = 'Showing only ' + (f==='arc'?'arc':'thread') + ' columns — click to show them all';
+        }catch(e){}
+      };
       var cmpb=document.createElement('button'); cmpb.type='button'; cmpb.id='plotCmpArcs'; cmpb.textContent='Compare arcs';
       cmpb.addEventListener('click', function(e){ e.stopPropagation(); menu.classList.remove('show');
         arcViewArc=null; arcCompareOn=true; arcCompareSel=null; arcCompareMode=''; scheduleReplot(); });
