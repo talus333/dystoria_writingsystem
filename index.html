@@ -24071,20 +24071,108 @@ async function cloudConflict(sess){
   }
 }
 
-async function cloudPull(){
+/* One pull at a time, and not twice for the same account in quick succession. Two callers
+   fire on boot — `getSession()` and the INITIAL_SESSION event — and before v.423 that meant
+   the entire library was downloaded twice before the writer had touched anything. The guard
+   is keyed to the ACCOUNT, not to the clock alone: signing in as somebody else must always
+   pull, or you would be looking at the last account's library. */
+let _pullBusy = false, _pullAt = 0, _pullWho = '';
+async function cloudPull(force){
   if (!cloudReady()) return;
   if (document.body.classList.contains('guest') || /^#\/read\//.test(location.hash || '')) return;   // a shared reader link → stay on the public story; don't load the author's library or touch the URL
+  const _who = (cloud.user && cloud.user.id) || '';
+  if (_pullBusy){ if (_who !== _pullWho) setTimeout(function(){ cloudPull(true); }, 1500); return; }
+  if (!force && _who === _pullWho && _pullAt && (Date.now() - _pullAt) < 15000) return;
+  _pullBusy = true; _pullWho = _who;
   try {
-    // No owner filter: row-level security returns stories I own AND stories shared with me.
-    const { data, error } = await supa.from('stories').select('id,owner,doc,planning_baton,is_public,public_token,updated_at');
-    if (error){ console.warn('cloud pull error:', error); flashStatus('Cloud pull: ' + error.message); return; }
-    if (!data) return;
+    /* ── phase 1 · what is up there, without downloading it ──────────────────
+       `doc` is the whole book: prose, inline images, handwriting strokes, the revision
+       archive. Selecting it for every row meant every sync downloaded the entire library,
+       which is what exhausted this project's egress quota. Ask instead for the row's own
+       columns plus the two fields buried inside the JSON that we need in order to decide
+       anything — the local story id, and the doc's `updated` stamp. Postgres reads those
+       out server-side; the documents themselves stay where they are.
+       No owner filter: row-level security returns stories I own AND stories shared with me. */
+    const LIGHT = 'id,owner,planning_baton,is_public,public_token,updated_at,sid:doc->>id,supd:doc->>updated';
+    let res = await supa.from('stories').select(LIGHT);
+    let light = true;
+    /* A JSON-path select is the one thing in this function that depends on the shape of
+       something at the other end, and a library that stops syncing is a far worse failure
+       than one that syncs expensively. So fall back on an error — and ALSO on rows that
+       came back without the field we asked for.
+
+       The second test is the one that matters. An error is loud and this code already
+       handles it; a select that succeeds but names the column something else would be
+       silent, and silent means `sid` is undefined on every row, `want` is empty, the
+       merge loop returns early on every row, and the writer's library simply stops
+       updating with nothing anywhere saying why. **Ask a question you cannot verify the
+       answer to, and check the answer.** */
+    const _light_ok = !res.error && (!res.data || !res.data.length || res.data.some(function(r){ return r && r.sid; }));
+    if (!_light_ok){
+      console.warn('cloud pull: light select unusable, falling back to full docs:', res.error || 'no doc->>id in the response');
+      res = await supa.from('stories').select('id,owner,doc,planning_baton,is_public,public_token,updated_at');
+      light = false;
+    }
+    if (res.error){ console.warn('cloud pull error:', res.error); flashStatus('Cloud pull: ' + res.error.message); return; }
+    const data = res.data; if (!data) return;
     const list = loadSessions();
     const byId = {}; list.forEach(x => { byId[x.id] = x; });
     const dead = loadDeleted();
+    /* ── phase 2 · fetch a doc only where it is going to be used ─────────────
+       A story this device has never seen, or one the cloud has a STRICTLY newer copy of.
+       Everything else already sits in localStorage.
+
+       Note the `>` here where the merge below has `>=`. Equal stamps mean the same version
+       of the story, and the only thing the cloud copy would add is the handwriting, images
+       and archive that `stripHeavyForLocal` takes out — which `restoreHeavyFromCloud`
+       already fetches, for one story, the moment you open it. Downloading the whole library
+       on every sync to pre-restore data for stories the writer is not looking at IS the bug;
+       and because a save writes the same `updated` to both copies, equal is the common case
+       rather than the corner one. The merge keeps `>=`, so a row we DID fetch behaves
+       exactly as it always has.
+
+       Batched, because one URL cannot carry an unbounded id list; a batch that fails is
+       simply not merged this time and arrives on the next pull. */
+    if (light){
+      const want = data.filter(function(r){
+        const sid = r.sid; if (!sid) return false;
+        if (dead.indexOf(sid) >= 0 || dead.indexOf(r.id) >= 0) return false;
+        const loc = byId[sid];
+        return !loc || (r.supd || '') > (loc.updated || '');
+      }).map(function(r){ return r.id; });
+      const got = {};
+      for (let i = 0; i < want.length; i += 20){
+        try {
+          const part = await supa.from('stories').select('id,doc').in('id', want.slice(i, i + 20));
+          if (part.error) throw part.error;
+          (part.data || []).forEach(function(x){ if (x && x.id) got[x.id] = x.doc; });
+        } catch (e){ console.warn('cloud pull docs:', e); }
+      }
+      data.forEach(function(r){ if (got[r.id]) r.doc = got[r.id]; });
+    }
     data.forEach(r => {
-      const d = r.doc; if (!d || !d.id) return;
-      if (dead.indexOf(d.id) >= 0 || dead.indexOf(r.id) >= 0) return;     // don't resurrect a story deleted from the library (match local OR cloud id)
+      const d = r.doc;
+      const sid = (d && d.id) || r.sid || '';
+      if (!sid) return;
+      if (dead.indexOf(sid) >= 0 || dead.indexOf(r.id) >= 0) return;     // don't resurrect a story deleted from the library (match local OR cloud id)
+      if (!d){
+        /* No document, by design: this row is already on the device and no newer than the
+           local copy, so there was nothing worth downloading. It still carries the row's OWN
+           facts, and those are not optional — who owns it, who holds the planning baton,
+           whether it is public, and the `updated_at` stamp that cloudSave guards its next
+           write with. Skip these and the story shows a stale sharing state and saves against
+           a stale base, which surfaces as a false "changed on another device" conflict. */
+        const loc = byId[sid];
+        if (loc){
+          loc.cloudId = r.id;
+          loc._owner = r.owner;
+          loc._shared = (r.owner !== cloud.user.id);
+          loc._baton = r.planning_baton || r.owner;
+          loc._isPublic = !!r.is_public; loc._publicToken = r.public_token || '';
+          loc._cloudUpdatedAt = r.updated_at || '';
+        }
+        return;
+      }
       d.cloudId = r.id;
       d._owner = r.owner;
       d._shared = (r.owner !== cloud.user.id);
@@ -24123,6 +24211,7 @@ async function cloudPull(){
     if (blank && merged.length){ const want = intendedStoryId(); const target = (want && merged.find(x => x.id === want)) || merged[0]; openSession(target.id); }
     else if (state.session && state.session.cloudId && cloud.user){ if (!live.on) liveJoin(state.session); loadStoryPeople(state.session); }
   } catch (e) {}
+  finally { _pullBusy = false; _pullAt = Date.now(); }
 }
 // Seed the worked examples (Alice + Hansel) into the signed-in account ONCE, as real cloud stories,
 // so they appear in the library on every device and survive a sign-out purge. Gated by a per-account
@@ -24512,9 +24601,18 @@ async function clearDeviceStorage(){
   var local = loadSessions().filter(function(s){ return s && s.id && !s._shared; });
   var rowIds = {}, docIds = {};
   try {
-    var res = await supa.from('stories').select('id,doc');
+    /* This asks one question — "is every local story present in the cloud?" — and the answer
+       is a set of ids. It used to download every full document to read one field out of each,
+       which is a whole library on the wire to compare a few dozen strings. */
+    var res = await supa.from('stories').select('id,sid:doc->>id');
+    if (res.error) res = await supa.from('stories').select('id,doc');   // fall back rather than refuse to answer
     if (res.error) throw res.error;
-    (res.data || []).forEach(function(r){ if (r && r.id) rowIds[r.id] = 1; if (r && r.doc && r.doc.id) docIds[r.doc.id] = 1; });
+    (res.data || []).forEach(function(r){
+      if (!r) return;
+      if (r.id) rowIds[r.id] = 1;
+      var sid = r.sid || (r.doc && r.doc.id);
+      if (sid) docIds[sid] = 1;
+    });
   } catch (e){ flashStatus('Couldn’t reach the cloud to confirm your stories are safe — nothing was cleared. Try again in a moment.'); return; }
   var unsynced = local.filter(function(s){ return !((s.cloudId && rowIds[s.cloudId]) || docIds[s.id]); });
   if (unsynced.length){
@@ -36226,7 +36324,16 @@ function init(){
       cloud.user = session ? session.user : null;
       cloud.token = session ? session.access_token : '';
       updateAccountUI();
-      if (cloud.user){ analyticsIdentify(cloud.user, cloud.username); loadMyProfile(); cloudPull(); if (!cloud.user.is_anonymous && typeof window.__dystMaybeShowUpdate === 'function') window.__dystMaybeShowUpdate(); }
+      /* Supabase refreshes the access token about once an hour for as long as a tab stays
+         open, and every refresh fires this handler. Until v.423 that re-ran the whole
+         library sync each time, so a tab left open for a working day downloaded every story
+         a dozen times over — the single largest source of this project's egress. The two
+         lines above must still run on EVERY event (the access token has changed and the next
+         write needs the new one); it is only the SYNC that belongs to an actual arrival. */
+      const _arrived = (_evt === 'SIGNED_IN' || _evt === 'INITIAL_SESSION');
+      if (cloud.user){ analyticsIdentify(cloud.user, cloud.username);
+        if (_arrived){ loadMyProfile(); cloudPull();
+          if (!cloud.user.is_anonymous && typeof window.__dystMaybeShowUpdate === 'function') window.__dystMaybeShowUpdate(); } }
       else { analyticsReset(); cloud.username = ''; liveLeave(); renderShareNote(null); }
     });
     supa.auth.getSession().then(({ data }) => {
@@ -47820,8 +47927,13 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.422';
+  var APP_VERSION = '2026.07.20.423';
   var APP_CHANGELOG = [
+    { v:'2026.07.20.423', date:'August 12, 2026', notes:[
+      '**Dystoria stopped downloading your whole library every time it synced.** Opening the app used to fetch every story in full \u2014 prose, images, handwriting, the revision archive \u2014 and then do it again about once an hour for as long as you left the tab open. It now asks the cloud what is there, and downloads a story only when it is one this device has never seen or one that changed somewhere else. A story\u2019s handwriting and images still come back the moment you open it, exactly as before.',
+      '**And it syncs when you arrive, not on a timer.** Signing in syncs. Refreshing the page syncs, once instead of twice. A background token refresh no longer does anything at all.',
+      'Nothing about your writing, your library or your sharing changes \u2014 this is the same sync, asking for a great deal less. If a story was shared with you or made public, that still shows up on every sync as it always did.'
+    ]},
     { v:'2026.07.20.422', date:'August 12, 2026', notes:[
       '**Show threads only, arcs only, or both.** In the Plot grid\u2019s \u22ef menu, once you have some of each. When a filter is on, a small gold badge sits in the bar so you can see it \u2014 and click it to clear \u2014 rather than wondering where your columns went.',
       '**And the .xls now knows what an arc column holds.** It was exporting an arc cell as though it were a thread cell, so the goalposts that land in a section, your note against each change, and the cost note were all left out. The export writes what the grid is showing, and the filename says when a filter was on.',
