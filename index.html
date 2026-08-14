@@ -48050,8 +48050,13 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.424';
+  var APP_VERSION = '2026.07.20.425';
   var APP_CHANGELOG = [
+    { v:'2026.07.20.425', date:'August 14, 2026', notes:[
+      '**Making a group in Bonds now shows you what you are choosing.** Pick a kind \u2014 Kinship, Martial, Places, Events \u2014 and beneath the pills you get the structure it opens on, drawn: a small worked example of a family tree, a social web, a chain of command, a blueprint, a causal chain. Each says what it draws and when you would reach for it. **The examples are drawn by the same layout that lays out your own groups**, so what you see is what you will get, not an illustration of it.',
+      '**And you can put the people in while you are making it.** A search and a list of everything in your story, with the kind you picked brought to the top \u2014 brought to the top, not filtered: anything in the story can go in any group, and it always could.',
+      'Under the examples is a line naming every other structure this group could wear. That is the point of it: a kind is a starting place, never a limit, and you can switch structures afterwards without changing a word of what you have written.'
+    ]},
     { v:'2026.07.20.424', date:'August 12, 2026', notes:[
       '**An arc column now calls the arc what you called it.** Name an arc and the pill at the top of its column shows that name instead of the \u201cwho \u00b7 what changes\u201d line the app made up for it. The pill sits centred in the column, and the momentum sparkline and percentage have moved down beside the Analysis button \u2014 which now wears a \u2727, because there is an AI reading behind it, and reads in the same lettering as Explore on the map.',
       '**And the arc pills in the notepad open the arc\u2019s notes, not its card.** An arc behaves like a thread now: the pill opens a notes section with the arc at the top for general notes, then a pill each for whose arc it is, what changes, what it costs and what drives it \u2014 every one of them takes a note of its own. Beneath a dividing line sit all the cards in that arc\u2019s column, each with the elements linked to it. Writing against a card or one of its elements here is the same note the plot grid shows; they are one note seen from two places.',
@@ -65712,6 +65717,120 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
     return out;
   }
 
+  /* What each structure is FOR, in the terms a writer thinks in. `KINDS[].lede` says
+     what a structure DRAWS ("Who is related to whom"); this says when you would reach
+     for it, which is the question someone standing in front of the ＋ actually has.
+     [Jeremy, roadmap #40] */
+  var STRUCT_USE = {
+    family:  'Reach for it when the question is descent — who came from whom, and who stands beside whom in the same generation. Parents sit above children; siblings and spouses share a row.',
+    social:  'Reach for it when the question is who owes what to whom. Nobody is above anybody; the most connected person sits in the middle and the rest ring them.',
+    faction: 'Reach for it when there is a chain of command — who answers to whom, and which body they answer inside. Orders run downward.',
+    place:   'Reach for it when the question is what is inside, beside or beyond what. Containers sit above the things they contain.',
+    concept: 'Reach for it when the ideas of the story hold each other up, and you want to see which one everything else is leaning on.',
+    causal:  'Reach for it when one thing made another happen. Causes stack above their consequences, so a chain reads top to bottom.',
+    free:    'Everything at once, unfiltered — useful for finding a shape you did not know was there, and a poor place to work.'
+  };
+  /* A worked example per LAYOUT, and the point of it is that **the positions come out
+     of `autoLayout`, the very function that lays out the writer's own groups**. An
+     illustration drawn by hand is a second thing to maintain and drifts from the real
+     drawing the first time a layout changes; this cannot, because it IS the drawing.
+     The words are invented, the shape is not. */
+  var MINI = {
+    generational: { nodes:['Elder','Consort','Daughter','Son','Child'],
+      edges:[['Elder','Consort','Spouse of'],['Elder','Daughter','Parent of'],['Elder','Son','Parent of'],
+             ['Daughter','Son','Sibling of'],['Daughter','Child','Parent of']] },
+    hierarchy: { nodes:['The Order','Marshal','Captain','Serjeant','Sworn'],
+      edges:[['The Order','Marshal','Leads'],['Marshal','Captain','Commands'],
+             ['Marshal','Serjeant','Commands'],['Captain','Sworn','Commands']] },
+    web: { nodes:['Ana','Bram','Cass','Dov','Eli'],
+      edges:[['Ana','Bram','Trusts'],['Ana','Cass','Owes'],['Bram','Dov','Betrayed'],
+             ['Cass','Dov','Loves'],['Ana','Eli','Mentors']] },
+    blueprint: { nodes:['The Vale','Old Town','The Keep','The Well'],
+      edges:[['The Vale','Old Town','Contains'],['Old Town','The Keep','Contains'],
+             ['Old Town','The Well','Contains']] },
+    timeline: { nodes:['The drought','The riot','The siege','The treaty'],
+      edges:[['The drought','The riot','Caused'],['The riot','The siege','Led to'],
+             ['The siege','The treaty','Led to']] }
+  };
+  /* Draw one. Everything is wrapped, because a miniature is an explanation and an
+     explanation that throws must cost the writer the explanation and nothing else —
+     the card still carries the structure's name and what it is for. */
+  function miniSvg(lensId){
+    try{
+      var K = BONDS.KINDS[lensId] || {}; var spec = MINI[K.layout || 'web']; if (!spec) return null;
+      var g = { layout:K.layout, nodes:spec.nodes.map(function(n){ return { key:n, label:n }; }),
+                edges:spec.edges.map(function(e){
+                  return { akey:e[0], bkey:e[1], type:e[2], kindType:e[2],
+                           aspects:{ fwd:{ type:e[2] } }, sections:[] }; }) };
+      var pos = autoLayout(g, { w:520, h:300 });
+      var W = function(n){ return estW(n); };
+      var minX=1e9,minY=1e9,maxX=-1e9,maxY=-1e9;
+      g.nodes.forEach(function(n){ var p=pos[n.key]; if(!p) return; var w=W(n);
+        if(p.x<minX)minX=p.x; if(p.y<minY)minY=p.y;
+        if(p.x+w>maxX)maxX=p.x+w; if(p.y+NH>maxY)maxY=p.y+NH; });
+      if (minX>maxX) return null;
+      var pad=10; minX-=pad; minY-=pad; maxX+=pad; maxY+=pad;
+      var NS='http://www.w3.org/2000/svg';
+      var svg=document.createElementNS(NS,'svg');
+      svg.setAttribute('viewBox', minX+' '+minY+' '+(maxX-minX)+' '+(maxY-minY));
+      svg.setAttribute('preserveAspectRatio','xMidYMid meet');
+      svg.setAttribute('class','bn-mini-svg'); svg.setAttribute('aria-hidden','true');
+      var cx=function(n){ var p=pos[n]; var nd=g.nodes.find(function(x){return x.key===n;}); return p ? p.x + W(nd)/2 : 0; };
+      var cy=function(n){ var p=pos[n]; return p ? p.y + NH/2 : 0; };
+      g.edges.forEach(function(e){
+        var ln=document.createElementNS(NS,'line');
+        ln.setAttribute('x1',cx(e.akey)); ln.setAttribute('y1',cy(e.akey));
+        ln.setAttribute('x2',cx(e.bkey)); ln.setAttribute('y2',cy(e.bkey));
+        ln.setAttribute('class','bn-mini-edge'); svg.appendChild(ln);
+      });
+      g.nodes.forEach(function(n){ var p=pos[n.key]; if(!p) return; var w=W(n);
+        var r=document.createElementNS(NS,'rect');
+        r.setAttribute('x',p.x); r.setAttribute('y',p.y); r.setAttribute('width',w); r.setAttribute('height',NH);
+        r.setAttribute('rx',NH/2); r.setAttribute('class','bn-mini-node'); svg.appendChild(r);
+        var t=document.createElementNS(NS,'text');
+        t.setAttribute('x',p.x+w/2); t.setAttribute('y',p.y+NH/2+5);
+        t.setAttribute('text-anchor','middle'); t.setAttribute('class','bn-mini-lbl');
+        t.textContent=n.label; svg.appendChild(t);
+      });
+      return svg;
+    }catch(e){ return null; }
+  }
+  /* The panel under the What-kind pills: for the chosen type, the structures it opens
+     on, each with its shape, its name and what it is for.
+
+     **It shows this type's OWN structures, and then says the others are still there.**
+     Showing every structure the cast can wear would bury the answer; showing only
+     these without saying so would read as a limit, and the whole v.417 correction was
+     that a type ORDERS and never shortens. The sentence at the bottom is not a
+     footnote — it is the difference between a suggestion and a rule. */
+  function structPreview(typeId){
+    var box = el('div','bn-new-preview');
+    var own = TYPE_LENSES[typeId] || [];
+    if (!own.length){ return box; }
+    own.slice(0,2).forEach(function(id, i){
+      var K = BONDS.KINDS[id]; if (!K) return;
+      var card = el('div','bn-struct');
+      var art = el('div','bn-mini');
+      var svg = miniSvg(id); if (svg) art.appendChild(svg); else art.classList.add('bn-mini-none');
+      card.appendChild(art);
+      var txt = el('div','bn-struct-txt');
+      var h = el('div','bn-struct-n', K.name);
+      if (i === 0) h.appendChild(el('i','bn-struct-first','opens on this'));
+      txt.appendChild(h);
+      txt.appendChild(el('div','bn-struct-l', K.lede));
+      if (STRUCT_USE[id]) txt.appendChild(el('div','bn-struct-u', STRUCT_USE[id]));
+      card.appendChild(txt);
+      box.appendChild(card);
+    });
+    var more = (lensOffer(typeId) || []).filter(function(id){ return own.indexOf(id) < 0; })
+      .map(function(id){ return (BONDS.KINDS[id] || {}).name; }).filter(Boolean);
+    box.appendChild(el('div','bn-new-note', more.length
+      ? ('You can look at this group through any structure that fits it — ' + more.join(', ') +
+         ' and Everything are all available afterwards, and switching between them changes nothing you have written.')
+      : 'Switching structures later changes only what is drawn, never what you have written.'));
+    return box;
+  }
+
   function makeSet(m){
     var existing = existingGroups();
     var box = el('div','bn-mk-back'); box.id = 'bnNewSet';
@@ -65731,20 +65850,85 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
     c.appendChild(el('div','bn-new-lbl','What kind'));
     var catRow = el('div','bn-new-cats');
     var chosenCat = m.ui.type || CAT_DEFAULT[m.ui.kind] || 'social';
+    var prevHost = el('div','bn-new-prevhost');
+    var memHost = el('div','bn-new-memhost');
+    var paintPreview = function(){
+      prevHost.innerHTML = '';
+      try{ prevHost.appendChild(structPreview(chosenCat)); }catch(e){}
+    };
     SET_CATS.forEach(function(ct){
       var b = el('button','bn-new-cat' + (ct.id === chosenCat ? ' on' : ''), ct.name);
       b.type='button'; b.title = ct.hint;
       b.addEventListener('click', function(){
         chosenCat = ct.id;
         Array.prototype.slice.call(catRow.children).forEach(function(x){ x.classList.toggle('on', x === b); });
+        paintPreview();
+        /* The roster reorders — the type's own cast first — but **nothing already
+           chosen is taken away**. Changing your mind about what the group IS is not a
+           statement about who is in it, and a picker that silently dropped members
+           would make the pills dangerous to touch. */
+        try{ paintMembers(); }catch(e){}
       });
       catRow.appendChild(b);
     });
     c.appendChild(catRow);
+    c.appendChild(prevHost);
+    paintPreview();   // the panel is the answer to a question already asked — it is there before the first click
+
+    /* ---- who is in it, while you are making it [Jeremy, roadmap #40] ----
+       A group with no members is still a legitimate thing to make — a door with
+       nothing behind it yet is still a door — so this is an offer above the Create
+       button and never a gate on it. */
+    var chosen = [];
+    var roster = {}; try{ roster = BONDS.roster() || {}; }catch(e){ roster = {}; }
+    var rosterList = Object.keys(roster).map(function(k){ return roster[k]; })
+      .filter(function(r){ return r && r.key && r.label; });
+    var paintMembers = function(){};
+    if (rosterList.length){
+      c.appendChild(el('div','bn-new-lbl','Who is in it'));
+      var mq = document.createElement('input');
+      mq.className = 'bn-new-search'; mq.placeholder = 'Search your elements…';
+      c.appendChild(mq);
+      var chipRow = el('div','bn-new-chips');
+      var memList = el('div','bn-new-list bn-new-memlist');
+      c.appendChild(chipRow); c.appendChild(memList);
+      c.appendChild(el('div','bn-new-note','Anything in the story can go in a group. The kind you picked just brings its own sort of element to the top of the list — it does not keep the others out.'));
+      paintMembers = function(){
+        var q = (mq.value || '').trim().toLowerCase();
+        var cast = TYPE_CAST[chosenCat] || '';
+        var got = {}; chosen.forEach(function(k){ got[k] = 1; });
+        chipRow.innerHTML = '';
+        chosen.forEach(function(k){
+          var r = roster[k] || { label:k };
+          var ch = el('button','bn-new-chip', r.label); ch.type='button';
+          ch.title = 'Take out of this group';
+          ch.appendChild(el('i','bn-new-chipx','×'));
+          ch.addEventListener('click', function(){ chosen = chosen.filter(function(x){ return x !== k; }); paintMembers(); });
+          chipRow.appendChild(ch);
+        });
+        memList.innerHTML = '';
+        var rows = rosterList.filter(function(r){ return !got[r.key]; })
+          .filter(function(r){ return !q || String(r.label).toLowerCase().indexOf(q) >= 0; });
+        rows.sort(function(a, b){
+          var ac = (a.cat === cast) ? 0 : 1, bc = (b.cat === cast) ? 0 : 1;
+          return (ac - bc) || String(a.label).localeCompare(String(b.label));
+        });
+        if (!rows.length){ memList.appendChild(el('div','bn-new-note', q ? 'Nothing by that name.' : 'Everything is already in.')); return; }
+        rows.slice(0, 60).forEach(function(r){
+          var b = el('button','bn-new-grp', r.label); b.type='button';
+          b.appendChild(el('i','bn-new-n', (r.cat === cast ? '' : (r.cat || ''))));
+          b.addEventListener('click', function(){ chosen.push(r.key); mq.value=''; paintMembers(); });
+          memList.appendChild(b);
+        });
+        if (rows.length > 60) memList.appendChild(el('div','bn-new-note', (rows.length - 60) + ' more — narrow it with the search.'));
+      };
+      mq.addEventListener('input', paintMembers);
+      paintMembers();
+    }
 
     var picked = null;
     if (existing.length){
-      c.appendChild(el('div','bn-new-lbl','Start from a group you have already made'));
+      c.appendChild(el('div','bn-new-lbl','Or start from a group you have already made'));
       var list = el('div','bn-new-list');
       existing.forEach(function(gp){
         var b = el('button','bn-new-grp', gp.name); b.type='button';
@@ -65770,6 +65954,13 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
       var gp = { id:freshGroupId(s), name:nm, type:chosenCat, members:[],
                  lens:(TYPE_LENSES[chosenCat] || [])[0] || m.ui.kind };
       if (picked){ gp.members = picked.keys.slice(); gp.fromGroup = picked.id; }
+      /* Members chosen here go in ON TOP of a group brought across, deduped — the two
+         are different answers to different questions ("start from these" and "put
+         these in"), and a writer who did both meant both. */
+      if (chosen.length){
+        var have = {}; gp.members.forEach(function(k){ have[k] = 1; });
+        chosen.forEach(function(k){ if (!have[k]){ have[k] = 1; gp.members.push(k); } });
+      }
       saveGroup(gp);
       /* the band follows the thing you just made, or it disappears from under you */
       if (m.ui.type && m.ui.type !== chosenCat) m.ui.type = chosenCat;
@@ -67130,6 +67321,37 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
       '.bn-new-grp.on{ background:#f3e7cd; border-color:#c8963c; }',
       '.bn-new-n{ font-style:normal; font-size:10.5px; color:#a49c88; }',
       '.bn-new-note{ font-size:11.5px; color:#9a9484; font-style:italic; line-height:1.5; margin-top:8px; }',
+      /* the structure preview — a worked example of the shape, and what it is for */
+      '.bn-new-preview{ margin-top:9px; }',
+      /* The example sits ABOVE the words at the card's full width, not beside them.
+         A layout drawn for a 520-unit canvas squeezed into a 132px column renders its
+         names at about three pixels — a picture of a shape whose labels you cannot
+         read is a decoration, and this exists to be read. */
+      '.bn-struct{ display:block; padding:9px 10px 10px; margin-bottom:7px;',
+      '  background:#faf6ec; border:1px solid #ece5d5; border-radius:11px; }',
+      '.bn-mini{ width:100%; height:104px; display:flex; align-items:center; justify-content:center;',
+      '  background:#fffdf8; border:1px solid #ece5d5; border-radius:8px; overflow:hidden; margin-bottom:8px; }',
+      '.bn-mini-svg{ width:100%; height:100%; }',
+      '.bn-mini-node{ fill:#fffdf8; stroke:#c9c0aa; stroke-width:1.4; }',
+      '.bn-mini-edge{ stroke:#c2b697; stroke-width:1.6; }',
+      '.bn-mini-lbl{ fill:#6b6353; font-size:14px; font-family:var(--sans,system-ui,sans-serif); }',
+      '.bn-struct-txt{ flex:1 1 auto; min-width:0; }',
+      '.bn-struct-n{ font-family:var(--serif,Georgia,serif); font-size:14px; color:#2b2419; display:flex; align-items:baseline; gap:7px; }',
+      '.bn-struct-first{ font-style:normal; font-size:9px; letter-spacing:.08em; text-transform:uppercase; color:#a8842a; }',
+      '.bn-struct-l{ font-size:12px; color:#5d5647; margin-top:2px; }',
+      '.bn-struct-u{ font-size:11.5px; color:#8d8677; line-height:1.5; margin-top:4px; }',
+      /* members, chosen while the group is being made */
+      '.bn-new-search{ width:100%; box-sizing:border-box; font-family:inherit; font-size:12.5px;',
+      '  padding:7px 10px; border:1px solid #e6e0d1; border-radius:8px; }',
+      '.bn-new-chips{ display:flex; flex-wrap:wrap; gap:5px; margin:7px 0 0; }',
+      '.bn-new-chip{ display:inline-flex; align-items:center; gap:5px; border:1px solid #c8963c; background:#f3e7cd;',
+      '  color:#4a3a12; border-radius:999px; padding:3px 9px; font-size:11.5px; font-family:inherit; cursor:pointer; }',
+      '.bn-new-chip:hover{ background:#eddcb8; }',
+      '.bn-new-chipx{ font-style:normal; color:#a8842a; }',
+      '.bn-new-memlist{ max-height:150px; margin-top:5px; }',
+      'body.eink .bn-struct, body.eink .bn-mini{ background:#fff; border-color:#000; }',
+      'body.eink .bn-mini-node{ fill:#fff; stroke:#000; }',
+      'body.eink .bn-mini-edge{ stroke:#000; }',
       /* the second filter level: the sets of this kind */
       '.bn-sets{ display:flex; align-items:center; gap:6px; flex-wrap:wrap; }',
       '.bn-set{ display:inline-flex; align-items:center; gap:6px; border:1px solid #e4dece; background:#fff;',
