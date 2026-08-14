@@ -868,7 +868,19 @@
   body.ember:not(.eink) .egn-head{color:#b8801f}
   @media (max-width:1180px){ body.eg-on #edGutter{display:none} }
   /* AI rephrase suggestions — left sidebar, mirrors the notes panel on the right */
-  #aiSugPanel{position:absolute; top:0; right:calc(50% + 384px); height:100%; width:272px; overflow:hidden; background:var(--paper); display:none}
+  /* Anchored to the left of the prose column, **with a floor**. `right:calc(50% + 384px)`
+     alone put the panel's left edge at `50% - 656px`, which is negative on any window
+     under ~1310px: on a 13" laptop the card was half off the screen and its buttons could
+     not be clicked at all. It now slides in to a 10px margin instead of walking out of
+     the window, and wears a shadow so that when it does overlap the prose it reads as a
+     panel over the page rather than as text that has gone wrong.
+
+     The z-index is the second half of the same fault: the Organize drawer is z-index 60
+     and this had none, so with that drawer open the drawer's list sat on top of the
+     suggestions and swallowed every click. **A panel the writer just asked for outranks
+     a drawer they left open.** [v.426] */
+  #aiSugPanel{position:absolute; top:0; left:max(10px, calc(50% - 656px)); right:auto; height:100%; width:272px;
+    overflow:hidden; background:var(--paper); display:none; z-index:70; box-shadow:14px 0 30px -22px rgba(60,45,20,.45)}
   #editMode.show-aisug #aiSugPanel{display:block}
   /* ---- Organize drawer (Refine): folder tree of Parts → Sections, slide-out from the left ---- */
   /* Hugs the LEFT edge and expands to fill the margin (inner edge ~8px from the text). Full-height, flat, border+shadow
@@ -1187,7 +1199,8 @@ body.eink .pt-rh-dev{color:#000}
   .pt-craft-host .ex-body{padding:8px 0 4px}
   body.ember:not(.eink) #edChkPanel, body.ember:not(.eink) #edChkTab{background:#f5efe1}
   body.eink #edChkPanel{background:#fff; border-left:2px solid #000}
-  .ais-close{float:right; cursor:pointer; color:var(--ink-faint); font-size:14px; line-height:1}
+  .ais-close{float:right; cursor:pointer; color:var(--ink-faint); font-size:16px; line-height:1;
+    border:none; background:none; padding:0 2px; font-family:inherit}
   .ais-close:hover{color:var(--gold)}
   #aiSugList{padding:0 14px 24px; overflow-y:auto; height:calc(100% - 40px)}
   .ais-orig{font-family:var(--serif); font-style:italic; font-size:12.5px; color:var(--ink-faint); padding:0 2px 9px; border-bottom:1px solid var(--line-soft); margin-bottom:11px; line-height:1.45}
@@ -4842,7 +4855,7 @@ body.eink #consentBar #cbAccept{background:#000; color:#fff; border-color:#000}
       <div id="editChrome"></div>
       <div id="editBody"></div>
     </div>
-    <div id="aiSugPanel"><div class="np-head">Suggestions <span class="ais-close" title="Close">×</span></div><div id="aiSugList"></div></div>
+    <div id="aiSugPanel"><div class="np-head">Suggestions <button type="button" class="ais-close" title="Close">×</button></div><div id="aiSugList"></div></div>
     <div id="notesPanel"><div class="np-head">Notes</div><div id="notesList"></div></div>
   </div>
   <div id="edInsertPop" role="menu" aria-label="Insert"><button type="button" data-ins="image"><span class="eip-ic">🖼</span>Image</button><button type="button" data-ins="part"><span class="eip-ic eip-part">▬</span>Part</button><button type="button" data-ins="section"><span class="eip-ic eip-dia">◆</span>Section</button></div>
@@ -31258,6 +31271,7 @@ async function aiRephrase(rng){
   if (/\s/.test(selText)){ rfxInjectCSS(); refractPhrase(rng); return; }   // multi-word → Refract reflection; single word → thesaurus (below)
   const list = $('aiSugList'); if (!list) return;
   $('editMode').classList.add('show-aisug');
+  armAiSug();
   const shorten = s => (s.length > 90 ? s.slice(0, 90) + '…' : s);
   list.innerHTML = '<div class="ais-orig">“' + ipEsc(shorten(selText)) + '”</div><div class="ais-empty"><span class="spin"></span>Finding alternatives…</div>';
   try {
@@ -31274,6 +31288,7 @@ async function aiRephrase(rng){
 }
 function renderAiSug(orig, arr){
   const list = $('aiSugList'); if (!list) return;
+  armAiSug();
   list.innerHTML = '';
   const o = document.createElement('div'); o.className = 'ais-orig'; o.textContent = '“' + (orig.length > 90 ? orig.slice(0, 90) + '…' : orig) + '”'; list.appendChild(o);
   if (!arr.length){ const e = document.createElement('div'); e.className = 'ais-empty'; e.textContent = 'No suggestions came back — try again.'; list.appendChild(e); return; }
@@ -31299,6 +31314,27 @@ function applyAiSug(text){
   closeAiSug();
 }
 function closeAiSug(){ _aiRephraseRng = null; const e = $('editMode'); if (e) e.classList.remove('show-aisug'); const l = $('aiSugList'); if (l) l.innerHTML = ''; }
+/* Every time the card is put up, wire its own × to its own close — and give Escape the
+   same job. The single boot-time listener this replaces was delegated from the panel
+   element captured once at startup: if anything ever rebuilds the Refine columns, that
+   node is gone and the × silently stops working while every other control in the card
+   keeps going. **A control with exactly one way to reach it is a control with exactly one
+   way to lose it.** [Jeremy, v.426] */
+function armAiSug(){
+  try{
+    const p = $('aiSugPanel'); if (!p) return;
+    const x = p.querySelector('.ais-close');
+    if (x && !x.__wired){ x.__wired = 1; x.addEventListener('click', function(ev){ ev.stopPropagation(); closeAiSug(); }); }
+    if (!document.__aiSugEsc){
+      document.__aiSugEsc = 1;
+      document.addEventListener('keydown', function(ev){
+        if (ev.key !== 'Escape') return;
+        const e = document.getElementById('editMode');
+        if (e && e.classList.contains('show-aisug')) closeAiSug();
+      });
+    }
+  }catch(e){}
+}
 /* ===== Refract — reflect a passage back (concepts / words / angles / underplayed) so the writer rewrites it.
    AI never produces replacement prose; the retry is typed by the author and applied via the Edit/Suggest path. ===== */
 function aiParseObj(raw){ let t=String(raw||'').trim().replace(/^```(?:json)?/i,'').replace(/```$/,'').trim(); const a=t.indexOf('{'), b=t.lastIndexOf('}'); if(a>=0&&b>a) t=t.slice(a,b+1); try{ const j=JSON.parse(t); return (j&&typeof j==='object'&&!Array.isArray(j))?j:{}; }catch(e){ return {}; } }
@@ -48050,8 +48086,13 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.425';
+  var APP_VERSION = '2026.07.20.426';
   var APP_CHANGELOG = [
+    { v:'2026.07.20.426', date:'August 14, 2026', notes:[
+      '**Fixed: the word alternatives card in Revise could not be used.** Ask Refract about a single word and the three suggestions arrive in the left margin \u2014 but the card was anchored to a point that goes off the left edge of the window on anything under about 1310 pixels wide, so on a laptop its buttons sat past the edge of the screen and could not be clicked. It now slides in to the margin instead of walking out of the window.',
+      '**And it no longer hides under the Organize drawer.** With that drawer open, the drawer sat on top of the suggestions and swallowed every click. A card you just asked for now sits above a drawer you left open.',
+      '**The × closes it, and so does Escape.** The close button is wired every time the card appears rather than once when the app starts \u2014 which is why it could stop working while everything else in the card kept going.'
+    ]},
     { v:'2026.07.20.425', date:'August 14, 2026', notes:[
       '**Making a group in Bonds now shows you what you are choosing.** Pick a kind \u2014 Kinship, Martial, Places, Events \u2014 and beneath the pills you get the structure it opens on, drawn: a small worked example of a family tree, a social web, a chain of command, a blueprint, a causal chain. Each says what it draws and when you would reach for it. **The examples are drawn by the same layout that lays out your own groups**, so what you see is what you will get, not an illustration of it.',
       '**And you can put the people in while you are making it.** A search and a list of everything in your story, with the kind you picked brought to the top \u2014 brought to the top, not filtered: anything in the story can go in any group, and it always could.',
