@@ -25459,7 +25459,7 @@ function openSession(id){
   state.placing = null; state.placeQueue = []; state.autoPlace = true; state.autoPlaceSeen = true;   // auto-place is the default
   (state.frames || []).forEach(fr => ((fr.prompt && fr.prompt.words) || []).forEach(w => { if (w.needsPlace) delete w.needsPlace; }));
   if (state.prompt && state.prompt.words) state.prompt.words.forEach(w => { if (w.needsPlace) delete w.needsPlace; });
-  if (state.npActive && state.npActive !== 'general' && state.npActive !== 'plotmain' && state.npActive.indexOf('goal:') !== 0 && state.npActive.indexOf('thread:') !== 0 && state.npActive.indexOf('group:') !== 0 && state.npActive.indexOf('part:') !== 0 && state.npActive.indexOf('section:') !== 0 && state.npActive.indexOf('grouptree:') !== 0 && state.npActive.indexOf('session:') !== 0 && typeof npFindEl === 'function' && !npFindEl(state.npActive)){ state.npActive = 'general'; state.cardTrait = null; }   // restored selection's element is gone → fall back
+  if (state.npActive && state.npActive !== 'general' && state.npActive !== 'plotmain' && state.npActive.indexOf('goal:') !== 0 && state.npActive.indexOf('thread:') !== 0 && state.npActive.indexOf('group:') !== 0 && state.npActive.indexOf('part:') !== 0 && state.npActive.indexOf('section:') !== 0 && state.npActive.indexOf('grouptree:') !== 0 && state.npActive.indexOf('session:') !== 0 && state.npActive.indexOf('arc:') !== 0 && typeof npFindEl === 'function' && !npFindEl(state.npActive)){ state.npActive = 'general'; state.cardTrait = null; }   // restored selection's element is gone → fall back
   renderNpElements();           // now the words/frames are loaded, so element chips resolve their real names
   if (typeof renderNotepad === 'function') renderNotepad();
   if (typeof renderNpCard === 'function') renderNpCard();
@@ -35766,7 +35766,11 @@ function renderNpElements(){
     const l = document.createElement('span'); l.className = 'np-label'; l.textContent = a.label; chip.appendChild(l);
     try { const raw = state.session && state.session.npNotes && state.session.npNotes[a.noteKey]; if (raw && npPlain(raw).trim()){ const d = document.createElement('span'); d.className = 'np-cat'; d.style.color = 'var(--gold,#c49e4a)'; d.textContent = '\u2022'; chip.appendChild(d); } } catch(e){}
     const ar = document.createElement('span'); ar.className = 'np-arrow'; ar.textContent = '\u25b8'; chip.appendChild(ar);
-    chip.addEventListener('click', () => { if (typeof window.__dystOpenArc === 'function') window.__dystOpenArc(a.id); else npSelect(key); });
+    /* Until v.424 this opened the arc CARD — a modal over the notepad, from a rail whose
+       every other pill selects a place to write. An arc now behaves like a thread: the
+       pill opens the arc's own notes section, and the card is one click further in, on
+       the ▾ beside the arc's name there. [Jeremy, v.424] */
+    chip.addEventListener('click', () => npSelect(key));
     host.appendChild(chip);
   };
   if (filter === 'arcs'){
@@ -40320,6 +40324,109 @@ document.addEventListener('DOMContentLoaded', init);
         card.appendChild(body);
         return;
       }
+      if (key.indexOf('arc:')===0){
+        /* The arc's notes section, built the way a thread's is [Jeremy, v.424]:
+             the arc's own pill (general notes)
+             what the arc IS — whose it is, what changes, what it costs, what drives it
+             ── a dividing line ──
+             every card in this arc's column, each with the elements linked to it
+
+           **An arc IS a Plot column and its column id IS the arc id**, so the very bridges
+           the thread card reads its cards through answer for an arc unchanged. Reuse the
+           instrument, not the rules. */
+        const _aid=key.slice(4);
+        const _ac=(typeof window.__dystArcCard==='function')?window.__dystArcCard(_aid):null;
+        if(!_ac){ card.style.display='none'; { const _lm=document.getElementById('lowerMain'); if(_lm) _lm.classList.remove('np-sheet'); } return; }
+        card.style.display='flex'; { const _lm=document.getElementById('lowerMain'); if(_lm) _lm.classList.add('np-sheet'); }
+        card.innerHTML='';
+        const _acSecs=(typeof window.__planThreadCardSections==='function')?(window.__planThreadCardSections(_aid)||[]):[];
+        const _acCardEls={}; const _acValid=new Set();
+        const _acCost=!!_ac.cost;
+        if(_ac.subject) _acValid.add('@arcsubject');
+        (_ac.facets||[]).forEach(f=>{ if(f&&f.id) _acValid.add('@arcfacet:'+f.id); });
+        if(_acCost) _acValid.add('@arccost');
+        (_ac.drivers||[]).forEach(d=>{ if(d&&d.nkey) _acValid.add('@arcel:'+d.nkey); });
+        _acSecs.forEach(k=>{ _acValid.add('@section:'+k);
+          const els=(typeof window.__planThreadCardEls==='function')?(window.__planThreadCardEls(_aid,k)||[]):[];
+          _acCardEls[k]=els; els.forEach(el=>_acValid.add('@cardel:'+k+'|'+el.nkey));
+          if(_acCost) _acValid.add('@cardstake:thread|'+k); });
+        if(state.cardTrait && !_acValid.has(state.cardTrait)) state.cardTrait=null;
+        const _hasN = nk => { try{ const raw=state.session&&state.session.npNotes&&state.session.npNotes[nk]; return !!(raw && String(raw).replace(/<[^>]*>/g,'').trim()); }catch(e){ return false; } };
+        const _shapeCol = sh => ({ positive:'#5f8a6b', negative:'#a65f6b', flat:'#9a8a5a', disillusion:'#6b7a95' })[sh] || 'var(--gold,#c49e4a)';
+        const _acBody=document.createElement('div'); _acBody.className='npc-body npc-plotbody';
+        const _acTl=document.createElement('div'); _acTl.className='npc-plottl';
+        // the arc itself — general notes, and the one door left to the arc card
+        { const p=document.createElement('span'); p.className='npc-trait npc-traitpill npc-plotname npc-arcname'+(!state.cardTrait?' on':''); p.title='Arc';
+          const sw=document.createElement('span'); sw.className='npc-threadsw'; sw.style.background=_shapeCol(_ac.shape); p.appendChild(sw);
+          const w=document.createElement('span'); w.className='npc-tw'; w.textContent=(_ac.name||_ac.label||'Arc'); p.appendChild(w);
+          if(_hasN(_ac.noteKey)){ const d=document.createElement('span'); d.className='npc-tldot'; d.title='Has notes'; p.appendChild(d); }
+          /* An arc with no column on the grid has no other way to its card, and this rail
+             lists every arc. Never close the last door. [v.418] */
+          const dv=document.createElement('span'); dv.className='npc-tx'; dv.textContent='▾'; dv.title='Open the arc card — what changes, what drives it, what it costs, its goalposts';
+          dv.addEventListener('click', ev=>{ ev.stopPropagation(); if(typeof window.__dystOpenArc==='function') window.__dystOpenArc(_aid); }); p.appendChild(dv);
+          p.addEventListener('click', ()=>setTrait(null)); _acTl.appendChild(p); }
+        // whose arc it is
+        if(_ac.subject){ const p=document.createElement('span'); p.className='npc-trait npc-traitpill npc-arcsubj'+(state.cardTrait==='@arcsubject'?' on':''); p.title='Whose arc this is';
+          const sw=document.createElement('span'); sw.className='npc-threadsw'; sw.style.background=(typeof catColor==='function')?catColor(_ac.subjectCat||'being'):'#888'; p.appendChild(sw);
+          const w=document.createElement('span'); w.className='npc-tw'; w.textContent=(_ac.subjectName||'—'); p.appendChild(w);
+          if(_hasN(key+SEP+'@arcsubject')){ const d=document.createElement('span'); d.className='npc-tldot'; d.title='Has notes'; p.appendChild(d); }
+          p.addEventListener('click', ()=>setTrait('@arcsubject')); _acTl.appendChild(p); }
+        // what changes — one pill per facet, the primary change first
+        (_ac.facets||[]).forEach(f=>{ if(!f||!f.id||!String(f.label||'').trim()) return;
+          const trait='@arcfacet:'+f.id;
+          const p=document.createElement('span'); p.className='npc-trait npc-traitpill npc-arcfacet'+(state.cardTrait===trait?' on':''); p.title='What changes';
+          const sw=document.createElement('span'); sw.className='npc-threadsw'; sw.style.background=_shapeCol(_ac.shape); p.appendChild(sw);
+          const w=document.createElement('span'); w.className='npc-tw'; w.textContent=f.label; p.appendChild(w);
+          if(_hasN(key+SEP+trait)){ const d=document.createElement('span'); d.className='npc-tldot'; d.title='Has notes'; p.appendChild(d); }
+          p.addEventListener('click', ()=>setTrait(trait)); _acTl.appendChild(p); });
+        // what it costs
+        if(_acCost){ const p=document.createElement('span'); p.className='npc-trait npc-traitpill npc-threadstake'+(state.cardTrait==='@arccost'?' on':''); p.title='What this change costs';
+          const sw=document.createElement('span'); sw.className='npc-threadsw'; sw.style.background=(typeof catColor==='function')?catColor('stakes'):'#b8554f'; p.appendChild(sw);
+          const w=document.createElement('span'); w.className='npc-tw'; w.textContent=_ac.cost; p.appendChild(w);
+          if(_hasN(key+SEP+'@arccost')){ const d=document.createElement('span'); d.className='npc-tldot'; d.title='Has notes'; p.appendChild(d); }
+          p.addEventListener('click', ()=>setTrait('@arccost')); _acTl.appendChild(p); }
+        // what drives it
+        (_ac.drivers||[]).forEach(dr=>{ if(!dr||!dr.nkey) return;
+          const trait='@arcel:'+dr.nkey;
+          const p=document.createElement('span'); p.className='npc-trait npc-traitpill npc-arcdriver'+(state.cardTrait===trait?' on':''); p.title='Drives the change';
+          const sw=document.createElement('span'); sw.className='npc-threadsw'; sw.style.background=(typeof catColor==='function')?catColor(dr.cat||dr.kind):'#888'; p.appendChild(sw);
+          const w=document.createElement('span'); w.className='npc-tw'; w.textContent=(dr.label||'—'); p.appendChild(w);
+          if(_hasN(key+SEP+trait)){ const d=document.createElement('span'); d.className='npc-tldot'; d.title='Has notes'; p.appendChild(d); }
+          p.addEventListener('click', ()=>setTrait(trait)); _acTl.appendChild(p); });
+        _acTl.appendChild(Object.assign(document.createElement('div'),{className:'npc-plotdiv'}));
+        // this arc's cards, each with the elements linked to it — the same note the grid edits
+        if(!_acSecs.length){ const e=document.createElement('span'); e.className='npc-plotempty'; e.textContent='No cards in this arc yet — add one in the plot grid.'; _acTl.appendChild(e); }
+        else _acSecs.forEach(k=>{
+          const _sn=(typeof npSectionName==='function')?npSectionName(k):{n:k+1,name:''};
+          const _ttl=(typeof window.__planThreadCardTitle==='function')?window.__planThreadCardTitle(_aid,k):'';
+          const cardLabel=(_ttl&&_ttl.trim())?_ttl.trim():((_sn.name&&_sn.name.trim())?_sn.name.trim():(_sn.label||('Section '+(_sn.n||(k+1)))));
+          const cp=document.createElement('span'); cp.className='npc-trait npc-traitpill npc-plotstage npc-threadcard'+(state.cardTrait==='@section:'+k?' on':''); cp.title='Card';
+          { const _secN=(_sn&&_sn.n)||(k+1); const _dia=document.createElement('span'); _dia.className='npc-secdia'; _dia.title='Section '+_secN; const _dn=document.createElement('span'); _dn.textContent=_secN; _dia.appendChild(_dn); cp.appendChild(_dia); }
+          const cn=document.createElement('span'); cn.className='npc-tw'; cn.textContent=cardLabel; cp.appendChild(cn);
+          if(_hasN(key+SEP+'@section:'+k)){ const d=document.createElement('span'); d.className='npc-tldot'; d.title='Has notes'; cp.appendChild(d); }
+          cp.addEventListener('click', ()=>setTrait('@section:'+k)); _acTl.appendChild(cp);
+          const _erow=document.createElement('div'); _erow.className='npc-cardelrow';
+          if(_acCost){ const trait='@cardstake:thread|'+k; const nk='section:'+k+'||COL:'+_aid+'||TRAIT||@tstake';
+            const ep=document.createElement('span'); ep.className='npc-trait npc-traitpill npc-cardel npc-cardstake'+(state.cardTrait===trait?' on':''); ep.title='What it costs, here';
+            const sw=document.createElement('span'); sw.className='npc-threadsw'; sw.style.background=(typeof catColor==='function')?catColor('stakes'):'#b07a6e'; ep.appendChild(sw);
+            const en=document.createElement('span'); en.className='npc-tw'; en.textContent=_ac.cost; ep.appendChild(en);
+            if(_hasN(nk)){ const d=document.createElement('span'); d.className='npc-tldot'; d.title='Has notes'; ep.appendChild(d); }
+            ep.addEventListener('click', ()=>setTrait(trait)); _erow.appendChild(ep); }
+          (_acCardEls[k]||[]).forEach(el=>{ const trait='@cardel:'+k+'|'+el.nkey;
+            const gkey=(typeof window.__planCardElNoteKey==='function')?window.__planCardElNoteKey(_aid,k,el.nkey):null;
+            const ep=document.createElement('span'); ep.className='npc-trait npc-traitpill npc-cardel'+(state.cardTrait===trait?' on':'');
+            ep.title=((typeof getCat==='function'&&getCat(el.cat||el.kind)&&getCat(el.cat||el.kind).name)||(el.cat||el.kind||'Element'));
+            const sw=document.createElement('span'); sw.className='npc-threadsw'; sw.style.background=(typeof catColor==='function')?catColor(el.cat||el.kind):'#888'; ep.appendChild(sw);
+            const en=document.createElement('span'); en.className='npc-tw'; en.textContent=(el.label||''); ep.appendChild(en);
+            if(gkey && _hasN(gkey)){ const d=document.createElement('span'); d.className='npc-tldot'; d.title='Has notes'; ep.appendChild(d); }
+            ep.addEventListener('click', ()=>setTrait(trait)); _erow.appendChild(ep); });
+          if(_erow.childNodes.length) _acTl.appendChild(_erow);
+          else { const em=document.createElement('span'); em.className='npc-plotempty npc-cardempty'; em.textContent='No elements linked — link them on this card in the plot grid.'; _acTl.appendChild(em); }
+        });
+        _acBody.appendChild(_acTl);
+        card.appendChild(_acBody);
+        return;
+      }
       if (key.indexOf('group:')===0){   // Group card: built like a being card — left portrait + options + members
         const _gid=key.slice(6); const _gr=(typeof beingGroupById==='function')?beingGroupById(_gid):null;
         if(!_gr){ card.style.display='none'; { const _lm=document.getElementById('lowerMain'); if(_lm) _lm.classList.remove('np-sheet'); } return; }
@@ -40809,7 +40916,18 @@ document.addEventListener('DOMContentLoaded', init);
     function start(){
       // --- per-trait note scoping: the "active" notes key becomes "<element><trait>" while a sub-tab is selected
       const _ak=window.npActiveKey, _lf=window.npLabelFor;
-      if(_ak){ window.npActiveKey=function(){ const b=state.npActive||'general'; if(b==='general'||!state.cardTrait) return b;
+      if(_ak){ window.npActiveKey=function(){ const b=state.npActive||'general';
+        /* An arc's GENERAL notes ARE the arc's own note — the same one the arc card's
+           "notes & nuance" box writes, which itself lives under the character. One arc,
+           one note, two windows onto it. Anything else would be a second store to sync,
+           and the writer would find half their thinking in each. [v.424] */
+        if(b.indexOf('arc:')===0 && !state.cardTrait){ try{ const _ai=window.__dystArcCard?window.__dystArcCard(b.slice(4)):null; if(_ai&&_ai.noteKey) return _ai.noteKey; }catch(e){} return b; }
+        if(b==='general'||!state.cardTrait) return b;
+        /* A card in an ARC's column, and an element linked to it, are the same objects a
+           thread's are — an arc column's id IS the arc id — so they route to the very note
+           keys the grid writes, and the two surfaces edit one note. */
+        if(state.cardTrait.indexOf('@cardel:')===0 && b.indexOf('arc:')===0){ const aid=b.slice(4); const rest=state.cardTrait.slice(8); const p=rest.indexOf('|'); if(p>0){ const si=rest.slice(0,p), nk=rest.slice(p+1); return 'section:'+si+'||COL:'+aid+'||TRAIT||@sectionel:'+nk; } }
+        if(state.cardTrait.indexOf('@cardstake:')===0 && b.indexOf('arc:')===0){ const aid=b.slice(4); const rest=state.cardTrait.slice(11); const p=rest.indexOf('|'); if(p>0){ const si=rest.slice(p+1); return 'section:'+si+'||COL:'+aid+'||TRAIT||@tstake'; } }
         // An element linked on a THREAD card → route to the SAME note key the plot grid uses, so notes sync both ways.
         if(state.cardTrait.indexOf('@cardel:')===0 && b.indexOf('thread:')===0){ const tid=b.slice(7); const rest=state.cardTrait.slice(8); const p=rest.indexOf('|'); if(p>0){ const si=rest.slice(0,p), nk=rest.slice(p+1); return 'section:'+si+'||COL:'+tid+'||TRAIT||@sectionel:'+nk; } }
         // A per-card STAKE note on a thread card → same note key the plot grid card popup edits (story=@sstake, thread=@tstake).
@@ -40825,6 +40943,7 @@ document.addEventListener('DOMContentLoaded', init);
         let nm=(w&&typeof elDisplayName==='function')?elDisplayName(w):'Element';
         if(base.indexOf('section:')===0){ try{ const _r=npSectionName(parseInt(base.slice(8),10)||0); nm=(_r&&_r.name)?_r.name:('Section '+(_r?_r.n:'')); }catch(e){ nm='Section'; } }
         if(base.indexOf('grouptree:')===0){ const _gk=base.slice(10); const _gw=(typeof npFindEl==='function')?npFindEl(_gk):null; nm=(_gw?elDisplayName(_gw):'Group')+' chart'; }
+        if(base.indexOf('arc:')===0){ try{ const _ai=(typeof window.__dystArcInfo==='function')?window.__dystArcInfo(base.slice(4)):null; nm=(_ai&&_ai.label)||'Arc'; }catch(e){ nm='Arc'; } }
         let label = tab;
         if(tab.indexOf('@conn:')===0){ const _cp=tab.slice(6).split('~~'); const _wa=(typeof npFindEl==='function')?npFindEl(_cp[0]):null, _wb=(typeof npFindEl==='function')?npFindEl(_cp[1]):null; label=(_wa?elDisplayName(_wa):(_cp[0]||'?'))+' ↔ '+(_wb?elDisplayName(_wb):(_cp[1]||'?')); }
         else if(tab.indexOf('@role:')===0) label='Role: '+tab.slice(6);
@@ -40833,6 +40952,10 @@ document.addEventListener('DOMContentLoaded', init);
         else if(tab.indexOf('@obstacle:')===0) label='vs '+obstacleLabel(base, tab.slice(10));
         else if(tab==='@stake') label='Stake';
         else if(tab==='@threadstake') label='Thread stake';
+        else if(tab==='@arcsubject') label='Whose arc';
+        else if(tab==='@arccost') label='The cost';
+        else if(tab.indexOf('@arcfacet:')===0) label='The change';
+        else if(tab.indexOf('@arcel:')===0){ const ek=tab.slice(8); const ew=(typeof npFindEl==='function')?npFindEl(ek):null; label=(ew&&typeof elDisplayName==='function')?elDisplayName(ew):ek; }
         else if(tab==='@storystake') label='Story stake';
         else if(tab==='@name') label='Name';
         else if(tab==='@type') label='Type';
@@ -47927,8 +48050,13 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.423';
+  var APP_VERSION = '2026.07.20.424';
   var APP_CHANGELOG = [
+    { v:'2026.07.20.424', date:'August 12, 2026', notes:[
+      '**An arc column now calls the arc what you called it.** Name an arc and the pill at the top of its column shows that name instead of the \u201cwho \u00b7 what changes\u201d line the app made up for it. The pill sits centred in the column, and the momentum sparkline and percentage have moved down beside the Analysis button \u2014 which now wears a \u2727, because there is an AI reading behind it, and reads in the same lettering as Explore on the map.',
+      '**And the arc pills in the notepad open the arc\u2019s notes, not its card.** An arc behaves like a thread now: the pill opens a notes section with the arc at the top for general notes, then a pill each for whose arc it is, what changes, what it costs and what drives it \u2014 every one of them takes a note of its own. Beneath a dividing line sit all the cards in that arc\u2019s column, each with the elements linked to it. Writing against a card or one of its elements here is the same note the plot grid shows; they are one note seen from two places.',
+      'The arc card itself is one click further in, on the \u25be beside the arc\u2019s name \u2014 and the arc\u2019s general notes are the same \u201cnotes & nuance\u201d you were already writing on that card, not a second box to keep in step.'
+    ]},
     { v:'2026.07.20.423', date:'August 12, 2026', notes:[
       '**Dystoria stopped downloading your whole library every time it synced.** Opening the app used to fetch every story in full \u2014 prose, images, handwriting, the revision archive \u2014 and then do it again about once an hour for as long as you left the tab open. It now asks the cloud what is there, and downloads a story only when it is one this device has never seen or one that changed somewhere else. A story\u2019s handwriting and images still come back the moment you open it, exactly as before.',
       '**And it syncs when you arrive, not on a timer.** Signing in syncs. Refreshing the page syncs, once instead of twice. A background token refresh no longer does anything at all.',
@@ -50172,7 +50300,22 @@ body.eink .pl-plotpop-ttl{ color:var(--ink); }
 .pl-arcpill.arc-shape-disillusion{ border-left-color:#6b7a95; }
 .pl-arcspark{ display:inline-flex; width:44px; height:13px; color:#8a7c56; margin-left:6px; vertical-align:middle; }
 .pl-arcpct{ font-family:var(--sans); font-size:9.5px; font-weight:700; color:#8a8272; margin-left:4px; }
-.pl-arcanalyse{ width:auto !important; padding:0 7px; font-family:var(--sans); font-size:9px; font-weight:800; letter-spacing:.06em; text-transform:uppercase; }
+/* The momentum reading rides the hover-hidden controls row and overrides it back to
+   visible, so it reads at rest and the row's buttons still wait to be asked for. */
+.pl-arcmeter{ visibility:visible; display:inline-flex; align-items:center; gap:3px; margin-right:6px; flex:0 0 auto; }
+.pl-arcmeter .pl-arcspark{ margin-left:0; }
+.pl-arcmeter .pl-arcpct{ margin-left:0; }
+/* Analysis wears the map bar's Explore type — same family, size, weight, tracking and
+   caps — because it is the same kind of control: a NAMED door to an AI reading, sitting
+   in a row of icons. [Jeremy, v.424] */
+/* Qualified with the tag on purpose. `.pl-partic` sits LATER in this stylesheet, so a
+   bare `.pl-arcanalyse` ties on specificity and loses on order — which is how the size
+   silently came out as .pl-partic's 10px rather than Explore's 9.5px, matching to the
+   eye and not on the page. Specificity, not order. [v.424] */
+button.pl-arcanalyse{ width:auto; height:auto; gap:4px; padding:2px 9px; font-family:var(--sans); font-size:9.5px; font-weight:600; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-soft); background:transparent; border:1px dashed var(--ink-faint); border-radius:13px; white-space:nowrap; }
+button.pl-arcanalyse:hover{ color:var(--ink); border-color:var(--gold); }
+.pl-arcanalyse .ai-star{ color:var(--gold,#c8791f); font-size:1.05em; line-height:1; }
+body.eink .pl-arcanalyse{ border-style:solid; border-color:#000; color:#000; }
 /* the goalposts a card can pin, inside the card editor */
 .pl-cardpop-goals{ display:flex; flex-wrap:wrap; gap:6px; align-items:center; padding:0 16px 9px; }
 .pl-goals-lab{ font-family:var(--sans); font-size:9.5px; font-weight:800; letter-spacing:.06em; text-transform:uppercase; color:#9a938a; }
@@ -53825,20 +53968,40 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
       var arc=(data.arcs||{})[c.id]||null;
       var ahead=document.createElement('div'); ahead.className='pl-thead';
       var apill=document.createElement('button'); apill.type='button'; apill.className='pl-threadpill pl-arcpill'+(arc&&arc.shape?(' arc-shape-'+aesc(arc.shape)):'');
-      apill.textContent=c.name||'arc…';
-      apill.title='Open this arc — what changes, what drives it, what it costs, and its goalposts';
+      /* **The writer's own name for the arc wins.** `c.name` is the column's COMPUTED
+         label — "who · what changes" — which is the right thing to read while the arc is
+         unnamed and the wrong thing the moment it is not. A name is the writer's decision
+         about what this arc is called; the grid should call it that. [Jeremy, v.424] */
+      apill.textContent=((arc && arc.name && String(arc.name).trim()) ? String(arc.name).trim() : (c.name||'arc…'));
+      apill.title=(arc && arc.name && String(arc.name).trim() && c.name && c.name!==String(arc.name).trim())
+        ? (c.name + ' — open this arc: what changes, what drives it, what it costs, and its goalposts')
+        : 'Open this arc — what changes, what drives it, what it costs, and its goalposts';
       apill.addEventListener('click', function(e){ e.stopPropagation(); colKindOf(c).setup(c); });
       ahead.appendChild(apill);
-      /* the momentum line, small — the same sparkline the arc chip carries, so the
-         column says at a glance how far the change has landed */
-      if(arc){ try{ var mom=arcMomentum(arc); var sp=arcSparkline(mom); sp.classList.add('pl-arcspark'); ahead.appendChild(sp);
-        var pc=document.createElement('span'); pc.className='pl-arcpct'; pc.textContent=(mom.series[mom.N-1]||0)+'%'; ahead.appendChild(pc); }catch(err){} }
-      h.appendChild(ahead);
+      h.appendChild(ahead);   // the pill alone, centred — the momentum reading moved down beside Analysis [v.424]
       var actrls=document.createElement('div'); actrls.className='pl-thctrls';
-      /* "Analysis" carries no ✦ deliberately. It is navigation to a page that has its
-         own AI action; a control that OPENS an AI reading is not itself AI, and giving
-         it a star would hand it to the gating sweep and hide it. [v.418] */
-      var anb=document.createElement('button'); anb.type='button'; anb.className='pl-partic pl-arcanalyse'; anb.textContent='Analysis';
+      /* Momentum — the sparkline and the percentage together, immediately left of the
+         Analysis button they are a one-glance summary of. [Jeremy, v.424]
+
+         They sit in the controls row but stay VISIBLE while that row is hidden:
+         `.pl-thctrls` is `visibility:hidden` until the column is hovered, and a child may
+         set `visibility:visible` against a hidden parent. So the reading is always on the
+         page, ◀ ▶ × still appear only on hover, and — because a `visibility:hidden` box
+         still occupies its space — nothing moves when the pointer arrives. */
+      if(arc){ try{ var mom=arcMomentum(arc);
+        var met=document.createElement('span'); met.className='pl-arcmeter';
+        met.title='How much of this arc has landed on the page';
+        var sp=arcSparkline(mom); sp.classList.add('pl-arcspark'); met.appendChild(sp);
+        var pc=document.createElement('span'); pc.className='pl-arcpct'; pc.textContent=(mom.series[mom.N-1]||0)+'%'; met.appendChild(pc);
+        actrls.appendChild(met); }catch(err){} }
+      /* The ✧ says there is an AI reading behind this door — but the door itself is
+         navigation, so `.pl-arcanalyse` is DENIED in the gating sweep and the star INSIDE
+         it is tagged instead. Star it without denying it and the sweep takes the whole
+         button when signed out, which is exactly how v.418 lost every arc on the page.
+         **A control that OPENS an AI reading is not itself AI** — it may say so, it may
+         not become it. [Jeremy asked for the star, v.424] */
+      var anb=document.createElement('button'); anb.type='button'; anb.className='pl-partic pl-arcanalyse';
+      anb.innerHTML='<span class="ai-star">✧</span> Analysis';
       anb.title='Read this arc section by section';
       anb.addEventListener('click', function(e){ e.stopPropagation(); openArcAnalysis(c.id); });
       actrls.appendChild(anb);
@@ -55595,6 +55758,35 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     window.__dystArcsList=function(){ return arcsList().map(arcInfoObj); };
     window.__dystArcsForSubject=function(key){ return arcsForSubject(key).map(arcInfoObj); };
     window.__dystArcInfo=function(id){ var a=arcsMap()[id]; return a?arcInfoObj(a):null; };
+    /* Everything the notepad's arc notes section draws, read in one go from the arcs
+       module that owns it. **The notepad is a second WINDOW onto the arc, never a second
+       copy** — nothing here is stored on the notepad's side, so there is no pair of
+       stores to keep in step. [v.424] */
+    window.__dystArcCard=function(id){ try{
+      var arc=arcsMap()[id]; if(!arc) return null;
+      var w=arcSubjWord(arc.subject);
+      return { id:arc.id,
+               label:arcDisplayLabel(arc),
+               name:(arc.name||'').trim(),
+               shape:arc.shape||'',
+               subject:arc.subject||'',
+               subjectName:arcSubjName(arc.subject)||'',
+               subjectCat:(w&&w.cat)||'',
+               noteKey:arcNoteKey(arc),
+               facets:arcFacets(arc.id),
+               cost:(arc.cost||'').trim(),
+               drivers:colKeyEls({ kind:'arc', id:arc.id }) };
+    }catch(e){ return null; } };
+    /* Open an arc's notes the way `openThreadNotes` opens a thread's — same shape, so the
+       grid, the rail and any future caller all reach it the one way. */
+    window.__dystArcNotes=function(id){ try{
+      state.npCatFilter='arcs';
+      if(typeof window.npSelect==='function') window.npSelect('arc:'+id);
+      document.body.classList.add('np-open');
+      var t=document.getElementById('npTab'); if(t){ var l=t.querySelector('.npt-lbl'); if(l) l.textContent='Hide'; }
+      if(typeof window.renderNpCard==='function') window.renderNpCard();
+      if(typeof window.renderNpElements==='function') window.renderNpElements();
+    }catch(e){} };
     window.__dystOpenArc=function(id){ try{ openArcCard(id); }catch(e){} };
     window.__dystNewArc=function(key, open){ try{ var a=newArcFor(key); if(open!==false){ openArcCard(a.id); } return a.id; }catch(e){ return null; } };
     // Read-only analysis for the notepad's @arc: sub-tab — the summary + each beat's on-the-page status and question.
@@ -59228,7 +59420,12 @@ body.ai-capped .pt-grouphd.ai-grouphd-empty{ display:none !important; }
        instead (see EXTRA), so the shortcut goes and the arc stays. Same for the
        dossier's arc links. A control that OPENS an AI reading is not itself AI. */
     '.arch-chip',
-    '.dossier-arclink'
+    '.dossier-arclink',
+    /* v.424 — the Plot grid's "✧ Analysis" button. Same case one surface along: the star
+       announces the AI reading on the page it opens, the button itself only navigates
+       there. Denied here, and the ✧ inside it tagged in EXTRA, so signed out the star
+       goes and the way into the analysis stays. */
+    '.pl-arcanalyse'
   ];
   var DENY_ANCESTOR = '#aboutPage,#aiModelPanel,#aiConsent,svg';
 
@@ -59255,6 +59452,7 @@ body.ai-capped .pt-grouphd.ai-grouphd-empty{ display:none !important; }
     ['#rcAi',                               'deep'],  // the recap's AI reflection — no ✦ of its own
     ['.arch-chip-ai',                       'deep'],  // the ✦ on an arc chip — the shortcut, not the arc
     ['.dossier-arclink .da-star',           'deep'],  // ditto, on an element's dossier
+    ['.pl-arcanalyse .ai-star',             'deep'],  // ditto, on the Plot grid's Analysis button (v.424)
     ['.fp-book',                            'deep'],  // the wiki book on a focus pill
     ['.fb-dd-wiki',                         'deep'],  // the wiki button in the focus-bar dropdown
     // Whole panels that are AI end to end. None carries a ✦ of its own, and leaving
