@@ -28031,6 +28031,8 @@ function renderWiki(){
     var empty = document.createElement('div'); empty.className = 'wk-doc-empty';
     empty.textContent = 'Add elements to your map and write — this page fills itself in as you go.';
     body.appendChild(empty);
+  } else if (typeof wikiRenderWoven === 'function'){
+    wikiRenderWoven(body, els, _hasDoc);
   } else {
     /* **The computed record is the wiki, whether or not an AI wiki exists.** [Jeremy,
        v.436: "if the wiki is already ai generated does it not do the deterministic?"]
@@ -32238,6 +32240,138 @@ function wikiElementFacts(el, ch){
    model the .md and .docx exports read, rendered as ONE document for the page.
    `opts.chaptersOnly` returns just the three structural chapters, for appending beneath
    an AI-written wikiDoc that has never contained them. [v.435] */
+/* Split an AI-written wikiDoc into its sections and match each to the element it is
+   about. Returns { byKey:{elKey: markdown}, rest:[{title, md}] }.
+
+   Matching is deliberately conservative — an element's NAME, then its type, both on a
+   word boundary, longest name first so "Mara" cannot claim a section about "Maranth".
+   Anything unmatched goes to `rest` and is shown whole rather than being forced into an
+   entry it may not belong to. [v.437] */
+function wikiSplitDoc(md, els){
+  var out = { byKey:{}, rest:[] };
+  try {
+    var lines = String(md || '').replace(/\r/g, '').split('\n');
+    var secs = [], cur = null;
+    lines.forEach(function(ln){
+      var m = ln.match(/^(#{2,4})\s+(.*)$/);
+      if (m){ if (cur) secs.push(cur); cur = { title:m[2].trim(), depth:m[1].length, body:[] }; }
+      else if (cur) cur.body.push(ln);
+      else if (ln.trim()) { cur = { title:'', depth:2, body:[ln] }; }
+    });
+    if (cur) secs.push(cur);
+
+    var cands = (els || []).map(function(el){
+      return { key: el.cat + '|' + el.word,
+               names: [ (el.name || '').trim(), (el.word || '').trim() ].filter(Boolean) };
+    });
+    cands.sort(function(a, b){ return (b.names[0] || '').length - (a.names[0] || '').length; });
+
+    secs.forEach(function(sec){
+      var body = sec.body.join('\n').trim();
+      if (!sec.title && !body) return;
+      var hit = null;
+      if (sec.title){
+        var t = sec.title.toLowerCase();
+        for (var i = 0; i < cands.length && !hit; i++){
+          for (var j = 0; j < cands[i].names.length; j++){
+            var n = cands[i].names[j].toLowerCase();
+            if (!n) continue;
+            var re = new RegExp('(^|[^a-z0-9])' + n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '([^a-z0-9]|$)', 'i');
+            if (re.test(t)){ hit = cands[i].key; break; }
+          }
+        }
+      }
+      /* A heading that names an element but carries no prose is a stub — folding an
+         empty portrait into an entry would add a marked-as-AI blank. */
+      if (hit && body) out.byKey[hit] = (out.byKey[hit] ? (out.byKey[hit] + '\n\n') : '') + body;
+      else if (body || sec.title) out.rest.push({ title: sec.title, md: body });
+    });
+  } catch(e){}
+  return out;
+}
+/* ONE document, woven. [Jeremy, v.437]
+
+   Each element's entry is: its name, the reading (where it is, where it is not), then
+   **the portrait** — the AI's paragraph for that element, from the per-element cache or
+   from the section of the wikiDoc that names it — then **the record**: what was
+   established, the bonds, the arc, the prose, the observations. Portrait above record,
+   because a portrait is an introduction and a record is what you consult after it.
+
+   Every rendered block carries `wk-ai` or `wk-det`, which is what makes the two switches
+   in the Contents drawer possible: hiding a layer is then a CSS question rather than a
+   re-render, so the page does not jump and the scroll position survives. */
+function wikiRenderWoven(body, els, hasDoc){
+  var CH = (typeof wikiChapters === 'function') ? wikiChapters() : { bonds:{byKey:{}}, groups:[], cols:[], missing:[] };
+  var split = hasDoc ? wikiSplitDoc(state.session.wikiDoc, els) : { byKey:{}, rest:[] };
+
+  /* Render a markdown chunk and stamp the layer on every block it produced. The stamp
+     goes on the BLOCKS rather than on a wrapper so an entry can interleave the two
+     layers and still hide one of them cleanly. */
+  var put = function(md, layer){
+    if (!md || !String(md).trim()) return;
+    var frag = mdToWikiHtml(md);
+    Array.prototype.forEach.call(frag.children, function(n){ n.classList.add(layer === 'ai' ? 'wk-ai' : 'wk-det'); });
+    while (frag.firstChild) body.appendChild(frag.firstChild);
+  };
+  var note = function(text, cls){
+    var d = document.createElement('div'); d.className = 'wk-doc-p wk-computed-note ' + (cls || '');
+    d.textContent = text; body.appendChild(d); return d;
+  };
+
+  var lede = note('Everything in the record is read from what you have written — it needs no AI and is always current.'
+    + (hasDoc || (state.session && state.session.wikiAI && Object.keys(state.session.wikiAI).length)
+        ? ' The written portraits are the AI’s; use Contents on the left to show or hide either layer.'
+        : ' ✦ Update Wiki adds a written portrait to each entry.'));
+  lede.classList.add('wk-lede');
+
+  var lastCat = '';
+  els.forEach(function(el){
+    if (el.cat !== lastCat){ lastCat = el.cat; put('## ' + wikiCatName(el.cat), 'det'); }
+    var F = (typeof wikiElementFacts === 'function') ? wikiElementFacts(el, CH) : null;
+    put('### ' + (el.name ? (el.name + ' — ' + el.word) : el.word), 'det');
+    if (F && F.span) put('*' + F.span + (F.gaps.length ? ('  ·  absent ' + F.gaps.join(', ')) : '')
+      + '  ·  ' + F.mentions + ' mention' + (F.mentions === 1 ? '' : 's') + '*', 'det');
+
+    // the portrait — per-element cache first, then whatever section of the blob named it
+    var cache = (state.session && state.session.wikiAI) ? state.session.wikiAI[el.cat + '|' + el.word] : null;
+    var portrait = (cache && cache.text) ? String(cache.text) : (split.byKey[el.cat + '|' + el.word] || '');
+    if (portrait && portrait.trim()){
+      put(portrait.replace(/\n{2,}/g, '\n'), 'ai');
+      put('*▲ written by Dystoria’s AI — not your own words*', 'ai');
+    }
+
+    var rec = [];
+    if (F && F.established.length) F.established.forEach(function(x){ rec.push('- **' + x.lab + ':** ' + x.val); });
+    else if (el.attrs && el.attrs.length) rec.push('- **Characteristics:** ' + el.attrs.map(function(a){ return a.word; }).join(', '));
+    if (F && F.bonds.length){ rec.push('', '#### Bonds'); F.bonds.forEach(function(r){ rec.push('- ' + r); }); }
+    if (F && F.change.length){ rec.push('', '#### Change tracked'); F.change.forEach(function(r){ rec.push('- ' + r); }); }
+    if (F && F.quotes.length){ rec.push('', '#### In the prose'); F.quotes.forEach(function(q){ rec.push('- “' + q + '”'); }); }
+    if (F && F.look.length){ rec.push('', '#### Worth a look'); F.look.forEach(function(r){ rec.push('- ' + r); });
+      rec.push('*Observations, not verdicts — each may be exactly what you intended.*'); }
+    put(rec.join('\n'), 'det');
+  });
+  if (!els.length) put('*No elements yet — add some to your map, and this fills itself in.*', 'det');
+
+  // the three structural chapters — computed, and no AI pass has ever produced them
+  put(wikiComputedMarkdown({ chaptersOnly:true }), 'det');
+
+  /* Sections of the written wiki that did not name an element — an overview, a themes
+     essay. Kept whole and kept last, because a section we could not place is a fact
+     about our matching and not about the writer's document. */
+  if (split.rest.length){
+    var keep = split.rest.filter(function(r){ return (r.md && r.md.trim()) || r.title; });
+    if (keep.length){
+      put('## ✦ From the written wiki', 'ai');
+      note('Written by Dystoria’s AI — these sections are not about one element, so they are kept whole.', 'wk-ai-note').classList.add('wk-ai');
+      keep.forEach(function(r){
+        if (r.title) put('### ' + r.title, 'ai');
+        put(r.md, 'ai');
+      });
+    }
+  }
+  try { if (typeof enhanceReadingList === 'function') enhanceReadingList(body); } catch(e){}
+  try { if (window.__wikiNavRefresh) window.__wikiNavRefresh(); } catch(e){}
+}
 function wikiComputedMarkdown(opts){
   opts = opts || {};
   var CH = (typeof wikiChapters === 'function') ? wikiChapters() : { bonds:{byKey:{}}, groups:[], cols:[], missing:[] };
@@ -37892,9 +38026,13 @@ function init(){
     add('Story Bible (.docx)', 'The whole wiki as a Word document — every entry, the relationships, the groups, the threads and arcs', function(){ exportWikiDOCX(); });
     add('Web page (.html)', 'One self-contained file that opens in any browser', function(){ exportWikiFiles(); });
     var r = ev.currentTarget.getBoundingClientRect();
+    /* A button with no layout (the sub-bar mid-transition) reports a zero rect, and the
+       menu would open in the top-left corner of the window instead of under the control
+       that opened it — which reads as a different menu belonging to something else. */
+    var _ok = r.width > 0 && r.height > 0;
     m.style.position = 'fixed';
-    m.style.left = Math.max(8, Math.min(r.left, window.innerWidth - 230)) + 'px';
-    m.style.top = (r.bottom + 6) + 'px';
+    m.style.left = (_ok ? Math.max(8, Math.min(r.right - 210, window.innerWidth - 230)) : (window.innerWidth - 240)) + 'px';
+    m.style.top = (_ok ? (r.bottom + 6) : 150) + 'px';
     m.style.zIndex = 9600;
     document.body.appendChild(m);
     var close = function(e){ if (!m.contains(e.target)){ m.remove(); document.removeEventListener('mousedown', close, true); } };
@@ -49038,7 +49176,7 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.436';
+  var APP_VERSION = '2026.07.20.437';
   var APP_CHANGELOG = [
     { v:'2026.07.20.430', date:'August 14, 2026', notes:[
       '**Fixed: hovering an arc pill in the Plot grid made its title unreadable.** The arc pill borrows its shape from the thread pill, and came with a hover written for a dark pill \u2014 so the pale arc pill turned charcoal while its lettering stayed dark. It now keeps its parchment and takes a gold ring instead.'
@@ -61727,6 +61865,13 @@ body.ai-capped .pt-grouphd.ai-grouphd-empty{ display:none !important; }
 #wkNavBody .wkn-empty{ font-family:var(--serif); font-style:italic; font-size:13px; color:var(--ink-faint); padding:14px 12px; line-height:1.5; }
 #wkNavBody .wkn-sec{ display:block; width:100%; text-align:left; font-family:var(--sans); font-size:10px; font-weight:700; letter-spacing:.14em; text-transform:uppercase; color:var(--ink); background:none; border:none; border-radius:8px; padding:10px 10px 6px; margin-top:6px; cursor:pointer; }
 #wkNavBody .wkn-sec:first-child{ margin-top:0; }
+#wkNavBody .wkn-layers{ display:flex; flex-wrap:wrap; gap:5px; align-items:center; padding:2px 8px 12px; margin-bottom:8px; border-bottom:1px solid var(--line); }
+#wkNavBody .wkn-layers-lbl{ font-family:var(--sans); font-size:9px; font-weight:700; letter-spacing:.14em; text-transform:uppercase; color:var(--ink-faint); width:100%; margin-bottom:2px; }
+#wkNavBody .wkn-layer{ font-family:var(--sans); font-size:10px; font-weight:600; letter-spacing:.04em; border:1px solid var(--line); border-radius:12px; padding:4px 10px; cursor:pointer; background:transparent; color:var(--ink-faint); }
+#wkNavBody .wkn-layer:hover{ color:var(--ink); border-color:var(--ink-faint); }
+#wkNavBody .wkn-layer.on{ color:#241405; background:rgba(250,154,49,.16); border-color:var(--gold,#c8791f); }
+body.wk-hide-ai .wk-ai{ display:none !important; }
+body.wk-hide-det .wk-det{ display:none !important; }
 #wkNavBody .wkn-item{ display:block; width:100%; text-align:left; font-family:var(--serif); font-size:13.5px; line-height:1.35; color:var(--ink-soft); background:none; border:none; border-radius:8px; padding:5px 10px 5px 20px; cursor:pointer; }
 #wkNavBody .wkn-sec:hover, #wkNavBody .wkn-item:hover{ background:rgba(0,0,0,.055); color:var(--ink); }
 #wkNavBody .wkn-sec.on, #wkNavBody .wkn-item.on{ color:#241405; background:rgba(250,154,49,.16); box-shadow:inset 2px 0 0 var(--gold,#c8791f); }
@@ -61833,15 +61978,72 @@ body.eink #wkNavBody .wkn-sec.on, body.eink #wkNavBody .wkn-item.on{ background:
   /* Build the index from the RENDERED document, not from the markdown: what is
      on screen is the only thing a jump can land on, and it stays right through
      an incremental update without re-parsing anything. */
+  /* Show / hide the two layers of the document, for the whole document. [Jeremy, v.437]
+     A CSS class on <body> rather than a re-render: the page must not jump and the
+     writer's scroll position must survive the toggle. Per story, and remembered. */
+  var LAYER_KEY = 'dystoria.wiki.layers';
+  function layerState(){
+    var sid = (state.session && state.session.id) || '-';
+    var all = {}; try{ all = JSON.parse(localStorage.getItem(LAYER_KEY) || '{}') || {}; }catch(e){}
+    var v = all[sid] || {};
+    return { ai: v.ai !== false, det: v.det !== false, all: all, sid: sid };
+  }
+  function layerApply(){
+    var st = layerState();
+    document.body.classList.toggle('wk-hide-ai', !st.ai);
+    document.body.classList.toggle('wk-hide-det', !st.det);
+  }
+  function layerSet(which, on){
+    var st = layerState();
+    var v = { ai: st.ai, det: st.det };
+    v[which] = !!on;
+    /* Never both off — a blank page is not a view, and the writer would have no way to
+       tell it from a broken one. Turning the last layer off turns the other on. */
+    if (!v.ai && !v.det) v[which === 'ai' ? 'det' : 'ai'] = true;
+    st.all[st.sid] = v;
+    try{ localStorage.setItem(LAYER_KEY, JSON.stringify(st.all)); }catch(e){}
+    layerApply(); navRender();
+  }
+  window.__wikiLayerApply = layerApply;
+  function navLayerSwitches(){
+    var st = layerState();
+    var wrap = document.createElement('div'); wrap.className = 'wkn-layers';
+    var lab = document.createElement('div'); lab.className = 'wkn-layers-lbl'; lab.textContent = 'Show'; wrap.appendChild(lab);
+    var mk = function(which, text, title){
+      var b = document.createElement('button'); b.type = 'button';
+      b.className = 'wkn-layer' + (st[which] ? ' on' : '') + ' wkn-layer-' + which;
+      b.textContent = text; b.title = title;
+      b.addEventListener('click', function(e){ e.stopPropagation(); layerSet(which, !layerState()[which]); });
+      wrap.appendChild(b);
+    };
+    mk('det', 'The record', 'Everything computed from what you have written — appearances, bonds, arcs, your own prose');
+    /* **No ✦ on this label.** The #31 gating sweep tags any control whose text carries a
+       star as an AI surface and hides it while signed out — so '✦ Portraits' vanished for
+       exactly the reader who most needs it, the one with no AI who wants the record on
+       its own. This button does not invoke anything; it HIDES AI text that is already on
+       the page, and a switch that turns something off must not itself be gated by it.
+       [lesson 44, committed again: when you add a marker to a control, go and read what
+       reads markers.] */
+    mk('ai', 'Portraits', 'The paragraphs Dystoria’s AI has written about each element — hide them to read the record alone');
+    return wrap;
+  }
   function navRender(){
     ensureNav();
+    layerApply();
     var body = document.getElementById('wkNavBody'); if (!body) return;
-    var hs = headings();
+    /* Only headings that are actually ON SCREEN — a hidden layer's headings must not
+       appear in the index, or Contents offers jumps to nothing. */
+    var hs = headings().filter(function(h){ return h.offsetParent !== null; });
     if (!hs.length){
-      body.innerHTML = '<div class="wkn-empty">Nothing to jump to yet — press ✦ Update Wiki and this fills with your sections and elements.</div>';
+      body.innerHTML = '';
+      body.appendChild(navLayerSwitches());
+      var em = document.createElement('div'); em.className = 'wkn-empty';
+      em.textContent = 'Nothing to jump to yet — write, add elements, and this fills with your sections.';
+      body.appendChild(em);
       return;
     }
     var frag = document.createDocumentFragment();
+    frag.appendChild(navLayerSwitches());
     var pendingSec = null, secCount = 0;
     var flushCount = function(){
       if (pendingSec && secCount){
