@@ -9420,9 +9420,10 @@ function storyFacts(opts){
         try{ var _role=(w.storyRole&&String(w.storyRole).trim())||''; var _bkt=(w.bucket&&String(w.bucket).trim())||''; var _rl=[]; if(_role) _rl.push(_role); if(_bkt && _bkt.toLowerCase()!==_role.toLowerCase()) _rl.push(_bkt); if(_rl.length) det.push('role: '+_rl.join(' / ')); }catch(e2){}
         try{ var tr=(e.attrs||[]).map(function(a){ return (a&&(a.word||a))||''; }).filter(Boolean); if(tr.length) det.push('traits: '+tr.slice(0,8).join(', ')); }catch(e2){}
         try{ var m=w.motivation; if(m){ var mt=[]; if(m.want) mt.push('wants '+strip(m.want)); if(m.stake) mt.push('at stake: '+strip(m.stake)); if(mt.length) det.push(mt.join('; ')); } }catch(e2){}
-        try{ var r=(typeof wikiRelations==='function')?(wikiRelations(e)||[]):[]; if(r.length) det.push('relationships: '+r.slice(0,6).join('; ')); }catch(e2){}
+        try{ var r=(typeof wikiRelations==='function')?(wikiRelations(e)||[]):[];
+          if(r.length) det.push('relationships: '+r.slice(0,6).join('; ')+(r.length>6?(' (+'+(r.length-6)+' more not shown)'):'')); }catch(e2){}
         try{ if(typeof wordThreadIds==='function'){ var ti=wordThreadIds(w)||[]; if(ti.length){ var tn=ti.map(function(id){ var t=(typeof threadById==='function')?threadById(id):null; return t?t.name:''; }).filter(Boolean); if(tn.length) det.push('threads: '+tn.join(', ')); } } }catch(e2){}
-        try{ var note=strip(npn[(typeof wordKey==='function')?wordKey(w):'']); if(note){ if(note.length>noteCap) note=note.slice(0,noteCap)+'…'; det.push('note: '+note); } }catch(e2){}
+        try{ var note=strip(npn[(typeof wordKey==='function')?wordKey(w):'']); if(note){ var _cut=note.length>noteCap; if(_cut) note=note.slice(0,noteCap)+'…'; det.push('note: '+note+(_cut?' [note shortened]':'')); } }catch(e2){}
         lines.push('- '+head+' ('+meta+')'+(det.length?(' — '+det.join('; ')):''));
       });
       if(lines.length) out.push('Elements ('+shown+(more?('+'+more+' more'):'')+'):\n'+lines.join('\n'));
@@ -9459,6 +9460,21 @@ function storyFacts(opts){
         }
       }
     }catch(e){}
+    /* #42(e) — the wiki's open questions. They were read by Explore's grounding and by
+       the prompt generator, and were absent from the one block Continuity, Craft, Refract
+       and the Research sidebar all read. An open question is a fact about the story: it
+       is what the author has decided not to answer yet. [v.442] */
+    try{
+      var eq = (state && state.session && state.session.elementQuestions) || {};
+      var qs = [];
+      Object.keys(eq).forEach(function(k){
+        (eq[k] || []).forEach(function(it){
+          if (!it || it.resolved || !it.q) return;
+          if (qs.length < 12 && qs.indexOf(it.q) < 0) qs.push(it.q);
+        });
+      });
+      if (qs.length) out.push('Open questions the author has NOT answered yet (do not answer them either — they are deliberate):\n' + qs.map(function(q){ return '- ' + q; }).join('\n'));
+    }catch(e){}
     // narrative overlay (genre / period / theme + narration / mode) from the Plan guide words
     try{
       var plan=window.__dystPlan;
@@ -9480,7 +9496,11 @@ function storyFacts(opts){
     }catch(e){}
   }catch(e){}
   var s = out.join('\n\n');
-  if(s.length>maxChars) s = s.slice(0,maxChars)+'\n…';
+  /* **No silent caps** — the standing rule everywhere else in this codebase. A block that
+     stops mid-sentence with an ellipsis reads to the model as though the story simply
+     ends there; saying so costs one line and is the difference between a bounded ground
+     truth and a misleading one. [#42, v.442] */
+  if(s.length>maxChars) s = s.slice(0,maxChars) + '\n\n[This summary was cut short at ' + maxChars + ' characters — the story has more in it than is shown here.]';
   return s;
 }
 try{ window.storyFacts = storyFacts; }catch(e){}
@@ -22948,9 +22968,14 @@ async function runSessionSummary(wovenNames){
   // The prose that already existed before the session — passed as comparison context only, never graded.
   const priorProse = (start && start.trim() && start.trim() !== chunk.trim()) ? start.trim() : '';
   const words = (state.prompt && state.prompt.words) || [];
-  const goals = (state.focusKeys || []).map(k => { const w = words.find(x => wordKey(x) === k); return w ? elDisplayName(w) : null; }).filter(Boolean);
+  /* #42(c) — WITHOUT this fallback the recap printed "No focus elements were set" for a
+     session started from a card with two of them, because they lived in another section.
+     Measured, not inferred. [v.442] */
+  const _resolveEl = k => { let w = words.find(x => wordKey(x) === k);
+    if (!w && typeof npFindEl === 'function'){ try { w = npFindEl(k); } catch(_){} } return w || null; };
+  const goals = (state.focusKeys || []).map(k => { const w = _resolveEl(k); return w ? elDisplayName(w) : null; }).filter(Boolean);
   const traitDossier = (state.focusKeys || []).map(k => {
-    const w = words.find(x => wordKey(x) === k); if (!w) return null;
+    const w = _resolveEl(k); if (!w) return null;
     const bits = [];
     const tr = (w.attrs || []).map(a => a.word).filter(Boolean);
     if (tr.length) bits.push('traits: ' + tr.join(', '));
@@ -22969,7 +22994,10 @@ async function runSessionSummary(wovenNames){
     const gc = goalContext();
     const sys = feedbackSys();
     const _pf = (typeof getProfileContext === 'function') ? getProfileContext() : '';
+    let _rfacts = '';
+    try { if (typeof storyFacts === 'function') _rfacts = storyFacts({ maxChars: 2000 }) || ''; } catch(e){}
     const prompt = (_pf ? (_pf + '\n\n') : '') + (gc ? (gc + '\n\n') : '')
+      + (_rfacts ? ('THE STORY AS THE AUTHOR HAS RECORDED IT (so you know who and what the passage is referring to — **context only, never a checklist to grade the writing against**):\n' + _rfacts + '\n\n') : '')
       + (goals.length ? ('This session’s focus elements (sparks for the session, not targets to hit): ' + goals.join(', ') + '\n' + (wovenNames && wovenNames.length ? ('Made it onto the page: ' + wovenNames.join(', ') + '\n') : '') + '\n') : 'No focus elements were set — just respond to the writing itself.\n')
       + (traitDossier.length ? ('Background the writer has noted about these elements (context only — do NOT check the prose against it):\n' + traitDossier.join('\n') + '\n\n') : '')
       + ((state._writeAboutContext && (state._writeAboutContext.notes || state._writeAboutContext.prose)) ? ('The writer opened this session from “' + (state._writeAboutContext.label || 'a card') + '” (context only — background they were working from, NOT a checklist to grade against):\n' + (state._writeAboutContext.notes ? (state._writeAboutContext.notes.slice(0, 1200) + '\n') : '') + (state._writeAboutContext.prose ? ('Prior prose: ' + state._writeAboutContext.prose.slice(0, 900) + '\n') : '') + '\n') : '')   // R37 Phase 2b — inherited card context
@@ -23037,11 +23065,18 @@ async function generateSessionGoal(hostId){
     log.forEach(s => { if ((s.frame || 0) !== cf) return; (s.els || []).forEach(n => { const k = (n || '').toLowerCase(); if (!k || curSet.has(k) || seen.has(k)) return; seen.add(k); earlierEls.push(n); }); });
   } catch(e){}
   // clarify, per focus character, that a given name owns the character and its type/archetype/occupation is just a trait
+  /* #42(b) — resolve a focus element from ANYWHERE in the story, not only from the
+     section the writer happens to be standing in. `goals` above has had this fallback for
+     ages; `castNotes`, `elemDossier` and the question pick did not, so an element focused
+     from a card three sections away arrived NAMED AND NOTHING MORE — its traits, its
+     motivation and its notes silently dropped. [v.442] */
+  const _resolveEl = k => { let w = words.find(x => wordKey(x) === k);
+    if (!w && typeof npFindEl === 'function'){ try { w = npFindEl(k); } catch(_){} } return w || null; };
   let castNotes = '';
   try {
     const cn = [];
     (state.focusKeys || []).forEach(k => {
-      const w = words.find(x => wordKey(x) === k); if (!w || w.role !== 'being') return;
+      const w = _resolveEl(k); if (!w || w.role !== 'being') return;
       const type = (w.word || '').trim();
       if (w.name){
         cn.push('"' + elDisplayName(w) + '" is ONE character — "' + w.name + '" is their name, and "' + type + '" is just a descriptive trait of ' + w.name + ' (their type/archetype/occupation). Refer to this character as "' + w.name + '", never as a separate "' + type + '" person.');
@@ -23059,7 +23094,7 @@ async function generateSessionGoal(hostId){
     const stripHtml = h => { const dv = document.createElement('div'); dv.innerHTML = h || ''; return (dv.textContent || '').replace(/\s+/g, ' ').trim(); };
     const parts = [];
     (state.focusKeys || []).forEach(k => {
-      const w = words.find(x => wordKey(x) === k); if (!w) return;
+      const w = _resolveEl(k); if (!w) return;
       const lines = [];
       const traits = (w.attrs || []).map(a => a.word).filter(Boolean);
       if (traits.length) lines.push('  Traits: ' + traits.join(', '));
@@ -23114,11 +23149,22 @@ async function generateSessionGoal(hostId){
     try {
       if (!prevPrompts.length && Math.random() < 0.34){
         const eqs = [];
-        (state.focusKeys || []).forEach(k => { const w = words.find(x => wordKey(x) === k); if (w && typeof elementQuestionsFor === 'function') elementQuestionsFor(w).forEach(q => eqs.push(q)); });
+        (state.focusKeys || []).forEach(k => { const w = _resolveEl(k); if (w && typeof elementQuestionsFor === 'function') elementQuestionsFor(w).forEach(q => eqs.push(q)); });
         if (eqs.length) chosenQ = eqs[Math.floor(Math.random() * eqs.length)];
       }
     } catch(e){}
-    const prompt = (_gc ? (_gc + '\nLet this goal shape the prompt’s mood, angle, and style (without naming the goal in the prompt itself).\n\n') : '')
+    /* #42(a) — the story's own facts, as RECOGNITION material. Every other AI surface
+       sends this block; the one place a writer is about to add new prose did not, so a
+       prompt could name a character the model knew nothing else about.
+
+       Framed deliberately: *who these names refer to*, not a checklist. The standing rule
+       is **surfaced, never scored against a target** — and #25's live test of it is that
+       **if the plan enters the prompt, the reading becomes a grade.** So the block is
+       explicitly for recognition, and explicitly not a list of things to include. */
+    let _facts = '';
+    try { if (typeof storyFacts === 'function') _facts = storyFacts({ maxChars: 2600 }) || ''; } catch(e){}
+    const prompt = (_facts ? ('WHAT THESE NAMES REFER TO (the story as the author has recorded it — for RECOGNITION only; it is NOT a list of things the prompt must include, and never contradict it):\n' + _facts + '\n\n') : '')
+      + (_gc ? (_gc + '\nLet this goal shape the prompt’s mood, angle, and style (without naming the goal in the prompt itself).\n\n') : '')
       + (_partCtx ? (_partCtx + '\nLet this stage colour where the beat sits in the arc.\n\n') : '')
       + (_arcCtx ? ('Character arc stages (OPTIONAL angle — use ONLY if it sharpens the spark, and phrase openly as a possibility, never a foregone conclusion; ignore otherwise):\n' + _arcCtx + '\n\n') : '')
       + (goals.length ? ('This session\'s focus elements: ' + goals.join(', ') + '\n') : '')
@@ -49452,7 +49498,7 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.441';
+  var APP_VERSION = '2026.07.20.442';
   var APP_CHANGELOG = [
     { v:'2026.07.20.430', date:'August 14, 2026', notes:[
       '**Fixed: hovering an arc pill in the Plot grid made its title unreadable.** The arc pill borrows its shape from the thread pill, and came with a hover written for a dark pill \u2014 so the pale arc pill turned charcoal while its lettering stayed dark. It now keeps its parchment and takes a gold ring instead.'
@@ -54535,7 +54581,13 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     if(!col) return [];
     if(col.kind==='arc'){
       var arc=(data.arcs||{})[col.id]; if(!arc) return [];
-      return (arc.drivers||[]).map(function(k){
+      /* #42(d) — **the arc's SUBJECT leads.** A card seeded only from `arc.drivers`, so
+         the person the arc is actually about was not on it, and was therefore not a focus
+         element when the writer pressed "Write about this" unless she also happened to be
+         a driver. Subject first, then the drivers, deduped. [v.442] */
+      var _keys=[]; if(arc.subject) _keys.push(arc.subject);
+      (arc.drivers||[]).forEach(function(k){ if(k && _keys.indexOf(k)<0) _keys.push(k); });
+      return _keys.map(function(k){
         var w=arcSubjWord(k);
         return { nkey:k, label:(arcSubjName(k)||(w&&(w.name||w.word))||'—'), cat:(w&&w.cat)||'', kind:(w&&w.role)||'' };
       }).filter(function(e){ return !!e.nkey; });
