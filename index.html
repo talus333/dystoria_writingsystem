@@ -27866,8 +27866,33 @@ function wikiRelations(el){
   }catch(e){}
   return [...new Set(out)];
 }
+/* The story's prose with the page's FURNITURE removed — the section diamonds and the
+   section headings. `editorText()` returns everything in the editor, chrome included, so
+   a sentence quoted from it could arrive as “2 Section 2 Bex did not speak…”. That has
+   always been true; it only became visible when the quotes were set in a document next
+   to the writer's own sentences. [v.434] */
+function wikiProseText(){
+  try {
+    var ed = document.getElementById('editor'); if (!ed) return (typeof editorText === 'function') ? editorText() : '';
+    var clone = ed.cloneNode(true);
+    Array.prototype.forEach.call(clone.querySelectorAll('.sec-mark, h3, .dia'), function(n){ n.remove(); });
+    /* Join the BLOCKS, don't take `textContent` of the container. `textContent`
+       concatenates block elements with no separator, so removing the headings between
+       two paragraphs welds them into "…keep.Bex did not speak…" — and the sentence
+       splitter, which needs ". ", then treats the pair as one sentence and quotes the
+       whole thing. The first fix traded visible furniture for an invisible join. */
+    var blocks = clone.querySelectorAll('p, div, li, blockquote');
+    var out = [];
+    if (blocks.length) Array.prototype.forEach.call(blocks, function(n){
+      if (n.querySelector && n.querySelector('p, div, li, blockquote')) return;   // containers: take their children instead, never both
+      var t = (n.textContent || '').replace(/\s+/g, ' ').trim(); if (t) out.push(t);
+    });
+    else { var t0 = (clone.textContent || '').replace(/\s+/g, ' ').trim(); if (t0) out.push(t0); }
+    return out.join('\n');
+  } catch(e){ return (typeof editorText === 'function') ? editorText() : ''; }
+}
 function wikiAppearances(el){
-  const text = editorText(); if (!text.trim()) return [];
+  const text = wikiProseText(); if (!text.trim()) return [];
   const sentences = text.replace(/\s+/g, ' ').split(/(?<=[.!?…])\s+/);
   const terms = [el.word]; if (el.name) terms.push(el.name);
   const hits = [];
@@ -32645,6 +32670,294 @@ function _dxStyles(W){
         pPr: sgl + '<w:ind w:firstLine="0"/><w:jc w:val="right"/>' })
     + '</w:styles>';
 }
+/* The reference stylesheet. Every paragraph in the bible names one of these, so the
+   document is editable as a document rather than as a pile of formatting. */
+function _bxStyles(W){
+  var SER = 'Georgia', SAN = 'Calibri';
+  var S = function(id, name, opts){
+    opts = opts || {};
+    return '<w:style w:type="paragraph"' + (opts.deflt ? ' w:default="1"' : '') + ' w:styleId="' + id + '">'
+      + '<w:name w:val="' + name + '"/>'
+      + (opts.basedOn ? '<w:basedOn w:val="' + opts.basedOn + '"/>' : '')
+      + (opts.next ? '<w:next w:val="' + opts.next + '"/>' : '')
+      + '<w:qFormat/>'
+      + (opts.uiPriority != null ? '<w:uiPriority w:val="' + opts.uiPriority + '"/>' : '')
+      + (opts.pPr ? '<w:pPr>' + opts.pPr + '</w:pPr>' : '')
+      + (opts.rPr ? '<w:rPr>' + opts.rPr + '</w:rPr>' : '')
+      + '</w:style>';
+  };
+  var sgl = '<w:spacing w:after="120" w:line="264" w:lineRule="auto"/>';   // single-ish, a little air after
+  return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+    + '<w:styles xmlns:w="' + W + '">'
+    + '<w:docDefaults><w:rPrDefault><w:rPr>'
+    +   '<w:rFonts w:ascii="' + SER + '" w:hAnsi="' + SER + '" w:cs="' + SER + '"/><w:sz w:val="22"/><w:szCs w:val="22"/>'
+    + '</w:rPr></w:rPrDefault><w:pPrDefault><w:pPr>' + sgl + '</w:pPr></w:pPrDefault></w:docDefaults>'
+    // Body: no first-line indent. A reference entry is read by scanning, and an indent
+    // is a signal for continuous prose, which this is not.
+    + S('Normal', 'Normal', { deflt:true, pPr: sgl + '<w:ind w:firstLine="0"/><w:jc w:val="left"/>' })
+    // A chapter starts a page — the page break lives in the STYLE, as it does in #16.
+    + S('Heading1', 'heading 1', { basedOn:'Normal', next:'Normal', uiPriority:9,
+        pPr: '<w:keepNext/><w:pageBreakBefore/><w:spacing w:before="0" w:after="240" w:line="240" w:lineRule="auto"/><w:ind w:firstLine="0"/><w:outlineLvl w:val="0"/>',
+        rPr: '<w:rFonts w:ascii="' + SAN + '" w:hAnsi="' + SAN + '"/><w:b/><w:sz w:val="40"/>' })
+    // An entry. NOT a page break — a bible with one character per page is a bible nobody
+    // scrolls through.
+    + S('Heading2', 'heading 2', { basedOn:'Normal', next:'Normal', uiPriority:9,
+        pPr: '<w:keepNext/><w:spacing w:before="320" w:after="60" w:line="240" w:lineRule="auto"/><w:ind w:firstLine="0"/><w:outlineLvl w:val="1"/>',
+        rPr: '<w:rFonts w:ascii="' + SAN + '" w:hAnsi="' + SAN + '"/><w:b/><w:sz w:val="28"/>' })
+    + S('Heading3', 'heading 3', { basedOn:'Normal', next:'Normal', uiPriority:9,
+        pPr: '<w:keepNext/><w:spacing w:before="200" w:after="40" w:line="240" w:lineRule="auto"/><w:ind w:firstLine="0"/><w:outlineLvl w:val="2"/>',
+        rPr: '<w:rFonts w:ascii="' + SAN + '" w:hAnsi="' + SAN + '"/><w:b/><w:smallCaps/><w:sz w:val="20"/><w:color w:val="6B5B3E"/>' })
+    // The reading under a name: where it appears, where it does not, how often.
+    /* A label INSIDE an entry — "Bonds", "In the prose". Looks like a small heading and
+       is deliberately NOT one: no `outlineLvl`, so it never reaches the Navigation Pane
+       or an automatic table of contents. An outline that lists "In the prose" once per
+       character is worse than no outline. */
+    + S('BibleLabel', 'Bible Label', { basedOn:'Normal', next:'Normal', uiPriority:1,
+        pPr: '<w:keepNext/><w:spacing w:before="180" w:after="40" w:line="240" w:lineRule="auto"/><w:ind w:firstLine="0"/>',
+        rPr: '<w:rFonts w:ascii="' + SAN + '" w:hAnsi="' + SAN + '"/><w:b/><w:smallCaps/><w:sz w:val="18"/><w:color w:val="6B5B3E"/>' })
+    + S('BibleMeta', 'Bible Meta', { basedOn:'Normal', next:'Normal', uiPriority:1,
+        pPr: '<w:spacing w:before="0" w:after="140" w:line="240" w:lineRule="auto"/><w:ind w:firstLine="0"/>',
+        rPr: '<w:rFonts w:ascii="' + SAN + '" w:hAnsi="' + SAN + '"/><w:i/><w:sz w:val="18"/><w:color w:val="7A6A52"/>' })
+    // A fact or a bond. Hanging indent so a line that wraps stays under its own text.
+    + S('BibleItem', 'Bible Item', { basedOn:'Normal', next:'BibleItem', uiPriority:1,
+        pPr: '<w:spacing w:after="40" w:line="252" w:lineRule="auto"/><w:ind w:left="340" w:hanging="220"/>' })
+    // Prose, quoted from the story — the one place the writer's own sentences appear.
+    + S('BibleQuote', 'Bible Quote', { basedOn:'Normal', next:'BibleQuote', uiPriority:1,
+        pPr: '<w:spacing w:after="80" w:line="252" w:lineRule="auto"/><w:ind w:left="340"/>',
+        rPr: '<w:i/><w:color w:val="3A342A"/>' })
+    // The chapter's own explanatory line.
+    + S('BibleLede', 'Bible Lede', { basedOn:'Normal', next:'Normal', uiPriority:1,
+        pPr: '<w:spacing w:after="220" w:line="252" w:lineRule="auto"/><w:ind w:firstLine="0"/>',
+        rPr: '<w:i/><w:color w:val="6B5B3E"/>' })
+    /* The AI marker. A style of its own rather than a run of italics, so a reader can see
+       at a glance which paragraphs are the machine's and — because it is a NAMED style —
+       select them all at once in Word and delete the lot if they want a document that is
+       only their own words. [Jeremy: "both but the ai paragraphs are marked as such"] */
+    + S('BibleAI', 'Bible AI Note', { basedOn:'Normal', next:'Normal', uiPriority:1,
+        pPr: '<w:spacing w:before="0" w:after="200" w:line="252" w:lineRule="auto"/><w:ind w:left="340"/>',
+        rPr: '<w:rFonts w:ascii="' + SAN + '" w:hAnsi="' + SAN + '"/><w:i/><w:sz w:val="18"/><w:color w:val="7A6A52"/>' })
+    + S('BibleTitle', 'Bible Title', { basedOn:'Normal', next:'Normal', uiPriority:1,
+        pPr: '<w:spacing w:before="2600" w:after="120" w:line="240" w:lineRule="auto"/><w:ind w:firstLine="0"/><w:jc w:val="center"/>',
+        rPr: '<w:rFonts w:ascii="' + SAN + '" w:hAnsi="' + SAN + '"/><w:b/><w:sz w:val="56"/>' })
+    + S('BibleSub', 'Bible Subtitle', { basedOn:'Normal', next:'Normal', uiPriority:1,
+        pPr: '<w:spacing w:after="0" w:line="240" w:lineRule="auto"/><w:ind w:firstLine="0"/><w:jc w:val="center"/>',
+        rPr: '<w:rFonts w:ascii="' + SAN + '" w:hAnsi="' + SAN + '"/><w:sz w:val="22"/><w:color w:val="7A6A52"/>' })
+    + S('Header', 'header', { basedOn:'Normal', next:'Normal', uiPriority:99,
+        pPr: '<w:spacing w:after="0" w:line="240" w:lineRule="auto"/><w:ind w:firstLine="0"/><w:jc w:val="right"/>',
+        rPr: '<w:rFonts w:ascii="' + SAN + '" w:hAnsi="' + SAN + '"/><w:sz w:val="16"/><w:color w:val="9A8B70"/>' })
+    + '</w:styles>';
+}
+/* ============================================================================
+   The wiki, as the document you hand somebody. [#17, v.434]
+   Everything here comes from `wikiChapters()` and `wikiElementFacts()` — the same
+   model the in-app wiki and the .md export read, so there is one assembler and this
+   is a RENDERER. A second gatherer would have drifted from the first one.
+   ========================================================================== */
+function exportWikiDOCX(){
+  try {
+    var story = (state.session && state.session.name) || 'Dystoria story';
+    var els = (typeof wikiGather === 'function') ? wikiGather() : [];
+    var CH = (typeof wikiChapters === 'function') ? wikiChapters() : { bonds:{byKey:{}}, groups:[], cols:[], missing:[] };
+    var W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
+    var xml = '';
+    var P = function(runs, o){ xml += _dxPara(runs, o || {}); };
+    var H = function(t, lvl){ P(_dxRun(t), { style:'Heading' + (lvl || 1) }); };
+    var item = function(t){ P(_dxRun('– ' + t), { style:'BibleItem' }); };
+    var labelled = function(lab, val){
+      P(_dxRun('– ' + lab + ': ', { bold:true }) + _dxRun(val), { style:'BibleItem' });
+    };
+
+    // ---- title page ----
+    P(_dxRun(story), { style:'BibleTitle' });
+    P(_dxRun('Story Bible'), { style:'BibleSub' });
+    P(_dxRun('Compiled by Dystoria · ' + new Date().toLocaleDateString()), { style:'BibleSub' });
+
+    // ---- what this document is ----
+    H('About this document');
+    P(_dxRun('Everything in this bible is drawn from what you have written and recorded in Dystoria — the elements and their characteristics, the relationships from every place the app keeps them, your groups, your threads and your arcs, and the sentences of your own prose in which each thing appears.'), { style:'Normal' });
+    P(_dxRun('Paragraphs written by Dystoria’s AI, where you have generated any, are marked as such and set in the “Bible AI Note” style — so you can see at a glance which words are yours, and select or remove them all at once if you would rather hand on a document that is only your own.'), { style:'Normal' });
+    if (CH.missing && CH.missing.length)
+      P(_dxRun('Not included in this build of the document: ' + CH.missing.join('; ') + '.'), { style:'BibleLede' });
+
+    // ---- the story in order ----
+    H('The story in order');
+    P(_dxRun('Every section, with the time that passes between them and the events that land in each.'), { style:'BibleLede' });
+    var frames = (state.frames || []);
+    if (!frames.length) P(_dxRun('No sections yet.'), { style:'Normal' });
+    frames.forEach(function(fr, fi){
+      var nm = ''; try { if (typeof npSectionName === 'function'){ var sn = npSectionName(fi); nm = (sn && (sn.name || sn.label)) || ''; } } catch(e){}   // .name is what the writer called it; .label is the numbered stand-in
+      if (!nm) nm = fr.stageName || ('Section ' + (fi + 1));
+      H('§' + (fi + 1) + ' · ' + nm, 2);
+      if (fr.gap) P(_dxRun(String(fr.gap)), { style:'BibleMeta' });
+      var evs = ((fr.prompt && fr.prompt.words) || []).filter(function(w){ return w.cat === 'event' && w.role === 'word'; })
+                 .map(function(w){ return w.name || w.word; });
+      if (evs.length) labelled('Events', evs.join(', '));
+    });
+
+    // ---- the elements ----
+    H('Characters, places and things');
+    P(_dxRun('One entry each. Where it appears, where it does not, what you have established about it, and the prose it appears in.'), { style:'BibleLede' });
+    if (!els.length) P(_dxRun('No elements yet.'), { style:'Normal' });
+    var lastCat = '';
+    els.forEach(function(el){
+      if (el.cat !== lastCat){ lastCat = el.cat; H(wikiCatName(el.cat), 2); }
+      var F = (typeof wikiElementFacts === 'function') ? wikiElementFacts(el, CH) : null;
+      var title = el.name ? (el.name + ' — ' + el.word) : el.word;
+      H(title, 3);
+      if (F && F.span){
+        P(_dxRun(F.span + (F.gaps.length ? ('   ·   absent ' + F.gaps.join(', ')) : '')
+          + '   ·   ' + F.mentions + ' mention' + (F.mentions === 1 ? '' : 's')), { style:'BibleMeta' });
+      }
+      var cache = (state.session && state.session.wikiAI) ? state.session.wikiAI[el.cat + '|' + el.word] : null;
+      if (cache && cache.text){
+        P(_dxRun(String(cache.text).replace(/\s+/g, ' ')), { style:'BibleQuote' });
+        P(_dxRun('▲ Written by Dystoria’s AI from the facts below — not your own words.'), { style:'BibleAI' });
+      }
+      if (F && F.established.length) F.established.forEach(function(x){ labelled(x.lab, x.val); });
+      else if (el.attrs && el.attrs.length) labelled('Characteristics', el.attrs.map(function(a){ return a.word; }).join(', '));
+      if (F && F.bonds.length){ P(_dxRun('Bonds'), { style:'BibleLabel' }); F.bonds.forEach(item); }
+      if (F && F.change.length){ P(_dxRun('Change tracked'), { style:'BibleLabel' }); F.change.forEach(item); }
+      var qs = (F ? F.quotes : []) || [];
+      if (qs.length){
+        P(_dxRun('In the prose'), { style:'BibleLabel' });
+        qs.forEach(function(q){ P(_dxRun('“' + q + '”'), { style:'BibleQuote' }); });
+      }
+      if (F && F.look.length){
+        P(_dxRun('Worth a look'), { style:'BibleLabel' });
+        F.look.forEach(item);
+        P(_dxRun('Observations, not verdicts — each may be exactly what you intended.'), { style:'BibleMeta' });
+      }
+    });
+
+    // ---- relationships ----
+    H('Relationships');
+    P(_dxRun('Every bond in the story, gathered from all five places Dystoria keeps them: the section maps, standing bonds, the member charts, the concept maps and the group structures.'), { style:'BibleLede' });
+    var keys = Object.keys(CH.bonds.byKey || {});
+    if (!keys.length) P(_dxRun('No relationships recorded yet.'), { style:'Normal' });
+    else {
+      var rows = keys.map(function(k){
+        var w = (typeof npFindEl === 'function') ? npFindEl(k) : null;
+        return { label: w ? ((typeof elDisplayName === 'function') ? elDisplayName(w) : (w.name || w.word)) : k, lines: CH.bonds.byKey[k] };
+      }).sort(function(a, b){ return String(a.label).localeCompare(String(b.label)); });
+      rows.forEach(function(r){
+        H(r.label, 2);
+        var seen = {};
+        r.lines.forEach(function(l){ if (seen[l.text]) return; seen[l.text] = 1; item(l.text); });
+      });
+    }
+
+    // ---- groups ----
+    H('Groups');
+    P(_dxRun('Who belongs to what, and the shape each group is drawn as.'), { style:'BibleLede' });
+    if (!CH.groups.length) P(_dxRun('No groups yet.'), { style:'Normal' });
+    CH.groups.forEach(function(gp){
+      H(gp.name + (gp.typeName ? ('   ·   ' + gp.typeName) : ''), 2);
+      if (gp.lensName) P(_dxRun('Drawn as a ' + gp.lensName.toLowerCase() + (gp.lensLede ? (' — ' + gp.lensLede.replace(/\.$/, '').toLowerCase()) : '') + '.'), { style:'BibleMeta' });
+      if (gp.sourced) P(_dxRun('Read from a chart built elsewhere rather than made here.'), { style:'BibleMeta' });
+      if (!gp.members.length) P(_dxRun('No members yet.'), { style:'Normal' });
+      gp.members.forEach(function(m){ item(m.label + (m.missing ? '  (no longer in the story)' : '')); });
+    });
+
+    // ---- threads and arcs ----
+    H('Threads and arcs');
+    P(_dxRun('Each storyline with what is at stake in it, and each arc as a per-section account of what changes.'), { style:'BibleLede' });
+    if (!CH.cols.length) P(_dxRun('No threads or arcs on the Plot grid yet.'), { style:'Normal' });
+    CH.cols.forEach(function(c){
+      H(c.name + (c.kind === 'arc' ? '   ·   arc' : (c.isMain ? '   ·   the main plot' : '   ·   thread')), 2);
+      if (c.arc){
+        if (c.arc.subject) P(_dxRun(c.arc.subject + ' — ' + c.arc.label + (c.arc.dim ? ('   [' + c.arc.dim + ']') : '')), { style:'BibleMeta' });
+        if (c.arc.from || c.arc.to) labelled('Changes', (c.arc.from || '…') + ' → ' + (c.arc.to || '…'));
+        labelled('On the page', c.arc.pct + '%');
+        if (c.arc.cost) labelled('Costs', c.arc.cost + (c.arc.costDesc ? (' — ' + c.arc.costDesc) : ''));
+        (c.arc.goalposts || []).forEach(function(g){
+          labelled(g.label, g.sec != null ? ('lands in §' + (g.sec + 1))
+                   : (g.land ? ('lands wherever “' + g.land + '” appears in the prose') : 'not yet placed'));
+        });
+      }
+      if (c.stake) labelled('Stake', c.stake);
+      if (c.shape) labelled('Shape', c.shape);
+      if (c.description) P(_dxRun(c.description), { style:'Normal' });
+      if (c.els && c.els.length){
+        labelled('Key elements', c.els.map(function(e){ return e.label; }).join(', '));
+        c.els.filter(function(e){ return e.note; }).forEach(function(e){ item(e.label + ' — ' + e.note); });
+      }
+      if (c.cards && c.cards.length){
+        P(_dxRun('Section by section'), { style:'BibleLabel' });
+        c.cards.forEach(function(cd){
+          var nm = ''; try { if (typeof npSectionName === 'function'){ var sn = npSectionName(cd.sec); nm = (sn && (sn.name || sn.label)) || ''; } } catch(e){}
+          P(_dxRun('§' + (cd.sec + 1) + (nm ? (' · ' + nm) : '') + (cd.title ? (' — ' + cd.title) : ''), { bold:true }), { style:'Normal' });
+          if (cd.text) P(_dxRun(cd.text), { style:'Normal' });
+          (cd.els || []).filter(function(e){ return e.note; }).forEach(function(e){ item(e.label + ' — ' + e.note); });
+        });
+      }
+    });
+
+    // ---- package ----
+    var pgW = 12240, pgH = 15840, mar = 1080, hdrDist = 620;
+    var header = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+      + '<w:hdr xmlns:w="' + W + '"><w:p><w:pPr><w:pStyle w:val="Header"/></w:pPr>'
+      + _dxRun(story + ' · Story Bible · ')
+      + '<w:r><w:fldChar w:fldCharType="begin"/></w:r>'
+      + '<w:r><w:instrText xml:space="preserve"> PAGE </w:instrText></w:r>'
+      + '<w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>1</w:t></w:r>'
+      + '<w:r><w:fldChar w:fldCharType="end"/></w:r>'
+      + '</w:p></w:hdr>';
+    var doc = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+      + '<w:document xmlns:w="' + W + '" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body>' + xml
+      + '<w:sectPr><w:headerReference r:id="rId2" w:type="default"/><w:titlePg/>'
+      +   '<w:pgSz w:w="' + pgW + '" w:h="' + pgH + '"/>'
+      +   '<w:pgMar w:top="' + mar + '" w:right="' + mar + '" w:bottom="' + mar + '" w:left="' + mar + '" w:header="' + hdrDist + '" w:footer="' + hdrDist + '" w:gutter="0"/>'
+      + '</w:sectPr></w:body></w:document>';
+    var core = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+      + '<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties"'
+      + ' xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/"'
+      + ' xmlns:dcmitype="http://purl.org/dc/dcmitype/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
+      + '<dc:title>' + _dxEsc(story) + ' — Story Bible</dc:title></cp:coreProperties>';
+    var app = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+      + '<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"'
+      + ' xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">'
+      + '<Application>Dystoria</Application></Properties>';
+    var ct = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+      + '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+      + '<Default Extension="xml" ContentType="application/xml"/>'
+      + '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+      + '<Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>'
+      + '<Override PartName="/word/header1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/>'
+      + '<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>'
+      + '<Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>'
+      + '</Types>';
+    var rels = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+      + '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>'
+      + '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>'
+      + '<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/>'
+      + '</Relationships>';
+    var drels = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+      + '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>'
+      + '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/>'
+      + '</Relationships>';
+    var zip = _dxZip([
+      { name:'[Content_Types].xml', data:ct },
+      { name:'_rels/.rels', data:rels },
+      { name:'docProps/core.xml', data:core },
+      { name:'docProps/app.xml', data:app },
+      { name:'word/_rels/document.xml.rels', data:drels },
+      { name:'word/document.xml', data:doc },
+      { name:'word/styles.xml', data:_bxStyles(W) },
+      { name:'word/header1.xml', data:header }
+    ]);
+    var name = slug(story) + '-story-bible.docx';
+    var url = URL.createObjectURL(new Blob([zip], { type:'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }));
+    var a = document.createElement('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click();
+    setTimeout(function(){ URL.revokeObjectURL(url); a.remove(); }, 1200);
+    if (typeof flashStatus === 'function') flashStatus('Story Bible exported (.docx)');
+    return true;
+  } catch (e){
+    console.warn('bible export:', e);
+    if (typeof flashStatus === 'function') flashStatus('Couldn’t build the document — ' + (e && e.message ? e.message : 'unknown error'));
+    return false;
+  }
+}
+try{ window.exportWikiDOCX = exportWikiDOCX; }catch(e){}
 function exportStoryDOCX(rootEl, storyName){
   const story = storyName || (state.session && state.session.name) || 'Dystoria story';
   const isOpen = !rootEl;
@@ -37418,7 +37731,27 @@ function init(){
       _iz.addEventListener('drop', e => { _stop(e); _iz.classList.remove('imp-drag'); const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]; if (f) importLoadFile(f); });
   } }
   { const wc=$('wikiClose'); if(wc) wc.addEventListener('click', closeWiki); }   // legacy close (removed in mode redesign)
-  $('wikiExport').addEventListener('click', exportWikiFiles);
+  /* Two things to export and one button, so it asks which [v.434]. The .docx is the
+     document you hand somebody; the .html/.md is the one you keep or put in a repo. */
+  $('wikiExport').addEventListener('click', function(ev){
+    var old = document.getElementById('wikiExportMenu'); if (old) old.remove();
+    var m = document.createElement('div'); m.id = 'wikiExportMenu'; m.className = 'plan-menu pl-editmenu';
+    var add = function(label, hint, fn){
+      var b = document.createElement('button'); b.type = 'button'; b.textContent = label; if (hint) b.title = hint;
+      b.addEventListener('click', function(e){ e.stopPropagation(); m.remove(); fn(); });
+      m.appendChild(b);
+    };
+    add('Story Bible (.docx)', 'The whole wiki as a Word document — every entry, the relationships, the groups, the threads and arcs', function(){ exportWikiDOCX(); });
+    add('Web page (.html)', 'One self-contained file that opens in any browser', function(){ exportWikiFiles(); });
+    var r = ev.currentTarget.getBoundingClientRect();
+    m.style.position = 'fixed';
+    m.style.left = Math.max(8, Math.min(r.left, window.innerWidth - 230)) + 'px';
+    m.style.top = (r.bottom + 6) + 'px';
+    m.style.zIndex = 9600;
+    document.body.appendChild(m);
+    var close = function(e){ if (!m.contains(e.target)){ m.remove(); document.removeEventListener('mousedown', close, true); } };
+    setTimeout(function(){ document.addEventListener('mousedown', close, true); }, 0);
+  });
   { const rx = $('rdExportBtn'); if (rx) rx.addEventListener('click', e => { e.stopPropagation(); toggleRdExportMenu(); }); }
   { const rm = $('rdExportMenu'); if (rm) rm.addEventListener('click', e => { const b = e.target.closest('button[data-exp]'); if (!b) return; rm.classList.remove('show'); if (b.dataset.exp === 'pdf') exportStoryPDF(); else if (b.dataset.exp === 'epub') exportStoryEPUB(); else exportStoryDOCX(); }); }
   document.addEventListener('mousedown', e => { const m = $('rdExportMenu'); if (m && m.classList.contains('show') && !m.contains(e.target) && !(e.target.closest && e.target.closest('#rdExportBtn'))) m.classList.remove('show'); });
@@ -48557,7 +48890,7 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.433';
+  var APP_VERSION = '2026.07.20.434';
   var APP_CHANGELOG = [
     { v:'2026.07.20.430', date:'August 14, 2026', notes:[
       '**Fixed: hovering an arc pill in the Plot grid made its title unreadable.** The arc pill borrows its shape from the thread pill, and came with a hover written for a dark pill \u2014 so the pale arc pill turned charcoal while its lettering stayed dark. It now keeps its parchment and takes a gold ring instead.'
