@@ -28276,6 +28276,37 @@ function wikiStructureSubjects(){
                prose: proseOf(uniq.length ? uniq : Object.keys(secText).map(Number)) });
   });
 
+  /* RELATIONSHIPS, as one subject. [Jeremy, v.440] A paragraph per character's bonds
+     would be one metered call per character — for a reading that each character's own
+     portrait already carries. What no portrait can say is the SHAPE: who the story
+     orbits, which ties are load-bearing, who is connected to nobody. */
+  try {
+    var bkeys = Object.keys(CH.bonds.byKey || {});
+    if (bkeys.length){
+      var lines = [], seen = {};
+      bkeys.forEach(function(k){
+        var w = (typeof npFindEl === 'function') ? npFindEl(k) : null;
+        var nm = w ? ((typeof elDisplayName === 'function') ? elDisplayName(w) : (w.name || w.word)) : k;
+        (CH.bonds.byKey[k] || []).forEach(function(l){
+          var t = nm + ' — ' + l.text; if (seen[t]) return; seen[t] = 1; lines.push(t);
+        });
+      });
+      /* Who has NO bond at all is part of the shape, and the edge list cannot say it. */
+      var lone = [];
+      try {
+        (typeof wikiGather === 'function' ? wikiGather() : []).forEach(function(el){
+          var w = (typeof npFindEl === 'function') ? npFindEl(el.cat + '|' + el.word) : null;
+          var k = w ? wordKey(w) : null;
+          if (k && !(CH.bonds.byKey || {})[k]) lone.push(el.name || el.word);
+        });
+      } catch(e){}
+      out.push({ key:'bonds:all', label:'the relationships in this story', kind:'relationships',
+                 facts:'EVERY BOND RECORDED, from all five places the app keeps them:\n' + lines.join('\n')
+                   + (lone.length ? ('\n\nElements with no bond recorded at all: ' + lone.join(', ')) : ''),
+                 notes:'', prose:'' });
+    }
+  } catch(e){}
+
   (CH.groups || []).forEach(function(gp){
     var facts = ['A GROUP — ' + (gp.typeName || 'a set of elements') + (gp.lensName ? (', drawn as a ' + gp.lensName.toLowerCase()) : '') + '.'];
     if (gp.members.length) facts.push('members: ' + gp.members.map(function(m){ return m.label; }).join(', '));
@@ -32433,38 +32464,85 @@ function wikiRenderWoven(body, els, hasDoc){
   /* Render a markdown chunk and stamp the layer on every block it produced. The stamp
      goes on the BLOCKS rather than on a wrapper so an entry can interleave the two
      layers and still hide one of them cleanly. */
+  /* THREE layers, not two. [Jeremy, v.440]
+     `nav` is the document's skeleton — every heading — and neither switch hides it,
+     because hiding the record used to take the character names with it and leave a page
+     of paragraphs with nothing saying who they were about. A heading is not content; it
+     is what tells you where you are. */
   var put = function(md, layer){
     if (!md || !String(md).trim()) return;
+    var cls = layer === 'ai' ? 'wk-lay-ai' : (layer === 'nav' ? 'wk-lay-nav' : 'wk-lay-det');
     var frag = mdToWikiHtml(md);
-    Array.prototype.forEach.call(frag.children, function(n){ n.classList.add(layer === 'ai' ? 'wk-lay-ai' : 'wk-lay-det'); });
+    Array.prototype.forEach.call(frag.children, function(n){ n.classList.add(cls); });
     while (frag.firstChild) body.appendChild(frag.firstChild);
+  };
+  /* An AI paragraph, marked at its head. The ✦ is a `wk-aistar` and NOT the app's
+     `ai-star` class: the #31 sweep keys on that one and walks up to the owning control to
+     hide it while signed out — which is right for a button and wrong for a sentence.
+     [v.437 lost a switch exactly this way.] */
+  var aiPara = function(text){
+    if (!text || !String(text).trim()) return;
+    var d = document.createElement('div');
+    d.className = 'wk-doc-p wk-lay-ai wk-aip';
+    var st = document.createElement('span'); st.className = 'wk-aistar'; st.textContent = '✦';
+    st.title = 'Written by Dystoria’s AI';
+    d.appendChild(st);
+    d.appendChild(document.createTextNode(' ' + String(text).replace(/\s+/g, ' ').trim()));
+    body.appendChild(d);
   };
   var note = function(text, cls){
     var d = document.createElement('div'); d.className = 'wk-doc-p wk-computed-note ' + (cls || '');
     d.textContent = text; body.appendChild(d); return d;
   };
 
-  var lede = note('Everything in the record is read from what you have written — it needs no AI and is always current.'
-    + (hasDoc || (state.session && state.session.wikiAI && Object.keys(state.session.wikiAI).length)
-        ? ' The written portraits are the AI’s; use Contents on the left to show or hide either layer.'
-        : ' ✦ Update Wiki adds a written portrait to each entry.'));
+  /* v.440 — the AI document's own non-element sections, routed to where they belong
+     rather than dumped in a bin at the end. An Overview is an opening; Questions and the
+     Reading List are closing matter; and **a section whose body is empty is dropped**,
+     because splitting the doc matches its `###` entries away into the characters and
+     leaves the `##` parents behind as titles with nothing under them — which is exactly
+     the "no information" section Jeremy saw. [Jeremy] */
+  var restOpen = [], restClose = [], restOther = [];
+  (split.rest || []).forEach(function(r){
+    if (!r.md || !r.md.trim()) return;                       // a heading with no body is not a section
+    var t = (r.title || '').toLowerCase();
+    if (/overview|premise|what the story is about/.test(t)) restOpen.push(r);
+    else if (/question|reading list|suggested reading|further reading/.test(t)) restClose.push(r);
+    else restOther.push(r);
+  });
+
+  /* ONE explanation at the top, and a ✦ on each paragraph it refers to — instead of a
+     line of small print under every single one. [Jeremy, v.440] Said once and marked
+     everywhere is how a document handles provenance; repeated under each paragraph it
+     stops being read by the third time. */
+  var lede = note('Everything in the record is read from what you have written — it needs no AI and is always current.');
   lede.classList.add('wk-lede');
+  var _anyAI = hasDoc || !!(state.session && state.session.wikiAI && Object.keys(state.session.wikiAI).length);
+  if (_anyAI){
+    var ex = note('');
+    ex.classList.add('wk-lede', 'wk-ailede');
+    var xs = document.createElement('span'); xs.className = 'wk-aistar'; xs.textContent = '✦';
+    ex.appendChild(xs);
+    ex.appendChild(document.createTextNode(' Any paragraph marked with this star is not your words. It is Dystoria’s AI summarising that part of the story from your prose and your notes — use Contents on the left to hide them, or the record, whenever you want to read one on its own.'));
+  }
+
+  /* The Overview opens the document, where an overview goes. */
+  restOpen.forEach(function(r){
+    put('## ' + (r.title || 'Overview'), 'nav');
+    aiPara(r.md);
+  });
 
   var lastCat = '';
   els.forEach(function(el){
-    if (el.cat !== lastCat){ lastCat = el.cat; put('## ' + wikiCatName(el.cat), 'det'); }
+    if (el.cat !== lastCat){ lastCat = el.cat; put('## ' + wikiCatName(el.cat), 'nav'); }
     var F = (typeof wikiElementFacts === 'function') ? wikiElementFacts(el, CH) : null;
-    put('### ' + (el.name ? (el.name + ' — ' + el.word) : el.word), 'det');
+    put('### ' + (el.name ? (el.name + ' — ' + el.word) : el.word), 'nav');
     if (F && F.span) put('*' + F.span + (F.gaps.length ? ('  ·  absent ' + F.gaps.join(', ')) : '')
       + '  ·  ' + F.mentions + ' mention' + (F.mentions === 1 ? '' : 's') + '*', 'det');
 
     // the portrait — per-element cache first, then whatever section of the blob named it
     var cache = (state.session && state.session.wikiAI) ? state.session.wikiAI[el.cat + '|' + el.word] : null;
     var portrait = (cache && cache.text) ? String(cache.text) : (split.byKey[el.cat + '|' + el.word] || '');
-    if (portrait && portrait.trim()){
-      put(portrait.replace(/\n{2,}/g, '\n'), 'ai');
-      put('*▲ written by Dystoria’s AI — not your own words*', 'ai');
-    }
+    if (portrait && portrait.trim()) aiPara(portrait);
 
     var rec = [];
     if (F && F.established.length) F.established.forEach(function(x){ rec.push('- **' + x.lab + ':** ' + x.val); });
@@ -32486,14 +32564,11 @@ function wikiRenderWoven(body, els, hasDoc){
     var c = (state.session && state.session.wikiAI) ? state.session.wikiAI[key] : null;
     return (c && c.text) ? String(c.text) : '';
   };
-  var portrait = function(key){
-    var t = aiFor(key); if (!t) return;
-    put(t.replace(/\n{2,}/g, '\n'), 'ai');
-    put('*▲ written by Dystoria’s AI — not your own words*', 'ai');
-  };
+  var portrait = function(key){ aiPara(aiFor(key)); };
 
-  put('## Relationships', 'det');
+  put('## Relationships', 'nav');
   put('*Every bond in the story, from all five places Dystoria keeps them.*', 'det');
+  portrait('bonds:all');   // v.440 — the relational shape of the story, in a sentence or three
   var bkeys = Object.keys(CH.bonds.byKey || {});
   if (!bkeys.length) put('*No relationships recorded yet.*', 'det');
   else bkeys.map(function(k){
@@ -32501,26 +32576,26 @@ function wikiRenderWoven(body, els, hasDoc){
       return { key:k, label: w ? ((typeof elDisplayName === 'function') ? elDisplayName(w) : (w.name || w.word)) : k, lines: CH.bonds.byKey[k] };
     }).sort(function(a, b){ return String(a.label).localeCompare(String(b.label)); })
     .forEach(function(r){
-      put('### ' + r.label, 'det');
+      put('### ' + r.label, 'nav');
       var seen = {}, ls = [];
       r.lines.forEach(function(l){ if (seen[l.text]) return; seen[l.text] = 1; ls.push('- ' + l.text); });
       put(ls.join('\n'), 'det');
     });
 
-  put('## Groups', 'det');
+  put('## Groups', 'nav');
   if (!CH.groups.length) put('*No groups yet.*', 'det');
   CH.groups.forEach(function(gp){
-    put('### ' + gp.name + (gp.typeName ? ('  ·  ' + gp.typeName) : ''), 'det');
+    put('### ' + gp.name + (gp.typeName ? ('  ·  ' + gp.typeName) : ''), 'nav');
     if (gp.lensName) put('*Drawn as a ' + gp.lensName.toLowerCase() + '.*', 'det');
     portrait('group:' + gp.id);
     put(gp.members.length ? gp.members.map(function(m){ return '- ' + m.label + (m.missing ? '  (no longer in the story)' : ''); }).join('\n')
                           : '*No members yet.*', 'det');
   });
 
-  put('## Threads & arcs', 'det');
+  put('## Threads & arcs', 'nav');
   if (!CH.cols.length) put('*No threads or arcs on the Plot grid yet.*', 'det');
   CH.cols.forEach(function(c){
-    put('### ' + c.name + (c.kind === 'arc' ? '  ·  arc' : (c.isMain ? '  ·  the main plot' : '  ·  thread')), 'det');
+    put('### ' + c.name + (c.kind === 'arc' ? '  ·  arc' : (c.isMain ? '  ·  the main plot' : '  ·  thread')), 'nav');
     if (c.arc && c.arc.subject) put('*' + c.arc.subject + ' — ' + c.arc.label + (c.arc.dim ? ('  [' + c.arc.dim + ']') : '') + '*', 'det');
     portrait((c.kind === 'arc' ? 'arc:' : 'thread:') + c.id);
     var rows = [];
@@ -32543,22 +32618,25 @@ function wikiRenderWoven(body, els, hasDoc){
   });
   if (CH.missing && CH.missing.length) put('*Not shown here: ' + CH.missing.join('; ') + '.*', 'det');
 
-  /* Sections of the written wiki that did not name an element — an overview, a themes
-     essay. Kept whole and kept last, because a section we could not place is a fact
-     about our matching and not about the writer's document. */
-  if (split.rest.length){
-    var keep = split.rest.filter(function(r){ return (r.md && r.md.trim()) || r.title; });
-    if (keep.length){
-      put('## ✦ From the written wiki', 'ai');
-      note('Written by Dystoria’s AI — these sections are not about one element, so they are kept whole.', 'wk-ai-note').classList.add('wk-lay-ai');
-      keep.forEach(function(r){
-        if (r.title) put('### ' + r.title, 'ai');
-        put(r.md, 'ai');
-      });
-    }
-  }
+  /* Questions and the Suggested Reading List close the document as their own sections —
+     which is where they were before #17 began, and where a reader expects them. Anything
+     else the AI wrote that names no element keeps its own heading here too; the catch-all
+     "From the written wiki" banner is gone, because with the empty sections dropped there
+     is nothing left for it to apologise for. [Jeremy, v.440] */
+  restClose.concat(restOther).forEach(function(r){
+    put('## ' + (r.title || 'From the written wiki'), 'nav');
+    /* A list of questions is a list, not a paragraph — rendering it through `aiPara`
+       would glue them into one block of prose. Mark the whole run instead. */
+    if (/^\s*[-*]\s/m.test(r.md)) put(r.md, 'ai');
+    else aiPara(r.md);
+  });
   try { if (typeof enhanceReadingList === 'function') enhanceReadingList(body); } catch(e){}
-  try { if (window.__wikiNavRefresh) window.__wikiNavRefresh(); } catch(e){}
+  /* v.440 — this said `__wikiNavRefresh`, which **is defined nowhere**; the module
+     exports `__wikiNavRender`. So Contents never rebuilt when the document re-rendered:
+     its jump targets went stale, and the Show row survived on a page that no longer had
+     anything to show. Lesson 59 again — a `if (window.x)` guard turns a wrong name into
+     a silent no-op. */
+  try { if (typeof window.__wikiNavRender === 'function') window.__wikiNavRender(); } catch(e){}
 }
 function wikiComputedMarkdown(opts){
   opts = opts || {};
@@ -32576,7 +32654,7 @@ function wikiComputedMarkdown(opts){
       if (F && F.span) L.push('*' + F.span + (F.gaps.length ? ('  ·  absent ' + F.gaps.join(', ')) : '')
         + '  ·  ' + F.mentions + ' mention' + (F.mentions === 1 ? '' : 's') + '*', '');
       var cache = (state.session && state.session.wikiAI) ? state.session.wikiAI[el.cat + '|' + el.word] : null;
-      if (cache && cache.text){ L.push(String(cache.text).replace(/\n+/g, ' '), '', '*▲ written by Dystoria’s AI — not your own words*', ''); }
+      if (cache && cache.text){ L.push('✦ ' + String(cache.text).replace(/\n+/g, ' '), ''); }
       if (F && F.established.length) F.established.forEach(function(x){ L.push('- **' + x.lab + ':** ' + x.val); });
       else if (el.attrs && el.attrs.length) L.push('- **Characteristics:** ' + el.attrs.map(function(a){ return a.word; }).join(', '));
       if (F && F.bonds.length){ L.push('', '#### Bonds', ''); F.bonds.forEach(function(r){ L.push('- ' + r); }); }
@@ -32614,7 +32692,7 @@ function wikiComputedMarkdown(opts){
     L.push('### ' + gp.name + (gp.typeName ? ('  ·  ' + gp.typeName) : ''), '');
     if (gp.lensName) L.push('*Drawn as a ' + gp.lensName.toLowerCase() + '.*', '');
     var _gA = (state.session && state.session.wikiAI) ? state.session.wikiAI['group:' + gp.id] : null;
-    if (_gA && _gA.text) L.push(String(_gA.text).replace(/\n+/g, ' '), '', '*▲ written by Dystoria’s AI — not your own words*', '');
+    if (_gA && _gA.text) L.push('✦ ' + String(_gA.text).replace(/\n+/g, ' '), '');
     if (!gp.members.length) L.push('*No members yet.*', '');
     else gp.members.forEach(function(m){ L.push('- ' + m.label + (m.missing ? '  (no longer in the story)' : '')); });
     L.push('');
@@ -32626,7 +32704,7 @@ function wikiComputedMarkdown(opts){
   else CH.cols.forEach(function(c){
     L.push('### ' + c.name + (c.kind === 'arc' ? '  ·  arc' : (c.isMain ? '  ·  the main plot' : '  ·  thread')), '');
     var _cA = (state.session && state.session.wikiAI) ? state.session.wikiAI[(c.kind === 'arc' ? 'arc:' : 'thread:') + c.id] : null;
-    if (_cA && _cA.text) L.push(String(_cA.text).replace(/\n+/g, ' '), '', '*▲ written by Dystoria’s AI — not your own words*', '');
+    if (_cA && _cA.text) L.push('✦ ' + String(_cA.text).replace(/\n+/g, ' '), '');
     if (c.arc){
       if (c.arc.subject) L.push('*' + c.arc.subject + ' — ' + c.arc.label + (c.arc.dim ? ('  [' + c.arc.dim + ']') : '') + '*', '');
       if (c.arc.from || c.arc.to) L.push('- **Changes:** ' + (c.arc.from || '…') + ' → ' + (c.arc.to || '…'));
@@ -32779,7 +32857,7 @@ function buildWikiMarkdown(els, story){
        writer typed; this one is a machine's reading of it, and a document that blurs the
        two is worse than one that omits it. [Jeremy, v.433] */
     const cache = (state.session && state.session.wikiAI) ? state.session.wikiAI[el.cat + '|' + el.word] : null;
-    if (cache && cache.text){ L.push('> ' + String(cache.text).replace(/\n+/g, ' '), '', '*— written by Dystoria’s AI from the facts below.*', ''); }
+    if (cache && cache.text){ L.push('✦ ' + String(cache.text).replace(/\n+/g, ' '), ''); }
     if (F && F.established.length){
       L.push('## Established', '');
       F.established.forEach(x => L.push('- **' + x.lab + ':** ' + x.val));
@@ -33207,9 +33285,13 @@ function _bxStyles(W){
        at a glance which paragraphs are the machine's and — because it is a NAMED style —
        select them all at once in Word and delete the lot if they want a document that is
        only their own words. [Jeremy: "both but the ai paragraphs are marked as such"] */
-    + S('BibleAI', 'Bible AI Note', { basedOn:'Normal', next:'Normal', uiPriority:1,
-        pPr: '<w:spacing w:before="0" w:after="200" w:line="252" w:lineRule="auto"/><w:ind w:left="340"/>',
-        rPr: '<w:rFonts w:ascii="' + SAN + '" w:hAnsi="' + SAN + '"/><w:i/><w:sz w:val="18"/><w:color w:val="7A6A52"/>' })
+    /* v.440 — this WAS a line of small print under each portrait saying who wrote it.
+       It is the portrait's own style now: the ✦ that opens the paragraph carries the
+       provenance, the document says once at the top what the star means, and the style
+       still lets a writer select every AI paragraph in Word and delete the lot. */
+    + S('BibleAI', 'Bible AI Paragraph', { basedOn:'Normal', next:'Normal', uiPriority:1,
+        pPr: '<w:spacing w:before="0" w:after="160" w:line="264" w:lineRule="auto"/><w:ind w:left="340"/>',
+        rPr: '<w:i/><w:color w:val="5A4A32"/>' })
     + S('BibleTitle', 'Bible Title', { basedOn:'Normal', next:'Normal', uiPriority:1,
         pPr: '<w:spacing w:before="2600" w:after="120" w:line="240" w:lineRule="auto"/><w:ind w:firstLine="0"/><w:jc w:val="center"/>',
         rPr: '<w:rFonts w:ascii="' + SAN + '" w:hAnsi="' + SAN + '"/><w:b/><w:sz w:val="56"/>' })
@@ -33249,7 +33331,7 @@ function exportWikiDOCX(){
     // ---- what this document is ----
     H('About this document');
     P(_dxRun('Everything in this bible is drawn from what you have written and recorded in Dystoria — the elements and their characteristics, the relationships from every place the app keeps them, your groups, your threads and your arcs, and the sentences of your own prose in which each thing appears.'), { style:'Normal' });
-    P(_dxRun('Paragraphs written by Dystoria’s AI, where you have generated any, are marked as such and set in the “Bible AI Note” style — so you can see at a glance which words are yours, and select or remove them all at once if you would rather hand on a document that is only your own.'), { style:'Normal' });
+    P(_dxRun('Any paragraph beginning with ✦ is not your words. It is Dystoria’s AI summarising that part of the story from your prose and your notes. They are set in the “Bible AI Paragraph” style, so you can select every one of them in Word and remove them at once if you would rather hand on a document that is only your own.'), { style:'Normal' });
     if (CH.missing && CH.missing.length)
       P(_dxRun('Not included in this build of the document: ' + CH.missing.join('; ') + '.'), { style:'BibleLede' });
 
@@ -33283,10 +33365,7 @@ function exportWikiDOCX(){
           + '   ·   ' + F.mentions + ' mention' + (F.mentions === 1 ? '' : 's')), { style:'BibleMeta' });
       }
       var cache = (state.session && state.session.wikiAI) ? state.session.wikiAI[el.cat + '|' + el.word] : null;
-      if (cache && cache.text){
-        P(_dxRun(String(cache.text).replace(/\s+/g, ' ')), { style:'BibleQuote' });
-        P(_dxRun('▲ Written by Dystoria’s AI from the facts below — not your own words.'), { style:'BibleAI' });
-      }
+      if (cache && cache.text) P(_dxRun('✦ ') + _dxRun(String(cache.text).replace(/\s+/g, ' ')), { style:'BibleAI' });
       if (F && F.established.length) F.established.forEach(function(x){ labelled(x.lab, x.val); });
       else if (el.attrs && el.attrs.length) labelled('Characteristics', el.attrs.map(function(a){ return a.word; }).join(', '));
       if (F && F.bonds.length){ P(_dxRun('Bonds'), { style:'BibleLabel' }); F.bonds.forEach(item); }
@@ -33306,6 +33385,8 @@ function exportWikiDOCX(){
     // ---- relationships ----
     H('Relationships');
     P(_dxRun('Every bond in the story, gathered from all five places Dystoria keeps them: the section maps, standing bonds, the member charts, the concept maps and the group structures.'), { style:'BibleLede' });
+    var _relA = (state.session && state.session.wikiAI) ? state.session.wikiAI['bonds:all'] : null;
+    if (_relA && _relA.text) P(_dxRun('✦ ') + _dxRun(String(_relA.text).replace(/\s+/g, ' ')), { style:'BibleAI' });
     var keys = Object.keys(CH.bonds.byKey || {});
     if (!keys.length) P(_dxRun('No relationships recorded yet.'), { style:'Normal' });
     else {
@@ -49351,7 +49432,7 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.439';
+  var APP_VERSION = '2026.07.20.440';
   var APP_CHANGELOG = [
     { v:'2026.07.20.430', date:'August 14, 2026', notes:[
       '**Fixed: hovering an arc pill in the Plot grid made its title unreadable.** The arc pill borrows its shape from the thread pill, and came with a hover written for a dark pill \u2014 so the pale arc pill turned charcoal while its lettering stayed dark. It now keeps its parchment and takes a gold ring instead.'
@@ -60864,7 +60945,14 @@ body.ai-capped .pt-grouphd.ai-grouphd-empty{ display:none !important; }
        announces the AI reading on the page it opens, the button itself only navigates
        there. Denied here, and the ✧ inside it tagged in EXTRA, so signed out the star
        goes and the way into the analysis stays. */
-    '.pl-arcanalyse'
+    '.pl-arcanalyse',
+    /* v.440 — the wiki Contents switch that SHOWS OR HIDES the AI portraits. It wears the
+       star because that is what it is about, and it must survive signing out for exactly
+       the reader who wants the record on its own — **a switch that turns something off
+       cannot be gated by the thing it turns off.** v.437 learned this the hard way by
+       dropping the star instead; the star is back, and this is the right mechanism for
+       keeping it. */
+    '.wkn-layer-ai'
   ];
   var DENY_ANCESTOR = '#aboutPage,#aiModelPanel,#aiConsent,svg';
 
@@ -60901,9 +60989,14 @@ body.ai-capped .pt-grouphd.ai-grouphd-empty{ display:none !important; }
     ['#edChkTab',                           'deep'],  // Checks tab
     ['#edChkPanel',                         'deep'],  // Checks drawer
     ['.fr-door[data-act="idea"]',           'entry'], // Find an Idea — the AI interview
-    // `noai`: too big to take away from someone who might still sign in.
-    ['#wikiModeBtn',                        'noai'],  // Wiki mode, Plan's bar (entries are AI-written)
-    ['[data-mode="wiki"]',                   'noai'],  // …and the Revise/Review/Wiki bars' own copies
+    /* v.440 — **Wiki mode is no longer an AI surface at all.** [Jeremy] It was registered
+       `noai` when the page's entire content was AI-written, and `body.ai-off .ai-surface`
+       hides those outright — so a writer who turned AI off lost the whole mode. Since
+       #17 the wiki is a computed record that renders with no network: where an element
+       appears, where it is absent, its bonds from all five stores, its arc, its own
+       prose. Taking that away from the No-AI writer is taking away the half that was
+       built FOR them. The ✦ Update Wiki button inside it is still `.ai-surface` and still
+       disappears with AI off, which is the correct amount to remove. */
     ['#libImportBtn',                       'noai'],  // Import Story
     ['.fr-door[data-act="import"]',         'noai']   // the first-run Import door
   ];
@@ -62051,16 +62144,24 @@ body.ai-capped .pt-grouphd.ai-grouphd-empty{ display:none !important; }
 #wkNavBody .wkn-sec:first-child{ margin-top:0; }
 #wkNavBody .wkn-secrow{ display:flex; align-items:stretch; width:100%; }
 #wkNavBody .wkn-secrow .wkn-sec{ flex:1 1 auto; width:auto; }
-#wkNavBody .wkn-caret{ flex:0 0 22px; border:none; background:transparent; color:var(--ink-faint); cursor:pointer; font-size:10px; line-height:1; padding:0; margin-top:9px; transition:transform .14s ease; transform-origin:50% 50%; }
+/* v.440 — double size [Jeremy]: at 10px the caret was a hint rather than a control. */
+#wkNavBody .wkn-caret{ flex:0 0 30px; border:none; background:transparent; color:var(--ink-faint); cursor:pointer; font-size:20px; line-height:1; padding:0; margin-top:4px; transition:transform .14s ease, color .12s ease; transform-origin:50% 50%; }
 #wkNavBody .wkn-caret.open{ transform:rotate(90deg); }
 #wkNavBody .wkn-caret:hover{ color:var(--ink); }
 #wkNavBody .wkn-kids{ display:block; }
 #wkNavBody .wkn-kids.shut{ display:none; }
 #wkNavBody .wkn-layers{ display:flex; flex-wrap:wrap; gap:5px; align-items:center; padding:2px 8px 12px; margin-bottom:8px; border-bottom:1px solid var(--line); }
 #wkNavBody .wkn-layers-lbl{ font-family:var(--sans); font-size:9px; font-weight:700; letter-spacing:.14em; text-transform:uppercase; color:var(--ink-faint); width:100%; margin-bottom:2px; }
-#wkNavBody .wkn-layer{ font-family:var(--sans); font-size:10px; font-weight:600; letter-spacing:.04em; border:1px solid var(--line); border-radius:12px; padding:4px 10px; cursor:pointer; background:transparent; color:var(--ink-faint); }
-#wkNavBody .wkn-layer:hover{ color:var(--ink); border-color:var(--ink-faint); }
-#wkNavBody .wkn-layer.on{ color:#241405; background:rgba(250,154,49,.16); border-color:var(--gold,#c8791f); }
+/* On is the brand gold; off is plainly, dully off. A switch whose two states differ only
+   in a tint is a switch you have to squint at. [Jeremy, v.440] */
+#wkNavBody .wkn-layer{ font-family:var(--sans); font-size:10px; font-weight:700; letter-spacing:.04em; border:1px solid #cfc7b6; border-radius:12px; padding:4px 11px; cursor:pointer; background:#e8e3d8; color:#8d8578; opacity:.75; transition:background .12s ease, color .12s ease, opacity .12s ease; }
+#wkNavBody .wkn-layer:hover{ opacity:1; color:#5f5646; border-color:#b3aa96; }
+#wkNavBody .wkn-layer.is-on{ opacity:1; color:#2b1a05; background:var(--gold,#c8791f); border-color:var(--gold,#c8791f); box-shadow:0 1px 3px rgba(120,80,20,.28); }
+#wkNavBody .wkn-layer.is-on:hover{ color:#2b1a05; }
+#wkNavBody .wkn-layer .wk-aistar{ color:inherit; margin-right:3px; }
+#wikiBody .wk-aip{ font-family:var(--serif,Georgia,serif); }
+#wikiBody .wk-aistar{ color:var(--gold,#c49e4a); font-size:11px; vertical-align:.12em; margin-right:2px; }
+#wikiBody .wk-ailede{ border-left-color:#8a6a2a; }
 body.wk-hide-ai .wk-lay-ai{ display:none !important; }
 body.wk-hide-det .wk-lay-det{ display:none !important; }
 #wkNavBody .wkn-item{ display:block; width:100%; text-align:left; font-family:var(--serif); font-size:13.5px; line-height:1.35; color:var(--ink-soft); background:none; border:none; border-radius:8px; padding:5px 10px 5px 20px; cursor:pointer; }
@@ -62213,12 +62314,35 @@ body.eink #wkNavBody .wkn-sec.on, body.eink #wkNavBody .wkn-item.on{ background:
   }
   window.__wikiLayerApply = layerApply;
   function navLayerSwitches(){
+    /* **A switch for something that is not on the page is furniture.** With AI off — or
+       simply before anything has been generated — there are no portraits to hide, so the
+       whole Show row goes. [Jeremy, v.440]
+
+       And it clears `wk-hide-det` on the way out: a stored "record hidden" from a session
+       when portraits existed would otherwise leave a writer with AI off staring at a
+       blank page and no control anywhere to bring it back. */
+    var host = document.getElementById('wikiBody');
+    var anyAI = host ? host.querySelector('.wk-lay-ai') : null;
+    if (!anyAI){
+      document.body.classList.remove('wk-hide-det', 'wk-hide-ai');
+      return document.createDocumentFragment();
+    }
     var st = layerState();
     var wrap = document.createElement('div'); wrap.className = 'wkn-layers';
     var lab = document.createElement('div'); lab.className = 'wkn-layers-lbl'; lab.textContent = 'Show'; wrap.appendChild(lab);
     var mk = function(which, text, title){
       var b = document.createElement('button'); b.type = 'button';
-      b.className = 'wkn-layer' + (st[which] ? ' on' : '') + ' wkn-layer-' + which;
+      b.className = 'wkn-layer wkn-layer-' + which;
+      /* Set the state with `classList`, not by concatenating it into a className string.
+         The string form silently produced an always-off pill, and a switch that never
+         shows its own state is worse than no switch. [v.440] */
+      /* `is-on`, NOT `on`. `navMarkActive` clears `.on` from EVERY element in this drawer
+         to mark the active heading — so a switch using the same class was silently
+         un-set on the first scroll or jump and rendered permanently grey whatever its
+         real state. **Third collision this build; `.on` in a shared container is not a
+         class, it is a shared variable.** [v.440] */
+      b.classList.toggle('is-on', st[which] !== false);
+      b.setAttribute('aria-pressed', st[which] !== false ? 'true' : 'false');
       b.textContent = text; b.title = title;
       b.addEventListener('click', function(e){ e.stopPropagation(); layerSet(which, !layerState()[which]); });
       wrap.appendChild(b);
@@ -62231,7 +62355,9 @@ body.eink #wkNavBody .wkn-sec.on, body.eink #wkNavBody .wkn-item.on{ background:
        the page, and a switch that turns something off must not itself be gated by it.
        [lesson 44, committed again: when you add a marker to a control, go and read what
        reads markers.] */
-    mk('ai', 'Portraits', 'The paragraphs Dystoria’s AI has written about each element — hide them to read the record alone');
+    /* The ✦ is back at v.440 [Jeremy], and safe this time: `.wkn-layer-ai` is in the
+       gating DENY list, so the sweep leaves the switch alone. */
+    mk('ai', '✦ Portraits', 'The paragraphs Dystoria’s AI has written — hide them to read the record alone');
     return wrap;
   }
   function navRender(){
