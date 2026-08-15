@@ -28210,6 +28210,128 @@ async function buildWikiChunked(used, unused, npAll, ctx, body){
   if (reading) doc += '\n\n## Suggested Reading List\n\n' + reading;
   return doc.trim();
 }
+/* ---- the ✦ pass, for the things that are not elements ---------------------
+   A thread, an arc and a group are each read back from the same three sources an
+   element is: the FACTS the writer recorded, the NOTES they wrote, and the PROSE of the
+   sections the thing actually runs through. [Jeremy, v.438]
+
+   Cached in `state.session.wikiAI` under a namespaced key (`thread:`, `arc:`, `group:`),
+   which is the store the per-element portraits already use — so the marking, the layer
+   switches and both exports pick these up with no further work. **One store, one router.**
+
+   Each subject is its own small call rather than one big one: a story with twenty
+   threads must not be a single prompt that gets truncated, and a failure on one subject
+   must not cost the other nineteen. */
+function wikiStructureSubjects(){
+  var out = [];
+  var CH = (typeof wikiChapters === 'function') ? wikiChapters() : { bonds:{byKey:{}}, groups:[], cols:[] };
+  var secText = {};
+  try {
+    (typeof editorNodeFrames === 'function' ? editorNodeFrames() : []).forEach(function(o){
+      var n = o.node;
+      if (n.nodeType === 1 && (n.tagName === 'H3' || (n.classList && n.classList.contains('sec-mark')))) return;
+      secText[o.frame] = (secText[o.frame] || '') + ' ' + (n.textContent || '');
+    });
+  } catch(e){}
+  var proseOf = function(secs){
+    var t = '';
+    (secs || []).forEach(function(i){ var v = (secText[i] || '').replace(/\s+/g, ' ').trim(); if (v) t += (t ? '\n\n' : '') + '§' + (i + 1) + ': ' + v; });
+    return t.slice(0, 6000);
+  };
+
+  (CH.cols || []).forEach(function(c){
+    var facts = [], secs = [];
+    if (c.kind === 'arc' && c.arc){
+      facts.push('An ARC — a change tracked across the story.');
+      if (c.arc.subject) facts.push('whose change: ' + c.arc.subject);
+      if (c.arc.from || c.arc.to) facts.push('from ' + (c.arc.from || '…') + ' to ' + (c.arc.to || '…'));
+      if (c.arc.dim) facts.push('dimension: ' + c.arc.dim);
+      if (c.arc.cost) facts.push('what it costs: ' + c.arc.cost + (c.arc.costDesc ? (' — ' + c.arc.costDesc) : ''));
+      facts.push('landed on the page so far (measured from the prose): ' + c.arc.pct + '%');
+      (c.arc.goalposts || []).forEach(function(g){
+        facts.push('goalpost “' + g.label + '”: ' + (g.sec != null ? ('lands in §' + (g.sec + 1)) : (g.land ? ('lands wherever “' + g.land + '” appears') : 'not yet placed')));
+        if (g.sec != null) secs.push(g.sec);
+      });
+    } else {
+      facts.push(c.isMain ? 'The MAIN PLOT of the story.' : 'A THREAD — one storyline running through the sections.');
+      if (c.stake) facts.push('what is at stake: ' + c.stake);
+      if (c.shape) facts.push('shape: ' + c.shape);
+      if (c.description) facts.push('the writer’s description: ' + c.description);
+      if (c.els && c.els.length) facts.push('key elements: ' + c.els.map(function(e){ return e.label + (e.note ? (' (' + e.note + ')') : ''); }).join('; '));
+    }
+    var notes = [];
+    (c.cards || []).forEach(function(cd){
+      secs.push(cd.sec);
+      var nm = ''; try { if (typeof npSectionName === 'function'){ var sn = npSectionName(cd.sec); nm = (sn && (sn.name || sn.label)) || ''; } } catch(e){}
+      var bits = [];
+      if (cd.title) bits.push(cd.title);
+      if (cd.text) bits.push(cd.text);
+      (cd.els || []).forEach(function(e){ if (e.note) bits.push(e.label + ': ' + e.note); });
+      if (bits.length) notes.push('§' + (cd.sec + 1) + (nm ? (' · ' + nm) : '') + ' — ' + bits.join(' · '));
+    });
+    var uniq = secs.filter(function(v, i, a){ return v != null && a.indexOf(v) === i; }).sort(function(a, b){ return a - b; });
+    out.push({ key: (c.kind === 'arc' ? 'arc:' : 'thread:') + c.id, label: c.name,
+               kind: (c.kind === 'arc' ? 'arc' : 'thread'),
+               facts: facts.join('\n'), notes: notes.join('\n'),
+               prose: proseOf(uniq.length ? uniq : Object.keys(secText).map(Number)) });
+  });
+
+  (CH.groups || []).forEach(function(gp){
+    var facts = ['A GROUP — ' + (gp.typeName || 'a set of elements') + (gp.lensName ? (', drawn as a ' + gp.lensName.toLowerCase()) : '') + '.'];
+    if (gp.members.length) facts.push('members: ' + gp.members.map(function(m){ return m.label; }).join(', '));
+    var bonds = [];
+    (gp.members || []).forEach(function(m){
+      ((CH.bonds && CH.bonds.byKey[m.key]) || []).forEach(function(l){
+        if ((gp.members || []).some(function(x){ return x.key === l.key; })) bonds.push(m.label + ' — ' + l.text);
+      });
+    });
+    if (bonds.length) facts.push('bonds inside the group:\n' + bonds.filter(function(v, i, a){ return a.indexOf(v) === i; }).join('\n'));
+    /* The prose a group appears in is the prose its MEMBERS appear in — a group is never
+       named in a sentence, its people are. */
+    var qs = [];
+    try {
+      (gp.members || []).forEach(function(m){
+        var w = (typeof npFindEl === 'function') ? npFindEl(m.key) : null;
+        if (w && typeof wikiAppearances === 'function'){
+          (wikiAppearances({ word: w.word, name: w.name, cat: w.cat }) || []).slice(0, 4).forEach(function(q){ if (qs.indexOf(q) < 0) qs.push(q); });
+        }
+      });
+    } catch(e){}
+    out.push({ key:'group:' + gp.id, label: gp.name, kind:'group',
+               facts: facts.join('\n'), notes:'', prose: qs.slice(0, 20).map(function(q){ return '“' + q + '”'; }).join(' ').slice(0, 5000) });
+  });
+  return out;
+}
+async function wikiRunStructureAI(force){
+  if (typeof aiAuthed === 'function' && !aiAuthed()) return;
+  if (!state.session) return;
+  var subs = wikiStructureSubjects();
+  if (!subs.length) return;
+  state.session.wikiAI = state.session.wikiAI || {};
+  var sys = 'You write ONE short paragraph for a writer’s story wiki about a THREAD, an ARC, or a GROUP in their novel — 2–4 sentences, no heading, no list, no preamble. '
+    + 'Say what the story is actually DOING with it: how it is developing across the sections, what it is turning on, what it connects to, what is quietly being set up or left hanging. '
+    + 'Use ONLY the facts, notes and prose given — never invent an event, a name or an outcome, and never predict what happens next. '
+    + 'Where the prose has not yet caught up with what the writer has planned, say so plainly rather than describing the plan as though it were on the page. '
+    + 'This is planning meta-description for the author, never story prose, and never a critique or a score. Return only the paragraph.';
+  for (var i = 0; i < subs.length; i++){
+    var sub = subs[i];
+    if (!force && state.session.wikiAI[sub.key] && state.session.wikiAI[sub.key].text) continue;   // additive, like the element pass
+    /* Nothing to read is not a thing to write about — a paragraph conjured from a name
+       and no facts is the exact "invented from nothing" failure the whole design avoids. */
+    if (!sub.prose.trim() && !sub.notes.trim() && sub.facts.split('\n').length < 3) continue;
+    var prompt = sub.kind.toUpperCase() + ': ' + sub.label + '\n\n' + sub.facts
+      + (sub.notes ? ('\n\nWHAT THE WRITER RECORDED SECTION BY SECTION:\n' + sub.notes.slice(0, 4000)) : '')
+      + (sub.prose ? ('\n\nTHE PROSE IT RUNS THROUGH:\n' + sub.prose) : '\n\n(No prose for it yet.)')
+      + '\n\nWrite the paragraph:';
+    try {
+      var out = await aiCall(sys, prompt, { feature:'wiki_structure', maxTokens: 400 });
+      var txt = String(out || '').trim();
+      if (txt) state.session.wikiAI[sub.key] = { text: txt, at: new Date().toISOString() };
+    } catch(e){ console.warn('wiki structure ' + sub.key + ':', e); }
+  }
+  try { if (typeof scheduleAutosave === 'function') scheduleAutosave(500); } catch(e){}
+}
+try{ window.wikiRunStructureAI = wikiRunStructureAI; }catch(e){}
 async function runWikiAll(opts){
   var _rebuild = !!(opts && opts.rebuild === true);   // "Regenerate" — force a full from-scratch rebuild (fresh structure), bypassing the incremental update
   if (_wikiAllRunning) return;
@@ -28303,7 +28425,11 @@ async function runWikiAll(opts){
     state.session.wikiDoc = out; state.session.wikiProseLen = prose.length; state.session.wikiSecLens = _secLenNow; state.session.wikiSecSigs = _secSigNow; state.session.wikiSig = wikiSig(); scheduleAutosave(500);
     try { const qm = out.match(/##\s*Questions[^\n]*\n([\s\S]*?)(?:\n##\s|$)/i); if (qm && typeof captureElementQuestions === 'function'){ const qtext = qm[1].replace(/^\s*[-*]\s+/gm, '').trim(); captureElementQuestions(qtext); state.session.wikiQuestions = qtext; } } catch(e){}
     try{ wikiMirrorSave(state.session); }catch(e){}   // second home for the wiki — a sync may replace the story doc, but it must never cost the writer a rebuild
-    renderWikiDoc(out);
+    /* v.438 — `renderWikiDoc(out)` painted the AI blob ALONE, so the woven page built at
+       v.435–v.437 was destroyed by the very button that fills it in. `renderWiki()` is
+       the one function that knows what this page is. */
+    try { await wikiRunStructureAI(); } catch(e){ console.warn('structure pass:', e); }
+    renderWiki();
     if (typeof updateWikiBtnState === 'function') updateWikiBtnState();   // up to date now → hide the button until prose/notes change
     flashStatus(incremental ? 'Wiki updated with new writing' : 'Wiki built');
   } catch (e){
@@ -32310,7 +32436,7 @@ function wikiRenderWoven(body, els, hasDoc){
   var put = function(md, layer){
     if (!md || !String(md).trim()) return;
     var frag = mdToWikiHtml(md);
-    Array.prototype.forEach.call(frag.children, function(n){ n.classList.add(layer === 'ai' ? 'wk-ai' : 'wk-det'); });
+    Array.prototype.forEach.call(frag.children, function(n){ n.classList.add(layer === 'ai' ? 'wk-lay-ai' : 'wk-lay-det'); });
     while (frag.firstChild) body.appendChild(frag.firstChild);
   };
   var note = function(text, cls){
@@ -32352,8 +32478,70 @@ function wikiRenderWoven(body, els, hasDoc){
   });
   if (!els.length) put('*No elements yet — add some to your map, and this fills itself in.*', 'det');
 
-  // the three structural chapters — computed, and no AI pass has ever produced them
-  put(wikiComputedMarkdown({ chaptersOnly:true }), 'det');
+  /* The three structural chapters, emitted ITEM BY ITEM rather than as one markdown
+     block — so a thread, an arc or a group can carry its own ✦ paragraph inside its own
+     section, exactly as a character does. A single block could only ever have the
+     portraits stapled to the end of the chapter. [v.438] */
+  var aiFor = function(key){
+    var c = (state.session && state.session.wikiAI) ? state.session.wikiAI[key] : null;
+    return (c && c.text) ? String(c.text) : '';
+  };
+  var portrait = function(key){
+    var t = aiFor(key); if (!t) return;
+    put(t.replace(/\n{2,}/g, '\n'), 'ai');
+    put('*▲ written by Dystoria’s AI — not your own words*', 'ai');
+  };
+
+  put('## Relationships', 'det');
+  put('*Every bond in the story, from all five places Dystoria keeps them.*', 'det');
+  var bkeys = Object.keys(CH.bonds.byKey || {});
+  if (!bkeys.length) put('*No relationships recorded yet.*', 'det');
+  else bkeys.map(function(k){
+      var w = (typeof npFindEl === 'function') ? npFindEl(k) : null;
+      return { key:k, label: w ? ((typeof elDisplayName === 'function') ? elDisplayName(w) : (w.name || w.word)) : k, lines: CH.bonds.byKey[k] };
+    }).sort(function(a, b){ return String(a.label).localeCompare(String(b.label)); })
+    .forEach(function(r){
+      put('### ' + r.label, 'det');
+      var seen = {}, ls = [];
+      r.lines.forEach(function(l){ if (seen[l.text]) return; seen[l.text] = 1; ls.push('- ' + l.text); });
+      put(ls.join('\n'), 'det');
+    });
+
+  put('## Groups', 'det');
+  if (!CH.groups.length) put('*No groups yet.*', 'det');
+  CH.groups.forEach(function(gp){
+    put('### ' + gp.name + (gp.typeName ? ('  ·  ' + gp.typeName) : ''), 'det');
+    if (gp.lensName) put('*Drawn as a ' + gp.lensName.toLowerCase() + '.*', 'det');
+    portrait('group:' + gp.id);
+    put(gp.members.length ? gp.members.map(function(m){ return '- ' + m.label + (m.missing ? '  (no longer in the story)' : ''); }).join('\n')
+                          : '*No members yet.*', 'det');
+  });
+
+  put('## Threads & arcs', 'det');
+  if (!CH.cols.length) put('*No threads or arcs on the Plot grid yet.*', 'det');
+  CH.cols.forEach(function(c){
+    put('### ' + c.name + (c.kind === 'arc' ? '  ·  arc' : (c.isMain ? '  ·  the main plot' : '  ·  thread')), 'det');
+    if (c.arc && c.arc.subject) put('*' + c.arc.subject + ' — ' + c.arc.label + (c.arc.dim ? ('  [' + c.arc.dim + ']') : '') + '*', 'det');
+    portrait((c.kind === 'arc' ? 'arc:' : 'thread:') + c.id);
+    var rows = [];
+    if (c.arc){
+      if (c.arc.from || c.arc.to) rows.push('- **Changes:** ' + (c.arc.from || '…') + ' → ' + (c.arc.to || '…'));
+      rows.push('- **On the page:** ' + c.arc.pct + '%');
+      if (c.arc.cost) rows.push('- **Costs:** ' + c.arc.cost);
+      (c.arc.goalposts || []).forEach(function(g){
+        rows.push('- **' + g.label + ':** ' + (g.sec != null ? ('lands in §' + (g.sec + 1))
+                  : (g.land ? ('lands wherever “' + g.land + '” appears') : 'not yet placed'))); });
+    }
+    if (c.stake) rows.push('- **Stake:** ' + c.stake);
+    if (c.description) rows.push('', c.description);
+    if (c.els && c.els.length) rows.push('- **Key elements:** ' + c.els.map(function(e){ return e.label; }).join(', '));
+    (c.cards || []).forEach(function(cd){
+      var nm = ''; try { if (typeof npSectionName === 'function'){ var sn = npSectionName(cd.sec); nm = (sn && (sn.name || sn.label)) || ''; } } catch(e){}
+      if (cd.text || cd.title) rows.push('- **§' + (cd.sec + 1) + (nm ? (' · ' + nm) : '') + (cd.title ? (' — ' + cd.title) : '') + ':** ' + (cd.text || ''));
+    });
+    put(rows.join('\n'), 'det');
+  });
+  if (CH.missing && CH.missing.length) put('*Not shown here: ' + CH.missing.join('; ') + '.*', 'det');
 
   /* Sections of the written wiki that did not name an element — an overview, a themes
      essay. Kept whole and kept last, because a section we could not place is a fact
@@ -32362,7 +32550,7 @@ function wikiRenderWoven(body, els, hasDoc){
     var keep = split.rest.filter(function(r){ return (r.md && r.md.trim()) || r.title; });
     if (keep.length){
       put('## ✦ From the written wiki', 'ai');
-      note('Written by Dystoria’s AI — these sections are not about one element, so they are kept whole.', 'wk-ai-note').classList.add('wk-ai');
+      note('Written by Dystoria’s AI — these sections are not about one element, so they are kept whole.', 'wk-ai-note').classList.add('wk-lay-ai');
       keep.forEach(function(r){
         if (r.title) put('### ' + r.title, 'ai');
         put(r.md, 'ai');
@@ -32425,6 +32613,8 @@ function wikiComputedMarkdown(opts){
   else CH.groups.forEach(function(gp){
     L.push('### ' + gp.name + (gp.typeName ? ('  ·  ' + gp.typeName) : ''), '');
     if (gp.lensName) L.push('*Drawn as a ' + gp.lensName.toLowerCase() + '.*', '');
+    var _gA = (state.session && state.session.wikiAI) ? state.session.wikiAI['group:' + gp.id] : null;
+    if (_gA && _gA.text) L.push(String(_gA.text).replace(/\n+/g, ' '), '', '*▲ written by Dystoria’s AI — not your own words*', '');
     if (!gp.members.length) L.push('*No members yet.*', '');
     else gp.members.forEach(function(m){ L.push('- ' + m.label + (m.missing ? '  (no longer in the story)' : '')); });
     L.push('');
@@ -32435,6 +32625,8 @@ function wikiComputedMarkdown(opts){
   if (!CH.cols.length) L.push('*No threads or arcs on the Plot grid yet.*', '');
   else CH.cols.forEach(function(c){
     L.push('### ' + c.name + (c.kind === 'arc' ? '  ·  arc' : (c.isMain ? '  ·  the main plot' : '  ·  thread')), '');
+    var _cA = (state.session && state.session.wikiAI) ? state.session.wikiAI[(c.kind === 'arc' ? 'arc:' : 'thread:') + c.id] : null;
+    if (_cA && _cA.text) L.push(String(_cA.text).replace(/\n+/g, ' '), '', '*▲ written by Dystoria’s AI — not your own words*', '');
     if (c.arc){
       if (c.arc.subject) L.push('*' + c.arc.subject + ' — ' + c.arc.label + (c.arc.dim ? ('  [' + c.arc.dim + ']') : '') + '*', '');
       if (c.arc.from || c.arc.to) L.push('- **Changes:** ' + (c.arc.from || '…') + ' → ' + (c.arc.to || '…'));
@@ -49176,7 +49368,7 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.437';
+  var APP_VERSION = '2026.07.20.438';
   var APP_CHANGELOG = [
     { v:'2026.07.20.430', date:'August 14, 2026', notes:[
       '**Fixed: hovering an arc pill in the Plot grid made its title unreadable.** The arc pill borrows its shape from the thread pill, and came with a hover written for a dark pill \u2014 so the pale arc pill turned charcoal while its lettering stayed dark. It now keeps its parchment and takes a gold ring instead.'
@@ -61870,8 +62062,8 @@ body.ai-capped .pt-grouphd.ai-grouphd-empty{ display:none !important; }
 #wkNavBody .wkn-layer{ font-family:var(--sans); font-size:10px; font-weight:600; letter-spacing:.04em; border:1px solid var(--line); border-radius:12px; padding:4px 10px; cursor:pointer; background:transparent; color:var(--ink-faint); }
 #wkNavBody .wkn-layer:hover{ color:var(--ink); border-color:var(--ink-faint); }
 #wkNavBody .wkn-layer.on{ color:#241405; background:rgba(250,154,49,.16); border-color:var(--gold,#c8791f); }
-body.wk-hide-ai .wk-ai{ display:none !important; }
-body.wk-hide-det .wk-det{ display:none !important; }
+body.wk-hide-ai .wk-lay-ai{ display:none !important; }
+body.wk-hide-det .wk-lay-det{ display:none !important; }
 #wkNavBody .wkn-item{ display:block; width:100%; text-align:left; font-family:var(--serif); font-size:13.5px; line-height:1.35; color:var(--ink-soft); background:none; border:none; border-radius:8px; padding:5px 10px 5px 20px; cursor:pointer; }
 #wkNavBody .wkn-sec:hover, #wkNavBody .wkn-item:hover{ background:rgba(0,0,0,.055); color:var(--ink); }
 #wkNavBody .wkn-sec.on, #wkNavBody .wkn-item.on{ color:#241405; background:rgba(250,154,49,.16); box-shadow:inset 2px 0 0 var(--gold,#c8791f); }
