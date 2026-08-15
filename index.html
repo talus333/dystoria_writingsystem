@@ -1354,7 +1354,19 @@ body.eink .pt-rh-dev{color:#000}
   #acctNudge .an-later:hover{color:var(--ink)}
   body.eink #acctNudge .an-card{border-width:2px; box-shadow:none}
   /* In-site confirm + text prompt (replace the browser dialogs) — centered, branded */
-  #confirmModal{position:fixed; inset:0; z-index:660; display:none; align-items:center; justify-content:center; background:rgba(28,27,25,.28)}   /* above the library (190), the plot card popup (320), the plot-add chooser (500) and the version-history modal (640) so confirm dialogs (Delete card, Restore version, + New Story) always sit on top */
+  /* ---- THE DIALOG BAND (9900) --------------------------------------------------
+     `#confirmModal` and `#inPrompt` are the two surfaces the app uses to ASK THE WRITER
+     A QUESTION, and a question must be answerable from wherever it was asked. They sat
+     at 660 — a number chosen against the version-history modal (640) and never revisited
+     as the app grew a dozen full-screen pages at 9000–9800. The comment on this very line
+     used to claim they "always sit on top"; the profile page (9100) painted straight over
+     them, and so did Settings, About, Help and Legal. [Jeremy, v.443]
+
+     9900 is above every page that can raise a dialog and below the SYSTEM band — the
+     tooltip (9999), the mobile notice and image lightbox (99999) and the consent bar
+     (100000) — none of which is waiting on an answer. **Anything new that can raise a
+     prompt must land below 9900.** */
+  #confirmModal{position:fixed; inset:0; z-index:9900; display:none; align-items:center; justify-content:center; background:rgba(28,27,25,.28)}
   #confirmModal.show{display:flex; animation:sgPopIn .14s ease}
   #confirmModal .cm-card{width:362px; max-width:calc(100vw - 32px); background:var(--paper); border:1px solid var(--line);
     border-radius:14px; box-shadow:0 14px 44px rgba(28,27,25,.24); padding:20px 20px 16px}
@@ -1571,7 +1583,7 @@ body.eink .pt-rh-dev{color:#000}
   body:not(.eink) #aboutMark svg{box-shadow:0 0 0 1px rgba(251,207,131,.3)}
   body:not(.eink) #aboutClose{background:rgba(30,26,20,.62); border-color:rgba(255,255,255,.16); color:#cdc5b4}
   body:not(.eink) #aboutClose:hover{color:#f6f0e4; border-color:#fbcf83}
-  #inPrompt{position:fixed; inset:0; z-index:660; display:none; align-items:center; justify-content:center; background:rgba(28,27,25,.28)}   /* above the version-history modal (640) so the "name version" prompt sits on top */
+  #inPrompt{position:fixed; inset:0; z-index:9900; display:none; align-items:center; justify-content:center; background:rgba(28,27,25,.28)}   /* the dialog band — see #confirmModal above [v.443] */
   #inPrompt.show{display:flex; animation:sgPopIn .14s ease}
   #inPrompt .ip-card{width:380px; max-width:calc(100vw - 32px); background:var(--paper); border:1px solid var(--line);
     border-radius:14px; box-shadow:0 14px 44px rgba(28,27,25,.24); padding:18px 18px 15px}
@@ -24383,6 +24395,7 @@ async function cloudPull(force){
           if (_loc.wikiSecLens) d.wikiSecLens = _loc.wikiSecLens;
           if (_loc.wikiSecSigs) d.wikiSecSigs = _loc.wikiSecSigs;
           if (_loc.wikiQuestions != null) d.wikiQuestions = _loc.wikiQuestions;
+          if (_loc.wikiReading != null) d.wikiReading = _loc.wikiReading;
         }
         byId[d.id] = d;
       }
@@ -24528,7 +24541,7 @@ function liveDocStr(){
   delete d.ink; delete d.inkPages; delete d.frameIdx; delete d.focusKeys; delete d.game;
   // …and neither do heavy, regenerable caches — they'd bloat every keystroke broadcast.
   // (They still sync via the periodic full cloud save, so a collaborator gets them on reload.)
-  delete d.wikiAI; delete d.wikiOverview; delete d.wikiQuestions; delete d.wikiDoc; delete d.sessionLog; delete d.archive; delete d.elementQuestions; delete d.goalQuestions;
+  delete d.wikiAI; delete d.wikiOverview; delete d.wikiQuestions; delete d.wikiReading; delete d.wikiDoc; delete d.sessionLog; delete d.archive; delete d.elementQuestions; delete d.goalQuestions;
   return JSON.stringify(d);
 }
 function liveJoin(sess){
@@ -24678,7 +24691,7 @@ function stripHeavyForLocal(s){
     // snapshot from each entry when the lighter session-delta `sessHtml` is present (the editor's own html already
     // holds the prose, and the notepad card / Notes sessions read sessHtml).
     if (Array.isArray(c.sessionLog)) c.sessionLog = c.sessionLog.map(function(e){ if (e && e.sessHtml != null && e.html){ var o = Object.assign({}, e); delete o.html; return o; } return e; });
-    // NOTE: wikiDoc + wikiQuestions are KEPT here (they're small markdown, a few KB) so the wiki survives a reload
+    // NOTE: wikiDoc + wikiQuestions + wikiReading are KEPT here (they're small markdown, a few KB) so the wiki survives a reload
     // instead of being rebuilt from scratch each time. Its change-tracking companions (wikiSig / wikiProseLen /
     // wikiSecLens) are already kept, so the next Update folds in only what changed rather than regenerating.
     if (typeof c.html === 'string' && c.html.indexOf('data:image') !== -1){ c.html = c.html.replace(/src\s*=\s*"data:image[^"]*"/gi, 'src="" data-cloudimg="1"'); c._htmlTrim = 1; }   // drop inline image BYTES locally (restored from the cloud on open)
@@ -24741,7 +24754,7 @@ async function restoreHeavyFromCloud(storyId, cloudId){
     if (Array.isArray(full.archive)) s.archive = full.archive;   // bring back the revision safety-net
     // bring back the wiki for any story whose local copy was trimmed before we started keeping it (or trimmed
     // under storage pressure) — so it isn't rebuilt from scratch. Only fill gaps; never clobber a fresher local wiki.
-    if (typeof full.wikiDoc === 'string' && !s.wikiDoc){ s.wikiDoc = full.wikiDoc; if (full.wikiSig != null) s.wikiSig = full.wikiSig; if (full.wikiProseLen != null) s.wikiProseLen = full.wikiProseLen; if (full.wikiSecLens) s.wikiSecLens = full.wikiSecLens; if (full.wikiQuestions != null) s.wikiQuestions = full.wikiQuestions;
+    if (typeof full.wikiDoc === 'string' && !s.wikiDoc){ s.wikiDoc = full.wikiDoc; if (full.wikiSig != null) s.wikiSig = full.wikiSig; if (full.wikiProseLen != null) s.wikiProseLen = full.wikiProseLen; if (full.wikiSecLens) s.wikiSecLens = full.wikiSecLens; if (full.wikiQuestions != null) s.wikiQuestions = full.wikiQuestions; if (full.wikiReading != null) s.wikiReading = full.wikiReading;
       try { if (typeof state !== 'undefined' && state.session && state.session.id === storyId && typeof renderWiki === 'function' && document.querySelector('[data-mode="wiki"].on')) renderWiki(); } catch(e){} }
     // restore full prose (with any inline image bytes) into the open editor — but NEVER clobber fresh typing
     if (s._htmlTrim && typeof full.html === 'string'){
@@ -27982,13 +27995,22 @@ function wikiSectionLabel(fi){
    page whose only cure is a full rebuild. Bounded to the 12 most recent stories so it can never
    crowd the cache. ---------------------------------------------------------------------------- */
 var LS_WIKI_MIRROR = 'dystoria.wiki.';
+/* The `## Suggested Reading List` section of a wiki document, as text. Written once and
+   read by everything that has to know whether a document still carries one. [v.443] */
+function wikiReadingOf(doc){
+  try{
+    var m = String(doc || '').match(/##\s*Suggested Reading[^\n]*\n([\s\S]*?)(?:\n##\s|$)/i);
+    return m ? m[1].trim() : '';
+  }catch(e){ return ''; }
+}
+window.wikiReadingOf = wikiReadingOf;
 function wikiMirrorSave(sess){
   try{
     if (!sess || !sess.id || !sess.wikiDoc) return;
     localStorage.setItem(LS_WIKI_MIRROR + sess.id, JSON.stringify({
       doc: sess.wikiDoc, sig: sess.wikiSig || '', proseLen: sess.wikiProseLen || 0,
       secLens: sess.wikiSecLens || null, secSigs: sess.wikiSecSigs || null,
-      questions: sess.wikiQuestions || '', at: new Date().toISOString()
+      questions: sess.wikiQuestions || '', reading: sess.wikiReading || '', at: new Date().toISOString()
     }));
     wikiMirrorPrune();
   }catch(e){}
@@ -28014,6 +28036,7 @@ function wikiMirrorRestore(sess){
     if (m.secLens) sess.wikiSecLens = m.secLens;
     if (m.secSigs) sess.wikiSecSigs = m.secSigs;
     if (m.questions) sess.wikiQuestions = m.questions;
+    if (m.reading) sess.wikiReading = m.reading;
     try{ if (typeof scheduleAutosave === 'function') scheduleAutosave(800); }catch(e){}   // write it back into the story doc so it stops being the mirror's job alone
     return true;
   }catch(e){ return false; }
@@ -28499,7 +28522,39 @@ async function runWikiAll(opts){
     const out = incremental
       ? await aiCall(sys, prompt, { feature:'wiki_build', maxTokens: 4096 })
       : await buildWikiChunked(used, unused, npAll, { _pf: _pf, _gc: _gc, _rb: _rb }, body);   // full rebuild: read the whole story in cycles so a long story isn't cut off by the 4096-token output cap
-    state.session.wikiDoc = out; state.session.wikiProseLen = prose.length; state.session.wikiSecLens = _secLenNow; state.session.wikiSecSigs = _secSigNow; state.session.wikiSig = wikiSig(); scheduleAutosave(500);
+    /* ---- v.443 · what came back has to be checked before it replaces what we had ----
+
+       **The Reading List.** It is the LAST section of the document and the only one with
+       nowhere else to live, so it is the first thing lost to a truncated answer or to a
+       model that decided not to reproduce it. Keep it: the new one if there is one, the
+       old one otherwise — re-attached to the document so the document itself stays whole,
+       and held in a field of its own so the next regeneration cannot take it either.
+       [Jeremy, v.443 — "i'm still not seeing the suggested reading"] */
+    var _doc = String(out || '');
+    var _newRead = wikiReadingOf(_doc);
+    var _oldRead = wikiReadingOf(prevDoc) || (state.session.wikiReading || '');
+    if (_newRead) state.session.wikiReading = _newRead;
+    else if (_oldRead){
+      state.session.wikiReading = _oldRead;
+      _doc = _doc.replace(/\s*$/, '') + '\n\n## Suggested Reading List\n\n' + _oldRead;
+    }
+
+    /* **And an update that came back missing a quarter of its entries is not an update.**
+       The incremental pass re-emits the WHOLE wiki inside a 4096-token ceiling; when it
+       runs out, the tail is simply absent, and storing it would overwrite a good wiki with
+       a shorter one — the writer's own words for that is "it was there yesterday". A
+       legitimate shrink happens too (an element removed from the story), so the test is
+       against what the story still HAS, and it says so rather than silently declining. */
+    var _wasEntries = (prevDoc.match(/^#{3,4}\s/gm) || []).length;
+    var _nowEntries = (_doc.match(/^#{3,4}\s/gm) || []).length;
+    if (incremental && _wasEntries >= 4 && _nowEntries < Math.floor(Math.min(_wasEntries, used.length) * 0.75)){
+      flashStatus('The update came back short — your wiki is unchanged. Try Regenerate.');
+      renderWiki();
+      if (typeof updateWikiBtnState === 'function') updateWikiBtnState();
+      return;
+    }
+    state.session.wikiDoc = _doc; state.session.wikiProseLen = prose.length; state.session.wikiSecLens = _secLenNow; state.session.wikiSecSigs = _secSigNow; state.session.wikiSig = wikiSig(); scheduleAutosave(500);
+    try { const _r2 = wikiReadingOf(state.session.wikiDoc); if (_r2) state.session.wikiReading = _r2; } catch(e){}
     try { const qm = out.match(/##\s*Questions[^\n]*\n([\s\S]*?)(?:\n##\s|$)/i); if (qm && typeof captureElementQuestions === 'function'){ const qtext = qm[1].replace(/^\s*[-*]\s+/gm, '').trim(); captureElementQuestions(qtext); state.session.wikiQuestions = qtext; } } catch(e){}
     try{ wikiMirrorSave(state.session); }catch(e){}   // second home for the wiki — a sync may replace the story doc, but it must never cost the writer a rebuild
     /* v.438 — `renderWikiDoc(out)` painted the AI blob ALONE, so the woven page built at
@@ -32683,6 +32738,13 @@ function wikiRenderWoven(body, els, hasDoc){
                              md:_q.split(/\n+/).map(function(x){ x = x.trim(); if (!x) return '';
                                return /^[-*]\s/.test(x) ? x : ('- ' + x.replace(/^[•·]\s*/, '')); }).filter(Boolean).join('\n') });
   }
+  /* The Reading List, the same way and for the same reason. Since v.443 it has a field
+     of its own, so a document that came back without one is no longer the end of it. */
+  var _sawR = restClose.some(function(r){ return /reading/i.test(r.title || ''); });
+  if (!_sawR){
+    var _r = (state.session && state.session.wikiReading) ? String(state.session.wikiReading).trim() : '';
+    if (_r) restClose.push({ title:'Suggested Reading List', md:_r });
+  }
   /* Questions before the Reading List — a reader finishes on what to go and read. */
   restClose.sort(function(a, b){
     var rank = function(t){ return /reading/i.test(t || '') ? 1 : 0; };
@@ -32696,6 +32758,25 @@ function wikiRenderWoven(body, els, hasDoc){
     if (/^\s*[-*]\s/m.test(r.md)) put(r.md, 'ai');
     else aiPara(r.md);
   });
+  /* A wiki that has never carried a reading list is otherwise a dead end: the only way to
+     get one was a full Regenerate, which rewrites the whole document to fetch one section.
+     So where the section would be, there is the offer instead — **one dedicated call**,
+     which is also why it can no longer be crowded out of the four-section budget that
+     drops it in the first place. Gated as an AI surface, because unlike v.437's Portraits
+     switch this one INVOKES the model rather than hiding it. [v.443] */
+  try {
+    var _haveR = restClose.some(function(r){ return /reading/i.test(r.title || ''); });
+    if (!_haveR && !document.body.classList.contains('ai-off')){
+      put('## Suggested Reading List', 'nav');
+      var _rn = note('Books chosen against this story — its themes, your goal and your profile — and never one you have already read.');
+      _rn.classList.add('wk-lay-ai');
+      var _rb = document.createElement('button');
+      _rb.className = 'wk-aibtn wk-lay-ai wk-readingbtn';
+      _rb.textContent = '✦ Suggest reading for this story';
+      _rb.addEventListener('click', function(){ if (typeof runWikiReading === 'function') runWikiReading(); });
+      body.appendChild(_rb);
+    }
+  } catch(e){}
   try { if (typeof enhanceReadingList === 'function') enhanceReadingList(body); } catch(e){}
   /* v.440 — this said `__wikiNavRefresh`, which **is defined nowhere**; the module
      exports `__wikiNavRender`. So Contents never rebuilt when the document re-rendered:
@@ -36244,6 +36325,57 @@ function renderWikiOverview(text){
   }
 }
 // Closing wiki section: open questions the narrative raises, one per key element — food for thought.
+/* ONE section, ONE call. [v.443]
+
+   The reading list used to arrive as the fourth of four sections in a single 4096-token
+   answer, behind an Overview, a Frame and a question per element — so on a story with any
+   size to it, it was the section the budget ran out on. Asking for it on its own is both
+   the fix for that and the way a wiki that never had one can get one without rewriting
+   every word of itself to do it. */
+async function runWikiReading(){
+  if (typeof aiAuthed === 'function' && !aiAuthed()){ if (typeof promptAiSignup === 'function') promptAiSignup(); return; }
+  if (state._wikiBusy) return;
+  state._wikiBusy = true;
+  try {
+    if (typeof flashStatus === 'function') flashStatus('Choosing books for this story…');
+    var els = (typeof wikiGather === 'function') ? wikiGather() : [];
+    var names = els.slice(0, 40).map(function(e){ return e.name ? (e.word + ' “' + e.name + '”') : e.word; });
+    var prose = (typeof editorText === 'function') ? editorText().trim() : '';
+    var _pf = (typeof getProfileContext === 'function') ? getProfileContext() : '';
+    var _gc = (typeof goalContext === 'function') ? (goalContext() || '') : '';
+    var _rb = (typeof getReadBooksContext === 'function') ? getReadBooksContext() : '';
+    var _facts = '';
+    try { if (typeof storyFacts === 'function') _facts = storyFacts({ maxChars: 1800 }) || ''; } catch(e){}
+    var sys = 'You recommend real, published books to a writer working on a specific story. Begin with one or two sentences on what they stand to gain from this reading as they work on it, then the recommendations. Choose with taste and restraint: classics, critically acclaimed and seminal works, and books that wrestle with the same themes, questions, structures or moods, so the writer can see where their work sits in the larger history of literature. Mix fiction and non-fiction; include craft books, criticism, and works on psychology, mythology, symbolism or philosophy where they would genuinely enrich THIS story, and only then. '
+      + 'Group them under a few short bold sub-labels (e.g. **Kindred fiction**, **On the craft**, **Myth, psychology & symbolism**). Output each as a bullet: "- *Title* — Author: one sentence on why it speaks to this story." Aim for 6–12 well-chosen books, quality over quantity. '
+      + 'NEVER invent a title or an author — recommend only real books you are confident exist — and never recommend a book listed under BOOKS THE WRITER HAS ALREADY READ. Do not mention the author of this story or the act of writing it. Output the list only, with no "## Suggested Reading List" heading.';
+    var prompt = (_pf ? (_pf + '\n\n') : '') + (_gc ? (_gc + '\n\n') : '') + (_rb ? (_rb + '\n\n') : '')
+      + (_facts ? ('THE STORY AS THE AUTHOR HAS RECORDED IT:\n' + _facts + '\n\n') : '')
+      + (names.length ? ('ELEMENTS: ' + names.join(', ') + '\n\n') : '')
+      + (prose ? ('PROSE:\n\n' + prose.slice(0, 8000) + '\n\n') : '')
+      + 'Recommend the books:';
+    var out = await aiCall(sys, prompt, { feature:'wiki_reading', maxTokens: 1600 });
+    var txt = String(out || '').replace(/^\s*##[^\n]*\n/, '').trim();
+    if (!txt){ if (typeof flashStatus === 'function') flashStatus('No reading list came back — try again'); return; }
+    if (state.session){
+      state.session.wikiReading = txt;
+      /* Into the document too, so an export carries it and the next update has something
+         to preserve — replacing an existing section rather than growing a second one. */
+      var d = String(state.session.wikiDoc || '');
+      if (/##\s*Suggested Reading/i.test(d))
+        d = d.replace(/##\s*Suggested Reading[^\n]*\n[\s\S]*?(?=\n##\s|$)/i, '## Suggested Reading List\n\n' + txt + '\n');
+      else if (d.trim()) d = d.replace(/\s*$/, '') + '\n\n## Suggested Reading List\n\n' + txt;
+      if (d.trim()) state.session.wikiDoc = d;
+      if (typeof scheduleAutosave === 'function') scheduleAutosave(500);
+      try { wikiMirrorSave(state.session); } catch(e){}
+    }
+    if (typeof renderWiki === 'function') renderWiki();
+    if (typeof flashStatus === 'function') flashStatus('Reading list ready');
+  } catch(e){
+    if (typeof flashStatus === 'function') flashStatus((typeof aiErrMsg === 'function') ? aiErrMsg(e) : 'Could not build a reading list');
+  } finally { state._wikiBusy = false; }
+}
+window.runWikiReading = runWikiReading;
 async function runWikiQuestions(silent){
   const wrap = $('wikiQuestions'); if (!wrap) return;
   if (typeof aiAuthed==='function' && !aiAuthed()){ if(!silent && typeof promptAiSignup==='function') promptAiSignup(); return; }
@@ -49498,7 +49630,7 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.442';
+  var APP_VERSION = '2026.07.20.443';
   var APP_CHANGELOG = [
     { v:'2026.07.20.430', date:'August 14, 2026', notes:[
       '**Fixed: hovering an arc pill in the Plot grid made its title unreadable.** The arc pill borrows its shape from the thread pill, and came with a hover written for a dark pill \u2014 so the pale arc pill turned charcoal while its lettering stayed dark. It now keeps its parchment and takes a gold ring instead.'
@@ -61039,7 +61171,8 @@ body.ai-capped .pt-grouphd.ai-grouphd-empty{ display:none !important; }
     '#ecSurprise',                          // ✦ Surprise Me
     '#helpAskBtn', '#helpAsk',              // in-app Ask
     '.arc-ai-btn',                          // ✦ Analyze on the page — the Arc Analysis view's ONLY action. As a deep control it vanished and left a page reading "Run the analysis to see…" with no button; entry tier keeps it visible and lets the click explain itself. Same shape as #wikiUpdate below, found the same way.
-    '#wikiUpdate'                           // ✦ Update Wiki — the Wiki tab's only action; as a deep-tier control it vanished when signed out, leaving the tab with an Export button and no way in. Entry tier keeps it visible and lets the click explain itself.
+    '#wikiUpdate',                          // ✦ Update Wiki — the Wiki tab's only action; as a deep-tier control it vanished when signed out, leaving the tab with an Export button and no way in. Entry tier keeps it visible and lets the click explain itself.
+    '.wk-readingbtn'                        // ✦ Suggest reading — v.443, and the same shape a third time: it stands under a "Suggested Reading List" heading and its own explanation, so a deep tier would leave the section promising a list with nothing beneath it to ask for one.
   ];
 
   /* AI controls with no ✦ of their own. The Patterns picker builds its cards from
