@@ -32023,8 +32023,141 @@ function wikiRelLinks(el, byKey){
   });
   return [...new Set(out)];
 }
+/* ============================================================================
+   #17 · THE REFERENCE CHAPTERS  (v.433)
+
+   Everything here is COMPUTED. It renders on open, costs nothing, and never touches
+   `state.session.wikiAI` — the ✦ pass writes a paragraph on TOP of an entry, and an
+   entry without one is still a complete entry.
+
+   The relationships come from `BONDS.graph()` and not from the wiki's own
+   `wikiRelLinks()`. That function reads `fr.prompt.links` — the per-section Map links,
+   **one store out of five** — so a standing bond between two characters who never share
+   a section (v.412's whole purpose), a member chart's chain of command, and a concept
+   map's edges were all missing from the wiki with nothing saying so. `BONDS.graph()` is
+   the one read model over all five (v.397), and `BONDS.readsAs()` turns an edge into
+   English (v.404–v.407) with no model involved.
+   ========================================================================== */
+function wikiChapters(){
+  var out = { bonds:{ byKey:{}, count:0 }, groups:[], cols:[], missing:[] };
+
+  // --- relationships, from every store ---
+  try {
+    if (window.BONDS && typeof window.BONDS.graph === 'function'){
+      var g = window.BONDS.graph({ kind:'free', scope:{ type:'all' }, loose:false }) || {};
+      var byKey = {}; (g.nodes || []).forEach(function(n){ byKey[n.key] = n; });
+      (g.edges || []).forEach(function(e){
+        var A = byKey[e.akey], B = byKey[e.bkey]; if (!A || !B) return;
+        var line = function(from, to){
+          var t = ''; try { t = window.BONDS.readsAs(e, from.key) || ''; } catch(_){}
+          return { key:to.key, label:to.label, type:t, text:(t ? (t + ' ') : 'connected to ') + to.label };
+        };
+        (out.bonds.byKey[A.key] = out.bonds.byKey[A.key] || []).push(line(A, B));
+        (out.bonds.byKey[B.key] = out.bonds.byKey[B.key] || []).push(line(B, A));
+        out.bonds.count++;
+      });
+    } else out.missing.push('relationships (the Bonds reader was not available)');
+  } catch(e){ out.missing.push('relationships (' + (e && e.message ? e.message : 'unreadable') + ')'); }
+
+  // --- groups ---
+  try {
+    if (window.BONDS && typeof window.BONDS.groupList === 'function') out.groups = window.BONDS.groupList() || [];
+    else out.missing.push('groups (the Bonds panel has not been opened in this session)');
+  } catch(e){ out.missing.push('groups (' + (e && e.message ? e.message : 'unreadable') + ')'); }
+
+  // --- threads and arcs ---
+  try {
+    if (typeof window.__planColFacts === 'function') out.cols = window.__planColFacts() || [];
+    else out.missing.push('threads and arcs (the Plan module was not available)');
+  } catch(e){ out.missing.push('threads and arcs (' + (e && e.message ? e.message : 'unreadable') + ')'); }
+
+  return out;
+}
+/* One element's entry, deterministically. Where it appears, **where it does not**, what
+   the writer established, who it is bound to, and what changes.
+
+   The gaps are the part nothing else in the app shows: a character who is in §1–3 and §7
+   is telling you something about §4–6, and absence is invisible in a list of appearances.
+   [Jeremy, 2026-08-15] */
+function wikiElementFacts(el, ch){
+  var F = { span:'', gaps:[], sections:[], established:[], bonds:[], change:[], quotes:[], mentions:0, look:[] };
+  try {
+    var fs = Array.from(el.frames || []).sort(function(a,b){ return a-b; });   // 1-based
+    F.sections = fs.slice();
+    if (fs.length){
+      var total = ((state && state.frames) || []).length || fs[fs.length-1];
+      var runs = [], cur = [fs[0]];
+      for (var i=1;i<fs.length;i++){ if (fs[i] === fs[i-1]+1) cur.push(fs[i]); else { runs.push(cur); cur=[fs[i]]; } }
+      runs.push(cur);
+      F.span = runs.map(function(r){ return r.length>1 ? ('§'+r[0]+'–'+r[r.length-1]) : ('§'+r[0]); }).join(', ');
+      var have = {}; fs.forEach(function(n){ have[n]=1; });
+      var miss = []; for (var n=1;n<=total;n++) if (!have[n]) miss.push(n);
+      if (miss.length && miss.length < total){
+        var gruns = [], gc = [miss[0]];
+        for (var j=1;j<miss.length;j++){ if (miss[j] === miss[j-1]+1) gc.push(miss[j]); else { gruns.push(gc); gc=[miss[j]]; } }
+        gruns.push(gc);
+        F.gaps = gruns.map(function(r){ return r.length>1 ? ('§'+r[0]+'–'+r[r.length-1]) : ('§'+r[0]); });
+      }
+    }
+  } catch(e){}
+
+  var w = null; try { w = (typeof npFindEl === 'function') ? npFindEl(el.cat + '|' + el.word) : null; } catch(e){}
+  try { w = w || el.ref || null; } catch(e){}
+
+  try {
+    var attrs = (el.attrs || (w && w.attrs) || []);
+    var traits = attrs.filter(function(a){ return a && a.word; }).map(function(a){ return a.word + (a.sub ? (' (' + a.sub + ')') : ''); });
+    if (traits.length) F.established.push({ lab:'Characteristics', val:traits.join(', ') });
+    if (w && w.bucket) F.established.push({ lab:'Role', val:w.bucket });
+    var mot = (w && w.motivation) || null;
+    if (mot && mot.want){
+      var mv = 'wants ' + mot.want;
+      var obs = (Array.isArray(mot.obstacles) ? mot.obstacles : []).map(function(o){ return (o && (o.word || o.name)) || ''; }).filter(Boolean);
+      if (obs.length) mv += ' — blocked by ' + obs.join(', ');
+      if (mot.stake) mv += '; at stake: ' + mot.stake;
+      F.established.push({ lab:'Drives', val:mv });
+    }
+  } catch(e){}
+
+  try {
+    var key = w ? wordKey(w) : (el.cat + '|' + el.word);
+    var lines = (ch && ch.bonds && ch.bonds.byKey[key]) || [];
+    var seen = {};
+    lines.forEach(function(l){ if (seen[l.text]) return; seen[l.text] = 1; F.bonds.push(l.text); });
+    (ch && ch.groups || []).forEach(function(gp){
+      if ((gp.members || []).some(function(m){ return m.key === key; }))
+        F.established.push({ lab:'Group', val:gp.name + (gp.typeName ? (' — ' + gp.typeName) : '') });
+    });
+    (ch && ch.cols || []).forEach(function(c){
+      if ((c.els || []).some(function(x){ return x.nkey === key; }))
+        F.established.push({ lab:(c.kind === 'arc' ? 'Arc' : 'Thread'), val:c.name });
+      if (c.arc && c.arc.subject && w && c.arc.subject === ((w.name || '').trim() || w.word))
+        F.change.push(c.arc.label + (c.arc.dim ? (' [' + c.arc.dim + ']') : '') + ' — ' + c.arc.pct + '% on the page'
+          + ((c.arc.goalposts || []).filter(function(g){ return g.sec != null; }).length
+             ? ('; lands: ' + c.arc.goalposts.filter(function(g){ return g.sec != null; }).map(function(g){ return g.label + ' §' + (g.sec+1); }).join(', ')) : ''));
+    });
+  } catch(e){}
+
+  try { var qs = wikiAppearances(el) || []; F.mentions = qs.length; F.quotes = qs; } catch(e){}
+
+  /* Observations, with their evidence and no score attached. The standing rule is
+     *surfaced, never scored against a target* — so each of these says what it saw and
+     stops. A writer may have excellent reasons for every one of them. */
+  try {
+    if (F.mentions === 0 && (el.attrs || []).length >= 2)
+      F.look.push('Given ' + (el.attrs||[]).length + ' characteristics, and not yet named anywhere in the prose.');
+    if (F.gaps.length && F.sections.length === 1 && F.mentions > 0)
+      F.look.push('Appears in one section only (' + F.span + ').');
+    else if (F.gaps.length >= 1 && F.sections.length > 1)
+      F.look.push('Absent from ' + F.gaps.join(', ') + '.');
+    if (F.bonds.length === 0 && F.mentions > 0)
+      F.look.push('No relationship recorded with anything else in the story.');
+  } catch(e){}
+  return F;
+}
 function buildWikiMarkdown(els, story){
   const files = [];
+  const CH = (typeof wikiChapters === 'function') ? wikiChapters() : { bonds:{byKey:{}}, groups:[], cols:[], missing:[] };
   const byKey = {}; els.forEach(e => { byKey[e.cat + '|' + e.word] = e; });
   const order = { being: 0, setting: 1, object: 2, theme: 3, event: 4 };
   const cats = [...new Set(els.map(e => e.cat))].sort((a, b) => (order[a] != null ? order[a] : 9) - (order[b] != null ? order[b] : 9));
@@ -32041,24 +32174,137 @@ function buildWikiMarkdown(els, story){
     String(state.session.wikiQuestions).split(/\n+/).map(s => s.trim()).filter(Boolean).forEach(q => idx.push('- ' + q));
     idx.push('');
   }
-  idx.push('— [Timeline](timeline.md)');
+  idx.push('## Chapters', '');
+  idx.push('- [Relationships](relationships.md)');
+  idx.push('- [Groups](groups.md)');
+  idx.push('- [Threads & arcs](threads-and-arcs.md)');
+  idx.push('- [Timeline](timeline.md)');
+  idx.push('');
+  /* **No silent caps, and no silent omissions.** If a chapter could not be read, the
+     document says so where the chapter would have been rather than simply not having
+     one — a missing chapter and an empty one are different facts about a story. */
+  if (CH.missing && CH.missing.length){
+    idx.push('> Not included in this build of the document: ' + CH.missing.join('; ') + '.', '');
+  }
   files.push({ name: 'index.md', text: idx.join('\n') });
+
+  // ---- Relationships ----
+  {
+    const R = ['# Relationships — ' + story, '',
+      '_Every bond in the story, from all five places the app keeps them: the section maps, standing bonds, the member charts, the concept maps and the group structures._', ''];
+    const names = Object.keys(CH.bonds.byKey || {});
+    if (!names.length) R.push('_No relationships recorded yet._', '');
+    else {
+      const rows = [];
+      names.forEach(k => {
+        const w = (typeof npFindEl === 'function') ? npFindEl(k) : null;
+        const label = w ? ((typeof elDisplayName === 'function') ? elDisplayName(w) : (w.name || w.word)) : k;
+        rows.push({ label: label, lines: CH.bonds.byKey[k] });
+      });
+      rows.sort((a, b) => String(a.label).localeCompare(String(b.label)));
+      rows.forEach(r => {
+        R.push('## ' + r.label, '');
+        const seen = {};
+        r.lines.forEach(l => { if (seen[l.text]) return; seen[l.text] = 1; R.push('- ' + l.text); });
+        R.push('');
+      });
+    }
+    files.push({ name: 'relationships.md', text: R.join('\n') });
+  }
+
+  // ---- Groups ----
+  {
+    const G = ['# Groups — ' + story, '',
+      '_Who belongs to what, and the shape each group is drawn as._', ''];
+    if (!CH.groups.length) G.push('_No groups yet._', '');
+    else CH.groups.forEach(gp => {
+      G.push('## ' + gp.name + (gp.typeName ? ('  ·  ' + gp.typeName) : ''), '');
+      if (gp.lensName) G.push('*Drawn as a ' + gp.lensName.toLowerCase() + (gp.lensLede ? (' — ' + gp.lensLede.replace(/\.$/, '').toLowerCase()) : '') + '.*', '');
+      if (gp.sourced) G.push('*Read from a chart you built elsewhere rather than made here.*', '');
+      if (!gp.members.length) G.push('_No members yet._', '');
+      else gp.members.forEach(m => G.push('- ' + m.label + (m.missing ? '  _(no longer in the story)_' : '')));
+      G.push('');
+    });
+    files.push({ name: 'groups.md', text: G.join('\n') });
+  }
+
+  // ---- Threads & arcs ----
+  {
+    const T = ['# Threads & arcs — ' + story, '',
+      '_Each storyline with what is at stake in it, and each arc as a per-section account of what changes._', ''];
+    if (!CH.cols.length) T.push('_No threads or arcs on the Plot grid yet._', '');
+    else CH.cols.forEach(c => {
+      T.push('## ' + c.name + (c.kind === 'arc' ? '  ·  arc' : (c.isMain ? '' : '  ·  thread')), '');
+      if (c.arc){
+        if (c.arc.subject) T.push('*' + c.arc.subject + ' — ' + c.arc.label + (c.arc.dim ? ('  [' + c.arc.dim + ']') : '') + '*', '');
+        if (c.arc.from || c.arc.to) T.push('- **Changes:** ' + (c.arc.from || '…') + ' → ' + (c.arc.to || '…'));
+        T.push('- **On the page:** ' + c.arc.pct + '%');
+        if (c.arc.cost) T.push('- **Costs:** ' + c.arc.cost + (c.arc.costDesc ? (' — ' + c.arc.costDesc) : ''));
+        (c.arc.goalposts || []).forEach(g => {
+          T.push('- **' + g.label + ':** ' + (g.sec != null ? ('lands in §' + (g.sec + 1))
+                 : (g.land ? ('lands wherever “' + g.land + '” appears') : 'not yet placed')));
+        });
+        T.push('');
+      }
+      if (c.stake) T.push('- **Stake:** ' + c.stake);
+      if (c.shape) T.push('- **Shape:** ' + c.shape);
+      if (c.description) T.push('', c.description, '');
+      if (c.els && c.els.length){
+        T.push('', '**Key elements:** ' + c.els.map(e => e.label).join(', '), '');
+        c.els.filter(e => e.note).forEach(e => T.push('- *' + e.label + '* — ' + e.note));
+      }
+      if (c.cards && c.cards.length){
+        T.push('', '### Section by section', '');
+        c.cards.forEach(cd => {
+          const nm = (typeof npSectionName === 'function') ? ((npSectionName(cd.sec) || {}).name || '') : '';
+          T.push('**§' + (cd.sec + 1) + (nm ? (' · ' + nm) : '') + (cd.title ? (' — ' + cd.title) : '') + '**', '');
+          if (cd.text) T.push(cd.text, '');
+          (cd.els || []).filter(e => e.note).forEach(e => T.push('- *' + e.label + '* — ' + e.note));
+          T.push('');
+        });
+      }
+      T.push('');
+    });
+    files.push({ name: 'threads-and-arcs.md', text: T.join('\n') });
+  }
   // one page per element
   els.forEach(el => {
+    const F = (typeof wikiElementFacts === 'function') ? wikiElementFacts(el, CH) : null;
     const L = ['---'];
     L.push('title: ' + (el.name ? (el.name + ' (' + el.word + ')') : el.word));
     L.push('type: ' + wikiCatName(el.cat) + (el.sub ? (' · ' + el.sub) : ''));
     L.push('sections: ' + [...el.frames].sort((a, b) => a - b).map(f => wikiSectionLabel(f - 1)).join('; '));
     L.push('---', '', '# ' + (el.name ? ('“' + el.name + '” — ' + el.word) : el.word), '');
+    /* The one-line reading a reference document opens with: where it is, where it is
+       NOT, and how often it is named. Absence is the part nothing else in the app shows. */
+    if (F && F.span){
+      L.push('*' + F.span + (F.gaps.length ? ('  ·  absent ' + F.gaps.join(', ')) : '')
+             + '  ·  ' + F.mentions + ' mention' + (F.mentions === 1 ? '' : 's') + '*', '');
+    }
+    /* The ✦ paragraph is MARKED. Everything else on this page traces to something the
+       writer typed; this one is a machine's reading of it, and a document that blurs the
+       two is worse than one that omits it. [Jeremy, v.433] */
     const cache = (state.session && state.session.wikiAI) ? state.session.wikiAI[el.cat + '|' + el.word] : null;
-    if (cache && cache.text) L.push(cache.text, '');
-    if (el.attrs && el.attrs.length) L.push('**Characteristics:** ' + el.attrs.map(a => a.word).join(', '), '');
-    const rels = wikiRelLinks(el, byKey);
-    if (rels.length){ L.push('## Relationships', ''); rels.forEach(r => L.push('- ' + r)); L.push(''); }
-    const qs = wikiAppearances(el);
+    if (cache && cache.text){ L.push('> ' + String(cache.text).replace(/\n+/g, ' '), '', '*— written by Dystoria’s AI from the facts below.*', ''); }
+    if (F && F.established.length){
+      L.push('## Established', '');
+      F.established.forEach(x => L.push('- **' + x.lab + ':** ' + x.val));
+      L.push('');
+    } else if (el.attrs && el.attrs.length){ L.push('**Characteristics:** ' + el.attrs.map(a => a.word).join(', '), ''); }
+    /* Relationships from ALL FIVE stores, via BONDS.graph — `wikiRelLinks` reads only
+       the per-section Map links and silently omitted standing bonds, member charts and
+       concept maps. [v.433] */
+    if (F && F.bonds.length){ L.push('## Bonds', ''); F.bonds.forEach(r => L.push('- ' + r)); L.push(''); }
+    if (F && F.change.length){ L.push('## Change tracked', ''); F.change.forEach(r => L.push('- ' + r)); L.push(''); }
+    const qs = (F ? F.quotes : wikiAppearances(el)) || [];
     L.push('## In the prose', '');
     if (!qs.length) L.push('_Not yet woven into the writing._', '');
     else qs.forEach(q => L.push('> ' + q, ''));
+    if (F && F.look.length){
+      L.push('## Worth a look', '');
+      F.look.forEach(r => L.push('- ' + r));
+      L.push('', '_Observations, not verdicts — each may be exactly what you intended._', '');
+    }
     files.push({ name: wikiFileName(el), text: L.join('\n') });
   });
   // timeline.md
@@ -48311,7 +48557,7 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.432';
+  var APP_VERSION = '2026.07.20.433';
   var APP_CHANGELOG = [
     { v:'2026.07.20.430', date:'August 14, 2026', notes:[
       '**Fixed: hovering an arc pill in the Plot grid made its title unreadable.** The arc pill borrows its shape from the thread pill, and came with a hover written for a dark pill \u2014 so the pale arc pill turned charcoal while its lettering stayed dark. It now keeps its parchment and takes a gold ring instead.'
@@ -54670,6 +54916,56 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
   function plotDefFieldVal(col, f){ return f==='stake' ? plotDefStake(col) : plotDefField(col.id, f); }
   // Author-defined plot summary for STORY FACTS + the wiki. The Main Plot (first column) is the story's overall
   // plot; other columns are sub-plots. It records the author's intent as guidance — it never forces structure.
+  /* The Plot grid's columns as DATA rather than as a sentence [v.433, #17].
+     `__planPlotFacts` next door answers the same question for an AI prompt and returns
+     one flat string, which is right for a prompt and useless to a document that wants to
+     print a heading per thread. Same readers, same stores; different shape.
+
+     Per-section cards come along because that is the chapter an arc column IS — a
+     per-section account of a change, with the goalposts that land in each section. It is
+     the material `buildCellText` assembles for the .xls (v.422), read the same way. */
+  window.__planColFacts = function(){
+    try{
+      if(typeof data==='undefined' || !data){ if(typeof load==='function') load(); }
+      var frames=(typeof state!=='undefined' && state.frames) ? state.frames.length : 0;
+      return plotColumns().map(function(col){
+        var out={ kind:col.kind||'thread', id:col.id, name:(_isMainCol(col)?'Main Plot':(col.name||'Thread')),
+                  isMain:!!_isMainCol(col), stake:'', description:'', shape:'', els:[], cards:[] };
+        try{ out.stake=(plotDefStake(col)||'').trim(); }catch(e){}
+        try{ out.description=(plotDefField(col.id,'description')||'').trim(); }catch(e){}
+        try{ out.shape=(plotDefField(col.id,'shape')||'').trim(); }catch(e){}
+        try{ out.els=(plotDefEls(col.id)||[]).map(function(el){
+               return { nkey:el.nkey, label:el.label, note:String(plotDefElNote(col.id, el.nkey)||'').trim() }; }); }catch(e){}
+        for(var i=0;i<frames;i++){
+          try{
+            var title=(typeof plotCardTitle==='function'?plotCardTitle(i,col):'')||'';
+            var text=String(plotCellText(i,col)||'').trim();
+            var cels=(cardEls(i,col)||[]).map(function(el){
+              return { label:el.label, note:String(plotElGet(i, col.id, el.nkey)||'').trim() }; });
+            if(title || text || cels.length) out.cards.push({ sec:i, title:title, text:text, els:cels });
+          }catch(e){}
+        }
+        /* An arc column carries the arc itself — what changes, from what to what, what it
+           costs, and which section each goalpost lands in. The percentage here is the
+           PROSE-DERIVED one; the AI's reading is a separate field and is not taken. */
+        if(col.kind==='arc'){
+          try{
+            var arc=(data.arcs||{})[col.id];
+            if(arc){
+              var mom=arcMomentum(arc);
+              out.arc={ subject:(arcSubjName(arc.subject)||''), label:arcDisplayLabel(arc),
+                        name:arc.name||'', from:arc.from||'', to:arc.to||'', dim:arc.dimLabel||'',
+                        cost:arc.cost||'', costDesc:arc.costDesc||'',
+                        pct:(mom.series[mom.N-1]||0),
+                        goalposts:(arc.goalposts||[]).map(function(g){
+                          return { label:g.label||'goalpost', sec:(g.sec!=null?g.sec:null), land:(g.land||'').trim() }; }) };
+            }
+          }catch(e){}
+        }
+        return out;
+      });
+    }catch(e){ return []; }
+  };
   window.__planPlotFacts = function(){
     try{
       if(typeof data==='undefined' || !data){ if(typeof load==='function') load(); }
@@ -64628,6 +64924,7 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
 (function(){
   'use strict';
   var V = window.BONDSVIEW = window.BONDSVIEW || {};
+  var B = window.BONDS = window.BONDS || {};   // v.431 — this file now ADDS to the BONDS surface (see B.groupList below)
   var LS = 'dystoria.bonds.v1.';
 
   /* A MOUNT is one Bonds surface: which element it draws into, its own chooser
@@ -67813,6 +68110,51 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
     ].join('\n');
     document.head.appendChild(s);
   }
+
+  /* ---- the groups, for anything outside this panel that has to PRINT them -----
+     Added at v.431 for the story bible [#17]. It returns groups the way a document
+     wants them — named, typed in words rather than ids, with the structure they are
+     drawn as, and their members already resolved to labels — because every caller
+     that wanted this was about to write the same five lookups, and the fifth one
+     would have got `sourced()` wrong.
+
+     `__live` is preferred over `members` for exactly the reason v.410 gave: a member
+     chart's group is READ from the chart rather than copied out of it, so the live
+     reading is the truth and the stored list is a stale copy of it.
+
+     Deliberately NOT a view of the store: no ids beyond the group's own, no hidden
+     groups, no migration artefacts. A door, not a window. */
+  B.groupList = function(){
+    var out = [];
+    try{
+      var ros = {}; try{ ros = (typeof BONDS.roster === 'function') ? BONDS.roster() : {}; }catch(e){}
+      groups().forEach(function(gp){
+        if (!gp) return;
+        var keys = (gp.__live && gp.__live.length) ? gp.__live : (gp.members || []);
+        var members = keys.map(function(k){
+          var n = ros[k];
+          return { key:k, label:(n && n.label) || k, cat:(n && n.cat) || '', missing:!n };
+        });
+        var lens = lensOfGroup(gp);
+        var lk = (BONDS.KINDS && BONDS.KINDS[lens]) || null;
+        out.push({
+          id: gp.id,
+          name: gp.name || 'Untitled group',
+          type: typeOf(gp),
+          typeName: typeName(typeOf(gp)) || '',
+          lens: lens,
+          lensName: (lk && lk.name) || '',
+          lensLede: (lk && lk.lede) || '',
+          /* A group read off a member chart or a concept map rather than made here —
+             worth saying in a document, because the writer never "made" it and will
+             not recognise it as something they created. */
+          sourced: !!gp.source,
+          members: members
+        });
+      });
+    }catch(e){}
+    return out;
+  };
 
   V.__open = openBondCreator;
   V.__poolFor = poolFor;   /* the harness asserts the WORDS that come back, not that a picker opened (lesson 19) */
