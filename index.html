@@ -24010,7 +24010,14 @@ async function cloudSave(sess){
         await cloudConflict(sess);
       }
       else { sess._needsCloud = false; sess._conflict = false;
-             if (rows && rows[0] && rows[0].updated_at) sess._cloudUpdatedAt = rows[0].updated_at; else sess._cloudUpdatedAt = now;
+             /* v.431 — the base must be what the COLUMN holds, never what this device
+                sent. They differ whenever the column's precision differs from the
+                string we wrote, or a trigger stamps its own time — and a base that is
+                off by a microsecond fails every future guard, which reads to the
+                writer as a phantom second device. Read it back; only guess if the
+                read gave us nothing, and re-read once before settling for the guess. */
+             if (rows && rows[0] && rows[0].updated_at) sess._cloudUpdatedAt = rows[0].updated_at;
+             else { sess._cloudUpdatedAt = now; _reStamp(sess); }
              if (typeof pubBroadcastUpdate === 'function') pubBroadcastUpdate(sess); }   // push live update to public readers
     } else {
       sess._inserting = true;
@@ -24053,6 +24060,20 @@ if (typeof window !== 'undefined') window.addEventListener('online', retryPendin
    snapshotted too. Only then is the choice offered. Whichever way it goes, both drafts
    still exist.
    ============================================================================ */
+/* Re-read a story row's real `updated_at` and adopt it as this device's guard base.
+   Every write that moves the row WITHOUT going through `cloudSave`'s return path has
+   to call this, or the next guarded save fails against a stamp that no longer exists
+   and the writer is told their story changed somewhere else. [v.431]
+
+   Cheap — one column, one row — and deliberately silent: it is a correction, not an
+   event, and there is nothing here for the writer to decide. */
+async function _reStamp(sess){
+  try {
+    if (!sess || !sess.cloudId || typeof supa === 'undefined' || !supa) return;
+    const { data } = await supa.from('stories').select('updated_at').eq('id', sess.cloudId).single();
+    if (data && data.updated_at) sess._cloudUpdatedAt = data.updated_at;
+  } catch (e){}
+}
 async function cloudConflict(sess){
   if (!sess || sess._conflict) return;          // one prompt per conflict, not one per autosave
   sess._conflict = true;
@@ -24061,6 +24082,61 @@ async function cloudConflict(sess){
     const { data } = await supa.from('stories').select('doc,updated_at').eq('id', sess.cloudId).single();
     theirs = data || null;
   } catch (e){}
+
+  /* ---- v.431 · is this actually somebody else's writing? --------------------
+     The caller knows one thing: a guarded update matched zero rows. That is NOT
+     the same fact as "another device wrote this story", and until v.431 the
+     difference was never checked — so a base stamp that had drifted for any of
+     the reasons fixed below produced a dialog about a second device that did not
+     exist, on every autosave, for ever. [Jeremy]
+
+     The test is the only one that is safe: **is the cloud copy actually newer
+     than this device's?** `updated` is the story's own stamp, written by
+     `saveSession` into the document itself, so it compares like with like across
+     devices without trusting either clock against the other.
+
+       · cloud strictly newer  → a real conflict. Ask. Nothing below changes.
+       · otherwise             → the row holds this device's own work (or older).
+                                 Nothing of anyone's can be lost by writing over
+                                 it, so re-base on the row's REAL stamp and save.
+                                 Silently: a question with a false premise is
+                                 worse than no question.
+
+     If the re-read failed, `theirs` is null and we cannot prove anything — so the
+     dialog stands. An unprovable case is not a safe case. */
+  try {
+    if (theirs && theirs.doc){
+      const mine  = String(sess.updated || '');
+      const yours = String(theirs.doc.updated || '');
+      if (!yours || !mine || yours <= mine){
+        sess._cloudUpdatedAt = theirs.updated_at || '';   // the stamp the row REALLY has
+        sess._conflict = false;
+        try {
+          const t3 = new Date().toISOString();
+          const { data: r3 } = await supa.from('stories')
+            .update({ title: sess.name || 'Untitled story', doc: cloudDocOf(sess), updated_at: t3 })
+            .eq('id', sess.cloudId).eq('updated_at', sess._cloudUpdatedAt).select('updated_at');
+          if (r3 && r3.length){
+            sess._cloudUpdatedAt = r3[0].updated_at || t3;
+            sess._needsCloud = false;
+            if (typeof pubBroadcastUpdate === 'function') pubBroadcastUpdate(sess);
+            return;                                        // saved, and the writer never had to think about it
+          }
+          /* Still nothing. The row is not moving under a stamp we can see, which
+             means the guard is not measuring what it thinks it is — a policy that
+             permits the UPDATE and returns nothing to SELECT does exactly this.
+             Keep the work, say so plainly, and do NOT invent a second device. */
+          sess._needsCloud = true;
+          if (typeof flashStatus === 'function') flashStatus('Saved on this device — the cloud copy could not be confirmed');
+          return;
+        } catch(e){
+          sess._needsCloud = true;
+          if (typeof flashStatus === 'function') flashStatus('Saved on this device — will sync when the cloud answers');
+          return;
+        }
+      }
+    }
+  } catch(e){}
 
   // 1. preserve THIS device's draft before anything else can touch it
   try { if (typeof captureVersion === 'function') captureVersion('manual', 'Recovery — this device, ' + new Date().toLocaleString()); } catch(e){}
@@ -24240,6 +24316,32 @@ async function cloudPull(force){
         byId[d.id] = d;
       }
     });
+    /* ---- v.431 · the open story is a DIFFERENT OBJECT ----------------------
+       `openSession` takes a deep copy (`JSON.parse(JSON.stringify(s))`), so everything
+       stamped above landed on the library's copies and not on the story the writer is
+       actually in — and `saveSession` then writes the open story, stale base and all,
+       straight back over the fresh entry (`list[i] = s`). That is the loop that made
+       this permanent rather than transient.
+
+       So re-base the open story here too — but ONLY when the cloud is not holding
+       something newer than it. If the cloud IS newer, the guard must stay armed: that
+       is a real conflict and the dialog is the correct answer to it. Re-basing
+       unconditionally would hand this device permission to overwrite work it has never
+       seen, which is the exact data loss the guard exists to prevent. */
+    try {
+      const _open = state.session;
+      if (_open && _open.id && byId[_open.id]){
+        const _row = byId[_open.id];
+        if (_row._cloudUpdatedAt && (_row.updated || '') <= (_open.updated || '')){
+          _open._cloudUpdatedAt = _row._cloudUpdatedAt;
+          _open.cloudId  = _row.cloudId || _open.cloudId;
+          _open._owner   = _row._owner;   _open._shared = _row._shared;
+          _open._baton   = _row._baton;
+          _open._isPublic = _row._isPublic; _open._publicToken = _row._publicToken;
+        }
+      }
+    } catch(e){}
+
     const merged = Object.values(byId).sort((a, b) => (b.updated || '').localeCompare(a.updated || ''));
     persistSessions(merged);
     renderLibrary();
@@ -24289,7 +24391,8 @@ async function shareStory(sess){
   // Push the latest local content so the collaborator gets the current version — but NEVER overwrite the cloud with a
   // trimmed local copy (a story that isn't open is stored lightweight; its full doc already lives in the cloud).
   if (!sess._localTrim){
-    try { await supa.from('stories').update({ title: sess.name || 'Untitled story', doc: cloudDocOf(sess), updated_at: new Date().toISOString() }).eq('id', sess.cloudId); } catch (e){}
+    try { await supa.from('stories').update({ title: sess.name || 'Untitled story', doc: cloudDocOf(sess), updated_at: new Date().toISOString() }).eq('id', sess.cloudId);
+          await _reStamp(sess); } catch (e){}   // v.431 — this moved the row; re-base or the next save reports a phantom conflict
   }
   const { data, error } = await supa.rpc('share_story', { sid: sess.cloudId, invitee_email: email.trim() });
   if (error){ flashStatus('Share failed: ' + error.message); return; }
@@ -25414,7 +25517,8 @@ async function pubImpLoadSettings(){
 async function pubImpSetAllow(field, val){
   var sess=state.session; if(!(sess&&sess.cloudId&&supa)) return;
   var col=(field==='comments')?'allow_comments':'allow_impressions';
-  try{ await supa.from('stories').update((function(){ var o={}; o[col]=!!val; return o; })()).eq('id', sess.cloudId); }catch(e){}
+  try{ await supa.from('stories').update((function(){ var o={}; o[col]=!!val; return o; })()).eq('id', sess.cloudId);
+       await _reStamp(sess); }catch(e){}   // v.431 — a column this device does not track may still carry an updated_at trigger
 }
 /* ===== Version-aware sharing (#12/#33): share freezes a snapshot; readers stay on it until the author publishes ===== */
 var _pubSnap=null, _pubPubVersion='';   // reader side: the frozen snapshot being read + its version id
@@ -25425,7 +25529,7 @@ async function pubPublishCurrent(label){
   if(typeof amOwner==='function' && !amOwner()) return false;
   var v=(typeof captureVersion==='function')?captureVersion('shared', label||'Shared draft'):null; if(!v) return false;
   var payload={ published_version_id:v.id, published_html:v.html, published_label:v.label||'', published_at:new Date().toISOString() };
-  try{ var r=await supa.from('stories').update(payload).eq('id', sess.cloudId); if(r&&r.error) throw r.error; }
+  try{ var r=await supa.from('stories').update(payload).eq('id', sess.cloudId); if(r&&r.error) throw r.error; await _reStamp(sess); }   // v.431 — re-base after publishing
   catch(e){ if(typeof flashStatus==='function') flashStatus('Publishing needs the version-sharing migration — run the delivered .sql'); return false; }
   sess._pubVersionId=v.id;
   try{ pubBroadcastUpdate(sess); }catch(e){}                 // nudge any open reader to reload the new snapshot
@@ -48189,7 +48293,7 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.430';
+  var APP_VERSION = '2026.07.20.431';
   var APP_CHANGELOG = [
     { v:'2026.07.20.430', date:'August 14, 2026', notes:[
       '**Fixed: hovering an arc pill in the Plot grid made its title unreadable.** The arc pill borrows its shape from the thread pill, and came with a hover written for a dark pill \u2014 so the pale arc pill turned charcoal while its lettering stayed dark. It now keeps its parchment and takes a gold ring instead.'
