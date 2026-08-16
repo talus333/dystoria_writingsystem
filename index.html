@@ -6305,14 +6305,31 @@ function enhanceReadingList(body){
   let node = rl.nextElementSibling;
   while(node && !node.classList.contains('wk-doc-h2')){
     const nxt = node.nextElementSibling;
-    if(node.classList.contains('wk-doc-li')){
+    /* **Idempotent, because three different functions call this and any of them can run
+       twice over the same DOM.** `renderWiki` ends with a call, `wikiRenderWoven` (which
+       `renderWiki` invokes) used to end with one too, and `renderWikiDoc` has its own — so
+       every book on the reading list was wearing TWO checkboxes, one of them inert.
+       [Jeremy, v.446] A decorator that adds a control must ask whether it already added it;
+       counting on exactly one caller is a guess about code you have not written yet. */
+    if(node.classList.contains('wk-doc-li') && !node.querySelector('.wk-read')){
       const book=_bookFromLi(node.textContent);
       if(read.indexOf(book.toLowerCase())>=0){ node.remove(); }
       else {
         node.classList.add('wk-book');
+        /* **`node` is the loop's CURSOR, not this row.** It is declared outside the while
+           and reassigned on every pass, so a handler closing over it does not point at the
+           book it was attached to — by the time anyone clicks, the loop has finished and
+           `node` is `null`. Ticking a box therefore added the book to the profile and then
+           threw on `node.style`, so the row never faded, never went, and the "Moved to your
+           read books" toast never fired: it sits after the throw. Captured per row. [v.446]
+
+           The general form is worth keeping: **a listener that closes over a loop variable
+           is bound to the loop, not to the item.** [see also lesson 54 — a listener bound
+           once at boot to a node captured at boot] */
+        const row=node;
         const lab=document.createElement('label'); lab.className='wk-read'; lab.title='I\u2019ve read this \u2014 move it to your profile so it is not suggested again';
         const cb=document.createElement('input'); cb.type='checkbox';
-        cb.addEventListener('change', ()=>{ if(cb.checked){ addReadBook(book); node.style.transition='opacity .25s'; node.style.opacity='0'; setTimeout(()=>{ try{node.remove();}catch(e){} },260); if(typeof flashStatus==='function') flashStatus('Moved to your read books'); } });
+        cb.addEventListener('change', ()=>{ if(cb.checked){ addReadBook(book); row.style.transition='opacity .25s'; row.style.opacity='0'; setTimeout(()=>{ try{row.remove();}catch(e){} },260); if(typeof flashStatus==='function') flashStatus('Moved to your read books'); } });
         lab.appendChild(cb);
         node.insertBefore(lab, node.firstChild);
       }
@@ -32853,7 +32870,9 @@ function wikiRenderWoven(body, els, hasDoc){
       body.appendChild(_rb);
     }
   } catch(e){}
-  try { if (typeof enhanceReadingList === 'function') enhanceReadingList(body); } catch(e){}
+  /* No `enhanceReadingList` here: `renderWiki` — this function's only caller — runs it on
+     this same body the moment we return. Two passes is what put two checkboxes on every
+     book. [v.446] */
   /* v.440 — this said `__wikiNavRefresh`, which **is defined nowhere**; the module
      exports `__wikiNavRender`. So Contents never rebuilt when the document re-rendered:
      its jump targets went stale, and the Show row survived on a page that no longer had
@@ -49932,7 +49951,7 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.445';
+  var APP_VERSION = '2026.07.20.446';
   var APP_CHANGELOG = [
     { v:'2026.07.20.430', date:'August 14, 2026', notes:[
       '**Fixed: hovering an arc pill in the Plot grid made its title unreadable.** The arc pill borrows its shape from the thread pill, and came with a hover written for a dark pill \u2014 so the pale arc pill turned charcoal while its lettering stayed dark. It now keeps its parchment and takes a gold ring instead.'
