@@ -2614,6 +2614,9 @@ body.eink .pt-rh-dev{color:#000}
   #npFmtBar{display:none; position:absolute; top:8px; right:16px; z-index:30; gap:2px; align-items:center; padding:3px 5px;
     background:var(--paper); border:1px solid var(--line); border-radius:10px; box-shadow:0 4px 14px rgba(28,27,25,.10)}
   body:not(.writing) #npFmtBar{display:flex}
+  /* v.466 [Jeremy] "the written notes still start at the same height as the format bar" — whenever the
+     bar shows, the pad's BASELINE top padding clears it; the pages strip's measured inline value only raises it. */
+  body:not(.writing) #notepad{padding-top:50px}
   body:not(.writing).np-ink #npFmtBar, body.res-allview #npFmtBar, body.writing #npFmtBar{display:none !important}
   #npFmtBar button{font-family:var(--sans); font-size:12.5px; font-weight:700; width:26px; height:24px; line-height:1;
     border:none; background:transparent; border-radius:7px; color:var(--ink-soft); cursor:pointer}
@@ -18884,6 +18887,7 @@ const PAWN_HEADS = {};
     if (typeSub && typeSub.groups) typeSub.groups.forEach(g => { const hd = fam[g.name] || humanHead; (g.words || []).forEach(w => { PAWN_HEADS[w] = hd; }); });
   } catch (e){}
   const set = (words, hd) => words.forEach(w => { PAWN_HEADS[w] = hd; });
+  PAWN_HEADS['__hybrid'] = hybridHead;   // v.466 — the head a two-Type being wears
   set(['Human', 'Plant'], humanHead);
   set(['Wolf', 'Bear', 'Fox', 'Horse', 'Cat', 'Hound', 'Boar', 'Hare', 'Rat', 'Moth', 'Spider', 'Werewolf', 'Kitsune', 'Kelpie'], animalHead);
   set(['Raven', 'Owl', 'Eagle', 'Crow', 'Heron', 'Phoenix', 'Roc', 'Garuda', 'Simurgh', 'Griffin', 'Hippogriff', 'Harpy', 'Peryton', 'Squonk', 'Bird'], birdHead);
@@ -18969,7 +18973,8 @@ function makeMeeple(nd){
   g.setAttribute('class', 'meeple');
   g.setAttribute('transform', 'translate(0,' + (baseY + 9) + ') scale(2.0)');   // being pawns at 2× size; baseY (-24) keeps the base anchored near the name
   const mk = (tag, a) => { const e = document.createElementNS(NS, tag); for (const k in a) e.setAttribute(k, a[k]); return e; };
-  const headKey = nd.creature || typeWord;   // pick the head by the being's Type (e.g. Wolf, Dragon, Angel)
+  let headKey = nd.creature || typeWord;   // pick the head by the being's Type (e.g. Wolf, Dragon, Angel)
+  try{ if(!nd.creature && typeof elHybridTypes==='function' && elHybridTypes(nd).length>1) headKey='__hybrid'; }catch(e){}   // v.466 — two Types → the Hybrid head
   const bodyFn = PLAIN_PAWNS ? null : (PAWN_BODIES[headKey] || PAWN_BODIES[typeWord]);   // full-body override (e.g. Mermaid) replaces the standard body+head
   if (bodyFn){ g.appendChild(bodyFn(mk)); const t0 = document.createElementNS(NS, 'title'); t0.textContent = typeWord || nd.word || 'Character'; g.appendChild(t0); return g; }
   g.appendChild(mk('path', { d: 'M-5.5 0 Q-6.2 -7 -2.6 -9.6 L2.6 -9.6 Q6.2 -7 5.5 0 Q0 2.6 -5.5 0 Z', fill: '#2b2620', stroke: '#100e0a', 'stroke-width': '0.8', 'stroke-linejoin': 'round' }));
@@ -21357,6 +21362,7 @@ function openElementDossier(key){
     // Characters show just their name as the title; their base Type ("Cat") moves to the identity line below.
     var name=(isBeing && w.name && String(w.name).trim()) ? String(w.name).trim() : ((typeof elDisplayName==='function')?elDisplayName(w):(w.name||w.word||'Element'));
     var baseType=(typeof capWord==='function'?capWord(w.word||''):(w.word||''));
+    try{ var _hyT=(typeof elHybridTypes==='function')?elHybridTypes(w):[]; if(_hyT.length>1) baseType=_hyT.map(function(t){ return (typeof capWord==='function')?capWord(t):t; }).join('–')+' hybrid'; }catch(e){}   // v.466
     var groupInfo=(isGroup && typeof window.__dystGroupTreeInfo==='function') ? window.__dystGroupTreeInfo(key) : null;
     var attrs=w.attrs||[];
     function sub(s){ var a=attrs.filter(function(x){return x&&x.sub===s;})[0]; return a?a.word:''; }
@@ -37813,6 +37819,18 @@ function elDisplayName(w){ if (!w) return ''; const nm = (w.name || '').trim(); 
   if (w.role === 'being'){ const fs = sn => { const a = ((w.attrs)||[]).find(x => x && x.sub === sn); if (a && a.word) return a.word; const id = ((w.identity)||[]).find(x => x && x.sub === sn); if (id && id.word) return id.word; if (w.sub === sn && w.word) return w.word; return ''; };
     return fs('Type') || fs('Archetype') || fs('Occupation') || (w.word || '').trim(); }   // unnamed being → Type, else Archetype, else Occupation
   return (w.word || '').trim(); }
+// v.466 (#6) — a being's Types, DERIVED (word + identity + attrs, up to two distinct):
+// hybridness is not a stored flag, so stories that already carried a second Type attr light up unchanged.
+function elHybridTypes(w){
+  if(!w || w.cat!=='being') return [];
+  var out=[], seen={};
+  var push=function(t){ t=String(t||'').trim(); if(t && !seen[t.toLowerCase()]){ seen[t.toLowerCase()]=1; out.push(t); } };
+  push(w.word);
+  ((w.identity)||[]).forEach(function(p){ if(p && p.sub==='Type') push(p.word); });
+  ((w.attrs)||[]).forEach(function(a){ if(a && a.sub==='Type') push(a.word); });
+  return out.slice(0,2);
+}
+try{ window.elHybridTypes=elHybridTypes; }catch(e){}
 // A section's display name for the notepad: its stageName / inline title / section-0 input, else just the number.
 function npSectionName(i){
   const fr = state.frames && state.frames[i];
@@ -41207,6 +41225,7 @@ document.addEventListener('DOMContentLoaded', init);
           +  '<div class="cc-seclbl">Characteristics</div>'
           +  '<div id="ccSlots"></div>'
           +  '<span class="cc-add" id="ccAdd">＋ add a dimension</span>'
+          +  '<span class="cc-add" id="ccHybrid" title="Give them a second Type — a true hybrid (wolf–machine, spirit–human…). Both Types show on the card, and the map figure changes.">⚭ hybridize</span>'
           +'</div>'
           +'<div class="cc-foot"><button class="cc-gen" id="ccGen">↻ Generate</button><button class="cc-create" id="ccCreate">Create character</button></div>';
         document.body.appendChild(el);
@@ -41216,6 +41235,7 @@ document.addEventListener('DOMContentLoaded', init);
         document.getElementById('ccDesc').addEventListener('input', e=>{ CC.desc=e.target.value; });
         document.getElementById('ccDescGo').addEventListener('click', ev=>{ ev.stopPropagation(); runInlineDesc('ccDesc','ccDescGo', ccApplyDescription); });
         document.getElementById('ccAdd').addEventListener('click', ev=>{ ev.stopPropagation(); ccAddMenu(ev.clientX, ev.clientY); });
+        document.getElementById('ccHybrid').addEventListener('click', ev=>{ ev.stopPropagation(); ccAddDim('Type', ev.clientX, ev.clientY); });   // v.466 — the second Type feeds the storage path that always existed
         document.getElementById('ccGen').addEventListener('click', ev=>{ ev.stopPropagation(); ccGenerate(); });
         document.getElementById('ccCreate').addEventListener('click', ev=>{ ev.stopPropagation(); ccCommit(); });
         const seg=document.getElementById('ccSeg');
@@ -50712,7 +50732,7 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.464';
+  var APP_VERSION = '2026.07.20.466';
   var APP_CHANGELOG = [
     { v:'2026.07.20.430', date:'August 14, 2026', notes:[
       '**Fixed: hovering an arc pill in the Plot grid made its title unreadable.** The arc pill borrows its shape from the thread pill, and came with a hover written for a dark pill \u2014 so the pale arc pill turned charcoal while its lettering stayed dark. It now keeps its parchment and takes a gold ring instead.'
@@ -63232,6 +63252,126 @@ body.ai-capped .pt-grouphd.ai-grouphd-empty{ display:none !important; }
       + '.el-mention:hover{color:var(--gold-ink); border-bottom-color:var(--gold-ink); background:rgba(196,158,74,.08)}'
       + 'body.eink .el-mention{border-bottom-color:#000}'
       + 'body.eink .el-mention:hover{color:#000; background:#eee}';
+    document.head.appendChild(css);
+  }catch(e){}
+})();
+</script>
+
+
+<script id="dyst-nameroll">
+/* ============================================================================
+   Dystoria — #6: roll-a-name. The forge (🎲, procedural, AI-free) + the optional
+   ✦ batch from the story. One enhancer, six builders. See patch_v465.
+   ============================================================================ */
+(function(){
+  'use strict';
+  var pick=function(a){ return a[Math.floor(Math.random()*a.length)]; };
+  var cap=function(s){ return s.charAt(0).toUpperCase()+s.slice(1); };
+  var SOFT_ON=['b','br','c','d','el','f','l','m','mar','n','r','s','sel','t','th','v','vel','w','y'];
+  var HARSH_ON=['dr','gr','k','kh','kr','mor','sk','thr','ur','vor','z','zar'];
+  var VOW=['a','e','i','o','u','ae','ia','ei'];
+  var MID=['l','ll','n','nd','r','rr','s','ss','st','th','m'];
+  var SOFT_END=['a','an','ar','el','en','eth','ia','in','is','on','or','ra','wen','ys'];
+  var HARSH_END=['ak','ax','gor','goth','ok','oth','rak','ur','ux','zar'];
+  var SET_SUF=['fell','mere','hollow','march','haven','reach','moor','vale','spire','ford','deep','watch','strand','barrow'];
+  var OBJ_A=['Ember','Ash','Star','Iron','Whisper','Thorn','Winter','Salt','Oath','Shadow','Dawn','Grave','Hollow','Sorrow'];
+  var OBJ_B=['blade','song','stone','key','lantern','crown','thread','mirror','bell','map','coin','cloak','needle','chain'];
+  var ORG_ADJ=['Silent','Gilded','Broken','Wandering','Last','Hollow','Crimson','Veiled','Northern','Forgotten','Patient','Unsleeping'];
+  var ORG_N=['Order','Circle','Company','Court','Choir','League','Covenant','Guild','Watch','Assembly','Household','Sisterhood'];
+  var EV_N=['Fall','Sundering','Accord','Burning','Crossing','Silence','Reckoning','Vigil','Exodus','Coronation','Drowning','Long Winter'];
+  var CON_N=['Debt','Hunger','Mercy','Rot','Passage','Memory','Static','Tide','Weight','Threshold','Quiet','Ledger'];
+  var HARSH_TYPES=/monster|construct|robot|demon|undead|beast|machine|golem|wraith|fiend/i;
+  function forgeBeing(harsh){
+    var on=harsh?HARSH_ON:SOFT_ON, end=harsh?HARSH_END:SOFT_END;
+    var n=cap(pick(on))+pick(VOW);
+    if(Math.random()<0.6) n+=pick(MID)+pick(VOW);
+    n+=pick(end);
+    if(n.length>10) n=n.slice(0,10);
+    return cap(n);
+  }
+  function forgeSetting(){ var stem=cap(pick(SOFT_ON))+pick(VOW)+(Math.random()<0.5?pick(MID):''); return cap(stem)+pick(SET_SUF); }
+  window.dystNameForge=function(cat, hint){
+    try{
+      hint=String(hint||'');
+      if(cat==='being') return forgeBeing(HARSH_TYPES.test(hint));
+      if(cat==='setting') return forgeSetting();
+      if(cat==='object') return pick(OBJ_A)+pick(OBJ_B).toLowerCase();
+      if(cat==='org') return 'The '+pick(ORG_ADJ)+' '+pick(ORG_N);
+      if(cat==='event') return 'The '+pick(EV_N)+' of '+forgeBeing(false);
+      if(cat==='concept') return (Math.random()<0.5?'The ':'')+pick(CON_N);
+      return forgeBeing(false);
+    }catch(e){ return 'Aris'; }
+  };
+  var BUILDERS={ ccName:'being', sbName:'setting', obName:'object', gbName:'org', evName:'event', coName:'concept' };
+  var aiBatch={};   // per-input: the fetched names not yet shown
+  function fill(input, name){
+    input.value=name;
+    input.dispatchEvent(new Event('input',{bubbles:true}));   // every builder's own state listens here
+    try{ input.focus(); }catch(e){}
+  }
+  function typeHint(id){
+    try{ if(id!=='ccName') return '';
+      // CC is closure-scoped inside the builder module — read the RENDERED Type slots instead
+      var out='';
+      Array.prototype.forEach.call(document.querySelectorAll('#ccSlots .cc-slot'), function(row){
+        var d=row.querySelector('.cc-dim'); if(!d || d.textContent!=='Type') return;
+        out+=' '+String(row.textContent||'').replace('Type','').trim();
+      });
+      return out;
+    }catch(e){ return ''; }
+  }
+  async function aiRoll(input, cat, btn){
+    if(typeof aiAuthed==='function' && !aiAuthed()){ if(typeof promptAiSignup==='function') promptAiSignup(); return; }
+    var k=input.id;
+    if(aiBatch[k] && aiBatch[k].length){ fill(input, aiBatch[k].shift()); return; }
+    btn.disabled=true; var t0=btn.textContent; btn.textContent='…';
+    try{
+      var facts=''; try{ facts=(typeof storyFacts==='function')?String(storyFacts()).slice(0,2000):''; }catch(e){}
+      var kind={being:'character',setting:'place',object:'object',org:'group or organization',event:'event',concept:'concept'}[cat]||cat;
+      var sys='You name story elements. Given the story\u2019s facts and one element\u2019s kind, suggest 5 NAMES that fit the story\u2019s world and tone. Names only \u2014 no descriptions. Return ONLY a JSON array of 5 strings.';
+      var user='ELEMENT KIND: '+kind+(typeHint(k)?('\nTYPE:'+typeHint(k)):'')+(facts?('\n\nSTORY FACTS:\n'+facts):'')+'\n\nReturn ONLY a JSON array of 5 name strings.';
+      var out=await aiCall(sys, user, { feature:'roll_name', json:true, maxTokens:200, temperature:0.9 });
+      var arr=[]; try{ arr=JSON.parse(out); }catch(e){ if(typeof parseJsonLoose==='function'){ try{ arr=parseJsonLoose(out); }catch(_){}} }
+      if(!Array.isArray(arr)) arr=[];
+      arr=arr.filter(function(x){ return typeof x==='string' && x.trim(); }).map(function(x){ return x.trim(); }).slice(0,5);
+      if(arr.length){ aiBatch[k]=arr; fill(input, aiBatch[k].shift()); }
+      else if(typeof flashStatus==='function') flashStatus('No names came back \u2014 try again.');
+    }catch(e){ if(typeof flashStatus==='function') flashStatus('Couldn\u2019t reach the AI just now.'); }
+    btn.disabled=false; btn.textContent=t0;
+  }
+  function enhance(input){
+    if(input._nameroll) return; input._nameroll=1;
+    var cat=BUILDERS[input.id];
+    var w=document.createElement('span'); w.className='nr-wrap';
+    input.parentNode.insertBefore(w, input); w.appendChild(input);
+    input.classList.add('nr-padded');
+    var dice=document.createElement('button'); dice.type='button'; dice.className='nr-btn nr-dice'; dice.textContent='🎲';
+    dice.title='Roll a name \u2014 click again to re-roll';
+    dice.addEventListener('click', function(ev){ ev.stopPropagation(); ev.preventDefault(); fill(input, window.dystNameForge(cat, typeHint(input.id))); });
+    var star=document.createElement('button'); star.type='button'; star.className='nr-btn nr-star ai-surface'; star.innerHTML='<span class="ai-star">\u2726</span>';
+    star.title='Name it from the story \u2014 five suggestions per \u2726, grounded in your story facts';
+    star.addEventListener('click', function(ev){ ev.stopPropagation(); ev.preventDefault(); aiRoll(input, cat, star); });
+    w.appendChild(dice); w.appendChild(star);
+  }
+  // the builders are cached singletons created on first open — watch for their name inputs arriving
+  function sweep(root){ Object.keys(BUILDERS).forEach(function(id){ var el=(root.getElementById?root:document).getElementById(id); if(el) enhance(el); }); }
+  try{
+    var mo=new MutationObserver(function(){ sweep(document); });
+    var start=function(){ sweep(document); mo.observe(document.body, { childList:true, subtree:true }); };
+    if(document.readyState!=='loading') start(); else document.addEventListener('DOMContentLoaded', start);
+  }catch(e){}
+  try{
+    var css=document.createElement('style'); css.id='dyst-nameroll-css';
+    css.textContent=
+        '.nr-wrap{position:relative; display:block}'
+      + '.nr-wrap input.nr-padded{padding-right:62px !important; width:100%; box-sizing:border-box}'
+      + '.nr-btn{position:absolute; top:50%; transform:translateY(-50%); width:24px; height:24px; line-height:1;'
+      + ' border:none; background:transparent; border-radius:7px; cursor:pointer; font-size:13px; padding:0}'
+      + '.nr-dice{right:32px}'
+      + '.nr-star{right:6px; color:var(--gold)}'
+      + '.nr-btn:hover{background:rgba(196,158,74,.14)}'
+      + 'body.ai-off .nr-star{display:none}'
+      + 'body.eink .nr-btn:hover{background:#eee}';
     document.head.appendChild(css);
   }catch(e){}
 })();
