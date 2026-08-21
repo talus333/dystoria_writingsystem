@@ -1529,6 +1529,21 @@ body.eink .pt-rh-dev{color:#000}
   #versionsModal .ver-prev-head button{font-family:var(--sans); font-size:11.5px; border:1px solid var(--line); border-radius:14px; padding:4px 10px; cursor:pointer; background:transparent; color:var(--ink-soft)}
   #versionsModal .ver-prev-body{font-family:var(--serif); font-size:14px; line-height:1.6; color:var(--ink)}
   #versionsModal .ver-prev-body p{margin:0 0 .7em}
+  #versionsModal .vd-bar{display:flex; align-items:center; gap:9px; margin:8px 0 10px; font-family:var(--sans)}
+  #versionsModal .vd-scopelbl{font-size:10.5px; font-weight:700; letter-spacing:.12em; text-transform:uppercase; color:var(--ink-faint)}
+  #versionsModal #vdScope{font-family:var(--sans); font-size:12px; color:var(--ink); background:var(--paper); border:1px solid var(--line); border-radius:10px; padding:5px 11px; cursor:pointer; max-width:270px}
+  #versionsModal #vdRestore{margin-left:auto; font-family:var(--sans); font-size:11px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--gold-ink); background:transparent; border:1px solid rgba(196,158,74,.5); border-radius:16px; padding:7px 15px; cursor:pointer}
+  #versionsModal #vdRestore:hover{border-color:var(--gold); background:rgba(196,158,74,.08)}
+  #versionsModal #vdRestore:disabled{color:var(--ink-faint); border-color:var(--line); cursor:default; background:transparent}
+  #versionsModal .vd-body{font-family:var(--serif); font-size:13.5px; line-height:1.62; color:var(--ink)}
+  #versionsModal .vd-block{margin:0 0 .7em}
+  #versionsModal .vd-block.vd-same{color:var(--ink-faint)}
+  #versionsModal .vd-sec{font-family:var(--sans); font-size:11px; font-weight:700; letter-spacing:.12em; text-transform:uppercase; color:var(--gold-ink); margin:13px 0 7px}
+  #versionsModal .vd-skip{font-family:var(--sans); font-size:11px; color:var(--ink-faint); text-align:center; margin:7px 0; letter-spacing:.05em}
+  #versionsModal .vd-del{color:#8f3a2b; background:rgba(179,64,47,.10); text-decoration:line-through; text-decoration-thickness:1px; border-radius:3px; padding:0 2px}
+  #versionsModal .vd-ins{color:#22633a; background:rgba(47,158,68,.12); border-radius:3px; padding:0 2px}
+  #versionsModal .vd-del-ct{color:#8f3a2b; font-weight:700}
+  #versionsModal .vd-ins-ct{color:#22633a; font-weight:700}
   #versionsModal .ver-fb-comments{margin-top:12px; border-top:1px solid var(--line); padding-top:10px}
   #versionsModal .ver-fb-h{font-family:var(--sans); font-size:11px; letter-spacing:.09em; text-transform:uppercase; color:var(--ink-faint); margin-bottom:8px}
   #versionsModal .ver-fb-c{border-left:2px solid rgba(58,123,213,.4); padding:2px 0 6px 10px; margin-bottom:9px}
@@ -31345,20 +31360,145 @@ function versionDelete(id){
   if(typeof scheduleAutosave==='function') scheduleAutosave();
   renderVersionsModal();
 }
-function versionRestore(id){
+// v.456 (#12) — Restore opens the DIFF first. The old text-only confirm asked the writer to
+// say yes to a label and a timestamp; now they say yes to the actual change, at the scope they choose.
+function versionRestore(id){ versionDiff(id); }
+// ---- reading a draft's sections, with the editor's own rule (h3[data-frame] delimits) ----
+function _verBlockList(html){
+  var tmp=document.createElement('div'); tmp.innerHTML=html||'';
+  var out=[], cur=0; var kids=Array.prototype.slice.call(tmp.children);
+  kids.forEach(function(c,i){
+    if(c.tagName==='H3' && c.dataset && c.dataset.frame!=null){ var f=parseInt(c.dataset.frame,10); if(!isNaN(f)) cur=f; out.push({frame:cur, el:c, head:true}); return; }
+    var deco=(c.classList && (c.classList.contains('sec-mark')||c.classList.contains('scene-mark')));
+    var frame=cur;
+    if(c.classList && c.classList.contains('sec-mark')){ var n=kids[i+1]; if(n && n.tagName==='H3' && n.dataset && n.dataset.frame!=null){ var f2=parseInt(n.dataset.frame,10); if(!isNaN(f2)) frame=f2; } }
+    out.push({frame:frame, el:c, head:false, deco:!!deco, text:deco?'':String(c.textContent||'').replace(/\s+/g,' ').trim()});
+  });
+  return out;
+}
+function _verSecContent(blocks,k){ return blocks.filter(function(b){ return b.frame===k && !b.head && !b.deco && b.text; }); }
+function _verFrames(blocks){ var seen={},out=[]; blocks.forEach(function(b){ if(!seen[b.frame]){ seen[b.frame]=1; out.push(b.frame); } }); return out.sort(function(a,b){return a-b;}); }
+// ---- LCS ops over two arrays: -1 = A only (current), 1 = B only (snapshot), 0 = both ----
+function _verLcsOps(A,B){
+  var pre=0; while(pre<A.length && pre<B.length && A[pre]===B[pre]) pre++;
+  var sufA=A.length, sufB=B.length; while(sufA>pre && sufB>pre && A[sufA-1]===B[sufB-1]){ sufA--; sufB--; }
+  var a=A.slice(pre,sufA), b=B.slice(pre,sufB), ops=[];
+  for(var p=0;p<pre;p++) ops.push([0,A[p]]);
+  if(a.length && b.length && a.length*b.length<=4000000){
+    var n=a.length,m=b.length, L=[]; for(var i2=0;i2<=n;i2++){ L.push(new Int32Array(m+1)); }
+    for(var i=n-1;i>=0;i--){ for(var j=m-1;j>=0;j--){ L[i][j]=(a[i]===b[j])?(L[i+1][j+1]+1):Math.max(L[i+1][j],L[i][j+1]); } }
+    var x=0,y=0; while(x<n&&y<m){ if(a[x]===b[y]){ ops.push([0,a[x]]); x++; y++; } else if(L[x+1][y]>=L[x][y+1]){ ops.push([-1,a[x]]); x++; } else { ops.push([1,b[y]]); y++; } }
+    while(x<n){ ops.push([-1,a[x++]]); } while(y<m){ ops.push([1,b[y++]]); }
+  } else { a.forEach(function(t){ ops.push([-1,t]); }); b.forEach(function(t){ ops.push([1,t]); }); }
+  for(var q=sufA;q<A.length;q++) ops.push([0,A[q]]);
+  return ops;
+}
+function _verWordDiffHtml(curText,snapText,tally){
+  var A=curText.split(/\s+/).filter(Boolean), B=snapText.split(/\s+/).filter(Boolean);
+  if(A.length+B.length>4000){ tally.del+=A.length; tally.ins+=B.length; return {html:'<div class="vd-block"><span class="vd-del">'+_versionEsc(curText)+'</span></div><div class="vd-block"><span class="vd-ins">'+_versionEsc(snapText)+'</span></div>', skippedWords:true}; }
+  var ops=_verLcsOps(A,B), out=[], run=[], mode=0;
+  var flush=function(){ if(!run.length) return; var t=_versionEsc(run.join(' ')); out.push(mode===0?t:('<span class="'+(mode===-1?'vd-del':'vd-ins')+'">'+t+'</span>')); run=[]; };
+  ops.forEach(function(o){ if(o[0]!==mode){ flush(); mode=o[0]; } run.push(o[1]); if(o[0]===-1) tally.del++; else if(o[0]===1) tally.ins++; });
+  flush();
+  return {html:'<div class="vd-block">'+out.join(' ')+'</div>', skippedWords:false};
+}
+// one section's diff: paragraph-level LCS, word-level inside changed pairs, unchanged runs collapsed
+function _verSectionDiffHtml(curBlocks,snapBlocks,tally){
+  var A=curBlocks.map(function(b){return b.text;}), B=snapBlocks.map(function(b){return b.text;});
+  var ops=_verLcsOps(A,B), html=[], i=0, changed=0;
+  while(i<ops.length){
+    if(ops[i][0]===0){ var j=i; while(j<ops.length&&ops[j][0]===0) j++; var n=j-i;
+      if(n===1){ html.push('<div class="vd-block vd-same">'+_versionEsc(ops[i][1])+'</div>'); }
+      else { html.push('<div class="vd-skip">⋯ '+n+' unchanged paragraphs</div>'); }
+      i=j; continue; }
+    var dels=[], inss=[]; while(i<ops.length&&ops[i][0]!==0){ (ops[i][0]===-1?dels:inss).push(ops[i][1]); i++; }
+    var pairs=Math.min(dels.length,inss.length); changed+=Math.max(dels.length,inss.length);
+    for(var p=0;p<pairs;p++){ html.push(_verWordDiffHtml(dels[p],inss[p],tally).html); }
+    for(var d=pairs;d<dels.length;d++){ tally.del+=dels[d].split(/\s+/).filter(Boolean).length; html.push('<div class="vd-block"><span class="vd-del">'+_versionEsc(dels[d])+'</span></div>'); }
+    for(var s2=pairs;s2<inss.length;s2++){ tally.ins+=inss[s2].split(/\s+/).filter(Boolean).length; html.push('<div class="vd-block"><span class="vd-ins">'+_versionEsc(inss[s2])+'</span></div>'); }
+  }
+  return {html:html.join(''), changed:changed};
+}
+function _verCurrentHtml(){
+  try{ var em=document.getElementById('editMode'); if(typeof editorHTML==='function' && em && em.classList.contains('show')) return editorHTML(); }catch(e){}
+  return (state.session&&state.session.html)||'';
+}
+function _verSecLabel(k){ var nm=(state.frames&&state.frames[k]&&(state.frames[k].stageName||'').trim())||''; return 'Section '+(k+1)+(nm?(' · '+nm):''); }
+// the diff preview: scope picker + the marked change + the one Restore button
+function versionDiff(id, scope){
+  var s=state.session; var v=((s&&s.versions)||[]).find(function(x){return x.id===id;}); if(!v) return;
+  var host=document.getElementById('verPreview'); if(!host) return;
+  var w=document.getElementById('versionsModal'); if(w) w.classList.add('previewing');
+  scope=(scope==null)?'all':scope;
+  var curB=_verBlockList(_verCurrentHtml()), snapB=_verBlockList(v.html);
+  var frames={}; _verFrames(curB).forEach(function(k){frames[k]=1;}); _verFrames(snapB).forEach(function(k){frames[k]=1;});
+  var fkeys=Object.keys(frames).map(Number).sort(function(a,b){return a-b;});
+  var opts='<option value="all"'+(scope==='all'?' selected':'')+'>Whole draft</option>'+fkeys.map(function(k){
+    var inSnap=_verSecContent(snapB,k).length>0;
+    return '<option value="'+k+'"'+(String(scope)===String(k)?' selected':'')+'>'+_versionEsc(_verSecLabel(k))+(inSnap?'':' (empty in this version)')+'</option>'; }).join('');
+  var tally={del:0,ins:0}, parts=[], anyChange=false;
+  var doSec=function(k){
+    var r=_verSectionDiffHtml(_verSecContent(curB,k),_verSecContent(snapB,k),tally);
+    if(scope==='all' && fkeys.length>1) parts.push('<div class="vd-sec">'+_versionEsc(_verSecLabel(k))+'</div>');
+    if(r.changed){ anyChange=true; parts.push(r.html); }
+    else if(scope!=='all'){ parts.push(r.html); }
+    else { parts.push('<div class="vd-skip">— unchanged —</div>'); }
+  };
+  if(scope==='all'){ fkeys.forEach(doSec); } else { doSec(parseInt(scope,10)||0); }
+  var nm=_versionEsc(v.label||_versionTime(v.at));
+  var sum = (tally.del||tally.ins) ? ('<span class="vd-del-ct">−'+tally.del+'</span> · <span class="vd-ins-ct">+'+tally.ins+'</span> words') : 'no differences in this scope';
+  host.innerHTML='<div class="ver-prev-head vd-head"><span>Restoring <b>'+nm+'</b> — <span class="vd-del-ct">red</span> disappears from today’s draft, <span class="vd-ins-ct">green</span> comes back · '+sum+'</span><button type="button" id="verPrevClose">Close</button></div>'
+    +'<div class="vd-bar"><label class="vd-scopelbl">Scope</label><select id="vdScope">'+opts+'</select><button type="button" id="vdRestore"'+((tally.del||tally.ins)?'':' disabled')+'>'+(scope==='all'?'Restore whole draft':'Restore this section')+'</button></div>'
+    +'<div class="ver-prev-body vd-body">'+parts.join('')+'</div>';
+  var cb=document.getElementById('verPrevClose'); if(cb) cb.addEventListener('click', function(){ host.innerHTML=''; if(w) w.classList.remove('previewing'); });
+  var sel=document.getElementById('vdScope'); if(sel) sel.addEventListener('change', function(){ versionDiff(id, sel.value==='all'?'all':parseInt(sel.value,10)); });
+  var rb=document.getElementById('vdRestore'); if(rb) rb.addEventListener('click', function(){ versionRestoreScoped(id, scope); });
+}
+function _versionRebuildTail(s){
+  var ed=$('editor'); if(ed){ ed.innerHTML=s.html||''; try{ ed.dataset.sid=s.id; }catch(e){} }
+  try{ if(typeof rebuildPools==='function') rebuildPools(); }catch(e){}
+  try{ if(typeof reconcileSections==='function') reconcileSections(); }catch(e){}
+  try{ if(typeof buildEditMode==='function') buildEditMode(); }catch(e){}
+  try{ if(typeof renderSessionHistory==='function') renderSessionHistory(); }catch(e){}
+  if(typeof scheduleAutosave==='function') scheduleAutosave();
+}
+function versionRestoreScoped(id, scope){
   var s=state.session; var v=((s&&s.versions)||[]).find(function(x){return x.id===id;}); if(!v) return;
   var when=_versionTime(v.at); var nm=v.label||('the '+when+' version');
-  siteConfirm('Restore “'+((v.label||when)||'this version')+'”? Your current draft is snapshotted first, so you can undo this.', 'Restore').then(function(ok){
+  if(scope==='all'){
+    siteConfirm('Restore “'+((v.label||when)||'this version')+'” — the whole draft, as shown? Your current draft is snapshotted first, so you can undo this.', 'Restore').then(function(ok){
+      if(!ok) return;
+      captureVersion('auto', 'before restore');
+      s.html=v.html; s.text=v.text||'';
+      _versionRebuildTail(s);
+      if(typeof flashStatus==='function') flashStatus('Version restored — the previous draft is saved as a version');
+      renderVersionsModal();
+    });
+    return;
+  }
+  var k=parseInt(scope,10)||0;
+  var snapB=_verBlockList(v.html); var snapC=_verSecContent(snapB,k);
+  if(!snapC.length){ if(typeof flashStatus==='function') flashStatus('This version has nothing in '+_verSecLabel(k)+' — nothing to restore there.'); return; }
+  siteConfirm('Restore '+_verSecLabel(k)+' from “'+((v.label||when)||'this version')+'”, as shown? Only that section’s prose changes; your current draft is snapshotted first.', 'Restore section').then(function(ok){
     if(!ok) return;
-    captureVersion('auto', 'before restore');                    // safety net: the current draft becomes a version too
-    s.html=v.html; s.text=v.text||'';
-    var ed=$('editor'); if(ed){ ed.innerHTML=v.html||''; try{ ed.dataset.sid=s.id; }catch(e){} }
-    try{ if(typeof rebuildPools==='function') rebuildPools(); }catch(e){}
-    try{ if(typeof reconcileSections==='function') reconcileSections(); }catch(e){}
-    try{ if(typeof buildEditMode==='function') buildEditMode(); }catch(e){}
-    try{ if(typeof renderSessionHistory==='function') renderSessionHistory(); }catch(e){}
-    if(typeof scheduleAutosave==='function') scheduleAutosave();
-    if(typeof flashStatus==='function') flashStatus('Version restored — the previous draft is saved as a version');
+    captureVersion('auto', 'before restore — '+_verSecLabel(k));
+    // splice: the CURRENT structure (headers, dividers) stays; section k's content blocks are replaced.
+    // One walk of the current draft; the first content block of section k becomes the insertion point.
+    var newNodes=snapC.map(function(b){ return b.el.cloneNode(true); });
+    var walk=_verBlockList(_verCurrentHtml());
+    var out=document.createElement('div'); var placed=false;
+    walk.forEach(function(b){
+      if(b.frame===k && !b.head && !b.deco && b.text){ if(!placed){ newNodes.forEach(function(n){ out.appendChild(n); }); placed=true; } return; }   // drop the old content, plant the new at its spot
+      out.appendChild(b.el);
+    });
+    if(!placed){   // the section is empty today: land after its header, or at the very top for section 0
+      var hd=null; Array.prototype.forEach.call(out.children, function(c){ if(!hd && c.tagName==='H3' && c.dataset && parseInt(c.dataset.frame,10)===k) hd=c; });
+      var ref = hd ? hd.nextSibling : (k<=0 ? out.firstChild : null);
+      newNodes.forEach(function(n){ out.insertBefore(n, ref); });
+    }
+    s.html=out.innerHTML; try{ s.text=out.textContent||''; }catch(e){}
+    _versionRebuildTail(s);
+    if(typeof flashStatus==='function') flashStatus(_verSecLabel(k)+' restored — the previous draft is saved as a version');
     renderVersionsModal();
   });
 }
@@ -31425,7 +31565,7 @@ function renderVersionsModal(){
       +(v.kind==='shared'?'<button type="button" data-act="feedback" title="See the reader feedback left on this shared version">Feedback</button>':'')
       +'<button type="button" data-act="view" title="Read this version">View</button>'
       +'<button type="button" data-act="rename" title="Name this version">Rename</button>'
-      +(isCur?'':'<button type="button" data-act="restore" title="Bring this version back">Restore</button>')
+      +(isCur?'':'<button type="button" data-act="restore" title="See exactly what would change — then restore the whole draft or one section">Restore</button>')
       +(v.kind==='auto'?'<button type="button" data-act="del" title="Delete this snapshot">✕</button>':'')
       +'</div></div>';
   }).join('');
@@ -50110,7 +50250,7 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.455';
+  var APP_VERSION = '2026.07.20.456';
   var APP_CHANGELOG = [
     { v:'2026.07.20.430', date:'August 14, 2026', notes:[
       '**Fixed: hovering an arc pill in the Plot grid made its title unreadable.** The arc pill borrows its shape from the thread pill, and came with a hover written for a dark pill \u2014 so the pale arc pill turned charcoal while its lettering stayed dark. It now keeps its parchment and takes a gold ring instead.'
