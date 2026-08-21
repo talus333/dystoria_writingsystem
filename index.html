@@ -498,6 +498,10 @@
   #recapBody .rc-route-btn:hover{border-color:var(--ink-faint); color:var(--ink)}
   #recapBody .rc-route-btn.rc-route-prose{color:#3f5f7f; border-color:rgba(74,106,138,.42)}
   #recapBody .rc-route-btn.rc-route-prose:hover{border-color:#4a6a8a; background:rgba(74,106,138,.08); color:#2b3f54}
+  #recapBody .rc-route-btn.rc-route-newscene{color:var(--gold-ink); border-color:rgba(196,158,74,.5)}
+  #recapBody .rc-route-btn.rc-route-newscene:hover{border-color:var(--gold); background:rgba(196,158,74,.08)}
+  #recapBody .rc-nppill{margin-top:10px; font-family:var(--sans); font-size:11.5px; line-height:1.5; color:var(--ink-faint); text-align:center}
+  #recapBody .rc-nppill b{color:var(--ink-soft); font-weight:700}
   #recapBody .rc-route-btn.rc-route-notes{color:var(--gold-bronze); border-color:rgba(196,158,74,.42)}
   #recapBody .rc-route-btn.rc-route-notes:hover{border-color:var(--gold); background:rgba(196,158,74,.07)}
   #recapBody .rc-route-btn.rc-route-discardpill{color:var(--ink-faint); border-color:var(--line)}
@@ -22930,7 +22934,10 @@ async function runSessionImport(passage, title, onDone, kind){
 // The end-session sort card: Add-to-section (the chosen section, via #rcSecSelect) or Discard.
 function recapRoute(route){
   const sid = state._lastSnapId;
-  if (route === 'prose'){ const sel = $('rcSecSelect'); recapRouteProse(sid, sel ? sel.value : String(state.frameIdx || 0)); return; }
+  // v.454 (#2) — New Scene and Append-to-Scene are DISTINCT NAMED ROUTES. 'prose' stays as an alias of
+  // 'append' (with a select value of 'new' still honoured) so every older caller keeps working.
+  if (route === 'newscene'){ recapRouteProse(sid, 'new'); return; }
+  if (route === 'append' || route === 'prose'){ const sel = $('rcSecSelect'); recapRouteProse(sid, sel ? sel.value : String(state.frameIdx || 0)); return; }
   if (route === 'discard'){ recapRouteDiscard(sid); return; }
 }
 // Discard: the writing does NOT join the draft — but the session is KEPT in the Notepad, marked "discarded",
@@ -23011,16 +23018,18 @@ function showRecap(){
   let _secOpts = '';
   { const _cf = ((base.words || 0) === 0) ? 0 : (state.frameIdx || 0);   // #62 — a brand-new story (0 words at session start) defaults the picker to Section 1
     (state.frames || []).forEach((fr, ii) => { const nm = (fr && fr.stageName ? String(fr.stageName).trim() : ''); const lbl = 'Section ' + (ii + 1) + (nm ? ' · ' + nm : ''); _secOpts += '<option value="' + ii + '"' + (ii === _cf ? ' selected' : '') + '>' + esc(lbl) + '</option>'; });
-    _secOpts += '<option value="new">＋ New section</option>'; }
+    /* v.454 — the '＋ New section' option moved out of the select: New Scene is its own named route/button */ }
   if (wrote){   // Add-to-section (chosen via #rcSecSelect) or Discard. The session becomes a Notepad pill either way.
     h += '<div class="rc-route" id="rcRoute">';
     h += '<div class="rc-route-q">Where does this go?</div>';
     h += '<div class="rc-secpick"><select id="rcSecSelect" class="rc-secsel">' + _secOpts + '</select></div>';
     h += '<div class="rc-route-btns">'
-       + '<button type="button" class="rc-route-btn rc-route-prose" data-route="prose">→ Add to section</button>'
+       + '<button type="button" class="rc-route-btn rc-route-prose" data-route="append">→ Add to section</button>'
+       + '<button type="button" class="rc-route-btn rc-route-newscene" data-route="newscene" id="rcNewScene" title="Your writing becomes a new scene — a fresh section right after this one, named after the session">⊞ New scene</button>'
        + '<button type="button" class="rc-route-btn rc-route-discardpill" data-route="discard" title="Discard — kept in your Notepad, out of the story">✕ Discard</button>'
        + '</div>';
     h += '<div class="rc-route-dest" id="rcProseDest"></div>';
+    h += '<div class="rc-nppill">Whichever you choose, this session is kept as a pill in your <b>Notepad</b> — nothing is lost.</div>';   // v.454 (#2) — the notice was only a hover tooltip before
     h += '</div>';
   }
   b.innerHTML = h;
@@ -23037,13 +23046,16 @@ function showRecap(){
   { const _sel = $('rcSecSelect'); const _dest = $('rcProseDest');
     if (_dest){
       const upd = () => {
+        _dest.classList.remove('is-new');
         const v = _sel ? _sel.value : String(state.frameIdx || 0);
-        const isNew = (v === 'new');
-        _dest.classList.toggle('is-new', isNew);
-        if (isNew){ const _cf = state.frameIdx || 0; _dest.innerHTML = '→ Creates a <b>new Section ' + (_cf + 2) + '</b> right after Section ' + (_cf + 1) + ', and opens it in Refine.'; }
-        else { const _i = parseInt(v, 10) || 0; const _nm = (state.frames && state.frames[_i] && (state.frames[_i].stageName || '').trim()) || ''; const _lbl = 'Section ' + (_i + 1) + (_nm ? ' · “' + esc(_nm) + '”' : ''); _dest.innerHTML = '→ Adds to the end of <b>' + _lbl + '</b>, and opens it in Refine.'; }
+        const _i = parseInt(v, 10) || 0; const _nm = (state.frames && state.frames[_i] && (state.frames[_i].stageName || '').trim()) || ''; const _lbl = 'Section ' + (_i + 1) + (_nm ? ' · “' + esc(_nm) + '”' : ''); _dest.innerHTML = '→ Adds to the end of <b>' + _lbl + '</b>, and opens it in Refine.';
       };
       if (_sel) _sel.addEventListener('change', upd);
+      // v.454 — hovering New scene previews ITS destination; leaving restores the append preview
+      { const _ns = $('rcNewScene'); if (_ns){
+          _ns.addEventListener('mouseenter', () => { const _cf = state.frameIdx || 0; _dest.classList.add('is-new'); _dest.innerHTML = '→ Creates a <b>new Section ' + (_cf + 2) + '</b> right after Section ' + (_cf + 1) + ', and opens it in Refine.'; });
+          _ns.addEventListener('mouseleave', upd);
+        } }
       upd();
     } }
   // R37 — sort-card wiring: one click routes to Prose or Notes
@@ -27660,6 +27672,9 @@ function confirmNotesImport(){
         if (typeof goMode === 'function') goMode('notepad');
         requestAnimationFrame(function(){ try { if (typeof fitViewToNodes === 'function') fitViewToNodes(); } catch(e){} });
         try { if (typeof window.__frProfileOffer === 'function') window.__frProfileOffer(); } catch(e){}   // #10b — offer to keep what they said about themselves
+      } else if (_qaEntryMode === 'insession'){
+        /* v.454 (#2) — Explore was opened from INSIDE the full-screen write session, which is still live under
+           the overlay. Returning means simply not navigating: goMode('write') here would tear down the session. */
       } else {
         var _mm = { map:'notepad', write:'write', refine:'edit', read:'read', wiki:'wiki' };
         if (typeof goMode === 'function') goMode(_mm[_qaEntryMode] || 'notepad');
@@ -38309,6 +38324,15 @@ function init(){
         // to #sessionGoal, which any applyFsHeader() call then wiped, and whose result was dropped once out of session).
         ['✦', 'Prompt', () => { if (typeof generateSessionGoal !== 'function') return; Promise.resolve(generateSessionGoal('prepPromptText')).then(() => { try { if (document.body.classList.contains('insession') && typeof applyFsHeader === 'function') applyFsHeader(); } catch(e){} }); }],
         ['✦', 'Where next', () => { const w = $('whereNextBtn'); if (w) w.click(); }],
+        // v.454 (#2) — Explore/Q&A from INSIDE the session. openExplore is an overlay on document.body, so the
+        // session stays live underneath; entry-mode 'insession' tells End & organize to return by NOT navigating.
+        ['✧', 'Explore / Q&A', () => { try {
+            if (typeof window.openExplore !== 'function') return;
+            const mk = ((state.prompt && state.prompt.words) || []).filter(w => (w.role === 'being' || w.role === 'word') && ({ being:1, setting:1, object:1, event:1, concept:1, org:1 })[w.cat]).map(wordKey);
+            const fi = (state.frameIdx || 0); const fr = state.frames && state.frames[fi]; const sn = (fr && fr.stageName) ? fr.stageName : '';
+            window.openExplore(mk, 'This session — Section ' + (fi + 1) + (sn ? ' · ' + sn : ''), 'map');
+            try { window.__qaEntryMode = 'insession'; } catch(e){}
+          } catch(e){} }],
         ['sep'],
         ['✎', 'Guide', a => { if (typeof openFocusAddCard === 'function' && typeof FOCUS_BLOCKS !== 'undefined'){ const r = a.getBoundingClientRect(); openFocusAddCard(FOCUS_BLOCKS[0], r.left, r.bottom + 6, true); } }],
         ['✎', 'Exercise', a => { if (typeof openFocusAddCard === 'function' && typeof FOCUS_BLOCKS !== 'undefined'){ const r = a.getBoundingClientRect(); openFocusAddCard(FOCUS_BLOCKS[1], r.left, r.bottom + 6, true); } }],
@@ -50027,7 +50051,7 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.453';
+  var APP_VERSION = '2026.07.20.454';
   var APP_CHANGELOG = [
     { v:'2026.07.20.430', date:'August 14, 2026', notes:[
       '**Fixed: hovering an arc pill in the Plot grid made its title unreadable.** The arc pill borrows its shape from the thread pill, and came with a hover written for a dark pill \u2014 so the pale arc pill turned charcoal while its lettering stayed dark. It now keeps its parchment and takes a gold ring instead.'
