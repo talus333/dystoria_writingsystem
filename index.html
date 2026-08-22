@@ -50768,8 +50768,14 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.476';
+  var APP_VERSION = '2026.07.20.477';
   var APP_CHANGELOG = [
+    { v:'2026.07.20.477', date:'August 22, 2026', notes:[
+      '**The social web lays itself out properly now.** It used to put your busiest element in the middle with everyone else in a ring around it \u2014 which meant every bond between two of the outer elements was a line straight through the middle one. Two bonds ran through Adonea at right angles, with their labels stacked on top of each other. The web now settles into a shape instead: elements push apart, bonds pull to a length that has room for their own words, and nothing comes to rest across an element.',
+      '**Every bond gets room for its own wording.** The gap a bond settles at is measured from the word it carries, so \u201cChosen family with\u201d is given more room than \u201cOwes\u201d, instead of every bond getting the same gap and the long ones landing on top of an element.',
+      '**And no line runs under an element on the family trees and org charts either.** There, an element can only step sideways to clear a line \u2014 never up or down, because which row something is in is the whole meaning of those charts.',
+      'Arrange is the button that does all of this. Opening a map you have arranged by hand still respects where you put everything, and only separates elements that were sitting in a perfect row.'
+    ]},
     { v:'2026.07.20.476', date:'August 22, 2026', notes:[
       '**Fixed: the row rule only reached brand-new maps.** In v.475 the labels re-placed themselves but the elements did not move, because Bonds remembers where you put every element and the new arrangement only ran when it had to work a layout out from scratch. It now applies to what is actually on the page, so opening a group you have used before is tidy straight away \u2014 no need to press Arrange first.',
       'Your saved positions are untouched: the tidy-up is only how the map is drawn, it is never written back over where you dropped something, and opening the same group twice lands in exactly the same place.',
@@ -68235,7 +68241,64 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
     for (var p = 0; p < 8; p++) if (!deRowPass(g, pos, S)) break;
     return pos;
   }
-  function autoLayout(g, box){ return deRow(g, autoLayoutRaw(g, box), box); }
+  /* A line that comes to rest across a pill is the other half of "no interference",
+     and the relaxed web solves it for itself \u2014 the ranked charts do not, because
+     their nodes are placed by rank and a general two rows above a distant captain
+     can route straight through whoever stands between them. So the same rule is
+     enforced afterwards, and on a ranked chart it may only move a node SIDEWAYS:
+     rank is meaning there, and lifting a captain out of his row to clear a line
+     would fix the picture by telling a lie about the chain of command. */
+  function unblock(g, pos, mode){
+    var ns = g.nodes.filter(function(n){ return pos[n.key]; });
+    if (ns.length < 3) return pos;
+    var wOf = {}; ns.forEach(function(n){ wOf[n.key] = estW(n); });
+    for (var it = 0; it < 40; it++){
+      var moved = false;
+      g.edges.forEach(function(e){
+        var A = pos[e.akey], B = pos[e.bkey]; if (!A || !B) return;
+        var ax = A.x + wOf[e.akey]/2, ay = A.y + NH/2;
+        var bx = B.x + wOf[e.bkey]/2, by = B.y + NH/2;
+        var vx = bx - ax, vy = by - ay, L2 = vx*vx + vy*vy; if (!L2) return;
+        ns.forEach(function(n){
+          if (n.key === e.akey || n.key === e.bkey) return;
+          var C = pos[n.key], cx = C.x + wOf[n.key]/2, cy = C.y + NH/2;
+          var t = ((cx - ax)*vx + (cy - ay)*vy) / L2;
+          if (t < 0.05 || t > 0.95) return;          // near an end belongs to the end
+          var px = ax + vx*t, py = ay + vy*t;
+          var dx = cx - px, dy = cy - py;
+          var d = Math.sqrt(dx*dx + dy*dy) || 0.01;
+          var clear = NH/2 + wOf[n.key]*0.16 + 12;
+          if (d >= clear) return;
+          var need = clear - d + 2, ux = dx/d, uy = dy/d;
+          if (mode === 'x') C.x += (ux >= 0 ? 1 : -1) * Math.max(10, need * 1.5);
+          else { C.x += ux*need; C.y += uy*need; }
+          moved = true;
+        });
+      });
+      if (!moved) break;
+    }
+    /* stepping sideways can walk two pills into each other, which is a worse fault
+       than the one just fixed \u2014 so anything now overlapping is pushed back apart */
+    for (var q = 0; q < 24; q++){
+      var hit = false;
+      for (var i = 0; i < ns.length; i++) for (var j = i+1; j < ns.length; j++){
+        var a = pos[ns[i].key], b = pos[ns[j].key];
+        var ox = (wOf[ns[i].key] + wOf[ns[j].key])/2 + 20 - Math.abs((a.x + wOf[ns[i].key]/2) - (b.x + wOf[ns[j].key]/2));
+        var oy = NH + 14 - Math.abs(a.y - b.y);
+        if (ox <= 0 || oy <= 0) continue;
+        var s2 = (a.x <= b.x) ? -1 : 1;
+        a.x += s2 * ox/2; b.x -= s2 * ox/2; hit = true;
+      }
+      if (!hit) break;
+    }
+    return pos;
+  }
+  function autoLayout(g, box){
+    var L = g.layout || '';
+    var ranked = /^(generational|hierarchy|blueprint|timeline)$/.test(L);
+    var pos = deRow(g, autoLayoutRaw(g, box), box);
+    return unblock(g, pos, ranked ? 'x' : 'both');
+  }
   function autoLayoutRaw(g, box){
     var L = g.layout;
     if (L === 'generational' || L === 'hierarchy' || L === 'blueprint'){
@@ -68258,7 +68321,138 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
         return layered(g, function(n){ return cd[n.key] || 0; }, box, orderRows(g, cd));
       return layered(g, function(n){ return firstSection(g, n.key); }, box);
     }
-    return ringLayout(g, box);
+    return relaxWeb(g, box);
+  }
+
+  /* THE WEB LAYOUT, RELAXED.
+
+     A ring is the wrong shape for a web and the screenshot finally said why. It
+     puts the busiest element in the MIDDLE and everyone else on the rim \u2014 so every
+     bond between two rim elements is a chord, and every chord passes through the
+     hub. Leighara\u2013Pietrek ran straight through the Adonea pill; so did
+     Delphia\u2013Feo, at right angles to it, and their two labels stacked in the same
+     corridor. No amount of nudging rows fixes that: the rows were a symptom and the
+     star was the disease. [Jeremy: "make the arrangement smarter so that you can
+     always see the bond types, that there is no interference"]
+
+     So the web relaxes instead. Three forces, and the third is the one that earns
+     its place \u2014 most spring layouts have only the first two and will happily lay a
+     line across a node:
+
+       1 \u00b7 every pair of elements pushes apart, hard when they overlap;
+       2 \u00b7 every bond pulls its two ends toward a length that has room for the
+           label between them, measured from the two names rather than assumed;
+       3 \u00b7 every element pushes away from every bond it is not an end of, so a
+           line cannot come to rest across a pill.
+
+     Deterministic on purpose: seeded from the ring, a fixed number of passes, no
+     randomness anywhere \u2014 the same graph must lay out the same way twice or a
+     writer cannot trust the picture they are looking at. */
+  function relaxWeb(g, box){
+    var pos = ringLayout(g, box);
+    var ns = g.nodes; if (ns.length < 3) return pos;
+    var W = (box && box.w) || 920, H = (box && box.h) || 580;
+    var P = {};
+    ns.forEach(function(n){ var p = pos[n.key] || { x:W/2, y:H/2 };
+      P[n.key] = { x:p.x + estW(n)/2, y:p.y + NH/2, w:estW(n), h:NH }; });   // work from centres
+    var keys = ns.map(function(n){ return n.key; });
+    var ed = g.edges.filter(function(e){ return P[e.akey] && P[e.bkey] && e.akey !== e.bkey; });
+    /* THE REST LENGTH IS MEASURED FROM THE WORD, not chosen as a constant. This is
+       the whole of "you can always see the bond types": a flat gap is generous for
+       "Owes" and far too tight for "Chosen family with", and the tight one is the
+       label that ends up sitting on a pill. Each bond is given room for its own
+       word, estimated the same way `estW` estimates a name. */
+    var want = {};
+    ed.forEach(function(e, i){
+      var word = String(e.kindType || e.type || '');
+      var lw = Math.min(190, 7.0 * word.length + 26);
+      want[i] = (P[e.akey].w + P[e.bkey].w) / 2 + lw + 78;
+    });
+    var STEP = 0.09, PASSES = Math.min(420, 160 + ns.length * 14);
+    for (var it = 0; it < PASSES; it++){
+      var fx = {}, fy = {};
+      keys.forEach(function(k){ fx[k] = 0; fy[k] = 0; });
+      var i, j;
+      // 1 · pairwise separation, measured on the BOXES so a long name pushes further
+      for (i = 0; i < keys.length; i++) for (j = i + 1; j < keys.length; j++){
+        var a = P[keys[i]], b = P[keys[j]];
+        var dx = b.x - a.x, dy = b.y - a.y;
+        var need = { x:(a.w + b.w) / 2 + 46, y:(a.h + b.h) / 2 + 40 };
+        var d = Math.sqrt(dx*dx + dy*dy) || 0.01;
+        var ox = need.x - Math.abs(dx), oy = need.y - Math.abs(dy);
+        var push = (ox > 0 && oy > 0) ? Math.min(ox, oy) * 0.55 : 2600 / (d*d);
+        var ux = dx/d, uy = dy/d;
+        fx[keys[i]] -= ux*push; fy[keys[i]] -= uy*push;
+        fx[keys[j]] += ux*push; fy[keys[j]] += uy*push;
+      }
+      // 2 · bonds pull to a length that fits their word
+      ed.forEach(function(e, ei){
+        var a = P[e.akey], b = P[e.bkey];
+        var dx = b.x - a.x, dy = b.y - a.y;
+        var d = Math.sqrt(dx*dx + dy*dy) || 0.01;
+        var f = (d - want[ei]) * 0.045;
+        var ux = dx/d, uy = dy/d;
+        fx[e.akey] += ux*f; fy[e.akey] += uy*f;
+        fx[e.bkey] -= ux*f; fy[e.bkey] -= uy*f;
+      });
+      // 3 · a line may not come to rest across a pill
+      ed.forEach(function(e){
+        var a = P[e.akey], b = P[e.bkey];
+        keys.forEach(function(k){
+          if (k === e.akey || k === e.bkey) return;
+          var c = P[k];
+          var vx = b.x - a.x, vy = b.y - a.y;
+          var L2 = vx*vx + vy*vy; if (!L2) return;
+          var t = ((c.x - a.x)*vx + (c.y - a.y)*vy) / L2;
+          if (t < 0.06 || t > 0.94) return;                 // near an end is the endpoint's business
+          var px = a.x + vx*t, py = a.y + vy*t;
+          var dx = c.x - px, dy = c.y - py;
+          var d = Math.sqrt(dx*dx + dy*dy) || 0.01;
+          var clear = c.h / 2 + 34;
+          if (d >= clear) return;
+          var push = (clear - d) * 0.5, ux = dx/d, uy = dy/d;
+          fx[k] += ux*push; fy[k] += uy*push;               // the pill steps aside…
+          fx[e.akey] -= ux*push*0.5; fy[e.akey] -= uy*push*0.5;   // …and the line gives way too
+          fx[e.bkey] -= ux*push*0.5; fy[e.bkey] -= uy*push*0.5;
+        });
+      });
+      keys.forEach(function(k){
+        var p = P[k];
+        p.x += Math.max(-26, Math.min(26, fx[k] * STEP));
+        p.y += Math.max(-26, Math.min(26, fy[k] * STEP));
+      });
+    }
+    /* SPREAD INTO THE ROOM, then re-frame.
+
+       The relaxation settles on a SHAPE; it has no opinion about scale, and left
+       alone it hands back a huddle in the corner of an empty panel \u2014 which reads
+       as a mistake, and packs the labels into a fraction of the space they could
+       have had. Scaling about the centroid keeps every angle and every crossing
+       decision exactly as relaxed, and because the pills do NOT scale with it, the
+       clearance around every line can only improve. Never scales DOWN: a graph too
+       big for the panel is one the writer pans, not one squeezed until it is
+       unreadable. */
+    var cx0 = 0, cy0 = 0;
+    keys.forEach(function(k){ cx0 += P[k].x; cy0 += P[k].y; });
+    cx0 /= keys.length; cy0 /= keys.length;
+    var spanX = 1, spanY = 1;
+    keys.forEach(function(k){
+      spanX = Math.max(spanX, Math.abs(P[k].x - cx0) + P[k].w/2);
+      spanY = Math.max(spanY, Math.abs(P[k].y - cy0) + P[k].h/2);
+    });
+    var sc = Math.max(1, Math.min(2.4, Math.min((W - 60) / (2*spanX), (H - 60) / (2*spanY))));
+    keys.forEach(function(k){ P[k].x = cx0 + (P[k].x - cx0) * sc; P[k].y = cy0 + (P[k].y - cy0) * sc; });
+
+    var minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
+    keys.forEach(function(k){ var p = P[k];
+      minX = Math.min(minX, p.x - p.w/2); maxX = Math.max(maxX, p.x + p.w/2);
+      minY = Math.min(minY, p.y - p.h/2); maxY = Math.max(maxY, p.y + p.h/2); });
+    var ox2 = Math.max(20, (W - (maxX - minX)) / 2) - minX;
+    var oy2 = Math.max(20, (H - (maxY - minY)) / 2) - minY;
+    var out = {};
+    ns.forEach(function(n){ var p = P[n.key];
+      out[n.key] = { x:Math.round(p.x - p.w/2 + ox2), y:Math.round(p.y - p.h/2 + oy2) }; });
+    return out;
   }
   function revType(e){ var a = e.aspects && e.aspects.rev; return (a && a.type) || ''; }
   /* "Parent of" is what the app can safely write; "Father of" is what the writer
@@ -69984,7 +70178,10 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
      the middle outward; the first that touches nothing wins, and if a hub really
      has no clean spot, the least-crowded stop is used. Deterministic: the same
      graph places the same way twice. */
-  var STOPS = [0.5, 0.42, 0.58, 0.34, 0.66, 0.27, 0.73, 0.2, 0.8];
+  /* finer sliding before any thought of leaving the line \u2014 a label that has moved
+     six pixels along its own edge has not moved at all, as far as the reader is
+     concerned, and it clears most collisions on its own */
+  var STOPS = [0.5, 0.46, 0.54, 0.42, 0.58, 0.38, 0.62, 0.34, 0.66, 0.3, 0.7, 0.26, 0.74, 0.22, 0.78, 0.18, 0.82];
   /* Sliding ALONG the edge is the right first move and it is not always enough:
      two edges that run nearly parallel offer their labels the same strip of page,
      and every stop on one collides with every stop on the other. That is how
