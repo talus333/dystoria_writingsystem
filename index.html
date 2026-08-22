@@ -50768,8 +50768,12 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.473';
+  var APP_VERSION = '2026.07.20.474';
   var APP_CHANGELOG = [
+    { v:'2026.07.20.474', date:'August 22, 2026', notes:[
+      '**Bonds now shows who does what to whom.** A line labelled \u201cBetrays\u201d used to leave you guessing which of the two is the traitor \u2014 the arrow only appeared when one side of a bond had been filled in, and Dystoria fills in the other side for you the moment you make a directional bond, so the arrows vanished from exactly the connections that needed them. Every connection whose wording has a direction now carries one, pointing from the one doing it. Mutual connections \u2014 Sibling of, Allied with, At war with \u2014 stay plain, because there is no direction to show.',
+      '**The arrowheads are cleaner.** The line used to run out underneath the arrowhead and show past its point, and the head grew or shrank with the weight of the connection. The line now stops where the head begins, and the head keeps its size whatever the bond\u2019s intensity.'
+    ]},
     { v:'2026.07.20.430', date:'August 14, 2026', notes:[
       '**Fixed: hovering an arc pill in the Plot grid made its title unreadable.** The arc pill borrows its shape from the thread pill, and came with a hover written for a dark pill \u2014 so the pale arc pill turned charcoal while its lettering stayed dark. It now keeps its parchment and takes a gold ring instead.'
     ]},
@@ -68179,6 +68183,18 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
     if (a === b) return true;
     try{ return window.relInverse(a) === b || window.relInverse(b) === a; }catch(err){ return false; }
   }
+  /* Is this word the same fact from both ends? `relInverse` answers it directly:
+     v.396's SYM set returns the word itself (Sibling of, Allied with, At war with,
+     Rivals), while a directional word returns its opposite or, when the vocabulary
+     deliberately declined to coin one, an empty string. So the ONLY symmetric case
+     is inverse === itself; a blank means "directional, with nothing to call the
+     reverse" — Betrays, Owes, Serves — and a word the writer invented is directional
+     too, because they wrote it on one side about one of the two. Getting this
+     backwards is what left the traitor unnamed. */
+  function symmetricRel(t){
+    if (!t || t === '—') return true;
+    try{ return window.relInverse(t) === t; }catch(err){ return false; }
+  }
   /* How many OTHER things these two are to each other — which is NOT how many words
      the bond has worn. "Mother of" and "Child of" are one fact read from two ends,
      and a marker that counts them as two tells a writer a dimension is hidden from
@@ -69599,14 +69615,42 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
     while (svg.firstChild) svg.removeChild(svg.firstChild);
     Array.prototype.slice.call(world.querySelectorAll('.bn-lab')).forEach(function(n){ n.parentNode.removeChild(n); });
     var defs = document.createElementNS('http://www.w3.org/2000/svg','defs');
+    /* The arrowhead, and why it is built this way.
+
+       It used to be `refX=9` on a marker with no `markerUnits`, which defaults to
+       `strokeWidth`. Two faults came out of that, and the screenshot showed the
+       second one. (1) The head was SIZED BY THE LINE: REL_WIDTH runs 1.6 to 6, so
+       an intense bond drew a head nearly four times the area of a faint one — the
+       weight of a feeling was silently changing the size of its arrow. (2) With the
+       reference point ON THE TIP, the stroke ran the full length of the line and
+       out underneath a triangle that TAPERS — and for the last few units before the
+       point the stroke is wider than the triangle containing it, so the line showed
+       around and past the tip. [Jeremy: "the line peaks a little past the point"]
+
+       So the head is now sized in USER SPACE (it scales with the canvas zoom, which
+       is what a reader expects, and not with the line's weight) at four sizes that
+       keep it in proportion to the four stroke widths; and `refX=0` puts the BACK of
+       the triangle at the path's end, so the head sits entirely FORWARD of where the
+       stroke stops. The geometry below shortens the line by exactly that length, so
+       the tip still lands on the node's edge and no stroke is ever drawn beneath the
+       taper. Nothing to overshoot. */
+    var HEADW = [12, 13, 16, 20];   // user units, one per REL_WIDTH bucket
+    /* read from REL_WIDTH rather than retyped, so a change to a stroke width cannot
+       leave its head sized for the old one */
+    var WIDX = (function(){ try{ return [REL_WIDTH[1], REL_WIDTH[2], REL_WIDTH[3], REL_WIDTH[4]]; }
+                            catch(err){ return [1.6, 2.6, 4, 6]; } })();
     ['#8f8a9c','#c98a3e','#4f78c2','#b0402f'].forEach(function(c, i){
-      var m = document.createElementNS('http://www.w3.org/2000/svg','marker');
-      m.setAttribute('id','bnArrow'+i); m.setAttribute('viewBox','0 0 10 10');
-      m.setAttribute('refX','9'); m.setAttribute('refY','5'); m.setAttribute('markerWidth','6');
-      m.setAttribute('markerHeight','6'); m.setAttribute('orient','auto-start-reverse');
-      var p = document.createElementNS('http://www.w3.org/2000/svg','path');
-      p.setAttribute('d','M0,1 L9,5 L0,9 z'); p.setAttribute('fill',c);
-      m.appendChild(p); defs.appendChild(m);
+      HEADW.forEach(function(hw, wi){
+        var m = document.createElementNS('http://www.w3.org/2000/svg','marker');
+        m.setAttribute('id','bnArrow'+i+'_'+wi); m.setAttribute('viewBox','0 0 10 10');
+        m.setAttribute('refX','0'); m.setAttribute('refY','5');
+        m.setAttribute('markerWidth',hw); m.setAttribute('markerHeight',hw);
+        m.setAttribute('markerUnits','userSpaceOnUse');
+        m.setAttribute('orient','auto-start-reverse');
+        var p = document.createElementNS('http://www.w3.org/2000/svg','path');
+        p.setAttribute('d','M0,1 L9,5 L0,9 z'); p.setAttribute('fill',c);
+        m.appendChild(p); defs.appendChild(m);
+      });
     });
     svg.appendChild(defs);
     var COLS = ['#8f8a9c','#c98a3e','#4f78c2','#b0402f'];
@@ -69620,23 +69664,20 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
       var line = document.createElementNS('http://www.w3.org/2000/svg','path');
       var elbow = ELBOW && Math.abs(pa.y - pb.y) > 24;
       var midY = (pa.y + pb.y) / 2;
-      line.setAttribute('d', elbow
-        ? ('M'+pa.x+' '+pa.y+' L '+pa.x+' '+midY+' L '+pb.x+' '+midY+' L '+pb.x+' '+pb.y)
-        : ('M'+pa.x+' '+pa.y+' L '+pb.x+' '+pb.y));
       line.setAttribute('stroke', st.col); line.setAttribute('stroke-width', st.w);
       line.setAttribute('opacity', st.op); line.setAttribute('fill','none');
+      line.setAttribute('stroke-linecap','butt');
       line.setAttribute('class','bn-edge' + (m.ui.sel === idx ? ' on' : ''));
       if (st.secret) line.setAttribute('stroke-dasharray','5 4');
       var ci = COLS.indexOf(st.col); if (ci < 0) ci = 0;
+      var wi = WIDX.indexOf(st.w); if (wi < 0) wi = 1;
       var fwd = e.aspects && e.aspects.fwd && e.aspects.fwd.type;
       var rev = e.aspects && e.aspects.rev && e.aspects.rev.type;
-      if (fwd && !rev) line.setAttribute('marker-end','url(#bnArrow'+ci+')');
-      else if (rev && !fwd) line.setAttribute('marker-start','url(#bnArrow'+ci+')');
-      svg.appendChild(line);
 
-      /* on a layered chart the label must read the way the eye travels — down.
-         The stored pair is ordered by key, not by generation, so half the tree
-         would otherwise say "Child of" where the line clearly descends. */
+      /* Which word this lens is drawing, and — the part the arrow needs — which
+         END it is read FROM. Computed here rather than beside the label, because
+         the arrow and the label are answering the same question and must not be
+         allowed to answer it differently. */
       var head = e.kindType || e.type || '—';
       var headFrom = e.akey;
       /* parent and child always reads downward, on any map and however it happens
@@ -69653,6 +69694,57 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
         if (ca.y < cb.y - 18){ head = fwd; headFrom = e.akey; }
         else if (cb.y < ca.y - 18){ head = rev; headFrom = e.bkey; }
       } else if (sameFace(head, rev) && !sameFace(head, fwd)) headFrom = e.bkey;
+
+      /* WHO does it to WHOM. A bare line labelled "Betrays" is a question, not a
+         fact — the reader cannot tell which of the two is the traitor, and the app
+         knows. [Jeremy: "it's uncertain looking at the connection who betrays who"]
+
+         v.408 drew an arrow only when a single side carried a type. That reads as a
+         sensible test and is the wrong question, because v.396's reverse auto-fill
+         writes the OTHER side of a directional bond the moment it is made — so the
+         arrow vanished from precisely the bonds that had been authored most fully,
+         and survived only on half-filled ones. The right question is whether the
+         WORD BEING DRAWN is symmetric, and `relInverse` is the one table that knows:
+         a symmetric word is its own inverse (v.396's SYM set — Sibling of, Allied
+         with, At war with), so everything else has a subject and an object.
+
+         A word with no coined inverse — Betrays, Owes, Serves, or one the writer
+         invented — is NOT symmetric; it is directional with nothing to call the
+         reverse, which is the vocabulary's deliberate choice ("a missing entry costs
+         a blank; a wrong one is repeated on screen every time"). Those get an arrow
+         too. The direction is `headFrom`, so the arrow and the label always agree. */
+      var arrowFrom = symmetricRel(head) ? '' : headFrom;
+      var HL = arrowFrom ? HEADW[wi] * 0.9 : 0;   // triangle tip sits at viewBox x=9 of 10
+
+      var qa = { x:pa.x, y:pa.y }, qb = { x:pb.x, y:pb.y };
+      if (HL){
+        if (elbow){
+          /* on an elbow the head rides the last VERTICAL run into its node */
+          if (arrowFrom === e.akey){
+            var da1 = Math.abs(pb.y - midY), h1 = Math.min(HL, Math.max(0, da1 - 4));
+            qb.y = pb.y - (pb.y > midY ? h1 : -h1);
+          } else {
+            var da2 = Math.abs(midY - pa.y), h2 = Math.min(HL, Math.max(0, da2 - 4));
+            qa.y = pa.y + (midY > pa.y ? h2 : -h2);
+          }
+        } else {
+          var vx = pb.x - pa.x, vy = pb.y - pa.y;
+          var L = Math.sqrt(vx*vx + vy*vy) || 1;
+          var h = Math.min(HL, Math.max(0, L - 6));   // never fold a short edge back on itself
+          if (arrowFrom === e.akey){ qb.x = pb.x - vx/L*h; qb.y = pb.y - vy/L*h; }
+          else { qa.x = pa.x + vx/L*h; qa.y = pa.y + vy/L*h; }
+        }
+      }
+      line.setAttribute('d', elbow
+        ? ('M'+qa.x+' '+qa.y+' L '+qa.x+' '+midY+' L '+qb.x+' '+midY+' L '+qb.x+' '+qb.y)
+        : ('M'+qa.x+' '+qa.y+' L '+qb.x+' '+qb.y));
+      if (arrowFrom === e.akey) line.setAttribute('marker-end','url(#bnArrow'+ci+'_'+wi+')');
+      else if (arrowFrom === e.bkey) line.setAttribute('marker-start','url(#bnArrow'+ci+'_'+wi+')');
+      svg.appendChild(line);
+
+      /* on a layered chart the label must read the way the eye travels — down.
+         The stored pair is ordered by key, not by generation, so half the tree
+         would otherwise say "Child of" where the line clearly descends. */
       var faces = otherFaces(e, head);
       head = readAs(head, headFrom);
       var lab = el('div','bn-lab' + (m.ui.sel === idx ? ' on' : '') + (st.conflict ? ' war' : ''), head);
