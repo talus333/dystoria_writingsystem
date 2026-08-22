@@ -40793,17 +40793,48 @@ document.addEventListener('DOMContentLoaded', init);
 
     /* ---- searchable trait picker (same UX as the element ADD card, + create-your-own) ---- */
     function groupPoolWords(sub){ try{ if(typeof GROUP_CHARS!=='undefined'){ const c=GROUP_CHARS.find(x=>x.sub===sub); if(c && c.words && c.words.length) return c.words.slice(); } }catch(e){} return poolWords(sub, 'being'); }
+    // v.467 (#6) — the writer's own dimensions + remembered words, per story. A SEPARATE store,
+    // deliberately: injectCustom's unknown-sub fallback is subcategories[0], which would put a
+    // custom Mood word in the Type pool. This store never touches the category pools.
+    function customDims(cat){ try{ return (state.session && state.session.customDims && state.session.customDims[cat]) || []; }catch(e){ return []; } }
+    function customDimAdd(cat, name){
+      try{ if(!state.session) ensureSession();
+        state.session.customDims=state.session.customDims||{}; state.session.customDims[cat]=state.session.customDims[cat]||[];
+        if(!state.session.customDims[cat].some(d=>d.toLowerCase()===name.toLowerCase())) state.session.customDims[cat].push(name);
+        if(typeof scheduleAutosave==='function') scheduleAutosave();
+      }catch(e){}
+    }
+    function customDimWords(cat, sub2){ try{ return (state.session && state.session.customDimWords && state.session.customDimWords[cat+'|'+sub2]) || []; }catch(e){ return []; } }
+    function customDimWordAdd(cat, sub2, word){
+      try{ if(!state.session) ensureSession();
+        state.session.customDimWords=state.session.customDimWords||{}; var k=cat+'|'+sub2;
+        state.session.customDimWords[k]=state.session.customDimWords[k]||[];
+        if(!state.session.customDimWords[k].some(w=>w.toLowerCase()===String(word).toLowerCase())) state.session.customDimWords[k].push(word);
+        if(typeof scheduleAutosave==='function') scheduleAutosave();
+      }catch(e){}
+    }
+    try{ window.__dystCustomDims=customDims; window.__dystCustomDimAdd=customDimAdd; window.__dystCustomDimWords=customDimWords; }catch(e){}
     function traitSubs(cat){
-      if(cat==='concept') return ['Charge','Counter-idea','Expression','Scope','Adjective'];   // idea-shaped dimensions; the concept's Kind (subcategory) is its identity, these are its characteristics
-      if(cat==='group'){ const gs=(typeof GROUP_CHARS!=='undefined')?GROUP_CHARS.map(c=>c.sub):[]; return gs.concat(['State','Adjective']); }
-      if(cat==='being'){ const ns=getCat('being').subcategories.filter(sb=>!sb.retired && sb.name!=='Archetype' && sb.name!=='Motivation' && sb.name!=='Age').map(sb=>sb.name); ['Physical State','Mental State','Mood'].forEach(s=>{ if(ns.indexOf(s)<0) ns.push(s); }); ns.push('Adjective'); return ns; }   // Type & Occupation can be added as extra traits; the transient states (Physical/Mental/Mood) round out the taxonomy; Archetype/Motivation/Age handled elsewhere
-      if(cat==='setting') return ['Condition','Control','Population','Origin','Function','Scale','Atmosphere','Climate','Symbolism','Adjective'];
-      if(cat==='object') return ['Material','Size','Appearance','Condition','Property','Power','Charge','Provenance','Purpose','Symbolism','Adjective'];
-      if(cat==='org') return ['Standing','Structure','Culture','Repute','Era','Adjective'];
-      if(cat==='event') return ['Scale','Tone','Outcome','Visibility','Timing','Adjective'];
+      if(cat==='concept') return ['Charge','Counter-idea','Expression','Scope','Adjective'].concat(customDims('concept'));   // idea-shaped dimensions; the concept's Kind (subcategory) is its identity, these are its characteristics
+      if(cat==='group'){ const gs=(typeof GROUP_CHARS!=='undefined')?GROUP_CHARS.map(c=>c.sub):[]; return gs.concat(['State','Adjective']).concat(customDims('group')); }
+      if(cat==='being'){ const ns=getCat('being').subcategories.filter(sb=>!sb.retired && sb.name!=='Archetype' && sb.name!=='Motivation' && sb.name!=='Age').map(sb=>sb.name); ['Physical State','Mental State','Mood'].forEach(s=>{ if(ns.indexOf(s)<0) ns.push(s); }); ns.push('Adjective'); return ns.concat(customDims('being')); }   // Type & Occupation can be added as extra traits; the transient states (Physical/Mental/Mood) round out the taxonomy; Archetype/Motivation/Age handled elsewhere
+      if(cat==='setting') return ['Condition','Control','Population','Origin','Function','Scale','Atmosphere','Climate','Symbolism','Adjective'].concat(customDims('setting'));
+      if(cat==='object') return ['Material','Size','Appearance','Condition','Property','Power','Charge','Provenance','Purpose','Symbolism','Adjective'].concat(customDims('object'));
+      if(cat==='org') return ['Standing','Structure','Culture','Repute','Era','Adjective'].concat(customDims('org'));
+      if(cat==='event') return ['Scale','Tone','Outcome','Visibility','Timing','Adjective'].concat(customDims('event'));
       return ['Adjective'];
     }
-    function poolWords(sub, cat){ const p=(typeof charPool==='function')?charPool(sub,cat):null; return (p||[]).map(x=>typeof x==='string'?x:x.w).filter(Boolean); }
+    function poolWords(sub, cat){
+      // v.467 — a CUSTOM dimension's pool is the writer's remembered words and NOTHING else:
+      // charPool's unknown-sub fallback is a generic being pool, which would bury two of the
+      // writer's words under three hundred archetypes.
+      const mineAll=customDimWords(cat||'being', sub);
+      if(customDims(cat||'being').some(d=>d.toLowerCase()===String(sub).toLowerCase())) return mineAll.slice();
+      const p=(typeof charPool==='function')?charPool(sub,cat):null;
+      const base=(p||[]).map(x=>typeof x==='string'?x:x.w).filter(Boolean);
+      const mine=mineAll.filter(w=>!base.some(b=>b.toLowerCase()===w.toLowerCase()));
+      return mine.concat(base);   // a STANDARD dim: remembered words ride first, presets follow
+    }
     function addTraitWord(i, word, sub){
       if(typeof addsLocked==='function' && addsLocked()){ if(typeof flashStatus==='function') flashStatus('The session is underway — end it to add'); return false; }
       const w=state.prompt && state.prompt.words[i]; if(!w) return false;
@@ -41077,6 +41108,7 @@ document.addEventListener('DOMContentLoaded', init);
       else if(!matches.length){ const e=document.createElement('div'); e.className='tp-empty'; e.textContent='Nothing here yet — type a name to create one.'; res.appendChild(e); }
     }
     function tpPick(word, isNew){
+      if(isNew && TP.mode==='trait' && TP.cat && TP.sub){ try{ customDimWordAdd(TP.cat, TP.sub, word); }catch(e){} }   // v.467 — remember in EVERY mode, in the clean store
       if(TP.onPick){ const cb=TP.onPick; closeTraitPicker(); try{ cb(word, isNew); }catch(e){} return; }   // callback mode (builder word picks) — no element commit
       if(TP.mode==='motivation'){ setMotivationWant(TP.i, word, isNew); closeTraitPicker(); if(window.syncElementViews) window.syncElementViews(); return; }
       if(TP.group){ if(typeof addGroupChar==='function') addGroupChar(TP.group, TP.sub, word); closeTraitPicker(); if(typeof renderNpCard==='function') renderNpCard(); setTrait('@gchar:'+TP.sub+'|'+word); return; }
@@ -41191,6 +41223,20 @@ document.addEventListener('DOMContentLoaded', init);
       BEING_TRAIT_FAMILIES.forEach(fam=>{ const subs=fam.subs; if(!subs.length) return;   // every dimension stays offered — add more than one of any (Sex/Age aren't here, so they stay one-each)
         const h=document.createElement('div'); h.textContent=fam.name; h.style.cssText='font-family:var(--sans);font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-faint);padding:6px 11px 2px'; menu.appendChild(h);
         subs.forEach(sub=>{ const b=document.createElement('button'); b.textContent=sub; b.addEventListener('click', ev=>{ ev.stopPropagation(); menu.style.display='none'; ccAddDim(sub, ev.clientX, ev.clientY); }); menu.appendChild(b); }); });
+      // v.467 (#6) — the writer's own dimensions, then the door to make one
+      { const mine=customDims('being');
+        const h=document.createElement('div'); h.textContent='Your dimensions'; h.style.cssText='font-family:var(--sans);font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-faint);padding:6px 11px 2px'; menu.appendChild(h);
+        mine.forEach(sub=>{ const b=document.createElement('button'); b.textContent=sub; b.addEventListener('click', ev=>{ ev.stopPropagation(); menu.style.display='none'; ccAddDim(sub, ev.clientX, ev.clientY); }); menu.appendChild(b); });
+        const nb=document.createElement('button'); nb.textContent='＋ new dimension…'; nb.style.fontStyle='italic';
+        nb.addEventListener('click', ev=>{ ev.stopPropagation(); menu.style.display='none';
+          sitePrompt('Name a dimension of your own — “Scent”, “Cuisine”, “Tell”… It joins the ＋ menus and remembers the words you use.', '', 'Create dimension').then(v=>{
+            if(v==null) return; const nm=String(v).trim();
+            if(nm.length<2 || nm.length>24){ if(typeof flashStatus==='function') flashStatus('A dimension name needs 2–24 characters.'); return; }
+            if(traitSubs('being').some(sX=>sX.toLowerCase()===nm.toLowerCase())){ if(typeof flashStatus==='function') flashStatus('“'+nm+'” already exists as a dimension.'); return; }
+            customDimAdd('being', nm); ccAddDim(nm, ev.clientX, ev.clientY);
+          });
+        });
+        menu.appendChild(nb); }
       menu.style.left=Math.max(8, Math.min(x||220, window.innerWidth-206))+'px';
       menu.style.top=Math.max(8, Math.min(y||200, window.innerHeight-360))+'px';
       menu.style.display='block';
@@ -50732,7 +50778,7 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.466';
+  var APP_VERSION = '2026.07.20.467';
   var APP_CHANGELOG = [
     { v:'2026.07.20.430', date:'August 14, 2026', notes:[
       '**Fixed: hovering an arc pill in the Plot grid made its title unreadable.** The arc pill borrows its shape from the thread pill, and came with a hover written for a dark pill \u2014 so the pale arc pill turned charcoal while its lettering stayed dark. It now keeps its parchment and takes a gold ring instead.'
