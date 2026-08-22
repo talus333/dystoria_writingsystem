@@ -1556,6 +1556,8 @@ body.eink .pt-rh-dev{color:#000}
   .dossier-aka-add{font-family:var(--sans); font-size:11px; letter-spacing:.04em; color:var(--ink-soft); background:transparent;
     border:1px dashed rgba(120,92,40,.4); border-radius:999px; padding:4px 12px; cursor:pointer}
   .dossier-aka-add:hover{color:var(--gold-ink); border-color:var(--gold)}
+  .cc-hybrid-note{font-family:var(--sans); font-size:11.5px; font-style:italic; color:var(--gold-ink); margin:7px 2px 0}
+  .cc-add-off{opacity:.45; cursor:default}
   #versionsModal .ver-fb-comments{margin-top:12px; border-top:1px solid var(--line); padding-top:10px}
   #versionsModal .ver-fb-h{font-family:var(--sans); font-size:11px; letter-spacing:.09em; text-transform:uppercase; color:var(--ink-faint); margin-bottom:8px}
   #versionsModal .ver-fb-c{border-left:2px solid rgba(58,123,213,.4); padding:2px 0 6px 10px; margin-bottom:9px}
@@ -21313,7 +21315,12 @@ function _groupMembership(name, info){
 // and update it in place on save (reusing applyElemEdit for identity + key migration; attrs set separately).
 window.dystElementToSlots = function(w){
   var slots=[];
-  if(w.role==='being') slots.push({ sub:'Type', word:w.word });
+  if(w.role==='being'){
+    // v.468 — a legacy "Hybrid (Wolf + Machine)" identity unfolds into two REAL Type slots
+    var _hm=/^.*?\((.+?)\s*\+\s*(.+?)\)\s*$/.exec(String(w.word||''));
+    if(_hm){ slots.push({ sub:'Type', word:_hm[1].trim() }); slots.push({ sub:'Type', word:_hm[2].trim() }); }
+    else slots.push({ sub:'Type', word:w.word });
+  }
   else slots.push({ sub:'Kind', word:w.word, kindSub:(w.sub||'') });
   (w.attrs||[]).forEach(function(a){ if(a && a.word) slots.push({ sub:a.sub, word:a.word }); });
   return slots;
@@ -37825,7 +37832,8 @@ function elHybridTypes(w){
   if(!w || w.cat!=='being') return [];
   var out=[], seen={};
   var push=function(t){ t=String(t||'').trim(); if(t && !seen[t.toLowerCase()]){ seen[t.toLowerCase()]=1; out.push(t); } };
-  push(w.word);
+  var _hm=/^.*?\((.+?)\s*\+\s*(.+?)\)\s*$/.exec(String(w.word||''));   // v.468 — legacy "X (A + B)" reads as A + B
+  if(_hm){ push(_hm[1]); push(_hm[2]); } else push(w.word);
   ((w.identity)||[]).forEach(function(p){ if(p && p.sub==='Type') push(p.word); });
   ((w.attrs)||[]).forEach(function(a){ if(a && a.sub==='Type') push(a.word); });
   return out.slice(0,2);
@@ -41188,7 +41196,7 @@ document.addEventListener('DOMContentLoaded', init);
       try{
         if(sub==='Sex') return (typeof assignBeingSex==='function')?assignBeingSex():'Unspecified';
         if(sub==='Age') return (typeof assignBeingAge==='function')?assignBeingAge():'Adult';
-        if(sub==='Type'){ const t=(typeof assignBeingType==='function')?assignBeingType():'Human'; return (typeof hybridizeType==='function')?hybridizeType(t):t; }
+        if(sub==='Type'){ return (typeof assignBeingType==='function')?assignBeingType():'Human'; }   // v.468 — never the "(A + B)" string; a hybrid is two SLOTS
         if(sub==='Occupation') return (typeof assignBeingOccupation==='function')?assignBeingOccupation():'Wanderer';
         if(sub==='Archetype') return (typeof assignBeingArchetype==='function')?assignBeingArchetype():'Wanderer';
         const pool=(typeof charPool==='function')?charPool(sub,'being'):null;
@@ -41207,7 +41215,12 @@ document.addEventListener('DOMContentLoaded', init);
     }
     // Sex & Age are one-each; everything from Type down can be stacked (multiple Occupations, Types, traits…).
     function ccRemovable(s){ if(!s) return false; if(s.sub==='Sex'||s.sub==='Age') return false; if(s.sub==='Type' && CC.slots.filter(x=>x.sub==='Type').length<=1) return false; return true; }
-    function ccAddDim(sub, x, y){ if((sub==='Sex'||sub==='Age') && ccSlot(sub)) return; CC.slots.push({sub, word:''}); ccRenderSlots(); ccPickMenu(CC.slots.length-1, x, y); }   // ＋dimension opens the add-system picker filtered to that dimension — the ↻ on each row stays the random roll
+    function ccTypeCount(){ return CC.slots.filter(s=>s.sub==='Type').length; }
+    function ccAddDim(sub, x, y){
+      if((sub==='Sex'||sub==='Age') && ccSlot(sub)) return;
+      if(sub==='Type' && ccTypeCount()>=2){ if(typeof flashStatus==='function') flashStatus('Two Types make a hybrid — that’s the cap. Remove one to change the pair.'); return; }   // v.468
+      CC.slots.push({sub, word:''}); ccRenderSlots(); ccPickMenu(CC.slots.length-1, x, y);
+    }   // ＋dimension opens the add-system picker filtered to that dimension — the ↻ on each row stays the random roll
     function ccReroll(idx){ const s=CC.slots[idx]; if(!s) return; s.word=ccRollDim(s.sub); ccRenderSlots(); }
     function ccRemove(idx){ const s=CC.slots[idx]; if(!s||!ccRemovable(s)) return; CC.slots.splice(idx,1); ccRenderSlots(); }
     function ccPickMenu(idx, x, y){
@@ -41243,15 +41256,27 @@ document.addEventListener('DOMContentLoaded', init);
     }
     function ccRenderSlots(){
       const host=document.getElementById('ccSlots'); if(!host) return; host.innerHTML='';
+      let _tySeen=0;   // v.468 — the second Type slot is the hybrid half, and says so
       CC.slots.forEach((s, idx)=>{
         const row=document.createElement('div'); row.className='cc-slot';
-        const dim=document.createElement('span'); dim.className='cc-dim'; dim.textContent=s.sub; row.appendChild(dim);
+        const dim=document.createElement('span'); dim.className='cc-dim';
+        dim.textContent=(s.sub==='Type' && _tySeen++>0) ? '⚭ Hybrid' : s.sub;
+        row.appendChild(dim);
         const wd=document.createElement('span'); wd.className='cc-word'+(s.word?'':' empty'); wd.textContent=s.word||'—'; wd.title='Pick a specific '+String(s.sub).toLowerCase();
         wd.addEventListener('click', ev=>{ ev.stopPropagation(); ccPickMenu(idx, ev.clientX, ev.clientY); }); row.appendChild(wd);
         const rr=document.createElement('span'); rr.className='cc-ctl'; rr.textContent='↻'; rr.title='Reroll'; rr.addEventListener('click', ev=>{ ev.stopPropagation(); ccReroll(idx); }); row.appendChild(rr);
         if(ccRemovable(s)){ const rm=document.createElement('span'); rm.className='cc-ctl'; rm.textContent='×'; rm.title='Remove'; rm.addEventListener('click', ev=>{ ev.stopPropagation(); ccRemove(idx); }); row.appendChild(rm); }
         host.appendChild(row);
       });
+      // v.468 — the hybrid is visible AS you make it, not on reopen
+      { const tys=CC.slots.filter(s=>s.sub==='Type'&&s.word).slice(0,2);
+        if(tys.length>=2){ const n=document.createElement('div'); n.className='cc-hybrid-note';
+          n.textContent='→ a '+(typeof capWord==='function'?capWord(tys[0].word):tys[0].word)+'–'+(typeof capWord==='function'?capWord(tys[1].word):tys[1].word)+' hybrid — both Types carry to the card and the map figure';
+          host.appendChild(n); } }
+      // …and the ⚭ chip knows when the pair is full
+      { const hb=document.getElementById('ccHybrid');
+        if(hb){ const full=ccTypeCount()>=2; hb.classList.toggle('cc-add-off', full);
+          hb.title=full?'Already a hybrid — remove one of the two Types to change the pair':'Give them a second Type — a true hybrid (wolf–machine, spirit–human…). Both Types show on the card, and the map figure changes.'; } }
     }
     function ccSyncSeg(){ const seg=document.getElementById('ccSeg'); if(!seg) return; Array.from(seg.children).forEach((b,i)=>{ b.classList.toggle('on', i===CC.complexity); }); const h=document.getElementById('ccSegHint'); if(h){ const ex=CC_LEVELS[CC.complexity].extra; h.textContent = ex===0 ? 'The essentials — roll ↻ or pick each.' : ('Essentials plus '+ex+' characteristic'+(ex===1?'':'s')+' — roll ↻ or pick each.'); } }
     function ccEl(){
@@ -41312,7 +41337,7 @@ document.addEventListener('DOMContentLoaded', init);
       if(typeof addsLocked==='function' && addsLocked()){ if(typeof flashStatus==='function') flashStatus('End the session to add elements'); return; }
       const typeSlots=CC.slots.filter(s=>s.sub==='Type'&&s.word); const type=(typeSlots[0]&&typeSlots[0].word)||'Human';
       if(CC.editKey){   // #6(g) edit mode — update the existing being in place, keep its position/links/notes
-        const eAttrs=[]; let eFirst=false; CC.slots.forEach(sl=>{ if(!sl.word) return; if(sl.sub==='Type'){ if(!eFirst){ eFirst=true; return; } } eAttrs.push({ word:sl.word, sub:sl.sub }); });
+        const eAttrs=[]; let eTy=0; CC.slots.forEach(sl=>{ if(!sl.word) return; if(sl.sub==='Type'){ eTy++; if(eTy===1) return; if(eTy>2) return; } eAttrs.push({ word:sl.word, sub:sl.sub }); });   // v.468 — one secondary Type, extras dropped
         try{ if(typeof window.dystSetElementAttrs==='function') window.dystSetElementAttrs(CC.editKey, eAttrs); }catch(e){}
         try{ if(typeof applyElemEdit==='function') applyElemEdit(CC.editKey, (CC.editIdx!=null?CC.editIdx:-1), { cat:'being', word:type, sub:'Type', name:(CC.name||'').trim() }); }catch(e){}
         const _nm=(CC.name||'').trim(); CC.editKey=null; CC.editIdx=null; closeCharCreator();
@@ -41322,8 +41347,8 @@ document.addEventListener('DOMContentLoaded', init);
       if(!state.prompt){ state.prompt={words:[],sets:1,links:[],removedLinks:[]}; state.activeSet=0; state.frames=[{gap:null,prompt:state.prompt}]; state.frameIdx=0; }
       const s=Math.min(state.activeSet||0,(state.prompt.sets||1)-1);
       const built=(typeof ecBuildItem==='function')?ecBuildItem(type,'Type',s,'being'):{ word:type, cat:'being', sub:'Type', set:s, role:'being', attrs:[], identity:[{word:type,sub:'Type'}] };
-      const attrs=[]; let firstType=false;   // the first Type is the identity/word; extra Types + everything else become characteristics
-      CC.slots.forEach(sl=>{ if(!sl.word) return; if(sl.sub==='Type'){ if(!firstType){ firstType=true; return; } } attrs.push({ word:sl.word, sub:sl.sub }); });
+      const attrs=[]; let nTy=0;   // v.468 — the first Type is the identity; the SECOND is the hybrid half; a third never survives commit
+      CC.slots.forEach(sl=>{ if(!sl.word) return; if(sl.sub==='Type'){ nTy++; if(nTy===1) return; if(nTy>2) return; } attrs.push({ word:sl.word, sub:sl.sub }); });
       built.attrs=attrs;
       const nm=(CC.name||'').trim(); if(nm) built.name=nm;
       if(typeof ensureDistinctBeing==='function') ensureDistinctBeing(built);
@@ -50778,7 +50803,7 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.467';
+  var APP_VERSION = '2026.07.20.468';
   var APP_CHANGELOG = [
     { v:'2026.07.20.430', date:'August 14, 2026', notes:[
       '**Fixed: hovering an arc pill in the Plot grid made its title unreadable.** The arc pill borrows its shape from the thread pill, and came with a hover written for a dark pill \u2014 so the pale arc pill turned charcoal while its lettering stayed dark. It now keeps its parchment and takes a gold ring instead.'
