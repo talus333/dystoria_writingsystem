@@ -50768,8 +50768,13 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.475';
+  var APP_VERSION = '2026.07.20.476';
   var APP_CHANGELOG = [
+    { v:'2026.07.20.476', date:'August 22, 2026', notes:[
+      '**Fixed: the row rule only reached brand-new maps.** In v.475 the labels re-placed themselves but the elements did not move, because Bonds remembers where you put every element and the new arrangement only ran when it had to work a layout out from scratch. It now applies to what is actually on the page, so opening a group you have used before is tidy straight away \u2014 no need to press Arrange first.',
+      'Your saved positions are untouched: the tidy-up is only how the map is drawn, it is never written back over where you dropped something, and opening the same group twice lands in exactly the same place.',
+      'And a bond label now stays beside its own line. v.475 let one step further away than it should to dodge a neighbour, which left it floating with nothing to belong to \u2014 a label you cannot match to a line is worse than two labels that touch.'
+    ]},
     { v:'2026.07.20.475', date:'August 22, 2026', notes:[
       '**Bonds arranges so you can read it.** Three or more pills sitting at exactly the same height was the thing making the canvas hard to follow \u2014 every line arrived at a shallow angle and the labels landed on top of each other. Arrange now staggers them, so no two elements share a height unless they are equals.',
       '**Equals still stand level.** Siblings, spouses, twins, allies \u2014 anyone whose bond reads the same from both ends keeps their row, however many of them there are, because being level is the point.',
@@ -68214,8 +68219,15 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
   }
   function deRow(g, pos, box){
     if (!pos) return pos;
-    var H = (box && box.h) || 580;
-    var S = Math.max(13, Math.min(24, Math.round(H * 0.045)));
+    /* The step is tied to the PILL, not to the canvas. Deriving it from the panel's
+       height made the whole pass non-deterministic: `box.h` is measured from the
+       live canvas, which settles a couple of pixels between the first render and
+       the second, so the same stored layout came back nudged 24px once and 22px the
+       next time. Nothing was being saved, so nothing accumulated \u2014 but a node that
+       sits two pixels lower every time you open the page is a node that is moving,
+       and the writer is right to distrust it. A pill's own height is what the nudge
+       has to clear, and that does not change. */
+    var S = Math.max(ROW_BAND + 3, Math.round(NH * 0.62));
     /* Same step every pass: the earlier shrinking version could not clear a band it
        had just created. Anchoring segment 0 is what makes repetition settle rather
        than argue \u2014 bounded anyway, because a story is allowed to be a knot and the
@@ -68410,6 +68422,21 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
     m._elbow = (typeOf(activeGroup(m)) === 'species') && g.layout === 'generational';
     var stored = positions(m), auto = autoLayout(g, box), pos = {};
     g.nodes.forEach(function(n){ pos[n.key] = stored[n.key] || auto[n.key] || { x:40, y:40 }; });
+    /* AND AGAIN OVER WHAT IS ACTUALLY DRAWN.
+
+       v.475 put the no-perfect-rows pass inside `autoLayout`, which is only reached
+       for a node the store has never heard of \u2014 and Bonds saves a position on every
+       drag and every Arrange, so for any group a writer has opened before, `pos` is
+       the store and the pass never ran. What they saw was the half-change:
+       [Jeremy] "the bond name moved, but not the pill or the line" \u2014 because the
+       LABELS are re-placed on every render and the pills were not.
+
+       So the rule is applied where the picture is decided. It is display only:
+       nothing is written back, the store keeps exactly what was dragged, and the
+       pass is idempotent \u2014 an arrangement with no violation is not touched, so a
+       node nudged once lands in the same place every time it is opened rather than
+       creeping further each render. */
+    deRow(g, pos, box);
 
     var nodeEls = {};
     g.nodes.forEach(function(n){
@@ -69965,7 +69992,7 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
      So when no stop on the line is clean, the label may step off the line
      perpendicular to it \u2014 still unambiguously ITS line, because it is directly
      beside it, and near enough that no reader has to guess. */
-  var PERP = [0, 1, -1, 2, -2];
+  var PERP = [0, 1, -1];
   function place(lane, nodeEls){
     if (!lane.length) return;
     var fixed = [];
@@ -69987,7 +70014,10 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
       var vx = it.pb.x - it.pa.x, vy = it.pb.y - it.pa.y;
       var len = Math.sqrt(vx*vx + vy*vy) || 1;
       var nx = -vy / len, ny = vx / len;           // unit normal to this edge
-      var step = h * 0.9 + 6;
+      /* One step, and a small one. A label that has moved far enough to read as
+         belonging to nothing is worse than one that overlaps: the reader can still
+         work out two crowded labels, but not which bond an orphan names. */
+      var step = Math.min(30, h * 0.9 + 6);
       outer:
       for (var pi = 0; pi < PERP.length; pi++){
         for (var i = 0; i < STOPS.length; i++){
@@ -69998,7 +70028,7 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
           for (j = 0; j < placed.length; j++) cost += overlap(c, placed[j]);
           /* a label that has stepped off its line pays a small toll, so an on-line
              stop always wins a tie and the picture stays as plain as it can be */
-          cost += Math.abs(PERP[pi]) * 40;
+          cost += Math.abs(PERP[pi]) * 180;
           if (!best || cost < best.cost){ best = { c:c, cost:cost }; }
           if (!cost) break outer;
         }
