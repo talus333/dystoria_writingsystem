@@ -50768,8 +50768,14 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.479';
+  var APP_VERSION = '2026.07.20.480';
   var APP_CHANGELOG = [
+    { v:'2026.07.20.480', date:'August 22, 2026', notes:[
+      '**Arrange lays the map out at the spacing it needs and then zooms to fit it.** It used to squeeze the gaps between elements until a row fitted the width of the panel \u2014 so on a smaller window the bonds lost the room their words sit in. The spacing is now chosen for the words, and the canvas zooms out to take the whole thing in. [Jeremy]',
+      '**Room is measured from the wording.** \u201cSibling of\u201d and \u201cChosen family with\u201d are not the same width, and the gap between two elements is now sized for whichever bond has to be written there \u2014 plus more air between the generations, so the connections that run diagonally across a tree have somewhere to put their labels too.',
+      '**A bond label can no longer sit on somebody else\u2019s line.** \u201cPartially frees\u201d had settled neatly in the middle of the line between Pietrek and Leighara, where it read as the name of THEIR bond and pushed \u201cChosen family with\u201d off its own line. Labels now avoid every other connection, not just the elements and each other.',
+      'And the framing waits for the panel to stop changing size before it fits \u2014 it was measuring a height that shrank a moment later, which is how Arrange could leave the bottom row cut off.'
+    ]},
     { v:'2026.07.20.479', date:'August 22, 2026', notes:[
       '**Fixed: a family tree could stand an ancestor in the same row as her own descendant.** Dystoria knew the bond \u2014 it just could not tell which way it pointed when the connection had been written from the descendant\u2019s side rather than the ancestor\u2019s. \u201cAncestor of\u201d ranked the tree correctly and \u201cDescendant of\u201d ranked it not at all, so the two people landed on the same line and the bond between them ran flat across the row, through whoever was standing in between.',
       'The same gap affected grandparent/grandchild, aunt/niece, step-parent/step-child, adopts/adopted-by, above/beneath, built-atop/buried-under and the causal words. All of them now read the same in both directions, and the two lists are derived from one another so they cannot drift apart again.',
@@ -67986,7 +67992,17 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
     /* the gap between two nodes in a row is where their label has to go, so it is
        sized for a label rather than for looks — siblings pushed together leave
        "Sibling of" nowhere to sit but on top of one of them */
-    var gapx = Math.max(18, Math.min(GAPX, GAPX * W / 920));
+    /* Not scaled to the panel any more. The row is laid out at the spacing it
+       NEEDS and the camera zooms out to take it in \u2014 see the squeeze note below.
+       [Jeremy, v.480: "make the canvas zoom out to fit everything with the spacing
+       proper, so that the final arrange always includes everything zoomed to the
+       correct level with proper spacing"] */
+    /* Generous on purpose. The old 94 was chosen when the row had to fit the panel,
+       and a gap that is merely "enough for the label" still leaves every diagonal
+       crossing the row nowhere to put ITS label \u2014 which is what kept pushing
+       "Chosen family with" off its own line. Spending width is free now: the camera
+       frames whatever this comes to. */
+    var gapx = Math.max(GAPX, 158);
     Object.keys(rows).map(Number).sort(function(a,b){ return a-b; }).forEach(function(r){
       var row = rows[r].sort(order
         ? function(a,b){ return (order[a.key] - order[b.key]) || a.label.localeCompare(b.label); }
@@ -67998,22 +68014,40 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
          for that label BETWEEN them — an ordinary gap leaves a horizontal edge
          with nowhere to write on, and three squeezed siblings is what a crowded
          family row actually looks like. */
-      var gaps = [];
+      /* MEASURED FROM THE WORD, not a flat bonus. "Sibling of" and "Chosen family
+         with" are not the same width, and the flat +74 was generous for one and far
+         too tight for the other \u2014 and a bond with nowhere to write is exactly what
+         sends its label off the line looking for space. [Jeremy, v.480] */
+      var gaps = [], need = [];
       for (var gi = 0; gi < row.length - 1; gi++){
-        gaps.push(peerBetween(g, row[gi].key, row[gi+1].key) ? gapx + 74 : gapx);
+        var nd = gapNeed(g, row[gi].key, row[gi+1].key);
+        need.push(nd);
+        gaps.push(Math.max(gapx, nd));
       }
       var span = function(){ var t = 0; ws.forEach(function(w, i){ t += w + (gaps[i] || 0); }); return t - (gaps[gaps.length-1] || 0) + (gaps.length ? 0 : 0); };
+      /* THE SQUEEZE IS GONE, and removing it is the whole of this fix.
+
+         It shrank every gap in a row until the row fitted the panel's WIDTH, with a
+         floor of ten pixels \u2014 so on any canvas narrower than the row wanted, the
+         bonds lost the space their words had to sit in, and the labels went looking
+         for room off their own lines. That is why "Chosen family with" floated below
+         the line joining Pietrek and Leighara.
+
+         Fitting the layout to the viewport was a hangover from a fixed panel. This
+         canvas pans and zooms, and `fitCam` already frames the whole graph whenever
+         there is no saved view \u2014 which is exactly the state Arrange leaves behind.
+         So the row is laid out at the spacing its labels need, and the camera zooms
+         out to take it in. Spacing is a property of the drawing; scale is a property
+         of the looking, and they were tangled. */
       var total = 0; ws.forEach(function(w, i){ total += w + (i < gaps.length ? gaps[i] : 0); });
-      if (total > W - 24){
-        var over = total - (W - 24), each = over / Math.max(1, gaps.length);
-        gaps = gaps.map(function(gp){ return Math.max(10, gp - each); });
-        total = 0; ws.forEach(function(w, i){ total += w + (i < gaps.length ? gaps[i] : 0); });
-      }
-      var x = Math.max(8, W / 2 - total / 2);
+      var x = W / 2 - total / 2;   // may go negative; fitCam frames it
       row.forEach(function(n, i){ pos[n.key] = { x:Math.round(x), y:y }; x += ws[i] + (i < gaps.length ? gaps[i] : 0); });
       /* the stride carries the de-row stagger as well as the row, or a nudged
          segment lands in the gap belonging to the rank below it */
-      y += NH + Math.max(58, Math.min(GAPY, GAPY * ((box && box.h) || 580) / 580));
+      /* The stride carries the de-row stagger AND the labels on every diagonal that
+         crosses between two ranks \u2014 those have to fit somewhere too, and a tight
+         stride is where "Ancestor of" and "partially frees" end up stacked. */
+      y += NH + Math.max(124, Math.min(GAPY, GAPY * ((box && box.h) || 580) / 580));
     });
     return pos;
   }
@@ -68024,6 +68058,20 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
      overlapped. Widths are estimated from the label, since the nodes do not
      exist yet at layout time. */
   function estW(n){ return Math.min(164, 7.4 * String(n.label || '').length + 38); }
+  /* How wide the label on a bond will be. The same estimator `relaxWeb` sizes its
+     springs from, so a gap on a ranked chart and a rest length on a web mean the
+     same thing: room for THIS bond's own word. */
+  function wordW(t){ return Math.min(190, 7.0 * String(t || '').length + 26); }
+  /* The widest word any bond between these two will have to write between them. */
+  function gapNeed(g, ka, kb){
+    var w = 0;
+    for (var i = 0; i < g.edges.length; i++){
+      var e = g.edges[i];
+      if (!((e.akey === ka && e.bkey === kb) || (e.akey === kb && e.bkey === ka))) continue;
+      w = Math.max(w, wordW(e.kindType || e.type || ''));
+    }
+    return w ? w + 64 : 0;
+  }
   function ringLayout(g, box){
     var W = (box && box.w) || 920, H = (box && box.h) || 580;
     var deg = degree(g);
@@ -68413,9 +68461,7 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
        word, estimated the same way `estW` estimates a name. */
     var want = {};
     ed.forEach(function(e, i){
-      var word = String(e.kindType || e.type || '');
-      var lw = Math.min(190, 7.0 * word.length + 26);
-      want[i] = (P[e.akey].w + P[e.bkey].w) / 2 + lw + 78;
+      want[i] = (P[e.akey].w + P[e.bkey].w) / 2 + wordW(e.kindType || e.type || '') + 78;
     });
     var STEP = 0.09, PASSES = Math.min(420, 160 + ns.length * 14);
     for (var it = 0; it < PASSES; it++){
@@ -68736,17 +68782,39 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
       paint();
       var w2 = Math.max(300, canvas.clientWidth - 48);
       if (!m._resized && Math.abs(w2 - box.w) > 40 && !Object.keys(stored).length){
-        m._resized = 1; V.render(m); return;
+        m._resized = 1; V.render(m); return;   // the fit flag survives on the model
       }
       m._resized = 0;
+      /* FRAME IT ONCE THE LAYOUT HAS SETTLED, not before.
+
+         The old trigger fired its own rAF beside this one, so on the double render
+         \u2014 which is the normal path, because the first pass measures the panel and
+         the second lays out against the real width \u2014 the camera framed pass ONE and
+         then saved a view, which made pass two skip framing entirely. Arrange looked
+         like it had not zoomed because it had zoomed to a layout that no longer
+         existed. The intent is carried on the model instead and spent here, after
+         the last pass. */
+      if (m._wantFit){
+        m._wantFit = 0; m._camTouched = 0;
+        fitCam(m);
+        /* …and once more when the room has stopped changing size. The panel is not
+           its final height at first paint \u2014 late chrome below it (the guide strip,
+           a banner) takes tens of pixels afterwards \u2014 and framing against a height
+           that then shrinks is why Arrange could leave the bottom row cut off while
+           reporting a perfectly sensible zoom of 1. Skipped if the writer has moved
+           the camera in the meantime: their gesture outranks our framing. */
+        setTimeout(function(){ if (!m._camTouched) fitCam(m); }, 420);
+      }
     });
     m._repaint = paint;
     m._graph = g;
     m._cam = cam;
     installCamera(m, canvas, world, cam);
-    /* first time on this map: frame it, rather than leaving the writer looking at
-       the top-left corner of a very large sheet of paper */
-    if (!(store().views || {})[slot(m)]) requestAnimationFrame(function(){ fitCam(m); });
+    /* No saved view means either the first time on this map or an Arrange that has
+       just cleared it \u2014 either way, frame the whole graph rather than leaving the
+       writer looking at the top-left corner of a very large sheet of paper. Spent in
+       the settle pass above. */
+    if (!(store().views || {})[slot(m)]) m._wantFit = 1;
   };
 
   /* ---- the camera: an endless sheet, panned and zoomed like the Map -------
@@ -68759,7 +68827,9 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
   }
   function installCamera(m, canvas, world, cam){
     applyCam(world, cam);
-    var save = function(){ clearTimeout(m._camT); m._camT = setTimeout(function(){ saveCamera(m, cam); }, 350); };
+    /* every path through here is a WRITER's gesture \u2014 wheel, pinch, drag \u2014 which is
+       what `_camTouched` records, so the settle re-fit can stand down */
+    var save = function(){ m._camTouched = 1; clearTimeout(m._camT); m._camT = setTimeout(function(){ saveCamera(m, cam); }, 350); };
     m._zoomTo = function(z, cx, cy){
       var r = canvas.getBoundingClientRect();
       if (cx == null){ cx = r.width / 2; cy = r.height / 2; }
@@ -70263,8 +70333,39 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
       var oy = (a.h + b.h)/2 - Math.abs(a.y - b.y);
       return (ox > 0 && oy > 0) ? ox * oy : 0;
     };
+    /* A LABEL MAY NOT SIT ON SOMEBODY ELSE'S LINE.
+
+       `place` avoided the pills and it avoided the other labels, and it had nothing
+       to say about the other BONDS \u2014 so the best-scoring spot for "partially frees"
+       was the middle of the line joining Pietrek and Leighara, where it read as the
+       name of their bond, and "Chosen family with" was pushed off its own line to
+       make room. Both halves of that are worse than a plain collision: a label on
+       the wrong line is not crowded, it is WRONG.
+
+       Every other edge is sampled and a candidate pays for each sample it covers,
+       heavily enough to outrank any ordinary overlap but not so heavily that a label
+       will abandon its own line to escape \u2014 the cost ladder is: sit on your own
+       line clear of everything (free), touch another label (cheap), sit on another
+       bond's line (expensive), leave your own line (most expensive of all). */
+    var segs = lane.map(function(it){
+      var pts = [], n = 12;
+      for (var i = 0; i <= n; i++)
+        pts.push({ x: it.pa.x + (it.pb.x - it.pa.x) * i/n, y: it.pa.y + (it.pb.y - it.pa.y) * i/n });
+      return pts;
+    });
+    var onOtherLine = function(c, self){
+      var hits = 0;
+      for (var j = 0; j < segs.length; j++){
+        if (j === self) continue;
+        var pts = segs[j];
+        for (var k = 0; k < pts.length; k++){
+          if (Math.abs(pts[k].x - c.x) < c.w/2 && Math.abs(pts[k].y - c.y) < c.h/2) hits++;
+        }
+      }
+      return hits;
+    };
     var placed = [];
-    lane.forEach(function(it){
+    lane.forEach(function(it, selfIdx){
       var w = it.el.offsetWidth + 6, h = it.el.offsetHeight + 4;
       var best = null;
       var vx = it.pb.x - it.pa.x, vy = it.pb.y - it.pa.y;
@@ -70282,9 +70383,14 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
           var cost = 0, j;
           for (j = 0; j < fixed.length; j++) cost += overlap(c, fixed[j]);
           for (j = 0; j < placed.length; j++) cost += overlap(c, placed[j]);
+          cost += onOtherLine(c, selfIdx) * 130;
           /* a label that has stepped off its line pays a small toll, so an on-line
              stop always wins a tie and the picture stays as plain as it can be */
-          cost += Math.abs(PERP[pi]) * 180;
+          /* Leaving the line is now very expensive indeed. With the roomier layout
+             an on-line stop almost always exists, and when the choice is between a
+             label that touches its neighbour and a label that has drifted away from
+             the bond it names, the reader can untangle the first and not the second. */
+          cost += Math.abs(PERP[pi]) * 900;
           if (!best || cost < best.cost){ best = { c:c, cost:cost }; }
           if (!cost) break outer;
         }
