@@ -25292,15 +25292,32 @@ async function pubSetPublic(on, quiet){
   if(!cloudReady()){ flashStatus('Sign in to make a reader link'); return; }
   if(!sess||!sess.cloudId){ flashStatus('Save the story to the cloud first'); return; }
   if(!amOwner()){ flashStatus('Only the owner can publish a reader link'); return; }
+  /* Unpublishing now DESTROYS the token (migration 7), so it is not a toggle any
+     more — it is a revoke, and it cannot be undone by pressing the button again.
+     Say so before it happens rather than after: the writer's mental model is a
+     switch, and the thing that actually breaks is every link they have already
+     sent someone. [Jeremy, 2026-08-23: "a warning if you go to unpublish that
+     people will lose access"] */
+  if(!on && !quiet){
+    const ok = await siteConfirm(
+      'Unpublish and revoke the reader link?\n\nEveryone you have sent the current link to loses access straight away \u2014 it stops opening for them. '
+      + 'This cannot be undone: publishing again gives you a NEW link, and the old one will never work again.',
+      'Unpublish and revoke');
+    if(!ok) return;
+  }
   try{
     const {data,error}=await supa.rpc('set_story_public',{sid:sess.cloudId,on_flag:!!on});
     if(error){ flashStatus('Reader link: '+error.message); return; }
-    sess._isPublic=!!on; if(on&&data) sess._publicToken=data;
+    sess._isPublic=!!on;
+    if(on && data) sess._publicToken=data;
+    /* and forget the dead token locally, or the share panel keeps offering a link
+       that resolves to nothing */
+    if(!on) sess._publicToken='';
     if(on){ try{ await pubPublishCurrent('Shared draft'); }catch(e){} }   // freeze the current draft as the version readers see
     pubRenderShareControls();
     if(!quiet){
       if(on){ const tok=data||sess._publicToken; if(tok){ await pubCopy(pubLinkFor(tok)); flashStatus('Reader link copied — readers see this frozen version until you publish an update'); } }
-      else flashStatus('Reader link turned off');
+      else flashStatus('Reader link revoked \u2014 the old link no longer opens');
     }
   }catch(e){ flashStatus('Reader link error: '+e.message); }
 }
@@ -50768,8 +50785,14 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.480';
+  var APP_VERSION = '2026.07.20.481';
   var APP_CHANGELOG = [
+    { v:'2026.07.20.481', date:'August 23, 2026', notes:[
+      '**Unpublishing a reader link now really revokes it \u2014 and warns you first.** Turning a link off used to keep the address in reserve, so publishing again handed back the SAME link and anyone who still had it was let straight back in. Unpublishing now destroys the link for good; publishing again gives you a new one. Because that cannot be undone, Dystoria asks before it does it. [Jeremy]',
+      '**Readers only ever see their own comments \u2014 for real this time.** A visitor to a shared link already only SAW their own, but every comment on the story was being sent to their browser and hidden there, which meant anyone curious enough could read the lot. Now the database itself only ever hands a reader their own. You still see everything, in Revise.',
+      'And a reader can read their own marks back from the server, which they never could \u2014 so the passages someone marked survive a reload rather than living only in that browser.',
+      '**Needs `reader_privacy_migration_7.sql` run in Supabase** \u2014 the app is safe without it, but the link keeps its old behaviour until the migration lands.'
+    ]},
     { v:'2026.07.20.480', date:'August 22, 2026', notes:[
       '**Arrange lays the map out at the spacing it needs and then zooms to fit it.** It used to squeeze the gaps between elements until a row fitted the width of the panel \u2014 so on a smaller window the bonds lost the room their words sit in. The spacing is now chosen for the words, and the canvas zooms out to take the whole thing in. [Jeremy]',
       '**Room is measured from the wording.** \u201cSibling of\u201d and \u201cChosen family with\u201d are not the same width, and the gap between two elements is now sized for whichever bond has to be written there \u2014 plus more air between the generations, so the connections that run diagonally across a tree have somewhere to put their labels too.',
