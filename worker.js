@@ -114,6 +114,107 @@ async function globalDailyOk(env) {
   const n = await _kvIncr(env, 'global:' + _utcDay(), 90000);
   return n == null ? true : n <= cap;
 }
+
+// ============================================================
+//  #31 — THE DAILY TOKEN BUDGET
+//  The unit is tokens, not calls. Counting calls charged a whole-story wiki
+//  rebuild and an icon-name lookup the same amount, and the fortnight of
+//  metering (migration 6) showed exactly how wrong that is: `wiki_build` was
+//  40% of the calls and 73% of every token spent, 3,282 a call against a
+//  median under 400.
+//
+//  Two dials, and deliberately only two:
+//   1. A per-user, per-UTC-day token budget. Sized from the burst, not the
+//      average — the observed peak day was 54,831 tokens and 8.8x the median
+//      active day, because real use is one heavy wiki day among quiet ones. A
+//      budget set from the average would block the writer on the exact day
+//      they are working hardest, so free sits at ~2.7x that peak.
+//   2. ONE named per-feature ceiling. `wiki_build` is the only feature the
+//      data justifies naming: its cost scales with the size of the story, so
+//      it is the one press that can eat a day by itself. Half the budget means
+//      a wiki rebuild can never leave the writer with nothing for the prose.
+//
+//  `import`, `checks` and `element_scan` are on a WATCH list below, not capped.
+//  They had zero or near-zero calls in the window; a ceiling for a feature
+//  nobody has run yet would be invention dressed as measurement.
+//
+//  Spend is added AFTER a call, because the real token counts only exist then.
+//  So a single large call can carry a writer past the line — the NEXT call is
+//  the one refused. That is on purpose: never kill a call in flight over an
+//  estimate of what it is about to cost.
+// ============================================================
+const TOK_DAY_FREE = 150000;
+const TOK_DAY_PRO  = 750000;
+const TOK_FEATURE_CAP = { wiki_build: 0.5 };     // fraction of that day's budget
+// Watch list (no code, on purpose): `import`, `checks`, `element_scan`. They are already metered
+// into public.ai_usage; the review is a query, not a ceiling, until there are calls to size one from.
+// A provider that reports usage as zeros (or reports nothing on an empty reply) must not make
+// calls free — that would be a hole big enough to drive a runaway loop through. Every call
+// costs at least this much against the budget.
+const TOK_MIN_CALL = 200;
+const TOK_LABEL = { wiki_build: 'Building the wiki' };
+function tokFeatureLabel(f) {
+  return TOK_LABEL[f] || String(f || 'That feature').replace(/_/g, ' ').replace(/^./, c => c.toUpperCase());
+}
+// In-memory mirror of the KV counters, for the same reason the call caps have one: KV may be
+// unbound (local dev) or briefly unavailable, and a per-isolate count is still better than none.
+const _tok = new Map();   // key -> tokens spent today
+function _tokAdd(key, n) {
+  _tok.set(key, (_tok.get(key) || 0) + n);
+  if (_tok.size > 8000) _tok.clear();
+}
+async function _kvGetNum(env, key) {
+  if (!env || !env.AILIMITS) return null;
+  try { return parseInt((await env.AILIMITS.get(key)) || '0', 10) || 0; } catch (e) { return null; }
+}
+async function _kvAdd(env, key, n, ttlSec) {
+  if (!env || !env.AILIMITS) return null;
+  try {
+    const cur = parseInt((await env.AILIMITS.get(key)) || '0', 10) || 0;
+    const next = cur + n;
+    await env.AILIMITS.put(key, String(next), { expirationTtl: ttlSec });
+    return next;
+  } catch (e) { return null; }
+}
+function _tokKeys(userId, feature) {
+  const day = _utcDay();
+  return { day: 'tok:' + userId + ':' + day, feat: feature ? 'tokf:' + userId + ':' + feature + ':' + day : null };
+}
+// Read-only check before a call. Returns { ok } or { ok:false, scope:'day'|'feature', used, budget }.
+// KV and the local map are both consulted and the LARGER is trusted: KV spans isolates but lags a
+// burst by up to a second, and the local map is instant but only knows this isolate.
+async function tokenBudgetOk(env, userId, feature, paid) {
+  const budget = paid ? TOK_DAY_PRO : TOK_DAY_FREE;
+  const k = _tokKeys(userId, feature);
+  let used = _tok.get(k.day) || 0;
+  const kv = await _kvGetNum(env, k.day);
+  if (kv != null && kv > used) used = kv;
+  if (used >= budget) return { ok: false, scope: 'day', used, budget };
+  const frac = feature && TOK_FEATURE_CAP[feature];
+  if (frac) {
+    const ceiling = Math.round(budget * frac);
+    let fUsed = _tok.get(k.feat) || 0;
+    const fKv = await _kvGetNum(env, k.feat);
+    if (fKv != null && fKv > fUsed) fUsed = fKv;
+    if (fUsed >= ceiling) return { ok: false, scope: 'feature', feature, used: fUsed, budget: ceiling, dayBudget: budget };
+  }
+  return { ok: true, used, budget };
+}
+// Record what a finished call actually cost. Fire-and-forget through waitUntil so the KV write
+// never delays the writer's response; the local map is updated synchronously so a burst inside
+// one isolate is counted even before KV catches up.
+function tokenSpend(env, ctx, userId, feature, tokens) {
+  const n = Math.max(TOK_MIN_CALL, Math.round(tokens) || 0);
+  if (!userId || !(n > 0)) return;
+  const k = _tokKeys(userId, feature);
+  _tokAdd(k.day, n);
+  const jobs = [_kvAdd(env, k.day, n, 90000)];
+  if (k.feat && TOK_FEATURE_CAP[feature]) { _tokAdd(k.feat, n); jobs.push(_kvAdd(env, k.feat, n, 90000)); }
+  try {
+    const p = Promise.all(jobs).catch(() => {});
+    if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(p);
+  } catch (e) {}
+}
 // Current Workers AI model. Lighter/cheaper alternative: '@cf/meta/llama-3.1-8b-instruct-fast'
 const MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
 // Vision model — OCR + handwriting recognition. Used when the request carries an image.
@@ -424,6 +525,11 @@ async function runFrontier(env, system, prompt, maxTokens, temperature, opts) {
   const now = Date.now();
   const tried = [];
   let exhausted = false;
+  // Tokens burned by attempts that produced nothing. A provider can read the whole prompt and hand
+  // back an empty reply, and the chain then tries the next one — so a "failed" call is not a free
+  // call, and #31's budget has to know that. Only REPORTED counts are added here; the estimate in
+  // meter() covers the rest, so a seven-provider fall-through can't be charged seven prompts.
+  let burned = 0;
   // Rough token estimate (~4 chars/token) so small-context providers (Cerebras free ~8K) are skipped on big calls —
   // a whole-story wiki/import then lands on a large-context model instead of truncating mid-sentence.
   const estTokens = Math.ceil(((system || '').length + (prompt || '').length) / 4) + (maxTokens || 0);
@@ -433,12 +539,13 @@ async function runFrontier(env, system, prompt, maxTokens, temperature, opts) {
     let r;
     try { r = await p.run(system, prompt, maxTokens, temperature, opts.json); }
     catch (e){ r = { text: '', error: String(e) }; }
-    if (r && r.text) return { text: r.text, via: p.name, raw: r.raw };   // raw carries the provider's usage block (see usageFrom)
+    if (r && r.text) return { text: r.text, via: p.name, raw: r.raw, burned };   // raw carries the provider's usage block (see usageFrom)
+    if (r && r.raw){ try { const u = usageFrom(r.raw, system, prompt, ''); if (!u.estimated) burned += u.in + u.out; } catch (_){} }
     const e = (r && r.error) || 'empty response';
     tried.push(p.name + ': ' + e);
     if (isQuotaErr(e)){ exhausted = true; if (!testing) _cooldown.set(p.name, now + 60 * 60 * 1000); }   // daily-ish quota → rest this provider an hour
   }
-  return { text: '', error: tried.join('  |  ') || 'no models configured', exhausted };
+  return { text: '', error: tried.join('  |  ') || 'no models configured', exhausted, burned };
 }
 
 function cors(origin) {
@@ -476,19 +583,45 @@ async function handleAI(request, env, ctx) {
   const plan = admin ? 'pro' : await planOf(env, user.id);   // entitlement from the subscriptions table; admin is treated as Pro
   const paid = admin || plan === 'pro';                       // may use the paid Claude model + gets the higher quotas
   if (!rateOk(user.id, image ? (paid ? 30 : 12) : (paid ? 120 : 45))) return new Response(JSON.stringify({ error: 'Too many AI requests — give it a moment' }), { status: 429, headers });
-  const _dailyCap = image ? (paid ? 1500 : 400) : (paid ? 6000 : 1200);
+  // --- metering (see migration 6). `feature` is the registry name the client sends;
+  // sanitized here because it lands in a database column AND keys the per-feature ceiling below.
+  const _t0 = Date.now();
+  const _feature = String(body.feature || '').replace(/[^a-z0-9_]/gi, '').slice(0, 40) || null;
+
+  // Runaway-loop backstop, in CALLS. The token budget below is the real policy; this stays as a
+  // coarse "something is broken" ceiling, set far above any hand-driven day, because token
+  // accounting depends on providers reporting honestly and a call cap does not.
+  // Images keep a tight call cap of their own: vision replies routinely report no usage at all, so
+  // their token counts are estimated from text length and badly understate the real cost.
+  const _dailyCap = image ? (paid ? 1500 : 400) : (paid ? 12000 : 3000);
   if (!dailyOk(user.id, _dailyCap)) return new Response(JSON.stringify({ error: 'You’ve hit today’s AI limit — it resets tomorrow. Reach out if you need more.', limit: 'day' }), { status: 429, headers });
   // Cross-isolate per-user cap (KV) — closes the "each Cloudflare isolate hands out a fresh in-memory quota" gap.
   if (!(await dailyOkKV(env, user.id, _dailyCap))) return new Response(JSON.stringify({ error: 'You’ve hit today’s AI limit — it resets tomorrow. Reach out if you need more.', limit: 'day' }), { status: 429, headers });
+  // #31 — the daily TOKEN budget, and the one named ceiling. This is the limit a writer will
+  // actually meet; the call caps above only catch a bug.
+  const _bud = await tokenBudgetOk(env, user.id, _feature, paid);
+  if (!_bud.ok) {
+    if (_bud.scope === 'feature') {
+      // A feature ceiling is NOT the day being over — everything else still works, and saying
+      // otherwise would send the app into its capped state and hide tools that are fine.
+      return new Response(JSON.stringify({
+        error: tokFeatureLabel(_bud.feature) + ' has used its share of today’s AI budget ('
+             + _bud.budget.toLocaleString('en-US') + ' of ' + _bud.dayBudget.toLocaleString('en-US')
+             + ' tokens). Every other AI tool still works; this one frees up when the budget resets.',
+        limit: 'feature', feature: _bud.feature, used: _bud.used, budget: _bud.budget,
+      }), { status: 429, headers });
+    }
+    return new Response(JSON.stringify({
+      error: 'You’ve used today’s AI budget (' + _bud.budget.toLocaleString('en-US')
+           + ' tokens) — it resets tomorrow. Reach out if you need more.',
+      limit: 'day', used: _bud.used, budget: _bud.budget,
+    }), { status: 429, headers });
+  }
   // Global backstop across every account — a coarse ceiling so a mass-signup attack can't run up the bill.
   if (!(await globalDailyOk(env))) return new Response(JSON.stringify({ error: 'Dystoria’s AI is at today’s capacity — please try again later.', limit: 'global' }), { status: 503, headers });
 
   const maxTokens = Math.min(Math.max(parseInt(body.max_tokens, 10) || 600, 64), body.kind === 'import' ? 8192 : 4096);   // import returns a big element list → allow a larger JSON reply
   const model = body.model || (image ? VISION_MODEL : MODEL);
-  // --- metering (see migration 6). `feature` is the registry name the client sends;
-  // sanitized here because it lands in a database column.
-  const _t0 = Date.now();
-  const _feature = String(body.feature || '').replace(/[^a-z0-9_]/gi, '').slice(0, 40) || null;
   const meter = (res, kind, okFlag, outcome) => {
     try {
       const u = usageFrom(res && res.raw, system, prompt, (res && res.text) || '');
@@ -498,6 +631,10 @@ async function handleAI(request, env, ctx) {
         in_tokens: u.in, out_tokens: u.out, estimated: u.estimated,
         ok: !!okFlag, outcome: outcome || null, ms: Date.now() - _t0,
       });
+      // Charge the budget from the same numbers the meter records — including failures, which
+      // burn provider tokens too, and would otherwise make an error loop free. `burned` is what
+      // the providers that produced nothing reported before the chain gave up.
+      tokenSpend(env, ctx, user.id, _feature, Math.max(u.in + u.out, (res && res.burned) || 0));
     } catch (e) {}
   };
   // Providers the user opted out of (may-train-on-free-prose toggles). Sanitized; only ever narrows the chain.

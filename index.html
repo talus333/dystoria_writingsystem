@@ -28547,13 +28547,20 @@ async function buildWikiChunked(used, unused, npAll, ctx, body){
   const seenCat = {}; const groups = [];
   catOrder.forEach(c => { if (seenCat[c]) return; seenCat[c] = 1; const list = used.filter(u => u.el.cat === c); if (list.length) groups.push([c, labelOf[c] || (typeof wikiCatName === 'function' ? wikiCatName(c) : c), list]); });
   const BATCH = 7, totalUsed = used.length; let done = 0, elementsDoc = '';
+  let _wikiCapped = '';   // set when wiki_build hits its own daily ceiling (#31) — stops the run and is reported at the end
   const genEntries = async (items, lvl, progressLabel) => {
     let outAcc = '';
     for (let bi = 0; bi < Math.ceil(items.length / BATCH); bi++){
+      if (_wikiCapped) break;   // the ceiling holds for the rest of the day; every remaining batch would fail the same way
       const batch = items.slice(bi * BATCH, (bi + 1) * BATCH); done += batch.length;
       if (body) body.innerHTML = '<div class="wk-doc-empty"><span class="spin"></span> Reading the story in cycles — ' + progressLabel + ' (' + done + '/' + totalUsed + ')…</div>';
       try { const o = await aiCall(sysEntries(lvl), pre + 'ELEMENTS:\n\n' + batch.map(u => blockFor(u, lvl)).join('\n\n') + '\n\nWrite the ' + lvl + ' entries:', { feature:'wiki_build', maxTokens: 4096 }); if (o && o.trim()) outAcc += (outAcc ? '\n\n' : '') + o.trim(); }
-      catch (e){ /* a failed batch is skipped, not fatal */ }
+      catch (e){
+        // A transient batch failure is skipped, as it always was. The wiki_build CEILING is not
+        // transient — every remaining batch would fail the same way — so stop rather than hand
+        // back half a wiki with nothing said about the missing half.
+        if (e && e.limit === 'feature'){ _wikiCapped = e.message || 'Building the wiki has used its share of today\u2019s AI budget.'; break; }
+      }
     }
     return outAcc;
   };
@@ -28609,6 +28616,7 @@ async function buildWikiChunked(used, unused, npAll, ctx, body){
     + 'For Overview, Frame and Questions use ONLY the given material; never mention the author/writer/reader; refer to story parts as "Section N". Output the four sections with those exact headings and nothing else.';
   let meta = '';
   try {
+    if (_wikiCapped) throw new Error(_wikiCapped);   // the synthesis is wiki_build as well; a doomed call helps nobody
     meta = await aiCall(sysO, pre + 'ELEMENT ENTRIES (already written — the whole story):\n\n' + elementsDoc.slice(0, 13000)
       + (frameLines.length ? ('\n\nNARRATIVE LAYERS:\n' + frameLines.join('\n')) : '')
       + (unusedNames.length ? ('\n\nELEMENTS NOT YET IN THE STORY: ' + unusedNames.join(', ')) : '')
@@ -28623,6 +28631,12 @@ async function buildWikiChunked(used, unused, npAll, ctx, body){
   if (elementsDoc) doc += '\n\n' + elementsDoc;
   doc += '\n\n## Questions the story raises\n\n' + (questions || '');
   if (reading) doc += '\n\n## Suggested Reading List\n\n' + reading;
+  if (_wikiCapped){
+    // Say it in the document, not only in a status line that scrolls away: the writer will
+    // come back to this page tomorrow and needs to know why half of it is missing.
+    doc = '> **This wiki is unfinished.** ' + _wikiCapped + ' What was written before that is below \u2014 press Update Wiki again once the budget resets and it will carry on.\n\n' + doc;
+    try { if (typeof flashStatus === 'function') flashStatus(_wikiCapped); } catch(e){}
+  }
   return doc.trim();
 }
 /* ---- the ✦ pass, for the things that are not elements ---------------------
@@ -36709,7 +36723,7 @@ async function aiCall(system, prompt, opts){
   if (opts.model) body.model = opts.model;
   const r = await fetch(AI_ENDPOINT, { method: 'POST', headers: aiHeaders(), body: JSON.stringify(body) });
   let data; try { data = await r.json(); } catch (e){ throw new Error('HTTP ' + r.status); }
-  if (!r.ok || data.error){ const msg = data.error || ('HTTP ' + r.status); if (data.limit === 'day' || aiIsDailyLimit(msg)) aiDailyNotice(); throw new Error(msg); }
+  if (!r.ok || data.error){ const msg = data.error || ('HTTP ' + r.status); const _e = new Error(msg); _e.limit = data.limit || ''; if (data.limit === 'feature') aiFeatureCapNotice(msg); else if (data.limit === 'day' || aiIsDailyLimit(msg)) aiDailyNotice(); throw _e; }
   window._aiLastVia = data.via || '';   // which model in the chain served this call (e.g. claude, gemini-2.5-pro)
   return (data.text || '').trim();
 }
@@ -36857,6 +36871,20 @@ function aiErrMsg(e){
   if (/too many|quota|rate|429|busy|rate-limited/i.test(m)) return 'The AI is busy for a moment — give it a few seconds and try again.';
   return 'Couldn’t reach the AI: ' + m;
 }
+// A per-feature ceiling (#31): ONE AI tool has spent its share of today's token budget and the
+// rest are untouched. This is why it never calls aiDailyNotice() — that raises window.__aiLimited,
+// which hides every deep AI tool in the app, and that would be a lie. Shown once per feature per
+// UTC day so a batch loop hitting the wall doesn't stack up identical status lines.
+var _aiFeatNoticed = {};
+function aiFeatureCapNotice(msg){
+  try{
+    var day = new Date().toISOString().slice(0,10);
+    var key = day + '|' + String(msg || '').slice(0, 40);
+    if (_aiFeatNoticed[key]) return; _aiFeatNoticed[key] = 1;
+    if (typeof flashStatus === 'function') flashStatus(String(msg || 'That AI tool has used its share of today\u2019s budget.'));
+  }catch(e){}
+}
+try{ window.aiFeatureCapNotice = aiFeatureCapNotice; }catch(e){}
 let _aiDailyNoticed = false;
 function aiDailyNotice(){
   try{ window.__aiLimited = true; }catch(e){}   // mirror for feature gating (e.g. the inline "Break it down" button hides once we're out of AI for the day)
@@ -37631,7 +37659,7 @@ async function inkReadStrokes(page){
   const r = await fetch(AI_ENDPOINT, { method: 'POST', headers: aiHeaders(),
     body: JSON.stringify({ feature: 'handwriting', system: INK_SYS, prompt: 'Transcribe the handwriting in this image, word for word.', image: png, model: AI_VISION_MODEL, max_tokens: 2000 }) });
   let data; try { data = await r.json(); } catch (e){ throw new Error('HTTP ' + r.status); }
-  if (!r.ok || data.error){ const msg = data.error || ('HTTP ' + r.status); if (data.limit === 'day' || aiIsDailyLimit(msg)) aiDailyNotice(); throw new Error(msg); }
+  if (!r.ok || data.error){ const msg = data.error || ('HTTP ' + r.status); const _e = new Error(msg); _e.limit = data.limit || ''; if (data.limit === 'feature') aiFeatureCapNotice(msg); else if (data.limit === 'day' || aiIsDailyLimit(msg)) aiDailyNotice(); throw _e; }
   const text = (data.text || '').trim();
   if (!text || /^\[no legible text\]$/i.test(text)){ console.warn('Transcribe: no usable text', data.debug || text); return ''; }
   return text;
@@ -50785,8 +50813,14 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.481';
+  var APP_VERSION = '2026.07.20.482';
   var APP_CHANGELOG = [
+    { v:'2026.07.20.482', date:'August 23, 2026', notes:[
+      '**The daily AI limit now counts what the AI actually costs, not how many times you pressed a button.** Rebuilding a whole wiki and looking up an icon name used to spend the same allowance, though one is worth about ten of the other \u2014 so the limit ran out in the wrong places. It is now a budget of words-in-and-out per day, which means far more of the small AI touches and a fair price on the big ones. [Jeremy]',
+      '**Building the wiki has a ceiling of its own \u2014 half the day\u2019s budget.** It is the one press whose cost grows with the size of your story, and the only one that could swallow a whole day on its own. Now it cannot: whatever the wiki costs, half the day is still there for everything else.',
+      '**And a wiki that ran out mid-build says so.** It used to drop the batches it could not afford and hand back what fitted as though that were the finished thing. It now stops at the wall, keeps what it wrote, and tells you at the top of the page to press Update Wiki again once the budget resets.',
+      'Running one AI tool out for the day no longer hides the others \u2014 they are all still there, and still work.'
+    ]},
     { v:'2026.07.20.481', date:'August 23, 2026', notes:[
       '**Unpublishing a reader link now really revokes it \u2014 and warns you first.** Turning a link off used to keep the address in reserve, so publishing again handed back the SAME link and anyone who still had it was let straight back in. Unpublishing now destroys the link for good; publishing again gives you a new one. Because that cannot be undone, Dystoria asks before it does it. [Jeremy]',
       '**Readers only ever see their own comments \u2014 for real this time.** A visitor to a shared link already only SAW their own, but every comment on the story was being sent to their browser and hidden there, which meant anyone curious enough could read the lot. Now the database itself only ever hands a reader their own. You still see everything, in Revise.',
@@ -61584,7 +61618,7 @@ body.eink #resAllView{ color:#000; }
     try{ var _ex=(typeof aiExcludedModels==='function')?aiExcludedModels():[]; if(_ex.length) body.exclude=_ex; }catch(e){}
     var r=await fetch(AI_ENDPOINT, { method:'POST', headers:aiHeaders(), body:JSON.stringify(body) });
     var data; try{ data=await r.json(); }catch(e){ throw new Error('HTTP '+r.status); }
-    if(!r.ok||data.error){ var _rerr=data.error||('HTTP '+r.status); if(data.limit==='day'||(typeof aiIsDailyLimit==='function'&&aiIsDailyLimit(_rerr))){ try{ aiDailyNotice(); }catch(_e){} } throw new Error(_rerr); }
+    if(!r.ok||data.error){ var _rerr=data.error||('HTTP '+r.status); var _rex=new Error(_rerr); _rex.limit=data.limit||''; if(data.limit==='feature'){ try{ aiFeatureCapNotice(_rerr); }catch(_e){} } else if(data.limit==='day'||(typeof aiIsDailyLimit==='function'&&aiIsDailyLimit(_rerr))){ try{ aiDailyNotice(); }catch(_e){} } throw _rex; }
     return { text:(data.text||'').trim(), sources:Array.isArray(data.sources)?data.sources:[], via:data.via||'' };
   }
 
