@@ -25069,6 +25069,113 @@ function heavyWanted(s){
   } catch(e){}
   return w;
 }
+/* The full set a backup has to be able to restore. Wider than `heavyWanted` because a
+   backup must also carry the pieces the OPEN story never needs back — the regenerable AI
+   caches, and the session log whose per-entry prose the local copy drops. `versions` is
+   deliberately absent: `cloudDocOf` prunes it before saving, so the LOCAL copy is the
+   fuller one and asking the cloud for it would trade bytes for a worse answer. */
+var BACKUP_HEAVY = ['npImages', 'npImagePos', 'inkPages', 'ink', 'cover', 'archive',
+  'wikiDoc', 'wikiSig', 'wikiProseLen', 'wikiSecLens', 'wikiQuestions', 'wikiReading',
+  'wikiAI', 'wikiOverview', 'elementQuestions', 'goalQuestions', 'sessionLog', 'html', 'text'];
+/* Fill the heavy gaps in a local copy from a cloud projection, and **fill only gaps**.
+   A local copy can be AHEAD of the cloud — a save that has not landed, an edit made
+   offline — and a backup that quietly replaced newer work with older would be the worst
+   possible bug in the one feature people reach for when something has already gone wrong.
+   So every branch here asks "is this missing?", never "is this different?". */
+function fillHeavyGaps(s, full){
+  try {
+    if (!s || !full) return s;
+    var o = Object.assign({}, s);
+    // stripHeavyForLocal leaves page shells behind marked `_t`, so an emptied page is not
+    // the same thing as a page nobody has drawn on.
+    var inkStripped = (Array.isArray(o.inkPages) && o.inkPages.some(function(p){ return p && p._t; })) || !!(o.ink && o.ink._t);
+    if (!o.npImages && full.npImages) o.npImages = full.npImages;
+    if (!o.npImagePos && full.npImagePos) o.npImagePos = full.npImagePos;
+    if (inkStripped && Array.isArray(full.inkPages)) o.inkPages = full.inkPages;
+    if (inkStripped && full.ink) o.ink = full.ink;
+    if (!o.cover && full.cover) o.cover = full.cover;
+    if ((!o.archive || !o.archive.length) && Array.isArray(full.archive)) o.archive = full.archive;
+    if (!o.wikiDoc && typeof full.wikiDoc === 'string'){
+      o.wikiDoc = full.wikiDoc;
+      ['wikiSig', 'wikiProseLen', 'wikiSecLens', 'wikiQuestions', 'wikiReading'].forEach(function(k){ if (full[k] != null) o[k] = full[k]; });
+    }
+    ['wikiAI', 'wikiOverview', 'elementQuestions', 'goalQuestions'].forEach(function(k){ if (!o[k] && full[k]) o[k] = full[k]; });
+    // The cloud's log entries keep the per-entry `html` the local copy drops. Take them only
+    // when the cloud is not SHORTER — a shorter log means this device has written since.
+    if (Array.isArray(full.sessionLog) && full.sessionLog.length >= ((o.sessionLog || []).length)) o.sessionLog = full.sessionLog;
+    if (o._htmlTrim && typeof full.html === 'string'){ o.html = full.html; if (typeof full.text === 'string') o.text = full.text; }
+    delete o._localTrim; delete o._htmlTrim;
+    return o;
+  } catch(e){ return s; }
+}
+/* Make every local copy complete enough to back up, buying as few bytes as it can.
+
+   **v.484.** `backupAll` used to do `select('id,doc')` — every row row-level security lets
+   you see, whole, INCLUDING stories other people have shared with you, and then threw away
+   the ones that were not in your library. One press moved the entire database. It was also
+   the last read in the app still doing that after v.423 and v.483.
+
+   The shape is cloudPull's, because the problem is cloudPull's: ask a cheap question first,
+   then buy only what the answer says you need.
+     1 · one light pass for the cloud's `updated` stamp on the rows you actually hold;
+     2 · the cloud is NEWER than this device → take the whole document, exactly as before,
+         because a backup must capture the newest copy and merging is not worth the risk;
+     3 · same version (or this device is ahead) → ask only for the heavy fields and fill the
+         gaps, which is the overwhelmingly common case and the whole saving.
+   Every failure path falls back to the whole document. **Fail expensive, never wrong**:
+   this is the backup. */
+async function backupFillFromCloud(list){
+  var mine = (list || []).filter(function(s){ return s && s.cloudId; });
+  var ids = mine.map(function(s){ return s.cloudId; });
+  if (!ids.length) return list;
+  var byCloud = {};    // cloudId → a whole document, where we had to fetch one
+  var gaps = {};       // cloudId → a heavy-field projection to fill gaps from
+  var pullFull = async function(batch){
+    var r = await supa.from('stories').select('id,doc').in('id', batch);
+    if (!r.error && r.data) r.data.forEach(function(x){ if (x && x.doc) byCloud[x.id] = x.doc; });
+  };
+  var stamp = {}, lightOK = true;
+  for (var i = 0; i < ids.length && lightOK; i += 20){
+    var p = await supa.from('stories').select('id,supd:doc->>updated').in('id', ids.slice(i, i + 20));
+    if (p.error || !p.data){ lightOK = false; break; }
+    p.data.forEach(function(r){ if (r && r.id) stamp[r.id] = r.supd || ''; });
+  }
+  if (!lightOK){
+    console.warn('backup: light stamp pass unusable — falling back to whole documents');
+    for (var j = 0; j < ids.length; j += 20) await pullFull(ids.slice(j, j + 20));
+  } else {
+    var newer = [], same = [];
+    mine.forEach(function(s){
+      var c = stamp[s.cloudId];
+      if (c == null) return;                                   // no such row — nothing the cloud can add
+      if (c > (s.updated || '')) newer.push(s.cloudId); else same.push(s.cloudId);
+    });
+    for (var k = 0; k < newer.length; k += 20) await pullFull(newer.slice(k, k + 20));
+    var SEL = 'id,' + BACKUP_HEAVY.map(function(f){ return f + ':doc->' + f; }).join(',');
+    for (var m = 0; m < same.length; m += 20){
+      var batch = same.slice(m, m + 20);
+      var r2 = await supa.from('stories').select(SEL).in('id', batch);
+      /* Check the ANSWER, not just the absence of an error — a projection is a question
+         about the shape of something at the other end, and a key that came back named
+         differently would be a silently thinner backup. */
+      var shapeOk = !r2.error && Array.isArray(r2.data) && r2.data.every(function(r){
+        return r && BACKUP_HEAVY.every(function(f){ return Object.prototype.hasOwnProperty.call(r, f); });
+      });
+      if (!shapeOk){
+        console.warn('backup: projected select unusable, falling back to whole documents:', (r2.error && r2.error.message) || 'requested keys missing from the response');
+        await pullFull(batch);
+        continue;
+      }
+      r2.data.forEach(function(r){ if (r && r.id) gaps[r.id] = r; });
+    }
+  }
+  return (list || []).map(function(s){
+    if (!s || !s.cloudId) return s;
+    if (byCloud[s.cloudId]) return byCloud[s.cloudId];
+    if (gaps[s.cloudId]) return fillHeavyGaps(s, gaps[s.cloudId]);
+    return s;
+  });
+}
 async function restoreHeavyFromCloud(storyId, cloudId){
   try {
     if (!supa || !cloud.user || !cloudId) return;
@@ -37392,15 +37499,13 @@ function slug(n){ return (n || 'session').toLowerCase().replace(/[^a-z0-9]+/g, '
 async function backupAll(){
   if (state.session) saveSession();
   let sessions = loadSessions();
-  // Local copies drop handwriting + images to save space; pull the FULL docs from the cloud so the backup is complete.
+  // Local copies drop handwriting, images and the revision archive to save space, so the
+  // cloud has to complete them before the file is written. See backupFillFromCloud for how
+  // little of the cloud that now takes — and for why every failure path still buys the lot.
   try {
     if (typeof cloudReady === 'function' && cloudReady() && cloud.user && supa && sessions.some(function(s){ return s && s.cloudId; })){
       flashStatus('Preparing full backup…');
-      const res = await supa.from('stories').select('id,doc');
-      if (!res.error && res.data){
-        const byCloud = {}; res.data.forEach(function(r){ if (r && r.doc) byCloud[r.id] = r.doc; });
-        sessions = sessions.map(function(s){ return (s && s.cloudId && byCloud[s.cloudId]) ? byCloud[s.cloudId] : s; });
-      }
+      sessions = await backupFillFromCloud(sessions);
     }
   } catch(e){}
   const data = { app: 'dystoria-writing', version: 1, exported: new Date().toISOString(), sessions: sessions };
@@ -50870,8 +50975,13 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.483';
+  var APP_VERSION = '2026.07.20.484';
   var APP_CHANGELOG = [
+    { v:'2026.07.20.484', date:'August 23, 2026', notes:[
+      '**Export a backup without downloading your whole library twice.** A backup has to be complete, and Dystoria bought that the blunt way \u2014 it downloaded every story in full, including ones other people had shared with you that were never going in the file. It now checks which stories this device is already holding a current copy of and asks only for the pieces it is missing. [Jeremy]',
+      '**The backup itself is unchanged, and that was the whole design problem.** If the cloud has a newer copy of a story than this computer does, the backup still takes the cloud\u2019s copy whole. If anything at all goes wrong with the cheaper route, it falls back to downloading everything. A backup is what you reach for when something has already gone wrong; it is not the place to be clever.',
+      'And work you have done on this device is never overwritten by an older copy from the cloud \u2014 the merge only ever fills in what is missing.'
+    ]},
     { v:'2026.07.20.483', date:'August 23, 2026', notes:[
       '**Opening a story no longer re-downloads the whole story.** To keep your browser\u2019s storage small, Dystoria keeps a light copy of every story you are not currently in \u2014 the handwriting, the images and the revision history live in the cloud until you open it. Fetching them back used to mean downloading the ENTIRE story, prose and notes and all, to pick out the four or five pieces that were missing. It now asks for exactly the missing pieces. [Jeremy]',
       'For a story with no handwriting and no pictures, that is very nearly the whole download gone. For one full of them, it is everything except the pictures.',
