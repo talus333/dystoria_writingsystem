@@ -25032,15 +25032,72 @@ function pruneEmptyStories(){
     return 0;
   } catch(e){ return 0; }
 }
-// A story opened from a trimmed local copy pulls its handwriting + images back from the cloud (best-effort).
+/* ── restoring the heavy half of a story ───────────────────────────────────────
+   A story opened from a trimmed local copy pulls its handwriting, images, cover and
+   revision archive back from the cloud (best-effort).
+
+   **v.483 — ask for the fields this device is actually MISSING, not the whole document.**
+   `select('doc')` returned the ENTIRE story — prose, elements, notepad notes, session
+   log, wiki, everything — in order to read back six or seven heavy fields the local
+   copy had dropped. For a story with no handwriting and no images that is the whole
+   book on the wire to discover there was nothing to restore. Postgres will project the
+   JSON keys server-side, which is the same trick that made v.423 work, so ask for
+   exactly what is gone. Measured 2026-08-23: PostgREST is 99% of this project's egress
+   and this is its largest repeated read.
+
+   **`archive` is deliberately NOT deferred, though it is the bulkiest field.** A local
+   copy with no archive is indistinguishable, at save time, from a story that has none —
+   and `cloudDocOf` writes the whole `doc` — so a save after a deferred restore would
+   erase the writer's revision safety-net. Bytes are worth less than that. If it ever
+   needs to go, the save path has to learn the difference first. (Lesson 65: a new
+   "not loaded" state changes the meaning of code that already handles "absent".)   */
+var _heavyGot = Object.create(null);   // cloudId|updated → this exact version is already restored in memory
+// Which heavy fields is the local copy missing? Companions travel with their principal.
+function heavyWanted(s){
+  var w = [];
+  try {
+    if (!s) return w;
+    if (!s.npImages) w.push('npImages', 'npImagePos');
+    // stripHeavyForLocal leaves page shells behind with `_t:1` and an empty strokes array,
+    // so an emptied page is not the same thing as a page with no strokes on it.
+    var inkStripped = (Array.isArray(s.inkPages) && s.inkPages.some(function(p){ return p && p._t; })) || !!(s.ink && s.ink._t);
+    if (inkStripped) w.push('inkPages', 'ink');
+    if (!s.cover) w.push('cover');
+    if (!s.archive || !s.archive.length) w.push('archive');
+    if (!s.wikiDoc) w.push('wikiDoc', 'wikiSig', 'wikiProseLen', 'wikiSecLens', 'wikiQuestions', 'wikiReading');
+    if (s._htmlTrim) w.push('html', 'text');
+  } catch(e){}
+  return w;
+}
 async function restoreHeavyFromCloud(storyId, cloudId){
   try {
     if (!supa || !cloud.user || !cloudId) return;
-    var res = await supa.from('stories').select('doc').eq('id', cloudId).single();
-    if (res.error || !res.data || !res.data.doc) return;
-    var full = res.data.doc;
     if (!state.session || state.session.id !== storyId) return;   // user already moved on
+    var want = heavyWanted(state.session);
+    if (!want.length) { delete state.session._localTrim; delete state.session._htmlTrim; return; }   // nothing is missing — ask for nothing
+    // Switching away from a story and back re-trims the local copy, which used to mean
+    // downloading it again. Same story, same version → it is already in memory.
+    var vkey = cloudId + '|' + (state.session.updated || '');
+    if (_heavyGot[vkey]) { delete state.session._localTrim; delete state.session._htmlTrim; return; }
+
+    var sel = want.map(function(k){ return k + ':doc->' + k; }).join(',');
+    var res = await supa.from('stories').select(sel).eq('id', cloudId).single();
+    var full = res.data;
+    /* Same rule cloudPull learned the hard way: a projected select is a question about the
+       shape of something at the other end, so check the ANSWER and not just the absence of
+       an error. A key that came back under a different name (or not at all) would be silently
+       undefined here, and the writer's handwriting would simply never return with nothing
+       anywhere saying why. `doc->missing` is legitimately null, so test for the PROPERTY. */
+    var shapeOk = !res.error && full && want.every(function(k){ return Object.prototype.hasOwnProperty.call(full, k); });
+    if (!shapeOk){
+      console.warn('restoreHeavy: projected select unusable, falling back to the whole doc:', (res.error && res.error.message) || 'requested keys missing from the response');
+      var r2 = await supa.from('stories').select('doc').eq('id', cloudId).single();
+      if (r2.error || !r2.data || !r2.data.doc) return;
+      full = r2.data.doc;
+    }
+    if (!state.session || state.session.id !== storyId) return;   // the await gave them time to move on
     var s = state.session;
+    _heavyGot[vkey] = 1;
     if (full.npImages) s.npImages = full.npImages;
     if (full.npImagePos) s.npImagePos = full.npImagePos;
     if (Array.isArray(full.inkPages)) s.inkPages = full.inkPages;
@@ -50813,8 +50870,14 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.482';
+  var APP_VERSION = '2026.07.20.483';
   var APP_CHANGELOG = [
+    { v:'2026.07.20.483', date:'August 23, 2026', notes:[
+      '**Opening a story no longer re-downloads the whole story.** To keep your browser\u2019s storage small, Dystoria keeps a light copy of every story you are not currently in \u2014 the handwriting, the images and the revision history live in the cloud until you open it. Fetching them back used to mean downloading the ENTIRE story, prose and notes and all, to pick out the four or five pieces that were missing. It now asks for exactly the missing pieces. [Jeremy]',
+      'For a story with no handwriting and no pictures, that is very nearly the whole download gone. For one full of them, it is everything except the pictures.',
+      'And switching away from a story and back no longer downloads it a second time \u2014 same story, same version, it is already open in front of you.',
+      '_Why it matters: this was 99% of what Dystoria costs to run, and the cost is what decides how many writers can share the free database. Nothing about it is visible except that stories open faster on a slow connection._'
+    ]},
     { v:'2026.07.20.482', date:'August 23, 2026', notes:[
       '**The daily AI limit now counts what the AI actually costs, not how many times you pressed a button.** Rebuilding a whole wiki and looking up an icon name used to spend the same allowance, though one is worth about ten of the other \u2014 so the limit ran out in the wrong places. It is now a budget of words-in-and-out per day, which means far more of the small AI touches and a fair price on the big ones. [Jeremy]',
       '**Building the wiki has a ceiling of its own \u2014 half the day\u2019s budget.** It is the one press whose cost grows with the size of your story, and the only one that could swallow a whole day on its own. Now it cannot: whatever the wiki costs, half the day is still there for everything else.',
