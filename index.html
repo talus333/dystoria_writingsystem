@@ -24342,6 +24342,18 @@ function cloudDocOf(sess){
     try { while (a.length > 1 && JSON.stringify(a).length > 700000) a.shift(); } catch(e){}
     doc.archive = a;
   }
+  /* Explore transcripts are the writer's record and are meant to be kept, so this guard
+     is deliberately loose — it exists only so a story cannot be made unsavable by them.
+     When it does bite it SAYS SO on the log rather than dropping conversations silently
+     (lesson 62: a cap that does not announce itself turns a bounded truth into a false one). */
+  if (Array.isArray(doc.exploreLog) && doc.exploreLog.length){
+    try {
+      var xl = doc.exploreLog.slice(), dropped = 0;
+      while (xl.length > 1 && JSON.stringify(xl).length > 600000){ xl.shift(); dropped++; }
+      if (dropped){ xl = xl.slice(); xl[0] = Object.assign({}, xl[0], { _droppedBefore: (xl[0]._droppedBefore || 0) + dropped }); }
+      doc.exploreLog = xl;
+    } catch(e){}
+  }
   // Version history: keep every manual/shared snapshot + the last few autos, size-guarded so the stored doc stays lean.
   if (Array.isArray(doc.versions) && doc.versions.length){
     var keep = doc.versions.filter(function(v){ return v && v.kind !== 'auto'; });
@@ -26196,7 +26208,7 @@ function openSession(id){
   state.placing = null; state.placeQueue = []; state.autoPlace = true; state.autoPlaceSeen = true;   // auto-place is the default
   (state.frames || []).forEach(fr => ((fr.prompt && fr.prompt.words) || []).forEach(w => { if (w.needsPlace) delete w.needsPlace; }));
   if (state.prompt && state.prompt.words) state.prompt.words.forEach(w => { if (w.needsPlace) delete w.needsPlace; });
-  if (state.npActive && state.npActive !== 'general' && state.npActive !== 'plotmain' && state.npActive.indexOf('goal:') !== 0 && state.npActive.indexOf('thread:') !== 0 && state.npActive.indexOf('group:') !== 0 && state.npActive.indexOf('part:') !== 0 && state.npActive.indexOf('section:') !== 0 && state.npActive.indexOf('grouptree:') !== 0 && state.npActive.indexOf('session:') !== 0 && state.npActive.indexOf('arc:') !== 0 && typeof npFindEl === 'function' && !npFindEl(state.npActive)){ state.npActive = 'general'; state.cardTrait = null; }   // restored selection's element is gone → fall back
+  if (state.npActive && state.npActive !== 'general' && state.npActive !== 'plotmain' && state.npActive.indexOf('goal:') !== 0 && state.npActive.indexOf('thread:') !== 0 && state.npActive.indexOf('group:') !== 0 && state.npActive.indexOf('part:') !== 0 && state.npActive.indexOf('section:') !== 0 && state.npActive.indexOf('grouptree:') !== 0 && state.npActive.indexOf('session:') !== 0 && state.npActive.indexOf('explore:') !== 0 && state.npActive.indexOf('arc:') !== 0 && typeof npFindEl === 'function' && !npFindEl(state.npActive)){ state.npActive = 'general'; state.cardTrait = null; }   // restored selection's element is gone → fall back
   renderNpElements();           // now the words/frames are loaded, so element chips resolve their real names
   if (typeof renderNotepad === 'function') renderNotepad();
   if (typeof renderNpCard === 'function') renderNpCard();
@@ -38050,12 +38062,27 @@ function npSectionName(i){
   return { n: (_ord != null ? _ord : (typeof sectionDiaText === 'function' ? sectionDiaText(i) : (i + 1))), name: nm, secType: _t, label: _t ? secTypeLabel(_t) : ('Section ' + (_ord != null ? _ord : (i + 1))) };
 }
 function npSectionCount(){ return (state.frames && state.frames.length) ? state.frames.length : 1; }
+/* One name for an Explore, used by the pill, the record head and the notepad title.
+   A named conversation keeps its name; an unnamed one is described by what it was
+   about, and failing that by when it happened. */
+function exploreTitle(x){
+  if (!x) return 'Explore';
+  if (x.title && x.title.trim()) return x.title.trim();
+  var when = ''; try { when = new Date(x.at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }); } catch(e){}
+  /* The subject alone is NOT enough: a conversation about Marek would be listed as
+     "Marek", which is the name of an element, and the pad above it would read "Notes
+     about Marek" when those notes are about the CONVERSATION. The date disambiguates,
+     and it is also how you find the one you mean. */
+  if (x.label && x.label.trim()) return x.label.trim() + (when ? (' \u00b7 ' + when) : '');
+  return when ? ('Explore \u00b7 ' + when) : 'Explore';
+}
 function npLabelFor(key){
   if (key === 'general') return { word: 'General Notes', cat: '', catId: null };
   if (key === NP_ARCHIVE_KEY) return { word: 'Archived Notes', cat: '', catId: null };
   if (key.indexOf('section:') === 0){ const i = parseInt(key.slice(8), 10) || 0; const sl = npSectionName(i); return { word: (sl.label || ('Section ' + sl.n)) + (sl.name ? ' — ' + sl.name : ''), cat: 'Section', catId: null }; }
   if (key.indexOf('goal:') === 0){ const it = (typeof goalById === 'function') ? goalById(key.slice(5)) : null; return { word: it ? it.word : 'Goal', cat: 'Goal', catId: null }; }
   if (key.indexOf('session:') === 0){ const s = ((state.session && state.session.sessionLog) || []).find(x => x.id === key.slice(8)); let nm = (s && s.title && s.title.trim()) ? s.title.trim() : 'Session'; if (s && (!s.title || !s.title.trim())){ try { nm = 'Session · ' + new Date(s.at).toLocaleDateString(undefined, { month:'short', day:'numeric' }); } catch(_){} } return { word: nm, cat: 'Session', catId: null }; }
+  if (key.indexOf('explore:') === 0){ const x = ((state.session && state.session.exploreLog) || []).find(e => e.id === key.slice(8)); return { word: exploreTitle(x), cat: 'Explore', catId: null }; }
   if (key.indexOf('part:') === 0){ const p = (typeof partById === 'function') ? partById(key.slice(5)) : null; return { word: (p && p.name) ? p.name : 'Part', cat: 'Part', catId: null }; }
   if (key.indexOf('thread:') === 0){ const t = (typeof threadById === 'function') ? threadById(key.slice(7)) : null; return { word: t ? t.name : 'Thread', cat: 'Thread', catId: null }; }
   if (key.indexOf('group:') === 0){ const g = (typeof beingGroupById === 'function') ? beingGroupById(key.slice(6)) : null; let nm = 'Party'; if (g){ if (g.name) nm = g.name; else { const lw = (typeof npFindEl === 'function') ? npFindEl(g.leader) : null; nm = (lw ? (lw.name || lw.word) : '') + '\u2019s party'; } } return { word: nm, cat: 'Party', catId: null }; }
@@ -38122,7 +38149,7 @@ function renderNpElements(){
   let filter = state.npCatFilter || 'all';
   if (filter === 'sections' || filter === 'parts') filter = 'plot';   // retired tabs → fold into the Plot tab (sections now live in the plot card)
   const _arcs = (typeof window.__dystArcsList === 'function') ? (window.__dystArcsList() || []) : [];
-  if (filter !== 'all' && filter !== 'goals' && filter !== 'threads' && filter !== 'groups' && filter !== 'plot' && filter !== 'arcs' && filter !== 'sessions' && cats.indexOf(filter) < 0) filter = 'all';   // a category that no longer exists → fall back
+  if (filter !== 'all' && filter !== 'goals' && filter !== 'threads' && filter !== 'groups' && filter !== 'plot' && filter !== 'arcs' && filter !== 'sessions' && filter !== 'explores' && cats.indexOf(filter) < 0) filter = 'all';   // a category that no longer exists → fall back
   {
     const fr = document.createElement('div'); fr.className = 'np-filters';
     const mkF = (cid, label, color) => { const b = document.createElement('button'); b.className = 'np-catfilter' + (filter === cid ? ' on' : ''); b.textContent = label;
@@ -38139,6 +38166,7 @@ function renderNpElements(){
     if (_grps.length) mkF('groups', 'Parties');
     if (_arcs.length) mkF('arcs', 'Arcs', 'var(--gold)');
     { const _slog = (state.session && state.session.sessionLog) || []; if (_slog.length) mkF('sessions', 'Sessions', 'var(--gold)'); }   // R37 — writing sessions as notepad pills
+    { const _xlog = (state.session && state.session.exploreLog) || []; if (_xlog.length) mkF('explores', 'Explores', 'var(--gold)'); }   // the Q&A conversations, kept whole
     cats.forEach(c => { if (c === 'plot') return; mkF(c, (getCat(c) || {}).name || c, catColor(c)); });   // 'plot' is folded into the merged Plot tab above
     // search box — narrows the pills to those whose name matches, within the active filter tab
     const sb = document.createElement('div'); sb.className = 'np-search' + ((state.npSearch || '').trim() ? ' has-q' : '');
@@ -38205,6 +38233,24 @@ function renderNpElements(){
       if (s.toNotes){ const nb = document.createElement('span'); nb.className = 'np-cat'; nb.style.color = 'var(--gold)'; nb.textContent = '→ Notes'; chip.appendChild(nb); }
       else if (s.words){ const wc = document.createElement('span'); wc.className = 'np-cat'; wc.style.color = 'var(--ink-faint)'; wc.textContent = s.words + 'w'; chip.appendChild(wc); }
       const ar = document.createElement('span'); ar.className = 'np-arrow'; ar.textContent = '▸'; chip.appendChild(ar);
+      chip.addEventListener('click', () => npSelect(key));
+      host.appendChild(chip);
+    });
+    return;
+  }
+  if (filter === 'explores'){   // the Explore conversations (newest first); selecting one shows the transcript above the pad
+    const _xlog = ((state.session && state.session.exploreLog) || []).slice().reverse();
+    if (!_xlog.length){ const e = document.createElement('span'); e.className = 'np-goalempty'; e.textContent = 'No conversations yet'; host.appendChild(e); return; }
+    _xlog.forEach(x => {
+      const key = 'explore:' + x.id;
+      const chip = document.createElement('span'); chip.className = 'np-chip np-session' + (key === active ? ' on' : '');
+      const lbl = exploreTitle(x);
+      let when = ''; try { when = new Date(x.at).toLocaleDateString(undefined, { month:'short', day:'numeric' }); } catch(_){}
+      chip.title = lbl + (when ? (' \u00b7 ' + when) : '') + ' \u00b7 ' + (x.answered || 0) + ' answered';
+      const l = document.createElement('span'); l.className = 'np-label'; l.textContent = lbl; chip.appendChild(l);
+      const n = document.createElement('span'); n.className = 'np-cat'; n.style.color = 'var(--ink-faint)'; n.textContent = (x.answered || 0) + 'q'; chip.appendChild(n);
+      try { const raw = state.session && state.session.npNotes && state.session.npNotes[key]; if (raw && npPlain(raw).trim()){ const d = document.createElement('span'); d.className = 'np-cat'; d.style.color = catColor('event'); d.textContent = '\u2022'; chip.appendChild(d); } } catch(e){}   // a dot marks a conversation you have written your own notes on
+      const ar = document.createElement('span'); ar.className = 'np-arrow'; ar.textContent = '\u25B8'; chip.appendChild(ar);
       chip.addEventListener('click', () => npSelect(key));
       host.appendChild(chip);
     });
@@ -38331,7 +38377,7 @@ function npSelect(key){
   // (Rename, icon, +role, +group…) act on the element's index in the CURRENT section,
   // so if it isn't loaded here they'd silently do nothing. Load its section first.
   try {
-    if (key && key !== NP_ARCHIVE_KEY && !/^(general|goal:|thread:|group:|section:|part:|grouptree:|arc:|session:)/.test(key)
+    if (key && key !== NP_ARCHIVE_KEY && !/^(general|goal:|thread:|group:|section:|part:|grouptree:|arc:|session:|explore:)/.test(key)
         && state.frames && state.frames.length > 1){
       const here = (state.prompt && state.prompt.words) || [];
       if (!here.some(w => wordKey(w) === key)){
@@ -38524,6 +38570,36 @@ function renderNotepad(){
       sp.innerHTML = h; sp.style.display = '';
       const _ti = document.getElementById('npSessTitle'); if (_ti) _ti.addEventListener('input', () => { s.title = _ti.value; if (typeof renderNpElements === 'function') renderNpElements(); scheduleAutosave(1500); });
     } else { if (sp) sp.style.display = 'none'; if (_lm) _lm.classList.remove('np-session'); }
+  } catch(e){}
+  // The Explore record: the conversation as it happened, above the pad that holds your
+  // own notes about it. Same slot and the same rules as the Session record above —
+  // np-session ↔ np-sheet are mutually exclusive, so the two records share the class.
+  try {
+    const _n2 = $('notepad'); const _wrap2 = _n2 && _n2.parentNode; const _lm2 = _wrap2 && _wrap2.parentNode;
+    let xp = document.getElementById('npExploreRead');
+    const mX = /^explore:(.+)$/.exec(key); const xid = mX ? mX[1] : null;
+    const x = xid ? (((state.session && state.session.exploreLog) || []).find(e => e.id === xid)) : null;
+    if (x && _lm2){
+      if (!xp){ xp = document.createElement('div'); xp.id = 'npExploreRead'; }
+      if (xp.parentNode !== _lm2) _lm2.insertBefore(xp, _wrap2);
+      _lm2.classList.add('np-session'); _lm2.classList.remove('np-sheet');
+      const _ex = v => String(v == null ? '' : v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      let when = ''; try { when = new Date(x.at).toLocaleString(undefined, { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' }); } catch(_){}
+      const LENS = { element:'about an element', thread:'about a storyline', set:'about a set', map:'about the map', plot:'about the plot', goals:'about the goals', layers:'about the layers', category:'about a category' };
+      const meta = [when, (x.answered || 0) + ' answered', (x.lens ? (LENS[x.lens] || x.lens) : ''), (x.label || '')].filter(Boolean).join(' \u00b7 ');
+      let h = '<input id="npExpTitle" class="npsr-title" placeholder="Name this conversation\u2026" value="' + _ex(x.title || '') + '">';
+      h += '<div class="npsr-meta">' + _ex(meta) + '</div>';
+      const turns = (x.turns || []).map(function(t){
+        const skipped = t.r === 'a' && String(t.t || '').indexOf('(skipped') === 0;
+        return '<div class="npxr-turn npxr-' + (t.r === 'q' ? 'q' : 'a') + (skipped ? ' npxr-skip' : '') + '">'
+             + '<span class="npxr-who">' + (t.r === 'q' ? 'Asked' : 'You') + '</span>'
+             + '<span class="npxr-text">' + _ex(t.t).replace(/\n{2,}/g, '<br><br>').replace(/\n/g, '<br>') + '</span></div>';
+      }).join('');
+      h += '<div class="npsr-passage npsr-passage-open"><div class="npsr-lbl">The conversation</div><div class="npxr-log">' + (turns || '<div class="npxr-turn">(empty)</div>') + '</div></div>';
+      xp.innerHTML = h; xp.style.display = '';
+      const _xt = document.getElementById('npExpTitle');
+      if (_xt) _xt.addEventListener('input', () => { x.title = _xt.value; if (typeof renderNpElements === 'function') renderNpElements(); scheduleAutosave(1500); });
+    } else { if (xp) xp.style.display = 'none'; }
   } catch(e){}
 }
 function saveNotepad(){ if (!state.session) ensureSession(); const k = npActiveKey(); npSetNotes(k, $('notepad').innerHTML); if (k.indexOf('goal:') === 0) refreshGoalTokens(); scheduleAutosave(); }
@@ -49921,6 +49997,33 @@ body.eink #expMenu{background:#fff; border-color:#000}
       var it2 = document.getElementById('importText'); if (it2) it2.value = transcript;
       var tt2 = document.getElementById('importTitle'); if (tt2) tt2.value = '';
       if (typeof IMP !== 'undefined'){ IMP.kind = 'notes'; IMP.mode = 'new'; IMP.qa = true; try { if (qaSet){ IMP.qaScope = { lens: qaSet.lens || 'set', label: qaSet.label || '', names: (qaSet.detail || []).map(function(d){ return d.name; }).filter(Boolean) }; } else { var _ftS = qaFocusThreadId(); var _feS = qaFocusEl(); if (_ftS){ var _fdS = qaFocusDetail(); IMP.qaScope = { lens:'thread', label:(_fdS && _fdS.name) || '', names:[] }; } else if (_feS){ IMP.qaScope = { lens:'element', label:(_feS.name || _feS.word), names:[_feS.name || _feS.word] }; } else IMP.qaScope = null; } } catch(e){ IMP.qaScope = null; } }   // Q&A transcript — notes come from the ANSWERS, cleaned, never verbatim
+      /* Keep the conversation. Until now the transcript existed only long enough to be
+         extracted from, and `qaLog` was emptied on the next line — so if the extractor
+         missed something the author said, or filed it under the wrong element, that
+         answer was gone. The organized notes are a READING of the conversation; this is
+         the conversation. [Jeremy, 2026-08-23]
+         Stored the way a writing session is stored: the record lives in a log entry, and
+         the pad under it holds the writer's own notes (npNotes['explore:<id>']). The
+         SKIPPED questions are kept too — what you were asked and chose not to answer is
+         part of what happened. */
+      try {
+        var _turns = qaLog.map(function(m){ return { r: m.role, t: String(m.text || '') }; });
+        var _answered = _turns.filter(function(m){ return m.r === 'a' && m.t.indexOf('(skipped') !== 0; }).length;
+        if (_turns.length && _answered){
+          if (!state.session.exploreLog) state.session.exploreLog = [];
+          var _lbl = '', _lens = '';
+          try {
+            if (qaSet && qaSet.label){ _lbl = qaSet.label; _lens = qaSet.lens || 'set'; }
+            else if (qaFocusThreadId()){ var _fd0 = qaFocusDetail(); _lbl = (_fd0 && _fd0.name) || ''; _lens = 'thread'; }
+            else { var _fe0 = qaFocusEl(); if (_fe0){ _lbl = _fe0.name || _fe0.word; _lens = 'element'; } }
+          } catch(e){}
+          state.session.exploreLog.push({
+            id: 'x' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+            at: new Date().toISOString(),
+            label: _lbl, lens: _lens, turns: _turns, answered: _answered,
+          });
+        }
+      } catch(e){}
       qaLog = []; qaFocus = null; qaClearDraft(); qaProvisional = []; qaExcluded = []; qaTraits = {}; qaHot = {}; qaEmphElems = {}; qaEmphTraits = {};   // Explore stays open behind the organize step; closed when it finishes
       var ing = document.createElement('div'); ing.id = 'qaIngest'; ing.innerHTML = '\u2726 Organizing your conversation\u2026';
       document.body.appendChild(ing);
@@ -50975,8 +51078,14 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.484';
+  var APP_VERSION = '2026.07.20.485';
   var APP_CHANGELOG = [
+    { v:'2026.07.20.485', date:'August 23, 2026', notes:[
+      '**Explore conversations are kept now \u2014 there is an Explores tab in the Notepad.** Ending a conversation still files what you said into notes, elements and traits. What it did NOT do was keep the conversation: the transcript was read once, extracted from, and thrown away. So if something you said was missed, or filed under the wrong element, it was gone. Every conversation is now saved whole. [Jeremy]',
+      '**Open one and you see it as it happened** \u2014 every question and every answer, in order, including the ones you skipped, because what you were asked and chose not to answer is part of the record too.',
+      '**And there is a notepad under it for your own thoughts about it**, exactly like a writing session: the conversation above, your notes below. You can name a conversation, and it keeps its name in the list.',
+      'The organized notes are still a READING of the conversation. This is the conversation.'
+    ]},
     { v:'2026.07.20.484', date:'August 23, 2026', notes:[
       '**Export a backup without downloading your whole library twice.** A backup has to be complete, and Dystoria bought that the blunt way \u2014 it downloaded every story in full, including ones other people had shared with you that were never going in the file. It now checks which stories this device is already holding a current copy of and asks only for the pieces it is missing. [Jeremy]',
       '**The backup itself is unchanged, and that was the whole design problem.** If the cloud has a newer copy of a story than this computer does, the backup still takes the cloud\u2019s copy whole. If anything at all goes wrong with the cheaper route, it falls back to downloading everything. A backup is what you reach for when something has already gone wrong; it is not the place to be clever.',
@@ -52590,6 +52699,24 @@ body.eink .arc-type-pill.on{ background:#000; color:#fff; }
 #npSessionRead .npsr-passage > summary:hover{ color:var(--gold); }
 #npSessionRead .npsr-prose{ margin-top:7px; padding-top:7px; border-top:1px dashed rgba(196,158,74,.28); font-family:var(--serif); font-size:15px; line-height:1.7; color:var(--ink); max-height:280px; overflow-y:auto; }
 body.eink #npSessionRead{ background:#fff; border-color:#000; }
+/* The Explore record — the conversation, kept. Shares #npSessionRead's shell (title,
+   meta, passage) and adds only the turn list. */
+#npExploreRead{ margin:0 0 9px; padding:11px 13px; background:rgba(196,158,74,.07); border:1px solid rgba(196,158,74,.22); border-radius:10px; font-family:var(--sans); }
+#npExploreRead .npsr-title{ width:100%; box-sizing:border-box; font-family:var(--serif); font-style:italic; font-size:17px; color:var(--ink); border:none; border-bottom:1px solid rgba(196,158,74,.3); background:transparent; padding:1px 2px 5px; outline:none; line-height:1.55}
+#npExploreRead .npsr-title:focus{ border-bottom-color:var(--gold); }
+#npExploreRead .npsr-title::placeholder{ color:var(--ink-faint); font-style:italic; }
+#npExploreRead .npsr-meta{ font-size:11px; letter-spacing:.04em; text-transform:uppercase; color:#a4977a; margin-top:6px; }
+#npExploreRead .npsr-passage{ margin-top:9px; }
+#npExploreRead .npsr-lbl{ font-size:10.5px; font-weight:800; letter-spacing:.1em; text-transform:uppercase; color:var(--gold-bronze); margin-bottom:3px; }
+#npExploreRead .npxr-log{ margin-top:7px; padding-top:7px; border-top:1px dashed rgba(196,158,74,.28); max-height:calc(100vh - 380px); min-height:180px; overflow-y:auto; scrollbar-width:thin; }   /* the transcript IS this card's content — a 340px box left the column empty beneath it */
+#npExploreRead .npxr-turn{ display:block; padding:5px 0; border-top:1px dotted rgba(120,110,90,.16); }
+#npExploreRead .npxr-turn:first-child{ border-top:none; }
+#npExploreRead .npxr-who{ display:block; font-size:10.5px; font-weight:800; letter-spacing:.1em; text-transform:uppercase; color:#a4977a; margin-bottom:2px; }
+#npExploreRead .npxr-q .npxr-who{ color:var(--gold-bronze); }
+#npExploreRead .npxr-text{ display:block; font-family:var(--serif); font-size:15px; line-height:1.55; color:var(--ink); }
+#npExploreRead .npxr-q .npxr-text{ font-style:italic; color:var(--ink-soft); }
+#npExploreRead .npxr-skip .npxr-text{ font-style:italic; color:var(--ink-faint); }
+body.eink #npExploreRead{ background:#fff; border-color:#000; }
 #npArcRead{ margin:0 0 9px; padding:9px 11px; background:rgba(196,158,74,.08); border:1px solid rgba(196,158,74,.24); border-radius:9px; font-family:var(--sans); }
 #npArcRead .npar-h{ font-size:11px; font-weight:800; letter-spacing:.06em; text-transform:uppercase; color:var(--gold-bronze); margin-bottom:5px; }
 #npArcRead .npar-sub{ font-weight:600; letter-spacing:0; text-transform:none; color:#a4977a; }
