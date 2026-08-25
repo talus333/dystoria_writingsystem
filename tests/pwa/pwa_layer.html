@@ -1,0 +1,138 @@
+<!-- ===== PWA layer: append before the FINAL </body></html>, after every other dyst-* layer ===== -->
+<style id="dyst-pwa">
+/* Settings → Data → "This device" row. Uses the existing .set-grp / .hbtn idiom; only the hint is new. */
+#setInstallGrp .pwa-hint{font-size:.86em;opacity:.72;margin:.35em 0 0;line-height:1.4}
+#setInstallGrp .pwa-hint kbd{font:inherit;padding:0 .3em;border:1px solid currentColor;border-radius:4px;opacity:.85}
+/* Installed window: a whisker of breathing room under the OS title bar on desktop; nothing on phones. */
+@media (display-mode: standalone) and (min-width: 761px){ body.dyst-standalone #deskbar{padding-top:2px} }
+</style>
+<script id="dyst-pwa-js">
+/* ============================================================================
+   Dystoria — PWA layer (sketch)
+
+   Three small jobs, all additive, none of which touch existing code paths:
+     1. Register /sw.js so the app launches offline and installs as an app.
+     2. Catch the browser's install prompt and put it behind a Settings row,
+        instead of letting Chrome flash its own mini-infobar at the writer.
+     3. Know when we're running installed (body.dyst-standalone) so styling
+        and analytics can tell the two apart.
+
+   The existing "New version available → Back up & update" banner keeps working
+   unchanged: the service worker serves documents network-first, so its
+   location.reload() lands on the new build exactly as before.
+   ============================================================================ */
+(function(){
+  'use strict';
+
+  /* ---------- 3. installed-or-not ---------- */
+  function standalone(){
+    try {
+      return (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) ||
+             window.navigator.standalone === true;
+    } catch(e){ return false; }
+  }
+  function markStandalone(){
+    try { document.body.classList.toggle('dyst-standalone', standalone()); } catch(e){}
+  }
+  if (document.body) markStandalone(); else document.addEventListener('DOMContentLoaded', markStandalone);
+  try { window.matchMedia('(display-mode: standalone)').addEventListener('change', markStandalone); } catch(e){}
+  try { window.__dystStandalone = standalone; } catch(e){}
+
+  /* ---------- 1. the service worker ---------- */
+  var secure = location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+  if ('serviceWorker' in navigator && secure) {
+    // After load, so the 7 MB document and its fonts are never competing with the SW install for bandwidth.
+    window.addEventListener('load', function(){
+      navigator.serviceWorker.register('/sw.js', { scope: '/' }).then(function(reg){
+        try { window.__dystSW = reg; } catch(e){}
+        // Look for a newer sw.js whenever the writer comes back to the tab; the app's own
+        // /version poll already covers the app itself.
+        document.addEventListener('visibilitychange', function(){ if (!document.hidden) { try { reg.update(); } catch(e){} } });
+      }).catch(function(e){ try { console.warn('[dyst-pwa] service worker not registered:', e && e.message); } catch(_){} });
+    });
+  }
+
+  /* ---------- 2. the install prompt, behind a Settings row ---------- */
+  var deferredPrompt = null;
+  window.addEventListener('beforeinstallprompt', function(e){
+    e.preventDefault();                 // no mini-infobar; we offer it from Settings
+    deferredPrompt = e;
+    renderRow();
+  });
+  window.addEventListener('appinstalled', function(){
+    deferredPrompt = null;
+    renderRow();
+    try { if (typeof bgNotesToast === 'function') bgNotesToast('Dystoria is installed. Find it with your other apps.'); } catch(e){}
+    try { if (window.posthog && posthog.capture) posthog.capture('pwa_installed'); } catch(e){}
+  });
+
+  function isIOS(){ return /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1); }
+  function isSafari(){ return /^((?!chrome|android|crios|fxios|edgios).)*safari/i.test(navigator.userAgent); }
+  function isMac(){ return /Mac/.test(navigator.platform) && !isIOS(); }
+
+  function hintText(){
+    if (isIOS()) return 'In Safari, tap <kbd>Share</kbd> then <kbd>Add to Home Screen</kbd>.';
+    if (isSafari() && isMac()) return 'In Safari, choose <kbd>File</kbd> → <kbd>Add to Dock</kbd>.';
+    if (isSafari()) return 'Use the Share menu and choose Add to Home Screen.';
+    return 'Open Dystoria in Chrome or Edge and look for the install icon at the right end of the address bar.';
+  }
+
+  function renderRow(){
+    var panel = document.querySelector('#settingsModal .set-panel[data-panel="data"]');
+    if (!panel) return;
+    var grp = document.getElementById('setInstallGrp');
+    if (!grp) {
+      grp = document.createElement('div');
+      grp.className = 'set-grp'; grp.id = 'setInstallGrp';
+      grp.innerHTML = '<div class="set-lbl">This device</div>';
+      panel.appendChild(grp);
+    }
+    // wipe everything but the label, then rebuild for the current state
+    while (grp.childNodes.length > 1) grp.removeChild(grp.lastChild);
+
+    if (standalone()) {
+      var p = document.createElement('p'); p.className = 'pwa-hint';
+      p.textContent = 'Dystoria is running as an installed app. Your stories are on this device and, when signed in, in the cloud.';
+      grp.appendChild(p);
+      return;
+    }
+    var btn = document.createElement('button');
+    btn.className = 'hbtn'; btn.id = 'installAppBtn';
+    btn.title = 'Open Dystoria in its own window, from your dock or taskbar, online or off';
+    btn.textContent = 'Install Dystoria';
+    grp.appendChild(btn);
+    if (deferredPrompt) {
+      btn.addEventListener('click', function(){
+        var ev = deferredPrompt; if (!ev) return;
+        deferredPrompt = null;
+        ev.prompt();
+        ev.userChoice.then(function(c){
+          try { if (window.posthog && posthog.capture) posthog.capture('pwa_install_prompt', { outcome: c && c.outcome }); } catch(e){}
+          if (!c || c.outcome !== 'accepted') { deferredPrompt = ev; }   // let them try again later
+          renderRow();
+        }).catch(function(){ renderRow(); });
+      });
+    } else {
+      var hint = document.createElement('p'); hint.className = 'pwa-hint';
+      hint.innerHTML = hintText();
+      btn.addEventListener('click', function(){ hint.style.opacity = '1'; hint.style.fontWeight = '600'; });
+      grp.appendChild(hint);
+    }
+  }
+
+  // Build the row once the Settings modal exists (it's static markup, so DOMContentLoaded is enough),
+  // and again whenever Settings opens in case the prompt arrived since.
+  function boot(){
+    renderRow();
+    try {
+      var sm = document.getElementById('settingsModal');
+      if (sm) new MutationObserver(function(){ if (sm.classList.contains('show')) renderRow(); })
+                .observe(sm, { attributes: true, attributeFilter: ['class'] });
+    } catch(e){}
+  }
+  if (document.readyState !== 'loading') setTimeout(boot, 0); else document.addEventListener('DOMContentLoaded', boot);
+
+  try { window.__dystInstall = function(){ var b = document.getElementById('installAppBtn'); if (b) b.click(); return !!deferredPrompt; }; } catch(e){}
+})();
+</script>
+<!-- ===== end PWA layer ===== -->
