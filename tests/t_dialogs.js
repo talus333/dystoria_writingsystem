@@ -44,6 +44,11 @@ const DIALOGS = [
   { name: 'concept-builder', mode: 'map', open: `(window.openConceptCreator||openConceptCreator)()`, bd: '#conceptCreatorBd', card: '#conceptCreator', title: '#conceptCreator .gc-title', x: '#conceptCreator .gc-x', isOpen: `document.getElementById('conceptCreatorBd').classList.contains('show')` },
   { name: 'describe-it',    mode: 'map', open: `openDescPrompt('character')`, bd: '#descPromptBd', card: '#descPrompt', title: '#descPrompt .bd-title', x: '#descPrompt .bd-x', isOpen: `document.getElementById('descPromptBd').classList.contains('show')` },
   { name: 'book-setup',     mode: 'read', open: `openBookSetup()`, bd: '#bookSetup', card: '#bookSetup .bs-card', title: '#bookSetup .bs-h', x: '#bookSetup .bs-x', isOpen: `!!document.getElementById('bookSetup') && document.getElementById('bookSetup').classList.contains('show')` },
+  /* v.497: the Plot grid's card and plot-thread pops, the arc card, and Bonds' "A new group" — all built fresh on open, closed by removal */
+  { name: 'plot-card',      view: 'plot',  open: `var a=document.querySelector('.pl-cardadd:not(.pl-plotadd)')||document.querySelector('.pl-pcard:not(.pl-plotcard)'); if(a) a.click()`, bd: '#planCardPop', card: '#planCardPop .pl-cardpop', title: '#planCardPop .pl-cardpop-titlein', x: '#planCardPop .dlg-x', isOpen: `!!document.getElementById('planCardPop')` },
+  { name: 'plot-thread',    view: 'plot',  open: `var a=document.querySelector('.pl-threadpill'); if(a) a.click()`, bd: '#planCardPop', card: '#planCardPop .pl-cardpop', title: '#planCardPop .pl-plotpop-ttl', x: '#planCardPop .dlg-x', isOpen: `!!document.getElementById('planCardPop')` },
+  { name: 'arc-card',       view: 'plot',  open: `window.__dystNewArc('x')`, bd: '#arcCardBd', card: '#arcCardBd .arc-card', title: null, x: '#arcCardBd .arc-card-x', isOpen: `!!document.getElementById('arcCardBd')` },
+  { name: 'new-group',      view: 'bonds', open: `var a=document.querySelector('.bn-set-add'); if(a) a.click()`, bd: '#bnNewSet', card: '#bnNewSet .bn-new', title: '#bnNewSet .bn-new-t', x: '#bnNewSet .bn-mk-x', isOpen: `!!document.getElementById('bnNewSet')` },
   { name: 'merge',          mode: 'edit', open: `orgOpenMergeDialog([0,1])`, bd: '#orgMergeModal', card: '#orgMergeModal .omm-card', title: '#orgMergeModal .omm-h', x: '#orgMergeModal .dlg-x', isOpen: `(function(){ var m=document.getElementById('orgMergeModal'); return !!m && m.isConnected && getComputedStyle(m).display!=='none'; })()` },
 ];
 
@@ -61,6 +66,7 @@ const DIALOGS = [
       const T = theme + ' · ' + d.name;
       const mode = d.mode || 'plan';
       if (mode !== cur) { try { await page.evaluate(m => goMode(m === 'plan' ? 'notepad' : m), mode); } catch (e) {} await page.waitForTimeout(500); cur = mode; }
+      if (d.view) { try { await page.evaluate(v => window.__planSetView(v), d.view); } catch (e) {} await page.waitForTimeout(600); }
       const open = async () => { await page.mouse.click(4, 4); try { await Promise.race([page.evaluate('(()=>{' + d.open + ';})()'), new Promise(r => setTimeout(r, 1200))]); } catch (e) {} await page.waitForTimeout(300); };
       const isOpen = () => page.evaluate(d.isOpen).catch(() => false);
       const closeAny = async () => { await page.keyboard.press('Escape'); await page.waitForTimeout(120); if (await isOpen()) { try { await page.evaluate((s) => { const x = document.querySelector(s); if (x) x.click(); }, d.x || 'button.dlg-x'); } catch (e) {} await page.waitForTimeout(120); } if (await isOpen()) { try { await page.evaluate(sel => { const b = document.querySelector(sel); if (b) { b.classList.remove('show'); } }, d.bd || d.card); } catch (e) {} } };
