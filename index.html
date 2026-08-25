@@ -51188,8 +51188,11 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.500';
+  var APP_VERSION = '2026.07.20.501';
   var APP_CHANGELOG = [
+    { v:'2026.07.20.501', date:'August 25, 2026', notes:[
+      '**Game mode is back in the mode bar — for the owner’s account.** The Game button sits after Wiki again when you are signed in as the owner; everyone else sees the five modes as before. The game itself is the build from July: choose your character, play the days, and the story it makes lands in the same elements and sections the writing system uses. [Jeremy]',
+    ]},
     { v:'2026.07.20.500', date:'August 25, 2026', notes:[
       '**The arc card has one spine.** Beats and Goalposts were two lists of the same idea — a Major arc asked you to place “The Dark Night” as a beat and then type it again as a goalpost, and only the second one moved the graph. Now there is one list of beats for both scales: a Major arc’s type fills it, a Minor arc starts it empty or loads a pattern, every row takes a label, a land phrase, a section and a note, and the momentum graph reads from it. The card also runs in story order now — what changes, its nuance, what drives it, the arc type and its beats, what it costs, and how far it has landed. Existing arcs keep everything they had. [Jeremy]',
     ]},
@@ -72814,6 +72817,19 @@ body.ember:not(.eink) .bn-mini-elbl{ stroke:#fffdf8; }
 body:not(.eink) .arc-type-pill.on{ background:var(--ink) !important; color:var(--paper) !important; border-color:var(--ink) !important; }
 body:not(.eink) .arc-scale-pill.on{ background:var(--ink) !important; background-image:none !important; color:var(--paper) !important; border-color:var(--ink) !important; }
 .arc-block-sub{ margin-bottom:8px !important; }
+
+/* ============================================================================
+   v.501 — GAME MODE, back in the bar for the owner. The July panel carried its
+   own mode-pill head for a bar that no longer exists (the app's mode bar has
+   been fixed above every mode since v.341), so that head sat underneath the
+   real bar and its guide text bled through at the right. The panel now starts
+   under the app's bar and its duplicate head is hidden; the app's own GAME
+   pill (injected after WIKI) is the way in and out.
+   ========================================================================== */
+#gamePanel .wk-head{ display:none !important; }
+body:not(.eink) #gamePanel{ top:111px !important; }
+body.ember:not(.eink) #gamePanel{ top:130px !important; }
+body:not(.eink) #gamePanel{ background:var(--bg) !important; }
 </style>
 <script id="dyst-dialog-js">
 /* ============================================================================
@@ -73055,5 +73071,2626 @@ body:not(.eink) .arc-scale-pill.on{ background:var(--ink) !important; background
     return { adopted: rows, stack: stack.map(function(r){ return r.name; }), top: (topRec() || {}).name || null };
   };
 })();
+</script>
+<script id="dyst-gamemode-module">
+/* ============================================================================
+ * Dystoria — Game Mode · M0 (substrate) + M1 (cards & decomposition)
+ * ----------------------------------------------------------------------------
+ * Built against index.html  v2026.07.20.125.
+ *
+ * INSTALL: paste this whole file inside a <script> … <\/script> block placed
+ * immediately BEFORE </body> in index.html, AFTER the window.__dystPlan bridge
+ * is defined (it lives near the end already). Nothing else needs to change to
+ * TEST M0/M1. (The legacy focus-game removal — spec §12.8 — is a separate,
+ * surgical edit and is NOT required for M0/M1 to run; start() migrates the key
+ * defensively at runtime so both can coexist until you rip the old one out.)
+ *
+ * SAFETY: 100% additive. It edits none of the existing app code. It only
+ * (a) augments window.__dystPlan with a few writes, and (b) exposes
+ * window.DystGame. It never touches the save path except through the app's own
+ * ensureSession() / scheduleAutosave(). Every app call is resolved at call-time
+ * and wrapped, so a missing/renamed internal degrades to a no-op, never a throw.
+ *
+ * TEST (browser console, after load):
+ *     DystGame._selftest()             // dry run — writes NOTHING to your story
+ *     DystGame._selftest({write:true}) // live — creates demo elements/frames
+ *                                      //  (run on a NEW/empty story only)
+ * ==========================================================================*/
+(function () {
+  'use strict';
+  if (window.DystGame) return;                    // idempotent
+
+  /* ---------- safe resolvers (call real app fns at call-time) --------------- */
+  function S() {
+    try {
+      if (window.__dystPlan && window.__dystPlan.getState) return window.__dystPlan.getState();
+    } catch (e) {}
+    return (typeof state !== 'undefined') ? state : null;
+  }
+  function fn(name) { try { var f = window[name]; return (typeof f === 'function') ? f : null; } catch (e) { return null; } }
+  function call(name) { var f = fn(name); if (!f) return undefined; try { return f.apply(null, Array.prototype.slice.call(arguments, 1)); } catch (e) { return undefined; } }
+  function plan() { return window.__dystPlan || null; }
+  function autosave() { call('scheduleAutosave'); }
+  function ensureSess() { call('ensureSession'); }
+  function rerender() { call('renderConstellation'); call('renderTimeline'); }
+
+  /* ---------- seeded RNG (mulberry32); state rides in the GameSession ------- */
+  function mulberry32(a) {
+    return function () {
+      a |= 0; a = (a + 0x6D2B79F5) | 0;
+      var t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  /* ======================================================================== *
+   * §12.1 — __dystPlan write-extensions (the writes the bridge lacks)
+   * Augment the existing object so Game Mode stays on the "never touches the
+   * save path" contract instead of reaching into internals.
+   * ======================================================================== */
+  function installPlanWrites() {
+    var P = plan(); if (!P) return false;
+
+    // fetch the live element ("word") object by key, searching every frame + legend
+    P.gmFindEl = P.gmFindEl || function (key) { return call('npFindEl', key) || null; };
+
+    // set an element's proper NAME ("Eloise" over the type "Follower")
+    P.gmSetName = P.gmSetName || function (key, name) {
+      var w = call('npFindEl', key); if (!w) return null;
+      w.name = String(name || '').trim();
+      _syncWords(); rerender(); autosave();
+      return { key: key, name: w.name };
+    };
+
+    // push a TRAIT onto attrs (this is where Characteristics + Bearing land)
+    P.gmAddTrait = P.gmAddTrait || function (key, word, opts) {
+      var w = call('npFindEl', key); if (!w) return null;
+      opts = opts || {};
+      w.attrs = w.attrs || [];
+      var t = { word: String(word || '').trim(), sub: opts.sub || 'Moral Trait' };
+      if (opts.bearing) t.bearing = opts.bearing;          // {light?,dark?} — read by Game Mode, ignored by the app
+      if (opts.fromCardId) t.fromCardId = opts.fromCardId;
+      w.attrs.push(t);
+      _syncWords(); rerender(); autosave();
+      return t;
+    };
+
+    // set the drives triad {want, stake, obstacles}
+    P.gmSetMotivation = P.gmSetMotivation || function (key, mot) {
+      var w = call('npFindEl', key); if (!w) return null;
+      w.motivation = Object.assign({}, w.motivation || {}, mot || {});
+      _syncWords(); autosave();
+      return w.motivation;
+    };
+
+    // add a typed LINK between two elements on a given section's map
+    P.gmAddLink = P.gmAddLink || function (section, keyA, keyB, type) {
+      var st = S(); if (!st) return null;
+      try { P.bringElementToSection(keyA, section); P.bringElementToSection(keyB, section); } catch (e) {}
+      var fr = (st.frames || [])[section]; if (!fr || !fr.prompt) return null;
+      var ws = fr.prompt.words || [], ai = -1, bi = -1;
+      for (var i = 0; i < ws.length; i++) {
+        var k = call('wordKey', ws[i]);
+        if (k === keyA && ai < 0) ai = i;
+        if (k === keyB && bi < 0) bi = i;
+      }
+      if (ai < 0 || bi < 0) return null;
+      fr.prompt.links = fr.prompt.links || [];
+      fr.prompt.links.push({ a: ai, b: bi, fwd: { type: type || 'bond' } });
+      _syncWords(); rerender(); autosave();
+      return { a: ai, b: bi, type: type || 'bond' };
+    };
+
+    return true;
+  }
+  function _syncWords() { var st = S(); try { if (st && st.session && st.prompt) st.session.words = st.prompt.words; } catch (e) {} }
+
+  /* ======================================================================== *
+   * §12.3 — Day == frame == section
+   * ======================================================================== */
+  function ensureBase() {
+    var st = S(); if (!st) return;
+    if (!st.prompt) {
+      st.prompt = { words: [], sets: 1, links: [], removedLinks: [] };
+      st.activeSet = 0;
+      st.frames = [{ gap: null, prompt: st.prompt, stage: 0 }];
+      st.frameIdx = 0;
+    }
+    if (!st.frames) st.frames = [{ gap: null, prompt: st.prompt, stage: 0 }];
+  }
+  function addsLockedSafe() { var f = fn('addsLocked'); try { return f ? !!f() : false; } catch (e) { return false; } }
+  // ensure state.frames has at least `day` frames; carry the world forward; switch to it.
+  function ensureDay(day) {
+    var st = S(); if (!st) return -1;
+    ensureBase();
+    while (st.frames.length < day) {
+      if (fn('addFrame') && !addsLockedSafe()) {
+        call('addFrame');                                  // app path: copies prior world forward + renders
+      } else {
+        var src = st.frames[st.frames.length - 1];
+        var copy; try { copy = JSON.parse(JSON.stringify(src.prompt)); } catch (e) { copy = { words: [], sets: 1, links: [], removedLinks: [] }; }
+        st.frames.push({ gap: 'later', prompt: copy, stage: (src.stage || 0) });
+      }
+    }
+    if (fn('switchFrame')) call('switchFrame', day - 1);
+    else { st.frameIdx = day - 1; st.prompt = st.frames[day - 1].prompt; }
+    return day - 1;
+  }
+  // write the per-Day .game block onto its frame (NB: `.game`, reclaimed key — §12.8)
+  function writeDayBlock(day, block) {
+    var st = S(); if (!st) return null;
+    var fr = (st.frames || [])[day - 1]; if (!fr) return null;
+    fr.game = Object.assign({ day: day }, fr.game || {}, block || {});
+    autosave();
+    return fr.game;
+  }
+
+  /* ======================================================================== *
+   * §3.1 — GameSession  (reclaims state.game; §12.8 migration guard)
+   * ======================================================================== */
+  var DEFAULT_CONFIG = {
+    players: 1, storyLength: 'short', dayCount: 8,
+    promptMode: 'light', questionForm: 'specific', aiEnabled: false, seed: 0x1a2b3c4d
+  };
+  function start(config) {
+    var st = S(); if (!st) throw new Error('DystGame: no app state');
+    ensureSess();
+    var cfg = Object.assign({}, DEFAULT_CONFIG, config || {});
+    if (cfg.storyLength === 'novella' && (!config || config.dayCount == null)) cfg.dayCount = 20;
+
+    // §12.8 migration: a legacy focus-game block has no .config — overwrite it.
+    var session = {
+      id: 'game_' + (cfg.seed >>> 0).toString(36) + '_' + Math.floor(cfg.dayCount),
+      mode: 'game', version: 1, config: cfg,
+      day: 1, act: actOf(1, cfg.dayCount), phase: 'plan',
+      rngState: (cfg.seed >>> 0) || 1,
+      players: [makePlayer(0)],
+      activePlayer: 0,
+      cardIndex: {},
+      metrics: { prompts: [], endSurvey: null }
+    };
+    st.game = session;                                     // reclaimed key
+    try { if (st.session) st.session.game = session; } catch (e) {}   // serialize with the project
+    ensureDay(1);
+    autosave();
+    return session;
+  }
+  function session() { var st = S(); var g = st && st.game; return (g && g.config) ? g : null; }   // .config ⇒ new GameSession (else legacy)
+  function makePlayer(i) {
+    return {
+      id: 'p' + i, protagonistId: null,
+      potential: { G: 0, Y: 0, R: 0, B: 0 },
+      time: 8, actionsChosen: 1, timePerAction: 8,
+      assignments: [], activeEmotionId: null, markers: 3, location: null
+    };
+  }
+  var TIME_ALLOWANCE = { 1: 8, 2: 7, 3: 6, 4: 5 };
+  function setFocus(playerId, n) {
+    var g = session(); if (!g) return null;
+    n = Math.max(1, Math.min(4, n | 0));
+    var p = g.players.find(function (x) { return x.id === playerId; }) || g.players[0];
+    p.actionsChosen = n; p.timePerAction = TIME_ALLOWANCE[n];
+    autosave(); return { actions: n, timePerAction: p.timePerAction };
+  }
+  function actOf(day, N) {
+    N = N || 8;
+    if (day <= N * 0.15) return 'setup';
+    if (day <= N * 0.70) return 'rising';
+    if (day <= N * 0.90) return 'climax';
+    return 'fallout';
+  }
+  function rng() {
+    var g = session(); if (!g) return Math.random();
+    var f = mulberry32(g.rngState >>> 0);
+    var v = f();
+    g.rngState = (Math.floor(v * 4294967296) >>> 0) || (g.rngState + 1);   // advance
+    return v;
+  }
+
+  /* ======================================================================== *
+   * §3.3–3.5, M1 — the card model + decomposition
+   * ======================================================================== */
+  // card TYPE -> element CATEGORY used by __dystPlan.addLibraryElement
+  // (concept maps to 'concept' for M1 safety; promotion to a 'theme' carrier is a later step)
+  var CARD_CAT = { being: 'being', location: 'setting', object: 'object', situation: 'event', concept: 'concept' };
+
+  var _cardSeq = 0;
+  function newCardId(type) { _cardSeq++; return type + '_' + _cardSeq.toString(36) + Math.floor(rng() * 1e6).toString(36); }
+
+  function ribbon() { return { markers: 0, bearing: { light: 0, dark: 0 }, emotionId: null, depth: 0 }; }
+
+  // spec bodies (§3.4) — thin, permissive builders
+  var BODY = {
+    being: function (s) {
+      return {
+        archetype: s.archetype || s.word || 'Being',
+        bearing: s.bearing || { light: 0, dark: 0 },
+        traits: s.traits || [],
+        motivation: s.motivation || { want: '', obstacle: '', stake: '' },
+        tier: s.tier || null,
+        word: s.word || s.archetype || 'Being'            // the type-word given to the element
+      };
+    },
+    situation: function (s) {
+      return {
+        kind: s.kind || 'event', premise: s.premise || '',
+        beingsReq: s.beingsReq || 1,
+        cost: s.cost || { time: 2, potential: { color: s.color || 'R', amount: 1 } },
+        baseP: (s.baseP != null ? s.baseP : 0.5),
+        outcomes: s.outcomes || null,
+        moralWeight: s.moralWeight || { light: 0, dark: 0 },
+        tags: s.tags || [],
+        word: s.word || s.name || 'Event'
+      };
+    },
+    location: function (s) {
+      return {
+        placeType: s.placeType || 'natural', domains: s.domains || [],
+        yieldColor: s.yieldColor || s.color || 'G',
+        stack: s.stack || [], buildings: s.buildings || [],
+        containerId: s.containerId || null,
+        word: s.word || s.name || 'Place'
+      };
+    },
+    concept: function (s) { return { domain: s.domain || '', motif: s.motif || s.name || 'Motif', flip: { used: false, ability: s.ability || '' }, word: s.motif || s.name || 'Motif' }; },
+    emotion: function (s) { return { name: s.name || 'Emotion', valence: s.valence || 0, energy: s.energy || 0, bearing: s.bearing || { light: 0, dark: 0 }, dailyEffect: s.dailyEffect || null }; }
+  };
+
+  function card(type, spec) {
+    spec = spec || {};
+    if (!BODY[type]) throw new Error('DystGame.card: unknown type ' + type);
+    var c = {
+      id: newCardId(type), type: type, elementId: null,
+      color: spec.color || 'R', name: spec.name || spec.word || '', icon: spec.icon || '',
+      ribbon: ribbon(), body: BODY[type](spec),
+      links: [], holds: [], origin: { day: (session() ? session().day : 0), via: spec.via || 'deck' }
+    };
+    var g = session(); if (g) g.cardIndex[c.id] = c;
+    return c;
+  }
+
+  // §3.5 DECOMPOSE — one declaration; returns an ElementPatch (pure, no writes)
+  var DECOMPOSE = {
+    being: function (c) {
+      return {
+        kind: 'character', elementId: c.elementId, name: c.name || c.body.word,
+        fields: { archetype: c.body.archetype, traits: c.body.traits, drives: c.body.motivation, tier: c.body.tier },
+        connections: c.links.map(function (l) { return { to: l.target, type: l.type, note: l.note }; }),
+        moralTag: c.ribbon.bearing
+      };
+    },
+    location: function (c) {
+      return { kind: 'setting', elementId: c.elementId, name: c.name || c.body.word,
+        fields: { placeType: c.body.placeType, domains: c.body.domains, buildings: c.body.buildings }, connections: [] };
+    },
+    concept: function (c) { return { kind: 'theme', elementId: c.elementId, name: c.body.motif, fields: { domain: c.body.domain } }; },
+    situation: function (c, ctx) {
+      ctx = ctx || {};
+      return { kind: 'beat', name: c.name || c.body.word, frame: ctx.day || (session() ? session().day : 1),
+        fields: { premise: c.body.premise, outcome: ctx.outcome || null, written: ctx.writtenLine || null },
+        connections: (ctx.involved || []).map(function (id) { return { to: id, type: 'involved-in' }; }),
+        moralTag: c.body.moralWeight };
+    },
+    emotion: function () { return null; }                  // decomposes to a frame field, not an element (declared exception)
+  };
+
+  // M1 — SINGLE-LAYER ON ARRIVAL (design principle, 2026-07-23):
+  // a kept card creates a BARE element with exactly ONE facet — its type-word.
+  // No traits, no second identity category (Occupation, Species…), no motivation, no
+  // bearing. Depth accrues later, step-wise, through play (Develop/Interact/markets/choice)
+  // via grow.* below. This matches the app itself (directly-added beings carry no auto traits).
+  // opts.withBody:true forces any authored depth in at birth — rare, opt-in only.
+  function keepCard(c, section, opts) {
+    opts = opts || {};
+    if (!c) return null;
+    if (c.elementId) return c.elementId;
+    var cat = CARD_CAT[c.type];
+    if (!cat) return null;                                 // emotion/etc. are not element-backed here
+    var P = plan(); if (!P || !P.addLibraryElement) return null;
+    var sec = (section != null) ? section : (session() ? session().day - 1 : 0);
+    var typeWord = c.body.word || c.name || (c.type.charAt(0).toUpperCase() + c.type.slice(1));
+    var res = P.addLibraryElement(cat, typeWord, '', sec);   // ← one facet, nothing else
+    if (!res || !res.key) return null;
+    c.elementId = res.key;
+    // unique INSTANCE id so distinct entities of the same type never collide (wordKey iid)
+    var w0 = call('npFindEl', c.elementId);
+    if (w0) { if (!w0.iid) w0.iid = c.id; var nk = call('wordKey', w0); if (nk) c.elementId = nk; }
+    if (opts.withBody) _applyAuthoredDepth(c);             // opt-in only — default keeps it bare
+    return c.elementId;
+  }
+
+  // Step-wise depth: layer identity/traits/categories/motivation onto a card that has
+  // entered the world. Each call mutates BOTH the element (via __dystPlan) and the card's
+  // play-face (body/ribbon), so the card stays in sync as depth is earned through play.
+  var grow = {
+    name: function (c, name) {
+      if (!c) return null; if (!c.elementId) keepCard(c);
+      var P = plan(); if (P && P.gmSetName) P.gmSetName(c.elementId, name);
+      c.name = String(name || '').trim(); autosave(); return c;
+    },
+    trait: function (c, word, o) {                          // a Characteristic (e.g. via Develop)
+      o = o || {}; if (!c) return null; if (!c.elementId) keepCard(c);
+      var P = plan(); if (P && P.gmAddTrait) P.gmAddTrait(c.elementId, word, { bearing: o.bearing, sub: o.sub || 'Trait', fromCardId: c.id });
+      c.body.traits = c.body.traits || []; c.body.traits.push({ word: word, bearing: o.bearing, sub: o.sub || 'Trait' });
+      if (o.bearing) { c.ribbon.bearing.light += (o.bearing.light || 0); c.ribbon.bearing.dark += (o.bearing.dark || 0); }
+      c.ribbon.depth++; return c;
+    },
+    // a SECONDARY identity category (Occupation, Species…) added later — never packaged at birth
+    category: function (c, word, o) { o = o || {}; return grow.trait(c, word, { sub: o.sub || 'Category', bearing: o.bearing }); },
+    motivation: function (c, mot) {                         // the drives triad, layered in when earned
+      if (!c) return null; if (!c.elementId) keepCard(c);
+      var P = plan(); if (P && P.gmSetMotivation) P.gmSetMotivation(c.elementId, mot || {});
+      c.body.motivation = Object.assign({}, c.body.motivation || {}, mot || {}); return c;
+    }
+  };
+  // opt-in: force a card's authored latent depth in at once (rare — the default is bare arrival)
+  function _applyAuthoredDepth(c) {
+    if (!c) return;
+    if (c.name && c.body.word && c.name.toLowerCase() !== String(c.body.word).toLowerCase()) grow.name(c, c.name);
+    if (c.type === 'being') {
+      var authored = (c.body.traits || []).slice(); c.body.traits = [];   // avoid double-push while growing
+      authored.forEach(function (t) { var w = t && (t.word || t); if (w) grow.trait(c, w, { bearing: t.bearing, sub: t.sub }); });
+      var m = c.body.motivation; if (m && (m.want || m.stake || m.obstacle)) grow.motivation(c, { want: m.want || '', stake: m.stake || '', obstacles: m.obstacle ? [{ word: m.obstacle }] : [] });
+    }
+  }
+
+  /* ------------------------------------------------------------------------ *
+   * Depth is CHOICE-DRIVEN, never automatic. As a character moves through the
+   * evolving world, the game OFFERS candidate layers (traits, categories, a
+   * name, a motivation) and the player CHOOSES one — and only then does grow.*
+   * apply it. offerLayers() builds the offer (candidates are handed in now;
+   * in M2 they come from location/market/probability). chooseLayer() resolves
+   * the pick. The write-at-choice prompt (M4) rides on top of this same seam.
+   * ------------------------------------------------------------------------ */
+  var _offerSeq = 0;
+  function offerLayers(card, candidates, opts) {
+    opts = opts || {};
+    if (!card) return null;
+    var offer = { id: 'off_' + (++_offerSeq), cardId: card.id, kind: opts.kind || 'trait', prompt: opts.prompt || '', options: [] };
+    (candidates || []).forEach(function (cand, i) {
+      var o = (typeof cand === 'string') ? { word: cand } : (cand || {});
+      offer.options.push({ id: offer.id + ':' + i, kind: o.kind || offer.kind, word: o.word, bearing: o.bearing, sub: o.sub, motivation: o.motivation, label: o.label || o.word });
+    });
+    return offer;
+  }
+  function chooseLayer(card, offer, optionId) {
+    if (!card || !offer) return null;
+    var opts = offer.options || [];
+    var opt = null; for (var i = 0; i < opts.length; i++) { if (opts[i].id === optionId) { opt = opts[i]; break; } }
+    if (!opt) opt = opts[0]; if (!opt) return null;
+    if (opt.kind === 'category') grow.category(card, opt.word, { sub: opt.sub, bearing: opt.bearing });
+    else if (opt.kind === 'name') grow.name(card, opt.word);
+    else if (opt.kind === 'motivation') grow.motivation(card, opt.motivation || {});
+    else grow.trait(card, opt.word, { sub: opt.sub, bearing: opt.bearing });
+    return { chosen: opt, elementId: card.elementId };
+  }
+
+  /* ------------------------------------------------------------------------ *
+   * The offered candidates are NOT random. They are drafted from (a) a layer
+   * MARKET pool, filtered by (b) the conditions of the SETTING the character is
+   * in (its color / domains) and (c) the ACTION used — Interact deepens
+   * relationship/traits, Explore surfaces categories/discoveries. So the layers
+   * on offer reflect WHERE you are and WHAT you did, then the player CHOOSES one.
+   * M0/M1 ships a thin seed market + deterministic drafter; M2 replaces the pool
+   * with the real Map/Location markets and the potential economy.
+   * ------------------------------------------------------------------------ */
+  var DEFAULT_LAYER_MARKET = [
+    { word: 'Ruthless',      kind: 'trait',    color: 'R', action: 'interact', sub: 'Moral Trait', bearing: { dark: 1 } },
+    { word: 'Compassionate', kind: 'trait',    color: 'R', action: 'interact', sub: 'Moral Trait', bearing: { light: 1 } },
+    { word: 'Guarded',       kind: 'trait',    color: 'B', action: 'interact', sub: 'Trait' },
+    { word: 'Devoted',       kind: 'trait',    color: 'Y', action: 'interact', sub: 'Trait', bearing: { light: 1 } },
+    { word: 'Soldier',       kind: 'category', color: 'R', action: 'explore',  domain: 'Power', sub: 'Occupation' },
+    { word: 'Healer',        kind: 'category', color: 'G', action: 'explore',  domain: 'Life',  sub: 'Occupation', bearing: { light: 1 } },
+    { word: 'Wanderer',      kind: 'category', color: 'Y', action: 'explore',  sub: 'Occupation' },
+    { word: 'Weathered',     kind: 'trait',    color: 'G', action: 'explore',  domain: 'Earth', sub: 'Physical' }
+  ];
+  function _sampleN(arr, n) {
+    var pool = arr.slice(), out = [];
+    while (out.length < n && pool.length) out.push(pool.splice(Math.floor(rng() * pool.length), 1)[0]);
+    return out;
+  }
+  function settingColor(s) { return s ? (s.color || (s.body && s.body.yieldColor)) : null; }
+  function settingDomains(s) { return (s && s.body && s.body.domains) || []; }
+  // draft an offer of candidate layers for `card`, given ctx {action, setting, market, count, prompt, kind}
+  function draftOffer(card, ctx) {
+    ctx = ctx || {};
+    var market = ctx.market || DEFAULT_LAYER_MARKET;
+    var setting = ctx.setting || null;
+    var action = ctx.action || 'interact';
+    var doms = settingDomains(setting), col = settingColor(setting);
+    var cands = market.filter(function (m) {
+      var actionOk = !m.action || m.action === action;                 // the action gates the KIND of depth
+      var colorOk  = !col || !m.color || m.color === col;              // the setting's color biases the pool
+      var domainOk = !m.domain || !doms.length || doms.indexOf(m.domain) >= 0;  // its domains bias it further
+      return actionOk && colorOk && domainOk;
+    });
+    if (!cands.length) cands = market.filter(function (m) { return !m.action || m.action === action; });  // relax to action-only
+    if (!cands.length) cands = market.slice();
+    return offerLayers(card, _sampleN(cands, Math.min(ctx.count || 3, cands.length)), { prompt: ctx.prompt || '', kind: ctx.kind || 'trait' });
+  }
+
+  // realize a Situation as a beat: an 'event' element + involved-in links to the beings in play
+  function realizeBeat(c, ctx) {
+    ctx = ctx || {};
+    var id = keepCard(c, ctx.day != null ? ctx.day - 1 : undefined);
+    var P = plan(); var sec = (ctx.day != null) ? ctx.day - 1 : (session() ? session().day - 1 : 0);
+    (ctx.involved || []).forEach(function (k) { if (P && P.gmAddLink && id) P.gmAddLink(sec, id, k, 'involved-in'); });
+    return id;
+  }
+
+  /* ======================================================================== *
+   * §4 — applyDelta (M1 pragmatic form): create/update, links, emotion, written
+   * ======================================================================== */
+  function applyDelta(delta) {
+    delta = delta || {};
+    var g = session(); var day = delta.day || (g ? g.day : 1);
+    ensureDay(day);
+    var P = plan();
+    // 1) keep cards (create/update elements) — accepts {card, section} entries
+    (delta.keeps || []).forEach(function (k) { keepCard(k.card || k, k.section != null ? k.section : day - 1); });
+    // 2) beats
+    (delta.beats || []).forEach(function (b) { realizeBeat(b.card || b, { day: day, involved: b.involved, outcome: b.outcome, writtenLine: b.writtenLine }); });
+    // 3) connections {from,to,type}
+    (delta.connections || []).forEach(function (cn) { if (P && P.gmAddLink) P.gmAddLink(day - 1, cn.from, cn.to, cn.type || 'bond'); });
+    // 4) emotion + 5) written -> frame block
+    var block = {};
+    if (delta.emotion) block.emotion = delta.emotion;
+    if (delta.written) block.written = delta.written;
+    if (delta.act || (g && g.act)) block.act = delta.act || g.act;
+    writeDayBlock(day, block);
+    rerender();
+    return true;
+  }
+
+  function storySoFar(opts) { var f = fn('storyFacts'); return f ? (call('storyFacts', opts || { maxChars: 1800, maxEls: 20 }) || '') : ''; }
+
+  /* ======================================================================== *
+   * SELF-TEST — dry by default (writes NOTHING); {write:true} for a live pass
+   * ======================================================================== */
+  function _selftest(opts) {
+    opts = opts || {};
+    var report = { version: 'M0+M1', builtAgainst: '2026.07.20.125', hooks: {}, decompose: {}, live: null, ok: true };
+
+    // (a) hook availability
+    var HOOKS = ['storyFacts', 'aiCall', 'wordKey', 'npFindEl', 'npStoryElements', 'ecBuildItem',
+      'addFrame', 'switchFrame', 'renderConstellation', 'ensureSession', 'scheduleAutosave'];
+    HOOKS.forEach(function (h) { report.hooks[h] = !!fn(h); if (!fn(h)) report.ok = false; });
+    var P = plan();
+    report.hooks['__dystPlan'] = !!P;
+    report.hooks['__dystPlan.addLibraryElement'] = !!(P && P.addLibraryElement);
+    report.hooks['__dystArcStageAt'] = !!fn('__dystArcStageAt');
+    installPlanWrites();
+    ['gmSetName', 'gmAddTrait', 'gmSetMotivation', 'gmAddLink'].forEach(function (m) { report.hooks['__dystPlan.' + m] = !!(P && P[m]); });
+
+    // (b) build cards + run decompose() WITHOUT writing
+    var mara = card('being', { name: 'Mara', archetype: 'Rebel', color: 'R', bearing: { dark: 1 }, traits: [{ word: 'Ruthless', bearing: { dark: 1 } }], motivation: { want: 'to burn the old order', stake: 'her brother', obstacle: 'the Ruler' } });
+    var sit = card('situation', { name: 'The Reckoning', kind: 'event', color: 'R', premise: 'A truth surfaces that cannot be unseen.', moralWeight: { dark: 1 } });
+    report.decompose.being = DECOMPOSE.being(mara);
+    report.decompose.situation = DECOMPOSE.situation(sit, { day: 3, outcome: 'complication', involved: ['x'] });
+    report.decompose.emotionIsFrameField = (DECOMPOSE.emotion(card('emotion', { name: 'Grief' })) === null);
+
+    // (c) optional live pass — demonstrates GROUND-UP, CHOICE-DRIVEN growth
+    //     (creates real elements/frames — run on an EMPTY story!)
+    if (opts.write) {
+      start({ seed: 12345 });
+      ensureDay(1);
+      // a Setting with conditions (its color/domains bias what layers the world can offer here)
+      var place = card('location', { name: 'The Marches', color: 'R', placeType: 'natural', domains: ['Power'] });
+      keepCard(place, 0);
+      // BARE arrival: the being is a single facet — just its type-word, no traits/occupation/motivation
+      var hero = card('being', { word: 'Rebel', color: 'R', via: 'explore' });
+      var hk = keepCard(hero, 0);
+      var bareCount = (((call('npFindEl', hk) || {}).attrs) || []).length;   // snapshot NOW (before any growth)
+      // depth is CHOICE-DRIVEN: the world (this Setting + an Interact action) drafts an offer;
+      // the pool is filtered by where you are and what you did — not random — then the player picks one
+      grow.name(hero, 'Mara');
+      var offer = draftOffer(hero, { action: 'interact', setting: place, count: 3, prompt: 'The Marches harden her — what does she become?' });
+      chooseLayer(hero, offer, offer.options[0].id);        // player's choice → one layer accrues
+      var rival = card('being', { word: 'Ruler', color: 'B' });
+      var rk = keepCard(rival, 0);
+      var link = (P && P.gmAddLink) ? P.gmAddLink(0, hk, rk, 'bond') : null;
+      applyDelta({ day: 1, written: [{ beatId: sit.id, text: 'he never forgave the silence', tier: 'caption', day: 1 }], emotion: { player: 'p0', emotionId: null } });
+      var heroEl = call('npFindEl', hk);
+      report.live = {
+        sessionOk: !!session(), heroKey: hk, rivalKey: rk, linkOk: !!link,
+        bareOnArrival: (bareCount === 0),                             // single-layer proof (snapshot at creation)
+        offer: { prompt: offer.prompt, options: offer.options.map(function (o) { return o.word; }) },  // setting+action-filtered pool
+        grewTo: { named: !!(heroEl && heroEl.name), traits: (heroEl && (heroEl.attrs || []).length) || 0, hasMotivation: !!(heroEl && heroEl.motivation) },
+        frameGame: (S().frames[0] || {}).game || null,
+        elementCount: (call('npStoryElements') || []).length
+      };
+    }
+    try { console.log('[DystGame selftest]', report); } catch (e) {}
+    return report;
+  }
+
+  /* ---------------------------- public surface ----------------------------- */
+  installPlanWrites();
+  window.DystGame = {
+    // lifecycle
+    start: start, session: session, setFocus: setFocus,
+    // day / frame
+    ensureDay: ensureDay, writeDayBlock: writeDayBlock, actOf: actOf, rng: rng,
+    // cards
+    card: card, keepCard: keepCard, realizeBeat: realizeBeat, DECOMPOSE: DECOMPOSE, CARD_CAT: CARD_CAT,
+    // step-wise, choice-driven depth
+    grow: grow, offerLayers: offerLayers, chooseLayer: chooseLayer, draftOffer: draftOffer, layerMarket: DEFAULT_LAYER_MARKET,
+    // apply / read
+    applyDelta: applyDelta, storySoFar: storySoFar,
+    // internals / test
+    _installPlanWrites: installPlanWrites, _selftest: _selftest, _mulberry32: mulberry32,
+    VERSION: 'M0+M1/2026.07.20.125'
+  };
+  try { console.log('[DystGame] M0+M1 loaded — run DystGame._selftest()'); } catch (e) {}
+})();
+
+</script>
+<script id="dyst-gamemode-m2">
+/* ============================================================================
+ * Dystoria — Game Mode · M2 (the daily loop)
+ * ----------------------------------------------------------------------------
+ * Augments window.DystGame (from the M0/M1 module) with the playable loop:
+ * seed Situations + Emotions, the day state-machine (beginDay → focus → resolve
+ * → record → advance), the four Action resolvers wired to the M0/M1
+ * offer→choose→grow seam, a per-color Potential economy, probability with a
+ * reversal bias, act-pacing, and a moral arc tracked on the player + written
+ * into each Day's frame. Additive; loads AFTER the core module.
+ *
+ * Test (browser console): DystGame.autoPlay(4)   // plays 4 Days, returns reports
+ * ==========================================================================*/
+(function () {
+  'use strict';
+  var G = window.DystGame;
+  if (!G) { try { console.warn('[DystGame M2] core module missing — load it first'); } catch (e) {} return; }
+  if (G.M2) return;
+
+  var BASE_TIME = 8, GAIN_PER_TIME = 1;
+  var TIME_ALLOWANCE = { 1: 8, 2: 7, 3: 6, 4: 5 };
+
+  /* ---------------------------- seed decks -------------------------------- */
+  var EMOTIONS = [
+    { name: 'Resolve', valence: 1, energy: 1, bearing: {}, effect: {} },
+    { name: 'Grief', valence: -2, energy: -1, bearing: { dark: 1 }, effect: { time: -1 } },
+    { name: 'Hope', valence: 2, energy: 1, bearing: { light: 1 }, effect: { potential: { Y: 1 } } },
+    { name: 'Dread', valence: -2, energy: 0, bearing: { dark: 1 }, effect: {} },
+    { name: 'Wonder', valence: 1, energy: 0, bearing: { light: 1 }, effect: { potential: { G: 1 } } },
+    { name: 'Rage', valence: -1, energy: 2, bearing: { dark: 2 }, effect: { potential: { R: 1 }, time: -1 } }
+  ];
+  // Situations fuse Story Events (kind:'event') and Ordeals (kind:'ordeal'); four story-shaped outcomes each.
+  var SITUATIONS = [
+    { id: 'reckoning', name: 'The Reckoning', kind: 'event', color: 'R', premise: 'A truth surfaces that cannot be unseen.', cost: { time: 2, potential: { color: 'R', amount: 1 } }, baseP: 0.5, moralWeight: { dark: 1 },
+      outcomes: { success: 'The truth lands, and it is yours to wield.', cost: 'You are believed — but it costs someone you needed.', complication: 'It twists in the telling; now two versions war.', transformation: 'What was exposed exposes you in turn.' } },
+    { id: 'vigil', name: 'The Vigil', kind: 'event', color: 'Y', premise: 'You keep watch through the long dark.', cost: { time: 3, potential: { color: 'Y', amount: 1 } }, baseP: 0.6, moralWeight: { light: 1 },
+      outcomes: { success: 'The watch holds; something is saved.', cost: 'It holds, but you are hollowed by it.', complication: 'Dawn brings a thing you did not guard against.', transformation: 'In the stillness you become someone new.' } },
+    { id: 'fast', name: 'The Fast', kind: 'ordeal', color: 'Y', premise: 'You deny yourself to sharpen the will.', cost: { time: 3, potential: { color: 'Y', amount: 1 } }, baseP: 0.7, moralWeight: { light: 1 },
+      outcomes: { success: 'Discipline hardens into a gift.', cost: 'You gain it, and lose your softness.', complication: 'The hunger speaks in a voice not yours.', transformation: 'Emptiness becomes a doorway.' } },
+    { id: 'wound', name: 'The Wound', kind: 'ordeal', color: 'R', premise: 'A hurt that will not close.', cost: { time: 2, potential: { color: 'R', amount: 1 } }, baseP: 0.5, moralWeight: { dark: 1 },
+      outcomes: { success: 'You carry it and grow around it.', cost: 'It closes wrong, and marks you.', complication: 'It reopens at the worst moment.', transformation: 'The scar becomes a strange power.' } },
+    { id: 'threshold', name: 'The Threshold', kind: 'event', color: 'G', premise: 'A place no one has entered.', cost: { time: 2, potential: { color: 'G', amount: 1 } }, baseP: 0.6, moralWeight: {},
+      outcomes: { success: 'You cross first, and the way is yours.', cost: 'You cross, and something follows back.', complication: 'The door will not stay open.', transformation: 'On the far side you are changed.' } }
+  ];
+  var WORLD_BEINGS = ['Follower', 'Ruler', 'Sage', 'Trickster', 'Caregiver', 'Rival', 'Stranger'];
+  var WORLD_PLACES = ['The Marches', 'The Grove', 'The Keep', 'The Wastes', 'The Harbor'];
+
+  /* ------------------------------ helpers --------------------------------- */
+  function rng() { return G.rng(); }
+  function pick(arr) { return arr[Math.floor(rng() * arr.length)]; }
+  function P() { var s = G.session(); return s && s.players && s.players[0]; }
+  function sessionAct() { var s = G.session(); return s ? s.act : 'setup'; }
+  function bond(day, aKey, bKey) { try { if (window.__dystPlan && window.__dystPlan.gmAddLink) window.__dystPlan.gmAddLink(day - 1, aKey, bKey, 'bond'); } catch (e) {} }
+  function firstChoice(o) { return o.options[0]; }
+
+  /* ------------------------------ economy --------------------------------- */
+  function canAfford(p, cost) {
+    if (!cost) return true;
+    if (cost.time && p.time < cost.time) return false;
+    if (cost.potential && (p.potential[cost.potential.color] || 0) < cost.potential.amount) return false;
+    return true;
+  }
+  // Step 1: spend Potential only. Per-action DEPTH is timePerAction, derived from HOW MANY of the
+  // four actions you chose (1→8T, 2→7T, 3→6T, 4→5T) — the choice of actions IS the focus decision.
+  function payCost(p, cost) {
+    if (cost && cost.potential) p.potential[cost.potential.color] = (p.potential[cost.potential.color] || 0) - cost.potential.amount;
+  }
+
+  /* ---------------------------- probability ------------------------------- */
+  function actWeights(act) {
+    return ({ setup: { comp: 0.10, trans: 0.02 }, rising: { comp: 0.35, trans: 0.06 }, climax: { comp: 0.25, trans: 0.15 }, fallout: { comp: 0.10, trans: 0.08 } })[act] || { comp: 0.20, trans: 0.05 };
+  }
+  // four story-shaped outcomes, reversal-biased: transformation floor, then success / complication / cost
+  function resolveSituation(sit, p, act, commitBonus) {
+    var pStrong = Math.min(0.9, (sit.baseP || 0.5) + (commitBonus || 0));
+    var w = actWeights(act), roll = rng(), kind;
+    if (roll < w.trans) kind = 'transformation';
+    else if (roll < pStrong) kind = 'success';
+    else if (roll < pStrong + w.comp) kind = 'complication';
+    else kind = 'cost';
+    return { kind: kind, text: (sit.outcomes && sit.outcomes[kind]) || '', roll: roll, pStrong: pStrong, fired: (sit.kind === 'event') };
+  }
+
+  /* ---------------------------- moral arc --------------------------------- */
+  function ensureArc(p) { if (!p.arc) p.arc = { light: 0, dark: 0, pos: 0 }; return p.arc; }
+  function addBearing(p, b) { var a = ensureArc(p); a.light += (b.light || 0); a.dark += (b.dark || 0); }
+  function netBearing(p, extra) {
+    var a = ensureArc(p), l = a.light, d = a.dark;
+    if (p.activeEmotion && p.activeEmotion.bearing) { l += p.activeEmotion.bearing.light || 0; d += p.activeEmotion.bearing.dark || 0; }
+    if (extra) { l += extra.light || 0; d += extra.dark || 0; }
+    return l - d;
+  }
+  // step the arc toward the NET of the character's currently-accumulated bearing (+ active emotion)
+  function arcStep(p) { var a = ensureArc(p), net = netBearing(p); if (net > 0) a.pos += 1; else if (net < 0) a.pos -= 1; return a.pos; }
+
+  /* -------------------------- protagonist --------------------------------- */
+  function ensureProtagonist(word) {
+    var s = G.session(), p = P(); if (!p) return null;
+    if (p.protagonistCard && p.protagonistCard.elementId) return p.protagonistCard;
+    var c = G.card('being', { word: word || 'Seeker', color: 'Y', via: 'setup' });
+    G.keepCard(c, (s.day || 1) - 1);
+    p.protagonistCard = c; p.protagonistId = c.elementId; ensureArc(p);
+    return c;
+  }
+  function worldBeings() {
+    var s = G.session(); if (!s) return [];
+    var p = P();
+    return Object.keys(s.cardIndex || {}).map(function (k) { return s.cardIndex[k]; })
+      .filter(function (c) { return c.type === 'being' && c.elementId && c.elementId !== (p && p.protagonistId); });
+  }
+
+  /* ---------------------- the four Action resolvers ----------------------- */
+  // each returns a record and mutates the model live via the core seam
+  function doAdapt(p, a) {
+    var color = a.color || 'G', g = GAIN_PER_TIME * (a.time || p.timePerAction || 1);   // deeper day (fewer actions) → bigger gain
+    p.potential[color] = (p.potential[color] || 0) + g;
+    return { action: 'adapt', color: color, gained: g };
+  }
+  function doExplore(p, a, day) {
+    var isPlace = rng() < 0.4;
+    var word = isPlace ? pick(WORLD_PLACES) : pick(WORLD_BEINGS);
+    var c = G.card(isPlace ? 'location' : 'being', { word: word, color: a.color || pick(['G', 'Y', 'R', 'B']), via: 'explore' });
+    var key = G.keepCard(c, day - 1);
+    return { action: 'explore', revealed: { key: key, word: word, kind: isPlace ? 'location' : 'being' } };
+  }
+  function doInteract(p, a, day, choose) {
+    var being = a.being; if (!being) return { action: 'interact', skipped: 'no being' };
+    var rec = { action: 'interact', with: being.name || being.body.word };
+    var sit = a.situation && canAfford(p, a.situation.cost) ? a.situation : null;
+    if (sit) {
+      var out = resolveSituation(sit, p, sessionAct(), a.commit || 0);
+      rec.situation = sit.name; rec.outcome = out.kind; rec.outcomeText = out.text;
+      if (out.fired) rec.beat = G.realizeBeat(G.card('situation', sit), { day: day, involved: [being.elementId], outcome: out.kind });
+      if (sit.moralWeight && (sit.moralWeight.light || sit.moralWeight.dark)) { addBearing(p, sit.moralWeight); rec.arc = arcStep(p); }   // the event's moral weight bears on the player
+      payCost(p, sit.cost);
+    }
+    // relationship layer on the OTHER being (choice-driven) — does not move the player's own arc
+    var offer = G.draftOffer(being, { action: 'interact', setting: a.setting, count: 3, prompt: 'What passes between you?' });
+    if (offer && offer.options.length) { var opt = (choose || firstChoice)(offer); G.chooseLayer(being, offer, opt.id); rec.layer = opt.word; rec.offer = offer.options.map(function (o) { return o.word; }); }
+    // bond to the protagonist
+    if (p.protagonistId && being.elementId) { bond(day, p.protagonistId, being.elementId); rec.bond = true; }
+    return rec;
+  }
+  function doDevelop(p, a, day, choose) {
+    var target = a.being || p.protagonistCard; var rec = { action: 'develop', on: target && (target.name || target.body.word) }, moved = false;
+    var sit = a.situation && canAfford(p, a.situation.cost) ? a.situation : null;
+    if (sit) {
+      var out = resolveSituation(sit, p, sessionAct(), a.commit || 0);
+      rec.situation = sit.name; rec.outcome = out.kind; rec.outcomeText = out.text;
+      if (sit.moralWeight && (sit.moralWeight.light || sit.moralWeight.dark)) { addBearing(p, sit.moralWeight); moved = true; }
+      payCost(p, sit.cost);
+    }
+    if (target) {
+      var offer = G.draftOffer(target, { action: 'explore', setting: a.setting, count: 3, prompt: 'What do they become?' });
+      if (offer && offer.options.length) {
+        var opt = (choose || firstChoice)(offer); G.chooseLayer(target, offer, opt.id); rec.characteristic = opt.word; rec.offer = offer.options.map(function (o) { return o.word; });
+        if (target === p.protagonistCard && opt.bearing) { addBearing(p, opt.bearing); moved = true; }   // developing YOURSELF bends your arc
+      }
+    }
+    if (moved) rec.arc = arcStep(p);
+    return rec;
+  }
+  var RESOLVERS = { adapt: doAdapt, explore: doExplore, interact: doInteract, develop: doDevelop };
+  var PROMPT_CLASS = { adapt: 'low', explore: 'mid', interact: 'high', develop: 'high' };
+
+  // a grounded, non-dictating question for a consequential record (Refract "ask, never assert")
+  function questionFor(rec) {
+    if (!rec || PROMPT_CLASS[rec.action] === 'low') return null;
+    if (rec.action === 'interact') return 'You reached ' + (rec.with || 'them') + (rec.outcome ? ' — and it went to ' + rec.outcome : '') + '. What passed between you?';
+    if (rec.action === 'develop') return (rec.characteristic ? 'They became more ' + rec.characteristic + '. ' : '') + 'What did that cost, or reveal?';
+    if (rec.action === 'explore') return 'You found ' + ((rec.revealed && rec.revealed.word) || 'something') + '. Why did you stop?';
+    return null;
+  }
+
+  /* ------------------------------- loop ----------------------------------- */
+  function beginDay() {
+    var s = G.session(); if (!s) return null;
+    G.ensureDay(s.day);
+    s.act = G.actOf(s.day, s.config.dayCount);
+    var p = P(); ensureProtagonist();
+    var em = pick(EMOTIONS); p.activeEmotion = em;
+    p.time = BASE_TIME + ((em.effect && em.effect.time) || 0);
+    if (em.effect && em.effect.potential) Object.keys(em.effect.potential).forEach(function (c) { p.potential[c] = (p.potential[c] || 0) + em.effect.potential[c]; });
+    s.offer = [pick(SITUATIONS), pick(SITUATIONS)];
+    p.assignments = [];
+    return { day: s.day, act: s.act, emotion: em.name, time: p.time, offer: s.offer.map(function (x) { return x.name; }) };
+  }
+  function chooseFocus(n) { var p = P(); n = Math.max(1, Math.min(4, n | 0)); p.actionsChosen = n; p.timePerAction = TIME_ALLOWANCE[n]; return { actions: n, timePerAction: p.timePerAction }; }
+  function resolveAction(a, choose) {
+    var s = G.session(), p = P(), fn = RESOLVERS[a.action]; if (!fn) return { action: a.action, skipped: 'unknown' };
+    a.time = a.time || p.timePerAction || 2;
+    var rec = fn(p, a, s.day, choose);
+    rec.promptClass = PROMPT_CLASS[a.action];
+    rec.question = questionFor(rec);
+    return rec;
+  }
+  function recordDay(records, written) {
+    var s = G.session(), p = P();
+    G.writeDayBlock(s.day, {
+      act: s.act,
+      focus: { actions: p.actionsChosen, timePerAction: p.timePerAction },
+      emotion: p.activeEmotion ? p.activeEmotion.name : null,
+      actions: records || [],
+      potentialEnd: Object.assign({}, p.potential),
+      timeLeft: p.time,
+      arc: p.arc ? p.arc.pos : 0,
+      written: written || []
+    });
+  }
+  function advanceDay() { var s = G.session(); if (!s) return; s.day += 1; G.ensureDay(s.day); s.act = G.actOf(s.day, s.config.dayCount); return s.day; }
+  function endCheck() { var s = G.session(); if (!s) return { over: true }; return { over: s.day >= s.config.dayCount, day: s.day, dayCount: s.config.dayCount }; }
+
+  /* ------------------- convenience (tests + simple UI) -------------------- */
+  function defaultPlan() {
+    var beings = worldBeings();
+    var sit = pick(SITUATIONS);
+    var color = sit.cost.potential.color;
+    var acts = [{ action: 'adapt', color: color, time: 2 }];      // gain the color the Situation needs
+    if (beings.length) acts.push({ action: 'interact', being: pick(beings), situation: sit });
+    else acts.push({ action: 'develop', situation: sit });
+    acts.push({ action: 'explore', time: 1 });
+    return { focus: acts.length, actions: acts, choose: firstChoice };
+  }
+  function playDay(plan) {
+    plan = plan || defaultPlan();
+    var info = beginDay();
+    chooseFocus(plan.focus || (plan.actions ? plan.actions.length : 2));
+    var records = (plan.actions || []).map(function (a) { return resolveAction(a, plan.choose); });
+    recordDay(records, plan.written);
+    return { info: info, records: records, end: endCheck() };
+  }
+  function autoPlay(nDays) {
+    var out = []; nDays = nDays || 3;
+    for (var i = 0; i < nDays; i++) { var r = playDay(defaultPlan()); out.push(r); if (r.end.over) break; advanceDay(); }
+    return out;
+  }
+
+  Object.assign(G, {
+    M2: true,
+    beginDay: beginDay, chooseFocus: chooseFocus, resolveAction: resolveAction, recordDay: recordDay,
+    advanceDay: advanceDay, endCheck: endCheck, playDay: playDay, autoPlay: autoPlay,
+    ensureProtagonist: ensureProtagonist, worldBeings: worldBeings, questionFor: questionFor,
+    canAfford: canAfford, resolveSituation: resolveSituation,
+    SITUATIONS: SITUATIONS, EMOTIONS: EMOTIONS, RESOLVERS: RESOLVERS, PROMPT_CLASS: PROMPT_CLASS
+  });
+  try { console.log('[DystGame M2] daily loop ready — DystGame.autoPlay(4)'); } catch (e) {}
+})();
+
+</script>
+<script id="dyst-gamemode-m3">
+/* ============================================================================
+ * Dystoria — Game Mode · M3 (the dual spine)
+ * ----------------------------------------------------------------------------
+ * Augments window.DystGame (M0/M1 + M2) with the two reward tracks made legible:
+ *   THE RACE  — Domains (currency) → assemble an Event's visible requirements →
+ *               TRIGGER it → Story Points (3-component) + Story Markers.
+ *   THE BECOMING — Ordeals: overcome → +points AND the Technology-vs-Characteristic
+ *               choice (keep the tool, or take the mark) → the character changes.
+ * Un-fuses M2's "Situation": Events are assembled & fired; Ordeals grow the self.
+ * Light braiding: some Events also transform the character; some Events/Ordeals are
+ * gated by the Moral Arc. Additive; loads AFTER M2. Overrides beginDay/recordDay.
+ *
+ * Test: DystGame.m3Demo()   // scripted playthrough proving the loop, returns a report
+ * ==========================================================================*/
+(function () {
+  'use strict';
+  var G = window.DystGame;
+  if (!G) { try { console.warn('[DystGame M3] core missing'); } catch (e) {} return; }
+  if (G.M3) return;
+
+  /* ------------------------------- data ----------------------------------- */
+  // 4 common groups: 2 natural, 2 human — one per colour, so "gain colour X → grab a domain from group X" reads cleanly.
+  var DOMAINS = {
+    'Life Forms':    { color: 'G', kind: 'natural', tokens: ['Plants', 'Fungus', 'Animals', 'Microorganisms'] },
+    'Elements':      { color: 'Y', kind: 'natural', tokens: ['Earth', 'Air', 'Fire', 'Water'] },
+    'Social Forces': { color: 'R', kind: 'human',   tokens: ['Intelligence', 'Influence', 'Power', 'Authority'] },
+    'Institutions':  { color: 'B', kind: 'human',   tokens: ['Science', 'Humanities', 'Religion', 'Governance'] }
+  };
+  var GROUPS = Object.keys(DOMAINS);
+
+  // Events: visible requirements you ASSEMBLE then TRIGGER. req = {domains:{group:n}, beings:n, potential:{color:n}, time:n}
+  var EVENTS = [
+    { id: 'reckoning', name: 'The Reckoning', color: 'R', req: { domains: { 'Social Forces': 2 }, beings: 1, potential: { R: 2 }, time: 2 },
+      moralWeight: { dark: 1 }, effect: 'A hidden truth is forced into the open.' },
+    { id: 'breakthrough', name: 'The Breakthrough', color: 'B', req: { domains: { 'Institutions': 2 }, beings: 1, potential: { B: 2 }, time: 2 },
+      moralWeight: {}, effect: 'A discovery changes what is possible.' },
+    { id: 'revelation', name: 'The Revelation', color: 'Y', req: { domains: { 'Elements': 2 }, beings: 1, potential: { Y: 2 }, time: 2 },
+      moralWeight: { light: 1 }, effect: 'A truth about the world is unveiled.', transform: { trait: 'Awakened', bearing: { light: 1 } } },   // Event that ALSO changes the character
+    { id: 'turning', name: 'The Turning of the Land', color: 'G', major: true, req: { domains: { 'Life Forms': 2, 'Elements': 1 }, beings: 2, potential: { G: 2 }, time: 3 },
+      moralWeight: { light: 1 }, effect: 'The living world shifts around you.' },
+    { id: 'premeditated', name: 'The Premeditated Act', color: 'R', major: true, gate: { dark: 3 }, req: { domains: { 'Social Forces': 2 }, beings: 1, potential: { R: 3 }, time: 2 },
+      moralWeight: { dark: 2 }, effect: 'You cross a line that cannot be uncrossed.' }   // Moral-Arc gated (Dark 3+)
+  ];
+
+  // Ordeals: overcome → +points AND the Technology-vs-Characteristic fork.
+  var ORDEALS = [
+    { id: 'fast', name: 'The Fast', cost: { potential: { Y: 1 }, time: 3 }, points: 2, moralWeight: { light: 1 },
+      technology: { name: 'Meditation', benefit: 'Convert 1 Time to Potential once/day' }, characteristic: { word: 'Iron Will', bearing: { light: 1 } } },
+    { id: 'wound', name: 'The Wound', cost: { potential: { R: 2 }, time: 2 }, points: 3, moralWeight: { dark: 1 },
+      technology: { name: 'Apothecary', benefit: 'Restore a spent node once/day' }, characteristic: { word: 'Scarred', bearing: { dark: 1 } } },
+    { id: 'study', name: 'The Study', cost: { potential: { B: 1 }, domains: { 'Institutions': 1 }, time: 2 }, points: 3, moralWeight: {},
+      technology: { name: 'Scientific Method', benefit: 'Look at the top 2 of any stack' }, characteristic: { word: 'Scholar', bearing: { light: 1 } } },
+    { id: 'reckless', name: 'The Reckless Act', cost: { potential: { R: 1 }, time: 3 }, points: 2, moralWeight: { dark: 1 },
+      technology: { name: 'Rhetoric', benefit: 'Bridge a node without full cost' }, characteristic: { word: 'Daring', bearing: { dark: 1 } } },
+    { id: 'longvigil', name: 'The Long Vigil', cost: { potential: { Y: 1, B: 1 }, time: 2 }, points: 3, gate: { light: 2 }, moralWeight: { light: 1 },
+      technology: { name: 'Contemplative Practice', benefit: 'Convert Time to Potential' }, characteristic: { word: 'Patient', bearing: { light: 1 } } }   // gated Light 2+
+  ];
+
+  var ARCH_BONUS = { 'default': 2, 'Ruler': 3, 'Sage': 3, 'Hero': 3, 'Visionary': 3, 'Creator': 3 };
+
+  /* ------------------------------ helpers --------------------------------- */
+  function rng() { return G.rng(); }
+  function S() { return G.session(); }
+  function P() { var s = S(); return s && s.players && s.players[0]; }
+  function pick(a) { return a[Math.floor(rng() * a.length)]; }
+  function eventById(id) { for (var i = 0; i < EVENTS.length; i++) if (EVENTS[i].id === id) return EVENTS[i]; return null; }
+  function ordealById(id) { for (var i = 0; i < ORDEALS.length; i++) if (ORDEALS[i].id === id) return ORDEALS[i]; return null; }
+  function domainCount(p, group) { return p.domains.filter(function (d) { return d.group === group; }).length; }
+
+  function ensureM3(p) {
+    if (typeof p.score !== 'number') p.score = 0;
+    if (!p.domains) p.domains = []; if (!p.spentDomains) p.spentDomains = [];
+    if (!p.technologies) p.technologies = []; if (!p.bonded) p.bonded = [];
+    if (!p.hand) p.hand = []; if (!p.markers || typeof p.markers !== 'object') p.markers = {};   // M0/M1 seeded markers:3 (a number) — replace with the marker map
+    if (!p.arc) p.arc = { light: 0, dark: 0, pos: 0 };
+  }
+
+  /* ------------------------ moral arc (shared) ---------------------------- */
+  function addBearing(p, b) { if (!b) return; p.arc.light += (b.light || 0); p.arc.dark += (b.dark || 0); }
+  function netBearing(p) { var l = p.arc.light, d = p.arc.dark; if (p.activeEmotion && p.activeEmotion.bearing) { l += p.activeEmotion.bearing.light || 0; d += p.activeEmotion.bearing.dark || 0; } return l - d; }
+  function arcStep(p) { var net = netBearing(p); if (net > 0) p.arc.pos += 1; else if (net < 0) p.arc.pos -= 1; return p.arc.pos; }
+  function gatePasses(p, gate) { if (!gate) return true; if (gate.light && p.arc.pos < gate.light) return false; if (gate.dark && (-p.arc.pos) < gate.dark) return false; return true; }
+
+  /* ------------------------------ economy --------------------------------- */
+  function canAfford(p, cost) {
+    if (!cost) return true;
+    if (cost.potential) for (var c in cost.potential) if ((p.potential[c] || 0) < cost.potential[c]) return false;
+    if (cost.domains) for (var g in cost.domains) if (domainCount(p, g) < cost.domains[g]) return false;
+    return true;
+  }
+  function payCost(p, cost) {
+    if (!cost) return;
+    if (cost.potential) for (var c in cost.potential) p.potential[c] = (p.potential[c] || 0) - cost.potential[c];
+    if (cost.domains) for (var g in cost.domains) { var n = cost.domains[g]; for (var i = p.domains.length - 1; i >= 0 && n > 0; i--) if (p.domains[i].group === g) { p.spentDomains.push(p.domains.splice(i, 1)[0]); n--; } }
+  }
+
+  /* ------------------------------ markets --------------------------------- */
+  function refreshMarkets() {
+    var s = S(), p = P();
+    s.domainMarket = [];
+    for (var i = 0; i < 3; i++) { var g = pick(GROUPS); s.domainMarket.push({ group: g, token: pick(DOMAINS[g].tokens), color: DOMAINS[g].color }); }
+    if (!s.eventMarket) s.eventMarket = [];
+    var avail = EVENTS.filter(function (e) { return p.hand.indexOf(e.id) < 0 && s.eventMarket.indexOf(e.id) < 0; });
+    if (avail.length) s.eventMarket.push(pick(avail).id);
+    while (s.eventMarket.length > 3) s.eventMarket.shift();
+    if (s.day === 1 && !p.hand.length) { var starters = EVENTS.filter(function (e) { return !e.gate && !e.major; }); if (starters.length) p.hand.push(pick(starters).id); }
+  }
+
+  /* -------------------- LEGIBILITY: visible events + gap ------------------ */
+  function gapForEvent(e) {
+    var p = P(), gap = { domains: {}, beings: 0, potential: {}, gated: false, reason: '' };
+    if (e.gate && !gatePasses(p, e.gate)) { gap.gated = true; gap.reason = e.gate.light ? ('Light ' + e.gate.light + '+') : ('Dark ' + e.gate.dark + '+'); }
+    for (var g in (e.req.domains || {})) { var need = e.req.domains[g], have = domainCount(p, g); if (have < need) gap.domains[g] = need - have; }
+    var haveB = p.bonded.length; if (haveB < (e.req.beings || 0)) gap.beings = (e.req.beings || 0) - haveB;
+    for (var c in (e.req.potential || {})) { var pn = e.req.potential[c], ph = p.potential[c] || 0; if (ph < pn) gap.potential[c] = pn - ph; }
+    return gap;
+  }
+  function isFireable(e) { var g = gapForEvent(e); return !g.gated && !Object.keys(g.domains).length && !g.beings && !Object.keys(g.potential).length; }
+  function projectedScore(e) {   // what you'd score if you fired it now (legibility)
+    var p = P(); var involved = p.bonded.slice(0, Math.max(1, e.req.beings || 1));
+    return scoreEvent(p, e, involved);
+  }
+  function visibleEvents() {
+    var s = S(), p = P(), out = [];
+    p.hand.forEach(function (id) { out.push(build(id, 'hand')); });
+    (s.eventMarket || []).forEach(function (id) { out.push(build(id, 'market')); });
+    function build(id, where) { var e = eventById(id); return { id: id, where: where, event: e, gap: gapForEvent(e), fireable: isFireable(e), projected: projectedScore(e) }; }
+    return out;
+  }
+  function fireable() { return visibleEvents().filter(function (v) { return v.fireable; }); }
+
+  /* ------------------------------ scoring --------------------------------- */
+  function markersOn(p, ids) { var m = 0; ids.forEach(function (id) { m += (p.markers[id] || 0); }); return m; }
+  function scoreEvent(p, e, involved) {
+    var domainsUsed = 0; for (var g in (e.req.domains || {})) domainsUsed += e.req.domains[g];
+    var potentialSpent = 0; for (var c in (e.req.potential || {})) potentialSpent += e.req.potential[c];
+    var markers = markersOn(p, involved);
+    var A = domainsUsed * potentialSpent * Math.max(1, markers);                       // Quill — narrative history compounds
+    var B = ARCH_BONUS[(p.protagonistCard && p.protagonistCard.body.archetype)] || ARCH_BONUS['default'];  // Palm — archetype
+    var extra = 0; for (var g2 in (e.req.domains || {})) extra += Math.max(0, domainCount(p, g2) - e.req.domains[g2]);
+    var C = extra * 2;                                                                  // Bonus Domain — over-collecting
+    return { A: A, B: B, C: C, total: A + B + C, domainsUsed: domainsUsed, potentialSpent: potentialSpent, markers: markers };
+  }
+
+  /* ------------------------------ actions --------------------------------- */
+  function gainPotential(color, amount) { var p = P(); amount = amount || 3; p.potential[color] = (p.potential[color] || 0) + amount; return { action: 'adapt', color: color, gained: amount }; }
+  function domainMarket() { return (S().domainMarket) || []; }
+  function acquireDomain(idx) {
+    var s = S(), p = P(), tok = (s.domainMarket || [])[idx]; if (!tok) return { error: 'no such domain' };
+    if ((p.potential[tok.color] || 0) < 1) return { error: 'need 1 ' + tok.color + ' Potential' };
+    p.potential[tok.color] -= 1; p.domains.push({ group: tok.group, token: tok.token, color: tok.color });
+    s.domainMarket.splice(idx, 1);
+    return { action: 'explore', grabbed: tok };
+  }
+  function scout() {
+    var s = S(), isPlace = rng() < 0.4, word = isPlace ? pick(['The Grove', 'The Keep', 'The Marches', 'The Harbor']) : pick(['Follower', 'Rival', 'Sage', 'Stranger', 'Ruler']);
+    var c = G.card(isPlace ? 'location' : 'being', { word: word, color: pick(['G', 'Y', 'R', 'B']), via: 'explore' });
+    var key = G.keepCard(c, s.day - 1);
+    return { action: 'explore', revealed: { key: key, word: word, kind: isPlace ? 'location' : 'being' } };
+  }
+  function unbondedBeings() { var p = P(); return (G.worldBeings ? G.worldBeings() : []).filter(function (c) { return p.bonded.indexOf(c.elementId) < 0; }); }
+  function bondBeing(card, choose) {
+    var s = S(), p = P(); if (!card) return { action: 'interact', skipped: 'no being' };
+    if (p.protagonistId && card.elementId) { try { if (window.__dystPlan && window.__dystPlan.gmAddLink) window.__dystPlan.gmAddLink(s.day - 1, p.protagonistId, card.elementId, 'bond'); } catch (e) {} }
+    if (p.bonded.indexOf(card.elementId) < 0) p.bonded.push(card.elementId);
+    var rec = { action: 'interact', with: card.name || card.body.word, bond: true };
+    var offer = G.draftOffer(card, { action: 'interact', count: 3, prompt: 'What passes between you?' });
+    if (offer && offer.options.length) { var opt = (choose || function (o) { return o.options[0]; })(offer); G.chooseLayer(card, offer, opt.id); rec.layer = opt.word; }
+    return rec;
+  }
+  function availableOrdeals() { var p = P(); return ORDEALS.filter(function (o) { return gatePasses(p, o.gate) && canAfford(p, o.cost); }); }
+  function ordealGap(o) { var p = P(); if (!gatePasses(p, o.gate)) return 'needs ' + (o.gate.light ? 'Light ' + o.gate.light : 'Dark ' + o.gate.dark); if (!canAfford(p, o.cost)) return 'cannot afford'; return null; }
+  // keepWhich: 'technology' | 'characteristic'
+  function undertakeOrdeal(ordealId, keepWhich) {
+    var s = S(), p = P(), o = ordealById(ordealId); if (!o) return { error: 'no such ordeal' };
+    if (!gatePasses(p, o.gate)) return { error: 'gated: needs ' + (o.gate.light ? 'Light ' + o.gate.light : 'Dark ' + o.gate.dark) };
+    if (!canAfford(p, o.cost)) return { error: 'cannot afford' };
+    payCost(p, o.cost); p.score += (o.points || 0);
+    var rec = { action: 'develop', ordeal: o.name, points: o.points };
+    addBearing(p, o.moralWeight);
+    if (keepWhich === 'technology') { p.technologies.push({ name: o.technology.name, benefit: o.technology.benefit }); rec.kept = 'Technology · ' + o.technology.name; addBearing(p, o.technology.bearing); }
+    else { try { G.grow.trait(p.protagonistCard, o.characteristic.word, { sub: 'Characteristic', bearing: o.characteristic.bearing }); } catch (e) {} rec.kept = 'Characteristic · ' + o.characteristic.word; addBearing(p, o.characteristic.bearing); }
+    rec.arc = arcStep(p);
+    return rec;
+  }
+
+  /* --------------------------- trigger an Event --------------------------- */
+  function capMarkers(p) {
+    var keys = Object.keys(p.markers), total = keys.reduce(function (a, k) { return a + p.markers[k]; }, 0);
+    while (total > 3 && keys.length) { var k = keys[0]; p.markers[k]--; if (p.markers[k] <= 0) { delete p.markers[k]; keys.shift(); } total--; }
+  }
+  function triggerEvent(id) {
+    var s = S(), p = P(), e = eventById(id); if (!e) return { error: 'no such event' };
+    if (p.triggeredToday) return { error: 'you have already triggered an Event today' };
+    if (!isFireable(e)) { var g = gapForEvent(e); return { error: g.gated ? ('locked — needs ' + g.reason) : 'requirements not met' }; }
+    var involved = p.bonded.slice(0, Math.max(1, e.req.beings || 1));
+    var sc = scoreEvent(p, e, involved);
+    payCost(p, { potential: e.req.potential, domains: e.req.domains });
+    p.score += sc.total; p.triggeredToday = true;
+    var place = e.major ? 2 : 1;
+    involved.concat([p.protagonistId]).forEach(function (eid) { if (place <= 0 || !eid) return; p.markers[eid] = (p.markers[eid] || 0) + 1; place--; });
+    capMarkers(p);
+    addBearing(p, e.moralWeight);
+    if (e.transform) { try { G.grow.trait(p.protagonistCard, e.transform.trait, { sub: 'Characteristic', bearing: e.transform.bearing }); } catch (er) {} addBearing(p, e.transform.bearing); }
+    var arc = arcStep(p);
+    var i = p.hand.indexOf(id); if (i >= 0) p.hand.splice(i, 1);
+    var j = (s.eventMarket || []).indexOf(id); if (j >= 0) s.eventMarket.splice(j, 1);
+    var beat = null; try { beat = G.realizeBeat(G.card('situation', { name: e.name, kind: 'event', premise: e.effect, moralWeight: e.moralWeight }), { day: s.day, involved: involved, outcome: 'triggered' }); } catch (er2) {}
+    return { action: 'trigger', event: e.name, score: sc, arc: arc, transform: e.transform ? e.transform.trait : null, major: !!e.major, beat: beat, won: p.score >= 100 };
+  }
+  function acquireEvent(id) { var s = S(), p = P(), j = (s.eventMarket || []).indexOf(id); if (j < 0) return { error: 'not in market' }; s.eventMarket.splice(j, 1); p.hand.push(id); return { acquired: id }; }
+
+  /* --------------------------- loop overrides ----------------------------- */
+  function beginDay() {
+    var s = S(); if (!s) return null;
+    G.ensureDay(s.day); s.act = G.actOf(s.day, s.config.dayCount);
+    var p = P(); ensureM3(p); if (G.ensureProtagonist) G.ensureProtagonist();
+    var em = pick(G.EMOTIONS || [{ name: 'Resolve', bearing: {}, effect: {} }]); p.activeEmotion = em;
+    if (em.effect && em.effect.potential) for (var c in em.effect.potential) p.potential[c] = (p.potential[c] || 0) + em.effect.potential[c];
+    p.triggeredToday = false;
+    refreshMarkets();
+    return { day: s.day, act: s.act, emotion: em.name };
+  }
+  function recordDay(records, written) {
+    var s = S(), p = P();
+    G.writeDayBlock(s.day, {
+      act: s.act, emotion: p.activeEmotion ? p.activeEmotion.name : null,
+      actions: records || [], score: p.score,
+      potentialEnd: Object.assign({}, p.potential),
+      domains: p.domains.map(function (d) { return d.token; }),
+      technologies: p.technologies.map(function (t) { return t.name; }),
+      arc: p.arc ? p.arc.pos : 0, written: written || []
+    });
+  }
+
+  /* ------------------------------ demo/test ------------------------------- */
+  function m3Demo() {
+    G.start({ seed: 4242, dayCount: 12 });
+    var out = { days: [], final: null };
+    var p = P();
+    for (var day = 1; day <= 6; day++) {
+      beginDay();
+      var log = [];
+      // strategy: bond a being if possible, gain the colour of a hand event, grab its domains, trigger when ready
+      var target = visibleEvents().filter(function (v) { return v.where === 'hand' && !v.gap.gated; })[0] || visibleEvents()[0];
+      if (target) {
+        var e = target.event, col = e.color;
+        log.push(gainPotential(col, 6));
+        // grab needed domains (scout the market for matching group)
+        for (var grp in (e.req.domains || {})) {
+          var need = e.req.domains[grp];
+          while (domainCount(p, grp) < need) {
+            var mi = domainMarket().findIndex(function (t) { return t.group === grp; });
+            if (mi < 0) { // gain that group's colour + refresh not available mid-day; approximate by buying any then re-gain
+              // give the colour and re-roll a token of that group into the market for the demo
+              gainPotential(DOMAINS[grp].color, 2); S().domainMarket.push({ group: grp, token: DOMAINS[grp].tokens[0], color: DOMAINS[grp].color }); mi = domainMarket().length - 1;
+            } else { gainPotential(DOMAINS[grp].color, 2); }
+            var r = acquireDomain(mi); if (r.error) break; log.push(r);
+          }
+        }
+        // bond a being for the requirement
+        if (e.req.beings) { var b = unbondedBeings(); if (!b.length) { log.push(scout()); b = unbondedBeings(); } if (b.length) log.push(bondBeing(b[0])); }
+        // ensure potential for the trigger
+        for (var pc in (e.req.potential || {})) gainPotential(pc, e.req.potential[pc]);
+        // trigger
+        if (isFireable(e)) { var tr = triggerEvent(e.id); log.push(tr); }
+      }
+      // one ordeal for character change (pick an affordable one)
+      var ords = availableOrdeals(); if (ords.length) { var od = ords[0]; log.push(undertakeOrdeal(od.id, (day % 2 ? 'characteristic' : 'technology'))); }
+      recordDay(log);
+      out.days.push({ day: day, score: p.score, arc: p.arc.pos, log: log });
+      G.advanceDay();
+    }
+    out.final = { score: p.score, arc: p.arc.pos + ' (L' + p.arc.light + '/D' + p.arc.dark + ')', domains: p.domains.length, technologies: p.technologies.map(function (t) { return t.name; }), bonded: p.bonded.length, markers: p.markers };
+    return out;
+  }
+
+  Object.assign(G, {
+    M3: true, DOMAINS: DOMAINS, GROUPS: GROUPS, EVENTS: EVENTS, ORDEALS: ORDEALS,
+    beginDay: beginDay, recordDay: recordDay,
+    gainPotential: gainPotential, domainMarket: domainMarket, acquireDomain: acquireDomain, scout: scout,
+    unbondedBeings: unbondedBeings, bondBeing: bondBeing,
+    availableOrdeals: availableOrdeals, ordealGap: ordealGap, undertakeOrdeal: undertakeOrdeal,
+    visibleEvents: visibleEvents, gapForEvent: gapForEvent, isFireable: isFireable, fireable: fireable,
+    triggerEvent: triggerEvent, acquireEvent: acquireEvent, eventById: eventById, scoreEvent: scoreEvent, projectedScore: projectedScore,
+    scoreOf: function () { var p = P(); return p ? p.score : 0; }, m3Demo: m3Demo
+  });
+  try { console.log('[DystGame M3] dual spine ready — DystGame.m3Demo()'); } catch (e) {}
+})();
+
+</script>
+<script id="dyst-gamemode-m4">
+/* ============================================================================
+ * Dystoria — Game Mode · M4 phase 2 (the interactive grid map)
+ * ----------------------------------------------------------------------------
+ * Adds a discrete game grid to the session: a cols×rows board, the player's
+ * character on a cell, grid-based (orthogonal) movement, and Domain tokens
+ * placed on cells each Day (the Map Market's daily add — the seed of the
+ * "possibility-space" loop). Tokens snap to CELL CENTRES. Additive; loads after
+ * M3. Wraps beginDay to set up / refresh the map. Movement is free in phase 2;
+ * the colour-cost per cardinal direction + the grab affordances come in phase 3.
+ * ==========================================================================*/
+(function () {
+  'use strict';
+  var G = window.DystGame;
+  if (!G) { try { console.warn('[DystGame M4] core missing'); } catch (e) {} return; }
+  if (G.M4) return;
+
+  var COLS = 8, ROWS = 5, MAX_DOMAIN_TOKENS = 7;
+  function rng() { return G.rng(); }
+  function S() { return G.session(); }
+
+  function ensureMap() {
+    var s = S(); if (!s) return null;
+    if (!s.map || typeof s.map !== 'object') {
+      s.map = { cols: COLS, rows: ROWS, playerPos: { x: Math.floor(COLS / 2), y: Math.floor(ROWS / 2) }, tokens: [] };
+      s.map.tokens.push({ x: s.map.playerPos.x, y: s.map.playerPos.y, kind: 'setting', label: 'start' });
+    }
+    return s.map;
+  }
+  function inBounds(m, x, y) { return x >= 0 && y >= 0 && x < m.cols && y < m.rows; }
+  function tokensAt(m, x, y) { return (m.tokens || []).filter(function (t) { return t.x === x && t.y === y; }); }
+  function mapState() { return ensureMap(); }
+
+  // grid-based, orthogonal, one cell per move (free in phase 2)
+  function moveTo(x, y) {
+    var m = ensureMap(); if (!m) return { error: 'no map' };
+    var pp = m.playerPos;
+    if (!inBounds(m, x, y)) return { error: 'off the map' };
+    if (Math.abs(x - pp.x) + Math.abs(y - pp.y) !== 1) return { error: 'move one cell at a time' };
+    pp.x = x; pp.y = y;
+    var here = tokensAt(m, x, y);
+    return { ok: true, pos: { x: x, y: y }, on: here };
+  }
+
+  // each Day, add one Domain token from the day's market onto an empty cell (the Map Market daily add)
+  function placeDailyTokens() {
+    var m = ensureMap(), s = S(); if (!m) return;
+    var dm = (typeof G.domainMarket === 'function') ? (G.domainMarket() || []) : [];
+    if (!dm.length) return;
+    var empties = [];
+    for (var x = 0; x < m.cols; x++) for (var y = 0; y < m.rows; y++) if (!tokensAt(m, x, y).length) empties.push({ x: x, y: y });
+    if (!empties.length) return;
+    var cell = empties[Math.floor(rng() * empties.length)];
+    var tok = dm[Math.floor(rng() * dm.length)];
+    m.tokens.push({ x: cell.x, y: cell.y, kind: 'domain', group: tok.group, token: tok.token, color: tok.color });
+    // cap the number of domain tokens on the board (oldest drop off)
+    var doms = m.tokens.filter(function (t) { return t.kind === 'domain'; });
+    while (doms.length > MAX_DOMAIN_TOKENS) { var drop = doms.shift(); var i = m.tokens.indexOf(drop); if (i >= 0) m.tokens.splice(i, 1); }
+  }
+
+  // wrap the M3 daily begin so the map is set up + gets its daily token
+  var _begin = G.beginDay;
+  G.beginDay = function () {
+    var r = _begin ? _begin.apply(this, arguments) : null;
+    try { ensureMap(); placeDailyTokens(); } catch (e) {}
+    return r;
+  };
+
+  Object.assign(G, { M4: true, ensureMap: ensureMap, mapState: mapState, moveTo: moveTo, tokensAt: tokensAt, placeDailyTokens: placeDailyTokens });
+  try { console.log('[DystGame M4] grid map ready'); } catch (e) {}
+})();
+
+</script>
+<script id="dyst-gamemode-icons">
+/* ============================================================================
+ * Dystoria — Game Mode · icons, straight from the writing system
+ * ----------------------------------------------------------------------------
+ * The game uses the SAME icons the writing system draws — the app's own
+ * `elIconArt()` (setting woodcuts) and `window.beingTokenSVG()` (being figures),
+ * keyed by the element's word/type. No embedded/older asset copies: the game
+ * stays in lockstep with whatever the writing system renders. Returns inline
+ * SVG strings for the card art band, the map's location cell, and the player
+ * pawn. Loads after M4; used by the cards + UI at render time.
+ * ==========================================================================*/
+(function () {
+  'use strict';
+  var G = window.DystGame;
+  if (!G) { try { console.warn('[DystGame icons] core missing'); } catch (e) {} return; }
+  if (G.ICONS) return;
+
+  function artFor(w) {
+    try { if (typeof elIconArt === 'function') { var a = elIconArt(w); if (a && a.body) return a; } } catch (e) {}
+    try { if (w && w.role === 'being' && typeof window.beingTokenSVG === 'function') { var t = window.beingTokenSVG(w); if (t && t.body) return t; } } catch (e2) {}
+    return null;
+  }
+  function toSvg(a, cls) { if (!a) return null; return '<svg class="' + (cls || 'gm-svg-ic') + '" viewBox="' + a.vb + '" preserveAspectRatio="xMidYMid meet">' + a.body + '</svg>'; }
+
+  // a Setting/Location word → the writing system's setting icon (woodcut/engraved per the app style)
+  function settingIcon(name, cls) { if (!name) return null; return toSvg(artFor({ cat: 'setting', word: name, sub: 'Terrain' }), cls); }
+  // a Being Type/species → the writing system's being figure token
+  function beingIcon(type, cls) { if (!type) return null; return toSvg(artFor({ role: 'being', cat: 'being', word: type, sub: 'Type' }), cls); }
+
+  G.ICONS = {
+    settingIcon: settingIcon, beingIcon: beingIcon,
+    // back-compat names used by the cards/UI: both now return inline SVG from the writing system
+    locImageFor: function (name) { return settingIcon(name); },
+    pawnFor: function (type) { return beingIcon(type); },
+    hasIcons: function () { return typeof elIconArt === 'function'; }
+  };
+  try { console.log('[DystGame icons] live writing-system icons (elIconArt / beingTokenSVG)'); } catch (e) {}
+})();
+
+</script>
+<script id="dyst-gamemode-attrs">
+/* ============================================================================
+ * Dystoria — Game Mode · the game-attribute layer on elements
+ * ----------------------------------------------------------------------------
+ * The Dystoria element database is one pool for the writing system AND the game.
+ * This module gives every element that maps to a game system its GDD-authored
+ * game attributes — colour, moral bearing, associated domains, and (for
+ * archetypes) the star/node chain grid + value. Attributes are resolved by
+ * ELEMENT IDENTITY (category + subcategory + word), explicit seed first, else
+ * DERIVED from properties the writing system already carries. These are read
+ * ONLY by Game mode; Write / Plan / Refine / Review / Wiki never surface them.
+ *
+ * A system for mapping, tuned by play — not a hand-authored table for every
+ * word. Loads after M4, before the cards module. Pure data (headless-testable).
+ * ==========================================================================*/
+(function () {
+  'use strict';
+  var G = window.DystGame;
+  if (!G) { try { console.warn('[DystGame attrs] core missing'); } catch (e) {} return; }
+  if (G.ATTR) return;
+
+  function lc(s) { return String(s == null ? '' : s).toLowerCase().trim(); }
+
+  /* ---- COLOUR lexicon (word → G/Y/R/B), grounded in GDD §3 associations ---- */
+  var COLOR = {};
+  function setColor(c, words) { words.forEach(function (w) { COLOR[lc(w)] = c; }); }
+  setColor('G', ['Knowledge', 'Change', 'Evolution', 'Adaptation', 'Progress', 'Nihilism', 'Science', 'Growth', 'Healing', 'Creation', 'Future', 'Clarity', 'Self-Improvement', 'Diligence', 'Meaning', 'Diversity', 'Nature', 'Earth', 'Plants', 'Fungus', 'Animals', 'Microorganisms', 'Entropy', 'Decay', 'Emergence']);
+  setColor('Y', ['Beauty', 'Joy', 'Prestige', 'Recognition', 'Spirituality', 'Memory', 'Dream', 'Light', 'Energy', 'Peace', 'Equanimity', 'Temperance', 'Escape', 'Thrill', 'Comedy', 'Pleasure', 'Happiness', 'Vitality', 'Hope', 'Air', 'Beginning', 'End', 'Darkness', 'Mysterious', 'Cosmic', 'Identity']);
+  setColor('R', ['Love', 'Hatred', 'Power', 'Faith', 'Strength', 'Loyalty', 'Community', 'Romance', 'Protection', 'Courage', 'Revenge', 'Wrath', 'Conflict', 'God', 'Charity', 'Compassion', 'Achievement', 'Lust', 'Impulse', 'Pride', 'Connection', 'Fire', 'Influence', 'Religion', 'Shadow', 'Exile', 'Survival', 'Freedom']);
+  setColor('B', ['Order', 'Justice', 'Truth', 'Authority', 'Duty', 'Fairness', 'Equality', 'Patience', 'Carefulness', 'Tolerance', 'Chastity', 'Unity', 'Punishment', 'Prejudice', 'Uniformity', 'Intelligence', 'Governance', 'Water', 'Science', 'Humanities', 'Law', 'Reason']);
+  function colorOf(word) { return COLOR[lc(word)] || null; }
+
+  /* ---- BEARING lexicon (word → light/dark/neutral), GDD §3.7 / §8.9 ---- */
+  var LIGHT = {}, DARK = {};
+  ['Truth', 'Love', 'Joy', 'Courage', 'Compassion', 'Charity', 'Justice', 'Peace', 'Forgiveness', 'Healing', 'Loyalty', 'Unity', 'Humanity', 'Tolerance', 'Hope', 'Equanimity', 'Community', 'Faith', 'Protection', 'Fairness', 'Honest', 'Generous', 'Brave', 'Benevolent'].forEach(function (w) { LIGHT[lc(w)] = 1; });
+  ['Hatred', 'Greed', 'Envy', 'Wrath', 'Pride', 'Revenge', 'Evil', 'Nihilism', 'Destruction', 'Punishment', 'Falsehood', 'Disloyalty', 'Cruelty', 'Lust', 'Gluttony', 'Sloth', 'Prejudice', 'Conflict', 'Desperation', 'Suffering', 'Egotism', 'Intolerance', 'Ruthless', 'Deceitful', 'Corrupt', 'Vengeful', 'Treacherous', 'Vain'].forEach(function (w) { DARK[lc(w)] = 1; });
+  function bearingOf(word) { var l = lc(word); return LIGHT[l] ? 'light' : DARK[l] ? 'dark' : 'neutral'; }
+
+  /* ---- DOMAIN groups (GDD §9.6): group → {name, colorHint, tokens} ---- */
+  var GROUPS = {
+    A: { name: 'Ideals', color: 'All', tokens: ['Truth', 'Beauty', 'Love', 'Unity'] },
+    B: { name: 'Abstract Forces', color: 'All', tokens: ['Change', 'Energy', 'Connection', 'Entropy'] },
+    C: { name: 'Social Forces', color: 'R/B', tokens: ['Intelligence', 'Influence', 'Power', 'Authority'] },
+    D: { name: 'Life Forms', color: 'G', tokens: ['Plants', 'Fungus', 'Animals', 'Microorganisms'] },
+    E: { name: 'Duality/Time', color: 'Y', tokens: ['Beginning', 'Light', 'End', 'Darkness'] },
+    F: { name: 'Classical Elements', color: 'All', tokens: ['Earth', 'Air', 'Fire', 'Water'] },
+    G: { name: 'Institutions', color: 'B', tokens: ['Science', 'Humanities', 'Religion', 'Governance'] },
+    H: { name: 'Scale/Frontier', color: 'B/Y', tokens: ['Atomic', 'Mysterious', 'Cosmic', 'Mechanical'] },
+    I: { name: 'Mind/Self', color: 'Y', tokens: ['Dream', 'Memory', 'Identity'] },
+    J: { name: 'Survival', color: 'G/R', tokens: ['Survival', 'Freedom', 'Shadow', 'Exile'] }
+  };
+  var WORD2GROUP = {};
+  Object.keys(GROUPS).forEach(function (g) { GROUPS[g].tokens.forEach(function (t) { WORD2GROUP[lc(t)] = g; }); });
+  // motivation/concept → group associations (for words that aren't literal domain tokens)
+  var ASSOC = { power: 'C', authority: 'C', influence: 'C', intelligence: 'C', truth: 'A', beauty: 'A', love: 'A', unity: 'A', knowledge: 'G', science: 'G', justice: 'G', governance: 'G', duty: 'G', memory: 'I', dream: 'I', identity: 'I', freedom: 'J', survival: 'J', healing: 'D', nature: 'D', faith: 'G', revenge: 'A', change: 'B', energy: 'B', connection: 'B' };
+  function domainGroupOf(word) { var l = lc(word); return WORD2GROUP[l] || ASSOC[l] || null; }
+
+  // per-token colour: single-colour groups deterministic; all-colour groups by token (Unity=Blue per Jeremy)
+  var DOMTOKCOLOR = { earth: 'G', air: 'Y', fire: 'R', water: 'B', truth: 'B', beauty: 'Y', love: 'R', unity: 'B', change: 'G', energy: 'Y', connection: 'R', entropy: 'G', intelligence: 'B', influence: 'R', power: 'R', authority: 'B', plants: 'G', fungus: 'G', animals: 'G', microorganisms: 'G', beginning: 'Y', light: 'Y', end: 'Y', darkness: 'Y', science: 'B', humanities: 'B', religion: 'R', governance: 'B', atomic: 'B', mysterious: 'Y', cosmic: 'Y', mechanical: 'B', dream: 'Y', memory: 'Y', identity: 'Y', survival: 'G', freedom: 'R', shadow: 'R', exile: 'R' };
+  function tokenColorOf(word) { var l = lc(word); return DOMTOKCOLOR[l] || colorOf(word) || 'Y'; }
+
+  /* ---- ARCHETYPES: chain grids (GDD §8.3) + innate bearing; colour & value derived ---- */
+  var ARCHETYPE_GRID = { Innocent: { G: '★○○', Y: '★○○', R: '★○○', B: '★★○' }, Sage: { G: '★○○', Y: '★★★', R: '★○○', B: '★★○' }, Explorer: { G: '★★○', Y: '★★○', R: '★○○', B: '★○○' }, Rebel: { G: '★○★', Y: '★★○', R: '★★★', B: '★○○' }, Visionary: { G: '★○★', Y: '★★★', R: '★○○', B: '★○★' }, Hero: { G: '★★○', Y: '★○○', R: '★★★', B: '★○★' }, Lover: { G: '★○★', Y: '★○★', R: '★★★', B: '★○○' }, Trickster: { G: '★★○', Y: '★○★', R: '★○★', B: '★★○' }, Realist: { G: '★○○', Y: '★○★', R: '★★○', B: '★★★' }, Caregiver: { G: '★★★', Y: '★○○', R: '★★○', B: '★○○' }, Ruler: { G: '★○○', Y: '★★○', R: '★○★', B: '★★★' }, Creator: { G: '★★★', Y: '★○★', R: '★○○', B: '★○★' } };
+  var ARCHETYPE_BEARING = { Innocent: 'light', Sage: 'light', Explorer: 'neutral', Rebel: 'dark', Visionary: 'neutral', Hero: 'light', Lover: 'neutral', Trickster: 'dark', Realist: 'neutral', Caregiver: 'light', Ruler: 'dark', Creator: 'neutral' };
+  function stars(row) { return (String(row || '').match(/★/g) || []).length; }
+  function archetypeGrid(name) { return ARCHETYPE_GRID[name] || null; }
+  function archetypeColor(name) { var g = ARCHETYPE_GRID[name]; if (!g) return null; var best = 'G', bn = -1; ['G', 'Y', 'R', 'B'].forEach(function (c) { var s = stars(g[c]); if (s > bn) { bn = s; best = c; } }); return best; }
+  function archetypeValue(name) { var g = ARCHETYPE_GRID[name]; if (!g) return null; return ['G', 'Y', 'R', 'B'].reduce(function (a, c) { return a + stars(g[c]); }, 0); }
+  function isArchetype(name) { return !!ARCHETYPE_GRID[name]; }
+
+  /* ---- terrain → location colour (GDD §5.3) ---- */
+  var TERRAIN_COLOR = { forest: 'G', jungle: 'G', grassland: 'G', 'old-growth forest': 'G', mountains: 'R', mountain: 'R', hill: 'R', volcano: 'R', desert: 'Y', 'dune sea': 'Y', sky: 'Y', ocean: 'B', lake: 'B', sea: 'B', wetland: 'B', swamp: 'B', marsh: 'B', river: 'B', shore: 'B' };
+  function terrainColor(word) { return TERRAIN_COLOR[lc(word)] || colorOf(word) || null; }
+
+  /* ---- the 8 Emotion families (GDD emotion-cards spec) ---- */
+  var EMOTION_FAMILIES = [
+    { family: 'Frustration', ring: 'dark', charge: 'R', effect: 'Cannot initiate new Ordeals' }, { family: 'Fear', ring: 'dark', charge: 'Y', effect: 'All cube costs +1' },
+    { family: 'Sadness', ring: 'dark', charge: 'B', effect: 'Cannot gain Technology' }, { family: 'Guilt', ring: 'dark', charge: 'G', effect: 'Cannot shift family this turn' },
+    { family: 'Gratitude', ring: 'light', charge: 'G', effect: 'All cube costs −1' }, { family: 'Excitement', ring: 'light', charge: 'Y', effect: 'Cube rewards +1' },
+    { family: 'Empathy', ring: 'light', charge: 'R', effect: 'Gain a bonus Technology' }, { family: 'Acceptance', ring: 'light', charge: 'B', effect: 'State cannot be forced to shift this turn' }
+  ];
+
+  /* ---- resolveGameAttrs(element): explicit seed → else derive, by element identity ---- */
+  function resolve(el) {
+    if (!el) return null;
+    var word = el.word || el.name || '', cat = el.cat || el.category || '', sub = el.sub || el.subcategory || '';
+    var out = { _derived: true };
+    // ARCHETYPE (being · Archetype) — the character-card core
+    if ((cat === 'being' && sub === 'Archetype') || isArchetype(word)) {
+      out.kind = 'archetype';
+      out.grid = archetypeGrid(word) || defaultGrid(word);
+      out.color = archetypeColor(word) || colorOf(word) || 'Y';
+      out.bearing = ARCHETYPE_BEARING[word] || bearingOf(word);
+      out.value = archetypeValue(word) || gridValue(out.grid);
+      return out;
+    }
+    // MOTIVATION → colour + bearing + associated domain group
+    if (cat === 'being' && sub === 'Motivation') { out.color = colorOf(word); out.bearing = bearingOf(word); out.group = domainGroupOf(word); return out; }
+    // MORAL / trait subcats → bearing (colour incidental)
+    if (cat === 'being' && /Trait/i.test(sub)) { out.bearing = bearingOf(word); out.color = colorOf(word); return out; }
+    // SETTING → Location colour + anchor domain
+    if (cat === 'setting') { out.kind = 'location'; out.color = terrainColor(word); out.domain = null; return out; }
+    // EVENT → colour + bearing (requirements filled by the engine/derivation)
+    if (cat === 'event') { out.kind = 'event'; out.color = colorOf(word) || 'R'; out.bearing = bearingOf(word); out.group = domainGroupOf(word); return out; }
+    // CONCEPT / domain word → token colour + group
+    if (cat === 'concept' || WORD2GROUP[lc(word)]) { out.kind = 'domain'; out.color = tokenColorOf(word); out.group = domainGroupOf(word); out.letter = String(word).charAt(0).toUpperCase(); return out; }
+    // default: derive what we can
+    out.color = colorOf(word); out.bearing = bearingOf(word); out.group = domainGroupOf(word);
+    return out;
+  }
+  // fallback grid for a non-core archetype: innate stars, dominant colour gets one extra
+  function defaultGrid(word) { var c = colorOf(word) || 'Y'; var g = { G: '★○○', Y: '★○○', R: '★○○', B: '★○○' }; g[c] = '★★○'; return g; }
+  function gridValue(g) { return ['G', 'Y', 'R', 'B'].reduce(function (a, c) { return a + stars(g[c]); }, 0); }
+
+  G.ATTR = {
+    colorOf: colorOf, bearingOf: bearingOf, domainGroupOf: domainGroupOf, tokenColorOf: tokenColorOf,
+    archetypeGrid: archetypeGrid, archetypeColor: archetypeColor, archetypeValue: archetypeValue, isArchetype: isArchetype,
+    terrainColor: terrainColor, GROUPS: GROUPS, FAMILIES: EMOTION_FAMILIES, ARCHETYPES: Object.keys(ARCHETYPE_GRID)
+  };
+  G.gameAttrs = resolve;
+  try { console.log('[DystGame attrs] game-attribute layer ready ·', G.ATTR.ARCHETYPES.length, 'core archetypes,', Object.keys(GROUPS).length, 'domain groups'); } catch (e) {}
+})();
+
+</script>
+<script id="dyst-gamemode-cards">
+/* ============================================================================
+ * Dystoria — Game Mode · Card structures + the map→hand connection
+ * ----------------------------------------------------------------------------
+ * The deck is FOUR card types — Ordeal, Location, Being, Event. Emotion is a
+ * card too, but smaller and a separate parallel system (not shuffled into the
+ * deck). Domains are TOKENS; Concepts/Constructs are TOKENS that attach onto
+ * Beings, Ordeals and Locations.
+ *
+ * This module is the STRUCTURE layer: it normalises any game object (an engine
+ * card, an EVENTS/ORDEALS entry, a held Domain, an Emotion) into one canonical
+ * `CardModel` the UI can render as a card in the Figma visual language. It does
+ * NOT hand-author content — every field is pulled from the element/engine data,
+ * so the variety comes for free from the app's own taxonomy.
+ *
+ * It also wires the first meaningful map→action connection: `grabHere()` picks
+ * up the Domain token you're standing on into your hand. Additive; loads after
+ * M4, before the UI. Pure data (no DOM) so it is headless-testable.
+ * ==========================================================================*/
+(function () {
+  'use strict';
+  var G = window.DystGame;
+  if (!G) { try { console.warn('[DystGame cards] core missing'); } catch (e) {} return; }
+  if (G.CARDS) return;
+
+  // ---- the four deck cards + the parallel Emotion card ----
+  // tints are the app's own category colours (parchment side); the charcoal
+  // mechanical zone + the 4 signal colours come from the UI.
+  var CARD_META = {
+    being:    { label: 'Being',    tint: '#92a98b', glyph: '☗', deck: true,  hasTokens: true },
+    location: { label: 'Location', tint: '#a4a87d', glyph: '⌂', deck: true,  hasTokens: true },
+    event:    { label: 'Event',    tint: '#b28a7b', glyph: '✦', deck: true,  hasTokens: false },
+    ordeal:   { label: 'Ordeal',   tint: '#9c5f54', glyph: '⚑', deck: true,  hasTokens: true },
+    emotion:  { label: 'Emotion',  tint: '#8f86b8', glyph: '❦', deck: false, small: true, parallel: true }
+  };
+  // token kinds (NOT cards): domain squares, and concept/construct chips that attach onto cards
+  var TOKEN_META = {
+    domain:  { label: 'Domain',  attaches: true },
+    concept: { label: 'Concept', tint: '#9c95b6', glyph: '❋', attaches: true }
+  };
+
+  function S() { return (typeof G.session === 'function') ? G.session() : null; }
+  function P() { var s = S(); return s ? s.players[0] : null; }
+  function meta(cat) { return CARD_META[cat] || CARD_META.event; }
+  function letterOf(w) { return String(w || '?').trim().charAt(0).toUpperCase(); }
+  function bearingWord(b) { if (!b) return null; if (b.dark) return 'dark'; if (b.light) return 'light'; return null; }
+
+  // ---- colour of a domain token: from the game-attribute layer ----
+  function domColor(name, grp) {
+    try { if (G.ATTR && G.ATTR.tokenColorOf) { var c = G.ATTR.tokenColorOf(name); if (c) return c; } } catch (e) {}
+    try { return (G.DOMAINS[grp] || {}).color; } catch (e2) {}
+    return 'Y';
+  }
+  function attrOf(word, cat, sub) { try { return G.gameAttrs ? G.gameAttrs({ word: word, cat: cat, sub: sub }) || {} : {}; } catch (e) { return {}; } }
+  function bearingObj(b) { return b === 'dark' ? { dark: 1 } : b === 'light' ? { light: 1 } : null; }
+  // emergent name from a Construct + a Domain (the writing-system pairing)
+  var DOM_ADJ = { Fire: 'Burning', Shadow: 'Shadowed', Truth: 'Revealed', Power: 'Sovereign', Memory: 'Remembered', Earth: 'Rooted', Change: 'Shifting', Water: 'Flowing', Air: 'Ascendant', Light: 'Radiant', End: 'Final', Beginning: 'First', Dream: 'Dreaming', Mysterious: 'Veiled', Connection: 'Bonded', Unity: 'United', Energy: 'Charged', Authority: 'Ruling', Governance: 'Ordered', Science: 'Enlightened', Intelligence: 'Cunning', Order: 'Ordered', Spirit: 'Spirited', Ego: 'Proud', Fight: 'Warring', Flight: 'Fleeting' };
+  function emergentName(construct, domain) { if (!construct || !domain) return construct || domain || ''; return (DOM_ADJ[domain] || domain) + ' ' + construct; }
+
+  // ---- token model (domain / concept) ----
+  function domainToken(d) {
+    if (!d) return null;
+    if (typeof d === 'string') { return { kind: 'domain', group: '', token: d, color: domColor(d), letter: letterOf(d), label: d }; }
+    var grp = d.group || d.grp || '', tok = d.token || d.word || grp;
+    var color = d.color || domColor(tok, grp) || 'G';
+    return { kind: 'domain', group: grp, token: tok, color: color, letter: letterOf(tok), label: tok + (grp ? ' · ' + grp : '') };
+  }
+  function conceptToken(word, opts) {
+    opts = opts || {};
+    return { kind: 'concept', word: word, sub: opts.sub || 'Concept', bearing: bearingWord(opts.bearing), letter: letterOf(word), label: word };
+  }
+  function traitToken(word, opts) {
+    opts = opts || {};
+    return { kind: 'trait', word: word, sub: opts.sub || 'Trait', bearing: bearingWord(opts.bearing), label: word };
+  }
+  // pull whatever tokens are attached to an engine card — kept DISTINCT:
+  //   concept/construct tokens (the attachable Concept system) vs the card's own traits vs domain tokens
+  function tokensOnCard(c) {
+    var out = [];
+    try {
+      var body = c && c.body || {};
+      (body.concepts || []).forEach(function (w) { out.push(conceptToken(w.word || w, { sub: w.sub || 'Construct', bearing: w.bearing })); });
+      (body.traits || []).forEach(function (t) { out.push(traitToken(t.word || t, { sub: t.sub || 'Trait', bearing: t.bearing })); });
+      (body.domains || []).forEach(function (d) { var dt = domainToken(d); if (dt) out.push(dt); });
+    } catch (e) {}
+    return out;
+  }
+
+  // ---- the four card models + emotion ----
+  function beingModel(c) {
+    var body = c && c.body || {};
+    var name = c.name || body.word || body.archetype || 'Being';
+    var typeword = body.archetype || body.word || '';
+    var facets = [];
+    if (body.word && body.word !== typeword) facets.push({ label: 'Type', value: body.word });
+    if (body.motivation && (body.motivation.want || body.motivation)) facets.push({ label: 'Motivation', value: body.motivation.want || body.motivation });
+    var bearing = bearingWord(body.bearing) || (typeof c.arc === 'object' && c.arc ? (c.arc.pos > 0 ? 'light' : c.arc.pos < 0 ? 'dark' : null) : null);
+    return norm('being', { name: name, typeword: typeword, facets: facets, tokens: tokensOnCard(c), mech: { bearing: bearing, color: c.color || null }, ref: c });
+  }
+  function locationModel(c) {
+    var body = c && c.body || {};
+    var name = c.name || body.word || 'Location';
+    var typeword = body.word || body.sub || '';
+    var facets = [];
+    if (body.sub && body.sub !== typeword) facets.push({ label: 'Kind', value: body.sub });
+    return norm('location', { name: name, typeword: typeword, facets: facets, tokens: tokensOnCard(c), mech: { color: c.color || null }, ref: c });
+  }
+  function eventModel(e, gap, projected) {
+    if (!e) return null;
+    var reqTokens = [];
+    Object.keys((e.req && e.req.domains) || {}).forEach(function (grp) {
+      var need = e.req.domains[grp], missing = gap && gap.domains ? (gap.domains[grp] || 0) : 0;
+      reqTokens.push({ kind: 'domain', group: grp, color: (function () { try { return G.DOMAINS[grp].color; } catch (x) { return 'G'; } })(), need: need, have: need - missing, met: missing === 0 });
+    });
+    var mech = {
+      color: e.color || null, points: projected ? projected.total : (e.points || 0),
+      markers: projected ? projected.markers : 0, major: !!e.major,
+      req: e.req || {}, gap: gap || null,
+      beings: e.req && e.req.beings || 0, potential: (e.req && e.req.potential) || {},
+      time: e.req && e.req.time || 0, transform: e.transform ? e.transform.trait : null,
+      gated: gap && gap.gated, reason: gap && gap.reason
+    };
+    return norm('event', { name: e.name, typeword: e.major ? 'Major Event' : 'Event', effect: e.effect || '', reqTokens: reqTokens, mech: mech, ref: e });
+  }
+  function ordealModel(o) {
+    if (!o) return null;
+    var facets = [];
+    var cost = o.cost || {};
+    var con = (o && o.id) ? constructForOrdeal(o.id) : (o.construct || null);
+    return norm('ordeal', {
+      name: o.name, typeword: 'Ordeal', facets: facets, tokens: con ? [con] : [],
+      mech: {
+        points: o.points || 0, cost: cost, gate: o.gate || null, moralWeight: o.moralWeight || {},
+        construct: con, characteristic: o.characteristic || null,
+        bearing: bearingWord(o.moralWeight)
+      }, ref: o
+    });
+  }
+  function emotionModel(em) {
+    if (!em) return null;
+    return norm('emotion', { name: em.name, typeword: 'Emotion', effect: em.effect ? describeFx(em.effect) : '', mech: { bearing: bearingWord(em.bearing), lens: em.lens || null }, ref: em });
+  }
+  function describeFx(fx) {
+    try {
+      if (fx == null) return '';
+      if (typeof fx === 'string') return fx;
+      return Object.keys(fx).map(function (k) {
+        var v = fx[k];
+        if (v && typeof v === 'object') v = Object.keys(v).map(function (kk) { return kk + (v[kk] != null ? ' ' + v[kk] : ''); }).join(' ');
+        return k + (v != null && v !== '' ? ' ' + v : '');
+      }).join(', ');
+    } catch (e) { return ''; }
+  }
+
+  /* ---- data-driven card models: built straight from the source tables ---- */
+  // BEING (being_cards.xlsx): archetype × gender × bearing, chain grid, value
+  function beingFromData(b) {
+    if (!b) return null;
+    var facets = [{ label: 'Archetype', value: b.archetype }];
+    if (b.gender) facets.push({ label: 'Aspect', value: (b.gender === 'male' ? '♂ ' : '♀ ') + (b.bearing || '') });
+    var grid = b.grid || {};
+    facets.push({ label: 'Chain', value: ['G ' + (grid.G || ''), 'Y ' + (grid.Y || ''), 'R ' + (grid.R || ''), 'B ' + (grid.B || '')].join('  ') });
+    return norm('being', { name: b.name || b.archetype, typeword: b.archetype + (b.value ? ' · value ' + b.value : ''), facets: facets, tokens: [], mech: { color: (b.color ? b.color[0].toUpperCase() : null), bearing: b.bearing }, ref: b });
+  }
+  // ORDEAL (ordeal_cards.xlsx): GO / HAVE / SPEND + Characteristic + Domains granted; fork = Characteristic vs Technology(→Construct)
+  function ordealFromData(o) {
+    if (!o) return null;
+    var facets = [];
+    if (o.go) facets.push({ label: 'Go', value: o.go });
+    if (o.have) facets.push({ label: 'Have', value: o.have });
+    if (o.spend && o.spend.text) facets.push({ label: 'Spend', value: o.spend.text });
+    var domTokens = (o.domains || []).map(function (d) { return domainToken(d); });
+    var construct = (DATA().constructs || [])[0] || 'Relic';
+    var pairDomain = (o.domains || [])[0];
+    var pot = {}; ['G', 'Y', 'R', 'B'].forEach(function (c) { if (o.spend && o.spend[c]) pot[c] = o.spend[c]; });
+    return norm('ordeal', {
+      name: o.name, typeword: 'Ordeal', facets: facets, tokens: domTokens,
+      mech: {
+        points: o.points || 0, cost: { potential: pot, time: o.spend && o.spend.time }, bearing: (o.bearing === '●' ? 'dark' : o.bearing === '◯' ? 'light' : null),
+        characteristic: o.characteristic ? { word: o.characteristic.name, chain: o.characteristic.chain, desc: o.characteristic.desc } : null,
+        technology: { provisional: true },                       // Technology/Construct side is TBD in the tables
+        construct: { word: construct, provisional: true, pairs: pairDomain ? emergentName(construct, pairDomain) : null },
+        grantsDomains: o.domains || []                            // Domain(s) granted regardless of fork
+      }, ref: o
+    });
+  }
+  // LOCATION (built_locations.xlsx): action + Demand + deck + anchor Domain
+  function locationFromData(l) {
+    if (!l) return null;
+    var facets = [];
+    if (l.action && l.action.name) facets.push({ label: l.action.name, value: l.action.text });
+    var dem = l.demand || {}; facets.push({ label: 'Demand', value: ['G', 'Y', 'R', 'B'].filter(function (c) { return dem[c]; }).map(function (c) { return c + dem[c]; }).join(' ') || '—' });
+    var dk = l.deck || {}; facets.push({ label: 'Deck', value: 'B' + (dk.being || 0) + ' L' + (dk.loc || 0) + ' S' + (dk.story || 0) + ' O' + (dk.ordeal || 0) });
+    return norm('location', { name: l.name, typeword: (l.color || '') + ' location', facets: facets, tokens: l.domain ? [domainToken(l.domain)] : [], mech: { color: (l.color ? l.color[0].toUpperCase() : null), domain: l.domain }, ref: l });
+  }
+  // EMOTION (8 families): ring, charge colour, effect
+  function emotionFromData(e) {
+    if (!e) return null;
+    return norm('emotion', { name: e.family, typeword: (e.ring === 'dark' ? 'Dark' : 'Light') + ' · ' + e.charge, effect: e.effect, mech: { bearing: e.ring === 'dark' ? 'dark' : 'light', charge: e.charge }, ref: e });
+  }
+
+  function norm(cat, o) {
+    var m = meta(cat);
+    return {
+      cat: cat, label: m.label, tint: m.tint, glyph: m.glyph, deck: !!m.deck, small: !!m.small, parallel: !!m.parallel, hasTokens: !!m.hasTokens,
+      name: o.name || m.label, typeword: o.typeword || '', effect: o.effect || '',
+      facets: o.facets || [], tokens: o.tokens || [], reqTokens: o.reqTokens || [],
+      mech: o.mech || {}, art: o.art || null, ref: o.ref || null
+    };
+  }
+
+  /* ---- the universal entry point: normalise ANY game object into a CardModel ---- */
+  function cardModel(obj, extra) {
+    extra = extra || {};
+    if (!obj) return null;
+    // an EVENTS entry (has req + effect) — or a visibleEvents() view {event, gap, projected}
+    if (obj.event && (obj.gap || obj.projected)) return eventModel(obj.event, obj.gap, obj.projected);
+    if (obj.technology && obj.characteristic) return ordealModel(obj);
+    if (obj.req && (obj.effect != null || obj.color)) return eventModel(obj, extra.gap, extra.projected);
+    if (obj.bearing !== undefined && obj.effect !== undefined && obj.name && !obj.type && !obj.cat) return emotionModel(obj);
+    // a held Domain token {group, token, color}
+    if ((obj.group || obj.grp) && (obj.token || obj.word) && !obj.type && !obj.cat && !obj.req) return domainToken(obj);
+    // an engine card (has .type via CARD_CAT) or an app element (has .cat)
+    var t = obj.type || obj.cat || (obj.body && obj.kind);
+    if (t === 'being' || t === 'character') return beingModel(obj);
+    if (t === 'location' || t === 'setting') return locationModel(obj);
+    if (t === 'situation' || t === 'event') return eventModel(obj.body ? { name: obj.name, color: obj.color, effect: (obj.body && obj.body.premise) || '', req: obj.req || { domains: {} } } : obj, extra.gap, extra.projected);
+    if (t === 'concept') return conceptToken(obj.name || (obj.body && obj.body.motif) || obj.word, { sub: 'Construct' });
+    // fall back: treat as a being-ish card
+    return beingModel(obj);
+  }
+
+  /* ---- hand: the card models the player currently holds ---- */
+  function handModels() {
+    var p = P(); if (!p) return { beings: [], domains: [], technologies: [] };
+    return {
+      beings: (p.bonded || []).map(beingModel).filter(Boolean),
+      domains: (p.domains || []).map(domainToken).filter(Boolean),
+      constructs: (p.constructs || []).map(function (c) { return c && c.kind ? c : conceptToken((c && c.word) || c, { sub: c && c.sub, bearing: c && c.bearing }); }),
+      technologies: (p.technologies || []).map(function (t) { return { kind: 'tech', name: t.name, benefit: t.benefit }; })
+    };
+  }
+
+  /* ---- the map→hand connection: grab the Domain token you're standing on ---- */
+  function grabHere() {
+    var p = P(); if (!p) return { error: 'no game' };
+    var m = (typeof G.mapState === 'function') ? G.mapState() : null;
+    if (!m) return { error: 'no map' };
+    var pp = m.playerPos;
+    var idx = -1;
+    for (var i = 0; i < m.tokens.length; i++) { var tk = m.tokens[i]; if (tk.kind === 'domain' && tk.x === pp.x && tk.y === pp.y) { idx = i; break; } }
+    if (idx < 0) return { error: 'nothing to grab here' };
+    var tok = m.tokens.splice(idx, 1)[0];
+    p.domains = p.domains || [];
+    p.domains.push({ group: tok.group, token: tok.token, color: tok.color });
+    return { action: 'grab', grabbed: { group: tok.group, token: tok.token, color: tok.color } };
+  }
+  function grabbableHere() {
+    var m = (typeof G.mapState === 'function') ? G.mapState() : null; if (!m) return null;
+    var pp = m.playerPos, hit = null;
+    (m.tokens || []).forEach(function (t) { if (t.kind === 'domain' && t.x === pp.x && t.y === pp.y) hit = t; });
+    return hit ? domainToken(hit) : null;
+  }
+
+  /* ======================================================================= *
+   * Concept / Construct tokens — the bag, and how they enter play.
+   * Constructs are drawn RANDOMLY from a bag (board-game sense). They are NOT
+   * in the Domain market. You get one by: completing an Ordeal (its blocked
+   * token — take the Construct to evolve your character, OR take the Ordeal's
+   * Characteristic to grow your potential chain), taking one attached to a
+   * Location on the map (via an action), a special action draw, or an exchange
+   * with another character. The set pulls from the app's Concept category so
+   * variety is free.
+   * ======================================================================= */
+  var CONSTRUCT_BAG = [
+    { word: 'Entropy', sub: 'Natural System' }, { word: 'Evolution', sub: 'Natural System', bearing: { light: 1 } }, { word: 'Emergence', sub: 'Natural System' }, { word: 'Symbiosis', sub: 'Natural System', bearing: { light: 1 } }, { word: 'Decay', sub: 'Natural System', bearing: { dark: 1 } }, { word: 'Regeneration', sub: 'Natural System', bearing: { light: 1 } }, { word: 'Contagion', sub: 'Natural System', bearing: { dark: 1 } },
+    { word: 'Money', sub: 'Human Construct' }, { word: 'Law', sub: 'Human Construct' }, { word: 'Borders', sub: 'Human Construct' }, { word: 'Language', sub: 'Human Construct' }, { word: 'Debt', sub: 'Human Construct', bearing: { dark: 1 } }, { word: 'Tradition', sub: 'Human Construct' }, { word: 'Bureaucracy', sub: 'Human Construct', bearing: { dark: 1 } },
+    { word: 'Revolution', sub: 'Social & Political', bearing: { dark: 1 } }, { word: 'Surveillance', sub: 'Social & Political', bearing: { dark: 1 } }, { word: 'Freedom', sub: 'Social & Political', bearing: { light: 1 } }, { word: 'Oppression', sub: 'Social & Political', bearing: { dark: 1 } }, { word: 'Justice', sub: 'Social & Political', bearing: { light: 1 } }, { word: 'Power', sub: 'Social & Political', bearing: { dark: 1 } },
+    { word: 'Memory', sub: 'Inner Life' }, { word: 'Trauma', sub: 'Inner Life', bearing: { dark: 1 } }, { word: 'Catharsis', sub: 'Inner Life', bearing: { light: 1 } }, { word: 'Obsession', sub: 'Inner Life', bearing: { dark: 1 } },
+    { word: 'Mirror', sub: 'Symbol' }, { word: 'Labyrinth', sub: 'Symbol' }, { word: 'Threshold', sub: 'Symbol' }, { word: 'Mask', sub: 'Symbol' }, { word: 'Wound', sub: 'Symbol', bearing: { dark: 1 } },
+    { word: 'Mortality', sub: 'Big Question' }, { word: 'Truth', sub: 'Big Question', bearing: { light: 1 } }, { word: 'Meaning', sub: 'Big Question' }, { word: 'Chaos', sub: 'Force' }, { word: 'Nihilism', sub: 'Ideology', bearing: { dark: 1 } }, { word: 'Humanism', sub: 'Ideology', bearing: { light: 1 } }
+  ];
+  function rngLocal() { try { return G.rng(); } catch (e) { return 0.5; } }
+  function shuffle(a) { for (var i = a.length - 1; i > 0; i--) { var j = Math.floor(rngLocal() * (i + 1)); var t = a[i]; a[i] = a[j]; a[j] = t; } return a; }
+  function refillBag() { return shuffle(CONSTRUCT_BAG.map(function (x) { return { word: x.word, sub: x.sub, bearing: x.bearing }; })); }
+  function ensureBag() { var s = S(); if (!s) return; if (!s.constructBag || !s.constructBag.length) s.constructBag = refillBag(); if (!s.ordealConstructs) s.ordealConstructs = {}; }
+  function drawConstruct() { var s = S(); if (!s) return conceptToken('Concept'); ensureBag(); if (!s.constructBag.length) s.constructBag = refillBag(); var w = s.constructBag.pop(); return conceptToken(w.word, { sub: w.sub, bearing: w.bearing }); }
+  // the Construct blocked by a given Ordeal (assigned once per session, stable)
+  function constructForOrdeal(id) { var s = S(); if (!s) return null; ensureBag(); if (!s.ordealConstructs[id]) s.ordealConstructs[id] = drawConstruct(); return s.ordealConstructs[id]; }
+  // attach a Construct to each Location/Setting token on the map that doesn't have one
+  function ensureLocationConstructs() { var m = (typeof G.mapState === 'function') ? G.mapState() : null; if (!m) return; (m.tokens || []).forEach(function (t) { if ((t.kind === 'setting' || t.kind === 'location') && !t.construct) t.construct = drawConstruct(); }); }
+  function constructHere() { var m = (typeof G.mapState === 'function') ? G.mapState() : null; if (!m) return null; var pp = m.playerPos, hit = null; (m.tokens || []).forEach(function (t) { if ((t.kind === 'setting' || t.kind === 'location') && t.construct && t.x === pp.x && t.y === pp.y) hit = t; }); return hit ? hit.construct : null; }
+  function takeConstructHere() { var p = P(); if (!p) return { error: 'no game' }; var m = (typeof G.mapState === 'function') ? G.mapState() : null; if (!m) return { error: 'no map' }; var pp = m.playerPos, hitTok = null; (m.tokens || []).forEach(function (t) { if ((t.kind === 'setting' || t.kind === 'location') && t.construct && t.x === pp.x && t.y === pp.y) hitTok = t; }); if (!hitTok) return { error: 'no construct here' }; var con = hitTok.construct; hitTok.construct = null; p.constructs = p.constructs || []; p.constructs.push(con); return { action: 'take-construct', construct: con }; }
+  function playerConstructs() { var p = P(); return (p && p.constructs) || []; }
+
+  // wrap beginDay: keep the bag + location constructs fresh
+  var _cbBeginDay = G.beginDay;
+  G.beginDay = function () { var r = _cbBeginDay ? _cbBeginDay.apply(this, arguments) : null; try { ensureBag(); ensureLocationConstructs(); } catch (e) {} return r; };
+
+  // wrap undertakeOrdeal: the fork is Construct (evolve character) vs Characteristic (potential chain)
+  var _cbUndertake = G.undertakeOrdeal;
+  if (typeof _cbUndertake === 'function') {
+    G.undertakeOrdeal = function (id, which) {
+      if (which === 'construct') {
+        var con = constructForOrdeal(id);
+        var r = _cbUndertake.call(this, id, 'technology');   // reuse cost/score/arc plumbing
+        if (r && !r.error) { var p = P(); if (p.technologies && p.technologies.length) p.technologies.pop(); p.constructs = p.constructs || []; if (con) p.constructs.push(con); r.kept = 'Construct · ' + (con ? con.word : '?'); r.construct = con; }
+        return r;
+      }
+      return _cbUndertake.apply(this, arguments);
+    };
+  }
+
+  /* ---- sample deck: one of each of the four card types (+ emotion), from real
+   *      data, so every structure is always visible while we iterate. Balance
+   *      doesn't matter here — this is a showcase, not the live market. ---- */
+  /* ======================================================================= *
+   * Pull card CONTENT from the Dystoria writing-system pool (DYSTORIA_DATA).
+   * The Excel tables informed the STRUCTURE (what each card carries); the words
+   * that fill that structure come from the app's own element taxonomy — so the
+   * game and the writing system stay one pool.
+   * ======================================================================= */
+  function CATLIST() { try { return (typeof DYSTORIA_DATA !== 'undefined' && DYSTORIA_DATA.categories) ? DYSTORIA_DATA.categories : ((window.DYSTORIA_DATA || {}).categories || []); } catch (e) { return []; } }
+  function catById(id) { var cs = CATLIST(); for (var i = 0; i < cs.length; i++) if (cs[i].id === id) return cs[i]; return null; }
+  function flatWords(arr) { var out = []; (arr || []).forEach(function (w) { if (typeof w === 'string') out.push(w); else if (w && w.w) out.push(w.w); else if (w && w.words) out = out.concat(flatWords(w.words)); else if (w && w.groups) (w.groups || []).forEach(function (g) { out = out.concat(flatWords(g.words)); }); }); return out; }
+  function subWords(catId, subName) { var c = catById(catId); if (!c) return []; var subs = c.subcategories || []; for (var i = 0; i < subs.length; i++) if (subs[i].name === subName) return flatWords(subs[i].words); return []; }
+  function pickAt(arr, i) { if (!arr || !arr.length) return null; return arr[((i % arr.length) + arr.length) % arr.length]; }
+
+  // structural constants (NOT content) — the 12 core archetype chain grids (GDD §8.3) and the 8 emotion families
+  var ARCHETYPE_GRID = { Innocent: { G: '★○○', Y: '★○○', R: '★○○', B: '★★○' }, Sage: { G: '★○○', Y: '★★★', R: '★○○', B: '★★○' }, Explorer: { G: '★★○', Y: '★★○', R: '★○○', B: '★○○' }, Rebel: { G: '★○★', Y: '★★○', R: '★★★', B: '★○○' }, Visionary: { G: '★○★', Y: '★★★', R: '★○○', B: '★○★' }, Hero: { G: '★★○', Y: '★○○', R: '★★★', B: '★○★' }, Lover: { G: '★○★', Y: '★○★', R: '★★★', B: '★○○' }, Trickster: { G: '★★○', Y: '★○★', R: '★○★', B: '★★○' }, Realist: { G: '★○○', Y: '★○★', R: '★★○', B: '★★★' }, Caregiver: { G: '★★★', Y: '★○○', R: '★★○', B: '★○○' }, Ruler: { G: '★○○', Y: '★★○', R: '★○★', B: '★★★' }, Creator: { G: '★★★', Y: '★○★', R: '★○○', B: '★○★' } };
+  var EMOTION_FAMILIES = [ { family: 'Frustration', ring: 'dark', charge: 'R', effect: 'Cannot initiate new Ordeals' }, { family: 'Fear', ring: 'dark', charge: 'Y', effect: 'All cube costs +1' }, { family: 'Sadness', ring: 'dark', charge: 'B', effect: 'Cannot gain Technology' }, { family: 'Guilt', ring: 'dark', charge: 'G', effect: 'Cannot shift family this turn' }, { family: 'Gratitude', ring: 'light', charge: 'G', effect: 'All cube costs −1' }, { family: 'Excitement', ring: 'light', charge: 'Y', effect: 'Cube rewards +1' }, { family: 'Empathy', ring: 'light', charge: 'R', effect: 'Gain a bonus Technology' }, { family: 'Acceptance', ring: 'light', charge: 'B', effect: 'State cannot be forced to shift this turn' } ];
+
+  // BEING card — content from the writing pool; colour/bearing/grid/value from the attribute layer
+  function poolBeing(seed) {
+    seed = seed || 0;
+    var cores = (G.ATTR && G.ATTR.ARCHETYPES) || Object.keys(ARCHETYPE_GRID);
+    var a = pickAt(cores, seed + 3);                              // a core archetype
+    var t = pickAt(subWords('being', 'Type') || [], seed) || 'Human';
+    var mot = pickAt(subWords('being', 'Motivation') || [], seed) || '';
+    var tr = pickAt(subWords('being', 'Moral Trait') || [], seed + 1);
+    var ga = attrOf(a, 'being', 'Archetype');                     // grid, color, bearing, value
+    var grid = ga.grid || ARCHETYPE_GRID[a];
+    var facets = [];
+    if (mot) facets.push({ label: 'Motivation', value: mot });
+    if (grid) facets.push({ label: 'Chain', value: 'G ' + grid.G + '  Y ' + grid.Y + '  R ' + grid.R + '  B ' + grid.B });
+    if (ga.value != null) facets.push({ label: 'Value', value: String(ga.value) });
+    var trB = tr ? attrOf(tr, 'being', 'Moral Trait').bearing : null;
+    var tokens = tr ? [traitToken(tr, { sub: 'Moral Trait', bearing: bearingObj(trB) })] : [];
+    var art = (G.ICONS && G.ICONS.beingIcon) ? G.ICONS.beingIcon(t) : null;
+    return norm('being', { name: a, typeword: t, facets: facets, tokens: tokens, mech: { color: ga.color || null, bearing: ga.bearing || null }, art: art, ref: { pool: 'being' } });
+  }
+  // LOCATION card — content from the setting category
+  function poolLocation(seed) {
+    seed = seed || 0;
+    var terr = subWords('setting', 'Terrain') || [];
+    var bld = subWords('setting', 'Building') || [];
+    var name = pickAt(terr.length ? terr : bld, seed) || 'Forest';
+    var kind = terr.indexOf(name) >= 0 ? 'Terrain' : 'Building';
+    var ga = attrOf(name, 'setting', kind);
+    var art = (G.ICONS && G.ICONS.locImageFor) ? G.ICONS.locImageFor(name) : null;
+    return norm('location', { name: name, typeword: kind, facets: [], tokens: [], mech: { color: ga.color || null, domain: null }, art: art, ref: { pool: 'setting' } });
+  }
+  // ORDEAL card — structure per the tables; Characteristic from the trait pool, Domains from the concept pool
+  function poolOrdeal(seed) {
+    seed = seed || 0;
+    var plotO = subWords('plot', 'Ordeal & Survival') || [];
+    var nm = pickAt(plotO, seed) || 'The Trial';
+    var chr = pickAt(subWords('being', 'Moral Trait') || subWords('being', 'Psychological Trait') || [], seed + 2) || 'Resolute';
+    var concepts = poolConcepts();
+    var d1 = pickAt(concepts, seed), d2 = pickAt(concepts, seed + 5);
+    var domTokens = [d1, d2].filter(Boolean).map(function (d) { return domainToken(d); });
+    var construct = 'Relic';
+    var chrB = attrOf(chr, 'being', 'Moral Trait').bearing;
+    return norm('ordeal', {
+      name: nm, typeword: 'Ordeal', facets: [{ label: 'Go', value: 'Overcome ' + nm.toLowerCase() }],
+      tokens: domTokens,
+      mech: { points: 2 + (seed % 3), cost: { potential: {}, time: 3 }, bearing: (chrB === 'neutral' ? null : chrB),
+        characteristic: { word: chr }, construct: { word: construct, provisional: true, pairs: d1 ? emergentName(construct, d1) : null },
+        grantsDomains: [d1, d2].filter(Boolean) }, ref: { pool: 'plot' } });
+  }
+  // EVENT card — content from the event category (structure from the engine's Event shape)
+  function poolEvent(seed) {
+    seed = seed || 0;
+    var evs = (subWords('event', 'Between Two') || []).concat(subWords('event', 'Communal') || []);
+    var nm = pickAt(evs, seed) || 'The Reckoning';
+    var ga = attrOf(nm, 'event');
+    var concepts = poolConcepts();
+    var d1 = pickAt(concepts, seed + 1);
+    var reqTokens = d1 ? [{ kind: 'domain', group: d1, color: domColor(d1), need: 2, have: 0, met: false }] : [];
+    return norm('event', { name: nm, typeword: 'Event', effect: 'A turning point involving ' + (d1 || 'the world') + '.', reqTokens: reqTokens, mech: { color: ga.color || (reqTokens[0] ? reqTokens[0].color : 'R'), bearing: ga.bearing, points: 6, beings: 2, potential: {}, time: 2 }, ref: { pool: 'event' } });
+  }
+  // Domains/Concepts pulled from the concept category (the writing-system concept pool)
+  function poolConcepts() {
+    var c = catById('concept'); if (!c) return ['Power', 'Memory', 'Truth', 'Freedom'];
+    var out = []; (c.subcategories || []).forEach(function (s) { out = out.concat(flatWords(s.words)); }); return out;
+  }
+  function emotionSample(seed) { var fams = (G.ATTR && G.ATTR.FAMILIES) || EMOTION_FAMILIES; return emotionFamilyModel(pickAt(fams, seed || 0)); }
+  function emotionFamilyModel(e) { if (!e) return null; return norm('emotion', { name: e.family, typeword: (e.ring === 'dark' ? 'Dark' : 'Light') + ' · ' + e.charge, effect: e.effect, mech: { bearing: e.ring, charge: e.charge }, ref: e }); }
+
+  // the live Protagonist: the chosen Character's card + traits/concepts grown through play
+  function protagonistModel(p) {
+    if (!p || !p.character) return null;
+    var m = characterModel(p.character); if (!m) return null;
+    try {
+      var body = p.protagonistCard && p.protagonistCard.body;
+      if (body) {
+        (body.traits || []).forEach(function (t) { m.tokens.push(traitToken(t.word || t, { sub: t.sub, bearing: t.bearing })); });
+        (body.concepts || []).forEach(function (c) { m.tokens.push(conceptToken(c.word || c, { bearing: c.bearing })); });
+      }
+    } catch (e) {}
+    return m;
+  }
+
+  // a drafted Character (setup) rendered as a Being card
+  function characterModel(ch) {
+    if (!ch) return null;
+    var facets = [];
+    if (ch.motivation) facets.push({ label: 'Motivation', value: ch.motivation });
+    if (ch.grid) facets.push({ label: 'Chain', value: 'G ' + ch.grid.G + '  Y ' + ch.grid.Y + '  R ' + ch.grid.R + '  B ' + ch.grid.B });
+    if (ch.value != null) facets.push({ label: 'Value', value: String(ch.value) });
+    var art = (G.ICONS && G.ICONS.beingIcon) ? G.ICONS.beingIcon(ch.type) : null;
+    return norm('being', { name: ch.archetype, typeword: ch.type, facets: facets, tokens: [], mech: { color: ch.color, bearing: ch.bearing }, art: art, ref: { character: true } });
+  }
+
+  // the "one of each" — four deck cards, content drawn from the writing pool
+  function sampleDeck(seed) {
+    seed = (seed == null) ? 0 : seed;
+    return [poolBeing(seed), poolLocation(seed), poolOrdeal(seed), poolEvent(seed)].filter(Boolean);
+  }
+  function sampleEmotion(seed) { return emotionSample(seed || 0); }
+
+  Object.assign(G, {
+    CARDS: true, CARD_META: CARD_META, TOKEN_META: TOKEN_META,
+    cardModel: cardModel, beingModel: beingModel, locationModel: locationModel,
+    eventModel: eventModel, ordealModel: ordealModel, emotionModel: emotionModel,
+    domainToken: domainToken, conceptToken: conceptToken, traitToken: traitToken,
+    handModels: handModels, grabHere: grabHere, grabbableHere: grabbableHere,
+    sampleDeck: sampleDeck, sampleEmotion: sampleEmotion, characterModel: characterModel, protagonistModel: protagonistModel,
+    drawConstruct: drawConstruct, constructForOrdeal: constructForOrdeal,
+    constructHere: constructHere, takeConstructHere: takeConstructHere, playerConstructs: playerConstructs,
+    beingFromData: beingFromData, ordealFromData: ordealFromData, locationFromData: locationFromData,
+    emotionFromData: emotionFromData, emergentName: emergentName, domColor: domColor
+  });
+  try { console.log('[DystGame cards] card structures ready'); } catch (e) {}
+})();
+
+</script>
+<script id="dyst-gamemode-setup">
+/* ============================================================================
+ * Dystoria — Game Mode · Setup / the character draft (GDD §12, §12.1)
+ * ----------------------------------------------------------------------------
+ * You begin the game AS a character. Setup draws candidate Characters from the
+ * writing pool (archetypes + a Type + a Motivation), stamps each with its game
+ * attributes (chain grid, colour, bearing, value) from the attribute layer, and
+ * lets the player pick their primary Character. On choose: bind the protagonist,
+ * deal the starting Potential (1 of each colour, GDD §12), seed the Map-Market
+ * staging with the un-chosen draws + a starting Ordeal and Location, and enter
+ * Day 1. Loads after cards, before UI. Wraps ensureProtagonist to honour the
+ * chosen archetype. Additive; headless-testable.
+ * ==========================================================================*/
+(function () {
+  'use strict';
+  var G = window.DystGame;
+  if (!G) { try { console.warn('[DystGame setup] core missing'); } catch (e) {} return; }
+  if (G.SETUP) return;
+
+  function S() { return (typeof G.session === 'function') ? G.session() : null; }
+  function P() { var s = S(); return s ? s.players[0] : null; }
+  function rng() { try { return G.rng(); } catch (e) { return Math.random(); } }
+  function attr(word, cat, sub) { try { return (G.gameAttrs ? G.gameAttrs({ word: word, cat: cat, sub: sub }) : {}) || {}; } catch (e) { return {}; } }
+
+  // ---- read the writing pool (same top-level const the attrs/cards modules use) ----
+  function CATLIST() { try { return (typeof DYSTORIA_DATA !== 'undefined' && DYSTORIA_DATA.categories) ? DYSTORIA_DATA.categories : ((window.DYSTORIA_DATA || {}).categories || []); } catch (e) { return []; } }
+  function catById(id) { var cs = CATLIST(); for (var i = 0; i < cs.length; i++) if (cs[i].id === id) return cs[i]; return null; }
+  function flat(arr) { var out = []; (arr || []).forEach(function (w) { if (typeof w === 'string') out.push(w); else if (w && w.w) out.push(w.w); else if (w && w.words) out = out.concat(flat(w.words)); else if (w && w.groups) (w.groups || []).forEach(function (g) { out = out.concat(flat(g.words)); }); }); return out; }
+  function subWords(catId, subName) { var c = catById(catId); if (!c) return []; var subs = c.subcategories || []; for (var i = 0; i < subs.length; i++) if (subs[i].name === subName) return flat(subs[i].words); return []; }
+  function pickN(arr, n) { arr = (arr || []).slice(); var out = []; while (arr.length && out.length < n) { var i = Math.floor(rng() * arr.length); out.push(arr.splice(i, 1)[0]); } return out; }
+  function pick1(arr) { return (arr && arr.length) ? arr[Math.floor(rng() * arr.length)] : null; }
+
+  // ---- draft a candidate Character from an archetype + pool facets + attributes ----
+  function draftCharacter(archetype) {
+    var ga = attr(archetype, 'being', 'Archetype');            // grid, color, bearing, value
+    return {
+      archetype: archetype,
+      type: pick1(subWords('being', 'Type')) || 'Human',
+      motivation: pick1(subWords('being', 'Motivation')) || '',
+      grid: ga.grid || null, color: ga.color || 'Y', bearing: ga.bearing || 'neutral', value: ga.value || null
+    };
+  }
+  function draftLocation() {
+    var terr = subWords('setting', 'Terrain'); var name = pick1(terr) || 'Forest';
+    return { name: name, kind: 'Terrain', color: attr(name, 'setting', 'Terrain').color || 'G' };
+  }
+  function draftOrdeal() {
+    var os = G.ORDEALS || []; return os.length ? os[Math.floor(rng() * os.length)] : null;
+  }
+
+  /* ---- begin setup: draw the starting cards (GDD §12) ---- */
+  function beginSetup() {
+    var s = S(); if (!s) return null;
+    if (s.setup && s.setup.done) return s.setup;
+    var cores = (G.ATTR && G.ATTR.ARCHETYPES) ? G.ATTR.ARCHETYPES.slice() : ['Rebel', 'Sage', 'Hero', 'Ruler', 'Creator'];
+    var chosen5 = pickN(cores, 5);                              // 5 candidate Characters
+    s.setup = {
+      phase: 'draft', done: false,
+      characters: chosen5.map(draftCharacter),
+      startOrdeal: draftOrdeal(),
+      startLocation: draftLocation(),
+      chosen: null
+    };
+    return s.setup;
+  }
+  function setupState() { var s = S(); return s ? (s.setup || null) : null; }
+  function setupDone() { var s = S(); return !!(s && s.setup && s.setup.done); }
+  function isSetupActive() { var s = S(); return !!(s && (!s.setup || !s.setup.done)); }
+
+  /* ---- choose your primary Character → bind, deal Potential, seed market, start ---- */
+  function chooseCharacter(idx) {
+    var s = S(), p = P(); if (!s || !p) return { error: 'no game' };
+    if (!s.setup) beginSetup();
+    var ch = s.setup.characters[idx]; if (!ch) return { error: 'no such character' };
+    s.setup.chosen = ch;
+    // bind the protagonist to the chosen archetype (ensureProtagonist wrap reads this)
+    p.chosenArchetype = ch; p.character = ch;
+    // starting Potential: 1 of each colour (GDD §12)
+    p.potential = { G: 1, Y: 1, R: 1, B: 1 };
+    // seed the Map-Market staging: the un-chosen candidates (place 2) + starting Ordeal + Location
+    var others = s.setup.characters.filter(function (c) { return c !== ch; });
+    s.setup.marketBeings = others.slice(0, 2);
+    s.setup.done = true; s.setup.phase = 'play';
+    try { if (G.ensureProtagonist) G.ensureProtagonist(); } catch (e) {}
+    try { if (typeof G.autosave === 'function') G.autosave(); } catch (e2) {}
+    return { ok: true, character: ch };
+  }
+
+  // ---- wrap ensureProtagonist so the chosen archetype becomes the protagonist ----
+  var _ensureP = G.ensureProtagonist;
+  if (typeof _ensureP === 'function') {
+    G.ensureProtagonist = function (word) {
+      var p = P();
+      if (p && !word && p.chosenArchetype) word = p.chosenArchetype.archetype;
+      var c = _ensureP.call(this, word);
+      try {
+        if (c && p && p.chosenArchetype && c.body) {
+          c.body.archetype = p.chosenArchetype.archetype;
+          if (p.chosenArchetype.type) c.body.word = c.body.word || p.chosenArchetype.type;
+          if (p.chosenArchetype.motivation && !c.body.motivation) c.body.motivation = { want: p.chosenArchetype.motivation };
+          if (!c.color) c.color = p.chosenArchetype.color;
+        }
+      } catch (e) {}
+      return c;
+    };
+  }
+
+  Object.assign(G, {
+    SETUP: true, beginSetup: beginSetup, setupState: setupState, setupDone: setupDone,
+    isSetupActive: isSetupActive, chooseCharacter: chooseCharacter, draftCharacter: draftCharacter
+  });
+  try { console.log('[DystGame setup] character draft ready'); } catch (e) {}
+})();
+
+</script>
+<script id="dyst-gamemode-ui">
+/* ============================================================================
+ * Dystoria — Game Mode UI surface (M3: the dual spine, made legible)
+ * "Game" button (right of Wiki, native icon medallion) + a full-screen overlay:
+ * a live Score, a Goals rail (Events with requirements + your gap + Trigger),
+ * the plan→act day (choose which of the four actions → the count sets T), each
+ * verb opening its concrete choice, the Ordeal Technology/Characteristic fork,
+ * and your holdings. Fully additive: injects button/panel, wraps goMode.
+ * ==========================================================================*/
+(function () {
+  'use strict';
+  if (window.__dystGameUI) return; window.__dystGameUI = true;
+
+  function $(id) { return document.getElementById(id); }
+  function el(tag, attrs, html) {
+    var e = document.createElement(tag);
+    if (attrs) Object.keys(attrs).forEach(function (k) { if (k === 'class') e.className = attrs[k]; else if (k === 'text') e.textContent = attrs[k]; else e.setAttribute(k, attrs[k]); });
+    if (html != null) e.innerHTML = html; return e;
+  }
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+  function G() { return window.DystGame; }
+  function flash(m) { try { if (typeof flashStatus === 'function') flashStatus(m); } catch (e) {} }
+  // Potential colours matched to the Figma card diamonds (Green / Yellow-Gold / Red / Blue)
+  var COLOR_HEX = { G: '#2ca02c', Y: '#e0a92e', R: '#d0331f', B: '#2f57c4' };
+  var GM_CHARCOAL = '#3f3d3a';
+  function potHTML(p) { return ['G', 'Y', 'R', 'B'].map(function (c) { return '<span style="color:' + COLOR_HEX[c] + ';font-size:11px">◆</span>' + (p.potential[c] || 0); }).join(' '); }
+  function groupColor(Gg, grp) { try { return COLOR_HEX[(Gg.DOMAINS[grp] || {}).color] || '#888'; } catch (e) { return '#888'; } }
+
+  /* ======================================================================= *
+   * Card structures — render any CardModel (from DystGame.cardModel) as a
+   * card in the Figma language: tinted category strip, parchment body pulled
+   * from element data, an attached-token shelf, a charcoal mechanical footer.
+   * ======================================================================= */
+  function tokChip(t) {
+    if (!t) return '';
+    if (t.kind === 'domain') { var c = COLOR_HEX[t.color] || '#888'; return '<span class="gm-dtok"><span class="sq" style="background:' + c + '">' + esc(t.letter || '') + '</span>' + esc(t.token || t.group) + '</span>'; }
+    var b = t.bearing || '', dot = b === 'dark' ? '● ' : b === 'light' ? '○ ' : '';
+    if (t.kind === 'trait') return '<span class="gm-ttok ' + b + '">' + dot + esc(t.word || t.label) + '</span>';
+    // concept / construct token — a distinct attachable token with the ❋ glyph
+    return '<span class="gm-ctok ' + b + '"><span class="gm-cglyph">❋</span>' + dot + esc(t.word || t.label) + '</span>';
+  }
+  function reqChip(t) { var c = COLOR_HEX[t.color] || '#888', met = t.met; return '<span class="gm-dtok"' + (met ? '' : ' style="opacity:.6"') + '><span class="sq" style="background:' + (met ? c : 'transparent') + ';box-shadow:inset 0 0 0 1.5px ' + c + ';color:' + (met ? '#fff' : c) + '">' + (t.have || 0) + '</span>' + esc(t.group) + ' ' + (t.have || 0) + '/' + t.need + '</span>'; }
+  function mechHTML(mm) {
+    var m = mm.mech || {}, parts = [];
+    if (mm.cat === 'event') {
+      (mm.reqTokens || []).forEach(function (t) { parts.push(reqChip(t)); });
+      if (m.beings) parts.push('<span>☗ ' + m.beings + '</span>');
+      Object.keys(m.potential || {}).forEach(function (c) { parts.push('<span style="color:' + (COLOR_HEX[c] || '#ccc') + '">◆' + c + ' ' + m.potential[c] + '</span>'); });
+      if (m.time) parts.push('<span style="opacity:.75">' + m.time + 'T</span>');
+      if (m.gated) parts.push('<span style="color:#e6b0a0">🔒 ' + esc(m.reason || 'gated') + '</span>');
+    } else if (mm.cat === 'ordeal') {
+      var cost = m.cost || {};
+      Object.keys(cost.potential || {}).forEach(function (c) { parts.push('<span style="color:' + (COLOR_HEX[c] || '#ccc') + '">◆' + c + ' ' + cost.potential[c] + '</span>'); });
+      Object.keys(cost.domains || {}).forEach(function (g) { parts.push('<span>' + esc(g) + ' ' + cost.domains[g] + '</span>'); });
+      if (cost.time) parts.push('<span style="opacity:.75">' + cost.time + 'T</span>');
+      if (m.construct || m.characteristic) parts.push('<span style="opacity:.9">❋ ' + esc(m.construct ? m.construct.word : '?') + ' &nbsp;|&nbsp; ✦ ' + esc(m.characteristic ? m.characteristic.word : '?') + '</span>');
+      if (m.gate) parts.push('<span style="color:#e6b0a0">🔒 ' + (m.gate.light ? '○' + m.gate.light : '●' + m.gate.dark) + '</span>');
+    } else if (mm.cat === 'being') {
+      if (m.color) parts.push('<span style="color:' + (COLOR_HEX[m.color] || '#ccc') + '">◆' + m.color + '</span>');
+      parts.push('<span style="opacity:.75">' + (m.bearing === 'dark' ? '● dark' : m.bearing === 'light' ? '○ light' : '— unmarked') + '</span>');
+    } else if (mm.cat === 'location') {
+      parts.push('<span style="opacity:.7">a place — tokens attach here</span>');
+    }
+    return parts.join('');
+  }
+  function gmCardHTML(mm) {
+    if (!mm) return '';
+    if (mm.kind === 'domain' || mm.kind === 'concept') return tokChip(mm);
+    if (mm.cat === 'emotion') return '<div class="gm-ecard"><span class="el">Emotion' + (mm.mech.bearing ? ' · ' + mm.mech.bearing : '') + '</span><span class="en">' + esc(mm.name) + '</span>' + (mm.effect ? '<span style="font-size:10px;opacity:.6">' + esc(mm.effect) + '</span>' : '') + '</div>';
+    var badge = '';
+    if (mm.cat === 'event' || mm.cat === 'ordeal') badge = '<span class="gm-star">★</span>' + (mm.mech.points || 0) + (mm.mech.markers > 1 ? ' <span style="opacity:.7">×' + mm.mech.markers + '</span>' : '');
+    else if (mm.mech.bearing) badge = mm.mech.bearing === 'dark' ? '●' : '○';
+    // top banner matches the element's signal colour when it has one (grey-neutral / 4-colours-as-signal)
+    var tint = (mm.mech && mm.mech.color && COLOR_HEX[mm.mech.color]) ? COLOR_HEX[mm.mech.color] : mm.tint;
+    var h = '<div class="gm-fcard cat-' + mm.cat + '" style="--tint:' + tint + '">';
+    // banner = icon + the card's NAME (the icon signals the type; no category text)
+    h += '<div class="gm-fc-strip"><span class="gm-fc-glyph">' + mm.glyph + '</span><span class="gm-fc-nm">' + esc(mm.name) + (mm.mech.major ? ' <small>· Major</small>' : '') + '</span><span class="gm-fc-badge">' + badge + '</span></div>';
+    if (mm.art) h += '<div class="gm-fc-art">' + mm.art + '</div>';
+    h += '<div class="gm-fc-body">';
+    (mm.facets || []).forEach(function (f) { h += '<div class="gm-fc-facet"><b>' + esc(f.label) + '</b>' + esc(f.value) + '</div>'; });
+    if (mm.effect) h += '<div class="gm-fc-effect">' + esc(mm.effect) + (mm.mech.transform ? ' <i style="opacity:.8">· changes you: ' + esc(mm.mech.transform) + '</i>' : '') + '</div>';
+    h += '</div>';
+    if (mm.tokens && mm.tokens.length) h += '<div class="gm-fc-shelf">' + mm.tokens.map(tokChip).join('') + '</div>';
+    var mech = mechHTML(mm); if (mech) h += '<div class="gm-fc-mech">' + mech + '</div>';
+    h += '</div>';
+    return h;
+  }
+  function gmCardNode(mm) { var d = el('div'); d.innerHTML = gmCardHTML(mm); return d.firstChild || d; }
+
+  /* ---- styles ---- */
+  function injectCSS() {
+    if ($('dystGameCSS')) return;
+    var s = document.createElement('style'); s.id = 'dystGameCSS';
+    s.textContent = [
+      '.gm-div{display:inline-block;width:1px;height:15px;margin:0 8px;vertical-align:middle;background:currentColor;opacity:.20;}',
+      '.mode-pills .gm-div{height:13px;margin:0 5px;opacity:.28;}',
+      '#gamePanel{position:fixed;top:var(--hH,58px);left:0;right:0;bottom:0;z-index:150;background:var(--paper,#faf8f4);color:var(--ink,#1a1a1a);display:none;overflow:auto;}',
+      '#gamePanel.show{display:block;}',
+      '#gamePanel .wk-head{display:flex;align-items:center;gap:14px;padding:9px 18px;background:var(--modebar,#efece6);border-bottom:1px solid var(--line,rgba(0,0,0,.1));}',
+      '#gamePanel .mode-pills{display:flex;align-items:center;gap:2px;}',
+      '#gamePanel .mode-pills button{background:none;border:none;font:inherit;padding:6px 10px;cursor:pointer;opacity:.62;color:inherit;}',
+      '#gamePanel .mode-pills button:hover{opacity:.85;} #gamePanel .mode-pills button.on{opacity:1;font-weight:700;}',
+      '#gamePanel .wk-guide{opacity:.62;font-size:12.5px;}',
+      '#gamePanel .gm-body{max-width:880px;margin:0 auto;padding:20px 22px 90px;}',
+      '.gm-hero{font-family:var(--serif,Georgia,serif);font-size:24px;margin:2px 0 6px;}',
+      '.gm-sub{opacity:.72;margin-bottom:14px;max-width:64ch;}',
+      '.gm-scorebar{display:flex;align-items:center;gap:12px;margin:2px 0 12px;}',
+      '.gm-scorebar .lbl{font-family:var(--serif,Georgia,serif);font-size:15px;white-space:nowrap;}',
+      '.gm-track{flex:1;height:9px;border-radius:6px;background:rgba(0,0,0,.09);overflow:hidden;}',
+      '.gm-track > i{display:block;height:100%;background:var(--accent,#3a3a42);border-radius:6px;transition:width .3s;}',
+      '.gm-stat{display:flex;flex-wrap:wrap;gap:6px 15px;align-items:center;font-size:13.5px;margin:2px 0 10px;}',
+      '.gm-stat b{font-family:var(--serif,Georgia,serif);font-weight:600;}',
+      '.gm-card{border:1px solid rgba(0,0,0,.12);border-radius:10px;padding:13px 15px;margin:11px 0;background:rgba(0,0,0,.015);}',
+      '.gm-h{font-family:var(--serif,Georgia,serif);font-size:16px;margin-bottom:2px;}',
+      '.gm-ev{border:1px solid rgba(0,0,0,.13);border-radius:9px;padding:11px 13px;margin:8px 0;background:var(--paper,#fff);}',
+      '.gm-ev.ready{border-color:var(--accent,#3a3a42);box-shadow:0 0 0 1px var(--accent,#3a3a42) inset;}',
+      '.gm-ev.locked{opacity:.72;}',
+      '.gm-ev-top{display:flex;justify-content:space-between;align-items:baseline;gap:8px;}',
+      '.gm-ev-name{font-family:var(--serif,Georgia,serif);font-size:15.5px;}',
+      '.gm-where{font-size:10.5px;text-transform:uppercase;letter-spacing:.09em;opacity:.5;}',
+      '.gm-req{display:flex;flex-wrap:wrap;gap:5px 8px;margin:7px 0 3px;font-size:12.5px;}',
+      '.gm-need{padding:2px 8px;border-radius:20px;background:rgba(168,67,47,.10);color:#8a3826;}',
+      '.gm-have{padding:2px 8px;border-radius:20px;background:rgba(74,124,63,.13);color:#3c6a32;}',
+      '.gm-proj{opacity:.6;font-size:12px;margin-top:2px;}',
+      '.gm-btn{font-family:var(--sans,system-ui,sans-serif);font-size:13px;font-weight:600;padding:8px 13px;border:1px solid rgba(0,0,0,.18);border-radius:8px;background:var(--accent,#3a3a42);color:#fff;cursor:pointer;}',
+      '.gm-btn.ghost{background:transparent;color:var(--ink,#1a1a1a);} .gm-btn.ghost.on{border-color:var(--accent,#3a3a42);}',
+      '.gm-btn.sm{font-size:12px;padding:5px 9px;} .gm-btn:hover{opacity:.9;} .gm-btn:disabled{opacity:.4;cursor:default;}',
+      '.gm-btn.go{background:#2e7d32;} .gm-btn.trigger{background:#8a3826;}',
+      '.gm-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}',
+      '.gm-pill{display:inline-block;font-size:11px;padding:2px 8px;margin:3px 4px 0 0;border-radius:20px;background:rgba(0,0,0,.06);}',
+      '.gm-log{margin:3px 0;font-size:13px;line-height:1.5;} .gm-log .k{opacity:.5;text-transform:uppercase;font-size:10px;letter-spacing:.08em;margin-right:6px;}',
+      '.gm-hold{font-size:12.5px;line-height:1.7;} .gm-hold b{font-family:var(--serif,Georgia,serif);}',
+      '.gm-q{font-family:var(--serif,Georgia,serif);font-style:italic;font-size:15px;margin:2px 0 8px;}',
+      '.gm-input{font-size:14px;padding:8px 10px;border:1px solid rgba(0,0,0,.2);border-radius:8px;min-width:220px;background:var(--paper,#fff);color:inherit;}',
+      '.gm-note{opacity:.55;font-size:12px;margin-top:20px;}',
+      '.gm-ev{border-left-width:4px;}',   // event colour accent set inline per event
+      '.gm-sq{display:inline-block;width:13px;height:13px;border-radius:4px;vertical-align:-2px;margin-right:5px;box-shadow:inset 0 0 0 1px rgba(0,0,0,.15);}',
+      '.gm-tok{display:inline-block;background:' + GM_CHARCOAL + ';color:#f3efe6;font-size:11.5px;padding:3px 9px;border-radius:7px;margin:3px 6px 3px 0;}',
+      '.gm-star{color:#e0a92e;}',
+      // ---- board shell (M4 phase 1) ----
+      '#gamePanel.board{display:flex;flex-direction:column;overflow:hidden;}',
+      '#gamePanel.board .gm-body{flex:1;min-height:0;max-width:none;padding:0;margin:0;width:100%;}',
+      '.gm-board{display:grid;grid-template-columns:272px minmax(0,1fr) 210px;grid-template-rows:232px minmax(0,1fr) minmax(196px,30%);gap:7px;padding:8px;height:100%;box-sizing:border-box;grid-template-areas:"gstat market score" "loc map oloc" "turn player oplayer";}',
+      '.gm-zone{background:rgba(0,0,0,.025);border:1px solid rgba(0,0,0,.10);border-radius:9px;padding:9px 11px;overflow:auto;min-height:0;min-width:0;}',
+      '.gm-zone .gm-card{margin:0 0 8px;background:none;border:none;padding:0;}',
+      '.gm-zone .gm-h{font-size:14px;}',
+      '.gm-zlbl{font-size:9.5px;letter-spacing:.13em;text-transform:uppercase;opacity:.45;margin-bottom:6px;}',
+      '.z-gstat{grid-area:gstat;} .z-market{grid-area:market;} .z-score{grid-area:score;} .z-loc{grid-area:loc;} .z-oloc{grid-area:oloc;} .z-turn{grid-area:turn;} .z-player{grid-area:player;} .z-oplayer{grid-area:oplayer;}',
+      '.z-map{grid-area:map;background:#ecebe7;border:1px solid rgba(0,0,0,.12);border-radius:9px;position:relative;overflow:hidden;padding:0;}',
+      '.z-deck{flex:0 0 auto;width:60px;height:84px;background:#2b2a28;border-radius:7px;color:#d8d2c6;font-size:8.5px;line-height:1.25;display:flex;align-items:center;justify-content:center;text-align:center;padding:5px;}',
+      // ---- interactive grid map (phase 2) ----
+      '.z-map{display:flex;align-items:center;justify-content:center;padding:8px;}',
+      '.gm-mapgrid{display:grid;gap:3px;background:rgba(0,0,0,.05);padding:3px;border-radius:8px;}',
+      '.gm-cell{width:46px;height:46px;background:#f4f2ee;border-radius:4px;position:relative;display:flex;align-items:center;justify-content:center;box-shadow:inset 0 0 0 1px rgba(0,0,0,.05);}',
+      '.gm-cell.move{cursor:pointer;box-shadow:inset 0 0 0 1.5px rgba(224,169,46,.8);}',
+      '.gm-cell.move:hover{background:#fbf3e0;}',
+      '.gm-you{width:30px;height:30px;border-radius:50%;background:' + GM_CHARCOAL + ';color:#f0d9a0;font-size:9px;display:flex;align-items:center;justify-content:center;border:2px solid #e0a92e;z-index:2;}',
+      '.gm-mtok{width:22px;height:22px;border-radius:5px;box-shadow:inset 0 0 0 1px rgba(0,0,0,.18);}',
+      '.gm-mstar{color:rgba(0,0,0,.22);font-size:22px;line-height:1;}',
+      '.gm-mloc{color:#555;font-size:19px;}',
+      // ---- card structures (four deck cards + emotion + tokens) ----
+      '.gm-fcard{position:relative;border-radius:11px;overflow:hidden;background:#f7f3ea;border:1px solid rgba(0,0,0,.14);box-shadow:0 1px 2px rgba(0,0,0,.06);margin:0 0 9px;}',
+      '.gm-fcard .gm-fc-strip{display:flex;align-items:center;gap:7px;padding:5px 10px;background:var(--tint,#8a8a8a);color:#fff;}',
+      '.gm-fc-glyph{font-size:14px;line-height:1;opacity:.92;}',
+      '.gm-fc-cat{font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;font-weight:700;opacity:.94;}',
+      '.gm-fc-nm{font-family:var(--serif,Georgia,serif);font-size:15px;font-weight:600;flex:1 1 auto;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;} .gm-fc-nm small{font-weight:400;opacity:.8;font-size:10px;}',
+      '.gm-fc-badge{margin-left:auto;font-size:12px;font-weight:700;display:flex;align-items:center;gap:5px;}',
+      '.gm-fc-body{padding:8px 11px 9px;}',
+      '.gm-fc-art{display:flex;align-items:center;justify-content:center;width:100%;height:56px;background:rgba(0,0,0,.045);overflow:hidden;color:#5a534a;}',
+      '.gm-fc-art svg{height:50px;width:auto;max-width:88%;}',
+      '.gm-mkt-cards .gm-fc-art{height:44px;} .gm-mkt-cards .gm-fc-art svg{height:40px;}',
+      '.gm-cell .gm-mic{position:absolute;inset:2px;display:flex;align-items:center;justify-content:center;color:#6a6258;opacity:.5;} .gm-cell .gm-mic svg{width:100%;height:100%;}',
+      '.gm-cell .gm-youic{position:absolute;inset:0;z-index:2;display:flex;align-items:flex-end;justify-content:center;color:' + GM_CHARCOAL + ';} .gm-cell .gm-youic svg{height:40px;width:auto;filter:drop-shadow(0 1px 1px rgba(0,0,0,.35));}',
+      '.gm-fc-name{font-family:var(--serif,Georgia,serif);font-size:16px;line-height:1.15;}',
+      '.gm-fc-type{font-family:var(--serif,Georgia,serif);font-style:italic;font-size:12px;opacity:.6;margin-top:1px;}',
+      '.gm-fc-facet{font-size:11.5px;opacity:.85;margin-top:3px;} .gm-fc-facet b{opacity:.5;text-transform:uppercase;letter-spacing:.07em;font-size:9.5px;font-weight:700;margin-right:5px;}',
+      '.gm-fc-effect{font-size:12px;opacity:.75;margin-top:5px;line-height:1.35;}',
+      '.gm-fc-shelf{display:flex;flex-wrap:wrap;gap:4px;padding:0 11px 8px;} .gm-fc-shelf:empty{display:none;}',
+      '.gm-fc-mech{background:' + GM_CHARCOAL + ';color:#efe9dd;padding:6px 11px;display:flex;flex-wrap:wrap;align-items:center;gap:5px 10px;font-size:11.5px;}',
+      '.gm-dtok{display:inline-flex;align-items:center;gap:5px;font-size:11px;padding:2px 7px 2px 3px;border-radius:6px;background:rgba(0,0,0,.05);}',
+      '.gm-dtok .sq{width:16px;height:16px;border-radius:4px;display:inline-flex;align-items:center;justify-content:center;color:#fff;font-size:9.5px;font-weight:700;box-shadow:inset 0 0 0 1px rgba(0,0,0,.15);}',
+      '.gm-fc-mech .gm-dtok{background:rgba(255,255,255,.10);color:#efe9dd;}',
+      '.gm-ctok{display:inline-flex;align-items:center;gap:4px;font-size:11px;padding:2px 8px 2px 6px;border-radius:20px;background:rgba(156,149,182,.20);color:#4f4767;box-shadow:inset 0 0 0 1px rgba(120,110,150,.35);}',
+      '.gm-ctok .gm-cglyph{font-size:10px;opacity:.85;color:#7a6ba0;}',
+      '.gm-fc-mech .gm-ctok{background:rgba(180,170,210,.22);color:#e7e2f0;box-shadow:inset 0 0 0 1px rgba(200,190,225,.3);} .gm-fc-mech .gm-ctok .gm-cglyph{color:#cbbfe6;}',
+      '.gm-ttok{display:inline-flex;align-items:center;gap:3px;font-size:11px;padding:2px 8px;border-radius:5px;background:rgba(0,0,0,.05);color:#4a4a4a;} .gm-ttok.dark{color:#2a2a2a;} .gm-ttok.light{color:#8a6a1e;}',
+      '.gm-ecard{display:inline-flex;flex-direction:column;gap:0;padding:4px 10px;border-radius:9px;background:rgba(143,134,184,.13);border:1px solid rgba(143,134,184,.32);min-width:92px;}',
+      '.gm-ecard .el{font-size:8.5px;letter-spacing:.12em;text-transform:uppercase;opacity:.6;} .gm-ecard .en{font-family:var(--serif,Georgia,serif);font-size:13.5px;}',
+      '.gm-handrow{display:flex;flex-wrap:wrap;gap:6px;margin:5px 0;}',
+      // Map Market = staging area: one of each card, all four main cards identical size
+      '.gm-mkt-cards{display:flex;gap:8px;align-items:stretch;overflow-x:auto;overflow-y:hidden;padding-bottom:4px;}',
+      '.gm-mkt-cards .gm-fcard{flex:0 0 182px;width:182px;height:178px;margin:0;display:flex;flex-direction:column;}',
+      '.gm-mkt-cards .gm-fcard .gm-fc-body{flex:1 1 auto;overflow:hidden;}',
+      '.gm-mkt-cards .gm-fc-shelf{flex:0 0 auto;} .gm-mkt-cards .gm-fc-mech{flex:0 0 auto;}',
+      '.gm-mkt-cards .gm-galle{flex:0 0 auto;align-self:center;}',
+      // ---- setup / character draft ----
+      '.gm-setup-row{display:flex;gap:12px;flex-wrap:wrap;margin-top:16px;}',
+      '.gm-setup-card{flex:0 0 172px;width:172px;}',
+      '.gm-pcard{max-width:210px;}',
+      '#gameModeBtn.on{font-weight:700;}'
+    ].join('\n');
+    document.head.appendChild(s);
+  }
+
+  /* ---- button + divider (native icon) ---- */
+  function syncIcons() { try { if (window.__syncModeBtns) window.__syncModeBtns(); } catch (e) {} }
+  function injectButtons() {
+    if (!gameAllowed()) return;                                   // account-gated: only the owner sees Game mode
+    var changed = false, wb = $('wikiModeBtn');
+    if (wb && !$('gameModeBtn')) {
+      var d = el('span', { class: 'gm-div gm-injected', 'aria-hidden': 'true' });
+      var g = el('button', { id: 'gameModeBtn', class: 'gm-injected', title: 'Game — play your story into being' }, 'Game');
+      g.addEventListener('click', openGame);
+      wb.parentNode.insertBefore(d, wb.nextSibling); wb.parentNode.insertBefore(g, d.nextSibling); changed = true;
+    }
+    document.querySelectorAll('.mode-pills').forEach(function (mp) {
+      if (mp.closest && mp.closest('#gamePanel')) return;          // the panel's own bar is fine as-is
+      if (mp.querySelector('[data-mode="game"]')) return;
+      var d = el('span', { class: 'gm-div gm-injected', 'aria-hidden': 'true' });
+      var gp = el('button', { 'data-mode': 'game', class: 'gm-injected' }, 'Game'); gp.addEventListener('click', openGame);
+      mp.appendChild(d); mp.appendChild(gp); changed = true;
+    });
+    if (changed) syncIcons();
+  }
+  function buildPanel() {
+    if ($('gamePanel')) return;
+    var p = el('div', { id: 'gamePanel' });
+    p.innerHTML = '<div class="wk-head"><div class="mode-pills">'
+      + '<button data-mode="notepad">Plan</button><button data-mode="write">Write</button><button data-mode="edit">Refine</button>'
+      + '<button data-mode="read">Review</button><button data-mode="wiki">Wiki</button><span class="gm-div"></span>'
+      + '<button data-mode="game" class="on">Game</button></div>'
+      + '<span class="wk-guide">Play your story into being — race for Story Points and become someone in the process.</span></div>'
+      + '<div class="gm-body" id="gameBody"></div>';
+    document.body.appendChild(p);
+    p.querySelectorAll('.mode-pills button').forEach(function (b) { var m = b.getAttribute('data-mode'); b.addEventListener('click', function () { if (m === 'game') openGame(); else goModeSafe(m); }); });
+    syncIcons();
+  }
+  function goModeSafe(m) { try { if (typeof window.goMode === 'function') window.goMode(m); } catch (e) {} }
+  function openGame() {
+    if (!gameAllowed()) return;                                    // account gate
+    injectCSS(); buildPanel(); injectButtons();
+    try { if (typeof suppressOverlayAnim === 'function') suppressOverlayAnim(); } catch (e) {}
+    ['closeReadMode', 'closeEditMode', 'closeWiki'].forEach(function (fn) { try { if (typeof window[fn] === 'function') window[fn](); } catch (e) {} });
+    try { if (typeof setWriting === 'function') setWriting(false); } catch (e) {}
+    $('gamePanel').classList.add('show'); document.body.classList.add('gamemode');
+    try { localStorage.setItem('dystoria.uiMode', 'game'); } catch (e) {}
+    renderGame();
+  }
+  function closeGame() { var p = $('gamePanel'); if (p) p.classList.remove('show'); document.body.classList.remove('gamemode'); }
+  function wrapGoMode() { try { var o = window.goMode; if (typeof o !== 'function' || o.__gameWrapped) return; var w = function (t) { if (t === 'game') { openGame(); return; } closeGame(); return o.apply(this, arguments); }; w.__gameWrapped = true; window.goMode = w; } catch (e) {} }
+
+  /* ======================================================================= *
+   * M3 day state + helpers
+   * ======================================================================= */
+  var ORDER = ['adapt', 'explore', 'interact', 'develop'];
+  var VERB_HINT = { adapt: 'gain Potential', explore: 'grab a Domain / reveal', interact: 'bond a Being', develop: 'undertake an Ordeal' };
+  var _ctx = { begun: null, phase: 'plan', selected: {}, taken: {}, open: null, log: [], written: [], lastRec: null, fork: null };
+
+  function potStr(p) { return ['G', 'Y', 'R', 'B'].map(function (c) { return c + (p.potential[c] || 0); }).join(' '); }
+  function selCount() { return ORDER.filter(function (a) { return _ctx.selected[a]; }).length; }
+  function tForCount(n) { return ({ 1: 8, 2: 7, 3: 6, 4: 5 })[n] || 8; }
+  function actionAvailable(a) { var Gg = G(); if (a === 'interact') return (Gg.unbondedBeings ? Gg.unbondedBeings() : []).length > 0; if (a === 'develop') return (Gg.availableOrdeals ? Gg.availableOrdeals() : []).length > 0; return true; }
+  function pushLog(rec) { if (rec && !rec.error) _ctx.log.push(rec); if (rec && rec.error) flash(rec.error); }
+
+  function beginActing() { var n = selCount(); if (!n) return; G().chooseFocus(n); _ctx.phase = 'act'; _ctx.open = null; renderGame(); }
+  function endDay() { var Gg = G(); Gg.recordDay(_ctx.log.slice(), _ctx.written.slice()); Gg.advanceDay(); _ctx.begun = null; renderGame(); }
+
+  /* ======================================================================= *
+   * render
+   * ======================================================================= */
+  function renderGame() {
+    var host = $('gameBody'); if (!host) return; var Gg = window.DystGame; host.innerHTML = '';
+    var _panel = $('gamePanel'); if (_panel) _panel.classList.remove('board');   // board only during a live session
+    if (!Gg) { host.appendChild(el('div', { class: 'gm-hero' }, 'Play your story into being')); host.appendChild(el('div', { class: 'gm-sub' }, 'The game module isn’t loaded.')); return; }
+    var sess = Gg.session();
+    if (!sess) {
+      host.appendChild(el('div', { class: 'gm-hero' }, 'Play your story into being'));
+      host.appendChild(el('div', { class: 'gm-sub' }, 'Race to 100 Story Points by triggering Events — and become someone through the Ordeals you take on. Start a game to begin. (Writes real elements into the current story — use an empty story to experiment.)'));
+      var b = el('button', { class: 'gm-btn' }, 'Start a new game');
+      b.addEventListener('click', function () { try { Gg.start({}); if (Gg.beginSetup) Gg.beginSetup(); } catch (e) {} _ctx = { begun: null, phase: 'plan', selected: {}, taken: {}, open: null, log: [], written: [], lastRec: null, fork: null }; renderGame(); });
+      var c = el('div', { class: 'gm-card' }); c.appendChild(b); host.appendChild(c);
+      return;
+    }
+    if (!Gg.M3) { host.appendChild(el('div', { class: 'gm-hero' }, 'Play your story into being')); host.appendChild(el('div', { class: 'gm-sub' }, 'M3 engine not loaded — core only.')); return; }
+
+    // ---- setup: draft and choose your Character before the board ----
+    if (Gg.isSetupActive && Gg.isSetupActive()) { try { if (Gg.beginSetup) Gg.beginSetup(); } catch (e) {} host.appendChild(renderSetup(Gg, sess)); return; }
+
+    var p = sess.players[0];
+    if (_ctx.begun !== sess.day) { try { Gg.beginDay(); } catch (e) {} _ctx.begun = sess.day; _ctx.phase = 'plan'; _ctx.selected = {}; _ctx.taken = {}; _ctx.open = null; _ctx.log = []; _ctx.written = []; _ctx.lastRec = null; _ctx.fork = null; }
+
+    // ---- the board shell (nine zones), wired to the engine ----
+    if (_panel) _panel.classList.add('board');
+    host.appendChild(renderBoard(Gg, p, sess));
+  }
+
+  /* ---- setup screen: choose your Character (GDD §12) ---- */
+  function renderSetup(Gg, sess) {
+    var st = (typeof Gg.setupState === 'function') ? Gg.setupState() : null;
+    var wrap = el('div');
+    wrap.appendChild(el('div', { class: 'gm-hero' }, 'Choose your Character'));
+    wrap.appendChild(el('div', { class: 'gm-sub' }, 'You begin as one of these five. Your archetype sets your Potential chain, your suit colour and your bearing — the shape you start becoming. You start with 1 Potential of each colour, then live the days.'));
+    if (!st) { wrap.appendChild(el('div', { style: 'opacity:.6' }, 'Drawing your candidates…')); return wrap; }
+    var row = el('div', { class: 'gm-setup-row' });
+    st.characters.forEach(function (ch, i) {
+      var col = el('div', { class: 'gm-setup-card' });
+      col.appendChild(gmCardNode(Gg.characterModel(ch)));
+      var pick = el('button', { class: 'gm-btn sm', style: 'margin-top:6px;width:100%' }, 'Choose ' + esc(ch.archetype));
+      pick.addEventListener('click', function () { var r = Gg.chooseCharacter(i); if (r && r.error) { flash(r.error); } else { _ctx.begun = null; flash('You are the ' + ch.archetype); } renderGame(); });
+      col.appendChild(pick);
+      row.appendChild(col);
+    });
+    wrap.appendChild(row);
+    var draws = el('div', { style: 'margin-top:16px;opacity:.7;font-size:12.5px' });
+    draws.innerHTML = 'Also dealt to the world: a starting Ordeal — <b>' + esc(st.startOrdeal ? st.startOrdeal.name : '—') + '</b>, and a Location — <b>' + esc(st.startLocation ? st.startLocation.name : '—') + '</b>.';
+    wrap.appendChild(draws);
+    return wrap;
+  }
+
+  function renderGoals(Gg, p) {
+    var card = el('div', { class: 'gm-card' });
+    card.appendChild(el('div', { class: 'gm-h' }, 'Events in play — what you’re racing toward'));
+    var evs = Gg.visibleEvents();
+    if (!evs.length) card.appendChild(el('div', { style: 'opacity:.6' }, 'None visible — Explore to reveal Events.'));
+    evs.forEach(function (v) {
+      var e = v.event, g = v.gap;
+      var wrap = el('div', { style: 'margin-bottom:11px' + (v.fireable ? ';filter:drop-shadow(0 0 0 rgba(0,0,0,0))' : '') });
+      var face = gmCardNode(Gg.cardModel(v));   // Event card from the visibleEvents view
+      if (v.fireable) { try { face.style.boxShadow = '0 0 0 2px ' + (COLOR_HEX[e.color] || '#3a3a42'); } catch (x) {} }
+      wrap.appendChild(face);
+      var where = el('div', { class: 'gm-where', style: 'margin:2px 2px 4px' }, esc(v.where === 'market' ? 'in the market' : v.where));
+      wrap.appendChild(where);
+      var row = el('div', { class: 'gm-row', style: 'margin-top:2px' });
+      if (v.fireable) { var t = el('button', { class: 'gm-btn trigger sm' }, 'Trigger — score ' + v.projected.total); t.addEventListener('click', function () { var r = Gg.triggerEvent(e.id); if (r.error) { flash(r.error); } else { _ctx.log.push(r); flash('Triggered ' + e.name + ' · +' + r.score.total + (r.won ? ' — YOU WIN' : '')); } renderGame(); }); row.appendChild(t); }
+      if (v.where === 'market') { var acq = el('button', { class: 'gm-btn ghost sm' }, 'Take to hand'); acq.addEventListener('click', function () { Gg.acquireEvent(e.id); renderGame(); }); row.appendChild(acq); }
+      if (!v.fireable && !g.gated) row.appendChild(el('div', { style: 'opacity:.6;font-size:12px' }, 'still need: ' + gapText(g)));
+      wrap.appendChild(row);
+      card.appendChild(wrap);
+    });
+    return card;
+  }
+  function chip(txt, met) { return el('span', { class: met ? 'gm-have' : 'gm-need' }, (met ? '✓ ' : '') + esc(txt)); }
+  function domChip(Gg, grp, txt, met) { var e = el('span', { class: met ? 'gm-have' : 'gm-need' }); e.innerHTML = '<span class="gm-sq" style="background:' + groupColor(Gg, grp) + '"></span>' + (met ? '✓ ' : '') + esc(txt); return e; }
+  function potChip(c, txt, met) { var e = el('span', { class: met ? 'gm-have' : 'gm-need' }); e.innerHTML = '<span style="color:' + (COLOR_HEX[c] || '#888') + '">◆' + c + '</span> ' + (met ? '✓ ' : '') + esc(txt); return e; }
+  function gapText(g) {
+    var parts = [];
+    Object.keys(g.domains).forEach(function (k) { parts.push(g.domains[k] + ' ' + k); });
+    if (g.beings) parts.push(g.beings + ' Being' + (g.beings > 1 ? 's' : ''));
+    Object.keys(g.potential).forEach(function (k) { parts.push(g.potential[k] + ' ◆' + k); });
+    return parts.join(', ') || '—';
+  }
+
+  function renderPlan(Gg, p) {
+    var plan = el('div', { class: 'gm-card' });
+    plan.appendChild(el('div', { class: 'gm-h' }, 'Choose your day'));
+    plan.appendChild(el('div', { style: 'opacity:.72;font-size:13px' }, 'Pick which of the four actions you’ll take — in service of an Event above. Fewer actions means each goes deeper.'));
+    var chips = el('div', { class: 'gm-row', style: 'margin:10px 0' });
+    ORDER.forEach(function (a) {
+      var avail = actionAvailable(a), on = !!_ctx.selected[a];
+      var c = el('button', { class: 'gm-btn ghost sm' + (on ? ' on' : ''), title: avail ? VERB_HINT[a] : (a === 'interact' ? 'no unbonded Beings — Explore first' : 'no affordable Ordeal yet') }, (on ? '✓ ' : '') + a.charAt(0).toUpperCase() + a.slice(1));
+      if (!avail) c.style.opacity = '.4';
+      c.addEventListener('click', function () { if (!avail) { flash('Not available yet — ' + (a === 'interact' ? 'Explore to find someone.' : 'gain resources first.')); return; } _ctx.selected[a] = !_ctx.selected[a]; renderGame(); });
+      chips.appendChild(c);
+    });
+    plan.appendChild(chips);
+    var n = selCount();
+    plan.appendChild(el('div', { style: 'margin:2px 0 12px;opacity:.85' }, n ? ('<b>' + n + '</b> action' + (n > 1 ? 's' : '') + ' · <b>' + tForCount(n) + 'T</b> each' + (n === 1 ? ' — a deep day' : n === 4 ? ' — broad & shallow' : '')) : 'Pick at least one action.'));
+    var go = el('button', { class: 'gm-btn' }, 'Begin the day →'); if (!n) go.setAttribute('disabled', 'disabled'); go.addEventListener('click', beginActing);
+    plan.appendChild(go);
+    return plan;
+  }
+
+  function renderAct(Gg, p) {
+    var act = el('div', { class: 'gm-card' });
+    var sel = ORDER.filter(function (a) { return _ctx.selected[a]; }); var n = sel.length;
+    act.appendChild(el('div', { class: 'gm-h' }, 'Your day · ' + n + ' action' + (n > 1 ? 's' : '') + ' · ' + tForCount(n) + 'T each'));
+    var row = el('div', { class: 'gm-row', style: 'margin-top:8px' });
+    sel.forEach(function (a) {
+      var done = _ctx.taken[a];
+      var ab = el('button', { class: 'gm-btn sm' + (_ctx.open === a ? '' : ' ghost') }, (done ? '✓ ' : '') + a.charAt(0).toUpperCase() + a.slice(1));
+      if (done) ab.setAttribute('disabled', 'disabled');
+      ab.addEventListener('click', function () { _ctx.open = (_ctx.open === a ? null : a); renderGame(); });
+      row.appendChild(ab);
+    });
+    act.appendChild(row);
+
+    // the open verb's concrete choice
+    if (_ctx.open && !_ctx.taken[_ctx.open]) act.appendChild(renderVerbChoice(Gg, p, _ctx.open));
+
+    // fork (ordeal) overlay-in-card
+    if (_ctx.fork) act.appendChild(renderFork(Gg, p));
+
+    // day log
+    if (_ctx.log.length) { var log = el('div', { style: 'margin-top:12px' }); _ctx.log.forEach(function (r) { log.appendChild(el('div', { class: 'gm-log' }, '<span class="k">' + esc(r.action) + '</span>' + esc(logLine(r)))); }); act.appendChild(log); }
+
+    // write-at-choice
+    if (_ctx.lastRec && _ctx.lastRec.question) act.appendChild(renderWrite(Gg, p));
+
+    // end
+    var takenN = ORDER.filter(function (a) { return _ctx.taken[a]; }).length;
+    var er = el('div', { class: 'gm-row', style: 'margin-top:14px' });
+    er.appendChild(el('div', { style: 'opacity:.6;font-size:12.5px;margin-right:4px' }, takenN + ' of ' + n + ' taken'));
+    var eb = el('button', { class: 'gm-btn' }, takenN >= n ? 'End Day →' : 'End Day early →'); eb.addEventListener('click', endDay);
+    er.appendChild(eb); act.appendChild(er);
+    return act;
+  }
+
+  function renderVerbChoice(Gg, p, verb) {
+    var wrap = el('div', { class: 'gm-card', style: 'background:rgba(0,0,0,.03)' });
+    if (verb === 'adapt') {
+      wrap.appendChild(el('div', {}, '<b>Adapt</b> — gain <b>' + tForCount(selCount()) + '</b> Potential of a colour:'));
+      var r = el('div', { class: 'gm-row', style: 'margin-top:8px' });
+      ['G', 'Y', 'R', 'B'].forEach(function (c) { var b = el('button', { class: 'gm-btn sm', style: 'background:' + COLOR_HEX[c] }, c); b.addEventListener('click', function () { pushLog(Gg.gainPotential(c, tForCount(selCount()))); finishVerb('adapt'); }); r.appendChild(b); });
+      wrap.appendChild(r);
+    } else if (verb === 'explore') {
+      wrap.appendChild(el('div', {}, '<b>Explore</b> — grab a Domain from the market (costs 1 matching Potential), or scout the unknown:'));
+      var m = Gg.domainMarket(); var mr = el('div', { style: 'margin-top:8px' });
+      if (!m.length) mr.appendChild(el('div', { style: 'opacity:.6' }, 'Market empty.'));
+      m.forEach(function (tok, i) {
+        var afford = (p.potential[tok.color] || 0) >= 1;
+        var b = el('button', { class: 'gm-btn sm' + (afford ? '' : ' ghost'), style: 'margin:3px 6px 3px 0' }, '<span class="gm-sq" style="background:' + (COLOR_HEX[tok.color] || '#888') + '"></span>' + esc(tok.token) + ' — ' + esc(tok.group) + ' <span style="color:' + (COLOR_HEX[tok.color] || '#888') + '">◆' + tok.color + '</span>');
+        if (!afford) b.setAttribute('disabled', 'disabled');
+        b.addEventListener('click', function () { var r = Gg.acquireDomain(i); if (r.error) { flash(r.error); } else { pushLog(r); finishVerb('explore'); } renderGame(); });
+        mr.appendChild(b);
+      });
+      var sc = el('button', { class: 'gm-btn ghost sm', style: 'margin-top:4px' }, 'Scout (reveal a being or place)'); sc.addEventListener('click', function () { pushLog(Gg.scout()); finishVerb('explore'); }); mr.appendChild(sc);
+      wrap.appendChild(mr);
+    } else if (verb === 'interact') {
+      wrap.appendChild(el('div', {}, '<b>Interact</b> — bond a Being (they become available for Events, and grow):'));
+      var bs = Gg.unbondedBeings(); var br = el('div', { style: 'margin-top:8px' });
+      if (!bs.length) br.appendChild(el('div', { style: 'opacity:.6' }, 'No one to bond — Explore to find someone.'));
+      bs.slice(0, 6).forEach(function (c) { var b = el('button', { class: 'gm-btn sm', style: 'margin:3px 6px 3px 0' }, esc(c.name || c.body.word)); b.addEventListener('click', function () { var r = Gg.bondBeing(c); pushLog(r); _ctx.lastRec = (r && r.question) ? r : null; finishVerb('interact'); }); br.appendChild(b); });
+      wrap.appendChild(br);
+    } else if (verb === 'develop') {
+      wrap.appendChild(el('div', {}, '<b>Develop</b> — undertake an Ordeal. It changes who you are:'));
+      var os = Gg.availableOrdeals(); var or = el('div', { style: 'margin-top:8px' });
+      if (!os.length) or.appendChild(el('div', { style: 'opacity:.6' }, 'No Ordeal you can afford yet.'));
+      os.forEach(function (o) {
+        var ob = el('div', { style: 'margin-bottom:9px' });
+        ob.appendChild(gmCardNode(Gg.ordealModel(o)));   // Ordeal card
+        var b = el('button', { class: 'gm-btn sm' }, 'Undertake →'); b.addEventListener('click', function () { _ctx.fork = o.id; renderGame(); }); ob.appendChild(b);
+        or.appendChild(ob);
+      });
+      wrap.appendChild(or);
+    }
+    return wrap;
+  }
+  function finishVerb(verb) { _ctx.taken[verb] = true; _ctx.open = null; renderGame(); }
+
+  function renderFork(Gg, p) {
+    var o = null; (Gg.ORDEALS || []).forEach(function (x) { if (x.id === _ctx.fork) o = x; }); if (!o) { _ctx.fork = null; return el('div'); }
+    var con = (typeof Gg.constructForOrdeal === 'function') ? Gg.constructForOrdeal(o.id) : null;
+    var wrap = el('div', { class: 'gm-card', style: 'border-color:var(--accent,#3a3a42)' });
+    wrap.appendChild(el('div', { class: 'gm-h' }, o.name + ' — take one:'));
+    wrap.appendChild(el('div', { style: 'opacity:.72;font-size:12.5px;margin-bottom:8px' }, 'The Ordeal blocked a Construct, and left its mark. Take the Construct to <b>evolve your character</b>, or the Characteristic to <b>grow your potential chain</b>.'));
+    var r = el('div', { class: 'gm-row' });
+    var cb = el('button', { class: 'gm-btn sm' }); cb.innerHTML = 'Construct · ' + tokChip(con || Gg.conceptToken('Concept'));
+    cb.title = 'Take the Construct token — evolves your character';
+    cb.addEventListener('click', function () { doOrdeal(Gg, o.id, 'construct'); });
+    var chr = el('button', { class: 'gm-btn sm ghost' }, 'Characteristic · ' + esc(o.characteristic.word) + (o.characteristic.bearing ? (o.characteristic.bearing.dark ? ' ●' : o.characteristic.bearing.light ? ' ○' : '') : ''));
+    chr.title = 'Take the Characteristic — grows your potential chain';
+    chr.addEventListener('click', function () { doOrdeal(Gg, o.id, 'characteristic'); });
+    r.appendChild(cb); r.appendChild(chr);
+    wrap.appendChild(r);
+    wrap.appendChild(el('div', { style: 'opacity:.55;font-size:11.5px;margin-top:6px' }, 'Construct: a Concept token you carry — evolves your character. Characteristic: a permanent trait — grows your potential chain.'));
+    return wrap;
+  }
+  function doOrdeal(Gg, id, which) { var r = Gg.undertakeOrdeal(id, which); if (r.error) { flash(r.error); } else { _ctx.log.push(r); _ctx.fork = null; finishVerb('develop'); } renderGame(); }
+
+  function renderWrite(Gg, p) {
+    var sess = Gg.session();
+    var q = el('div', { style: 'margin-top:12px;border-top:1px dashed rgba(0,0,0,.12);padding-top:10px' });
+    q.appendChild(el('div', { class: 'gm-q' }, esc(_ctx.lastRec.question)));
+    var qr = el('div', { class: 'gm-row' });
+    var qi = el('input', { class: 'gm-input', placeholder: 'a line, in your words (optional)' });
+    var qb = el('button', { class: 'gm-btn sm' }, 'Note it');
+    var save = function () { var tx = (qi.value || '').trim(); if (tx) _ctx.written.push({ beatId: _ctx.lastRec.action + sess.day, text: tx, tier: 'caption', day: sess.day }); _ctx.lastRec = null; renderGame(); };
+    qb.addEventListener('click', save); qi.addEventListener('keydown', function (e) { if (e.key === 'Enter') save(); });
+    var sk = el('button', { class: 'gm-btn ghost sm' }, 'Skip'); sk.addEventListener('click', function () { _ctx.lastRec = null; renderGame(); });
+    qr.appendChild(qi); qr.appendChild(qb); qr.appendChild(sk); q.appendChild(qr);
+    return q;
+  }
+
+  function renderHoldings(Gg, p) {
+    var card = el('div', { class: 'gm-card' });
+    card.appendChild(el('div', { class: 'gm-h' }, 'Your hand'));
+    var hand = (typeof Gg.handModels === 'function') ? Gg.handModels() : { beings: [], domains: [], technologies: [] };
+
+    // bonded Beings — as Being cards, with the Concept/Construct tokens attached onto them
+    if (hand.beings.length) { var bw = el('div'); hand.beings.forEach(function (bm) { bw.appendChild(gmCardNode(bm)); }); card.appendChild(bw); }
+
+    // Domain tokens you hold (grouped)
+    card.appendChild(el('div', { class: 'gm-zlbl', style: 'margin-top:4px' }, 'Domain tokens'));
+    var dr = el('div', { class: 'gm-handrow' });
+    if (hand.domains.length) hand.domains.forEach(function (dt) { dr.innerHTML += tokChip(dt); });
+    else dr.appendChild(el('div', { style: 'opacity:.5;font-size:12px' }, 'none yet — grab one on the map'));
+    card.appendChild(dr);
+
+    // Constructs you carry (evolve your character) — from Ordeals / Locations / exchange
+    card.appendChild(el('div', { class: 'gm-zlbl', style: 'margin-top:6px' }, 'Constructs · your evolving character'));
+    var cr = el('div', { class: 'gm-handrow' });
+    if (hand.constructs && hand.constructs.length) hand.constructs.forEach(function (ct) { cr.innerHTML += tokChip(ct); });
+    else cr.appendChild(el('div', { style: 'opacity:.5;font-size:12px' }, 'none yet — complete an Ordeal or take one on the map'));
+    card.appendChild(cr);
+
+    // who you are becoming (potential-chain traits)
+    var protoTraits = (p.protagonistCard && p.protagonistCard.body && p.protagonistCard.body.traits || []).map(function (t) { return t.word || t; });
+    card.innerHTML += '<div class="gm-hold" style="margin-top:6px"><b>You are becoming:</b> ' + (protoTraits.length ? esc(protoTraits.join(', ')) : 'unmarked') + '</div>';
+    return card;
+  }
+
+  function logLine(r) {
+    if (r.skipped) return '(skipped)';
+    if (r.action === 'adapt') return 'gained ' + r.gained + ' ' + r.color;
+    if (r.action === 'explore') return r.grabbed ? ('grabbed ' + r.grabbed.token + ' (' + r.grabbed.group + ')') : ('found ' + ((r.revealed && r.revealed.word) || '?'));
+    if (r.action === 'interact') return 'bonded ' + (r.with || '?') + (r.layer ? ' · they grew ' + r.layer : '');
+    if (r.action === 'develop') return (r.ordeal || '') + ' (+' + (r.points || 0) + ') · ' + (r.kept || '') + (r.arc != null ? ' · arc ' + (r.arc >= 0 ? '+' : '') + r.arc : '');
+    if (r.action === 'trigger') return 'TRIGGERED ' + r.event + ' · +' + r.score.total + ' pts' + (r.transform ? ' · became ' + r.transform : '') + (r.won ? ' · YOU WIN' : '');
+    return '';
+  }
+
+  /* ======================================================================= *
+   * M4 phase 1 — the board shell (nine zones), wired to the M3 engine
+   * ======================================================================= */
+  function arcStr(p) { return p.arc.pos > 0 ? '◯'.repeat(Math.min(4, p.arc.pos)) : p.arc.pos < 0 ? '●'.repeat(Math.min(4, -p.arc.pos)) : '—'; }
+  function zone(cls, label, node) { var z = el('div', { class: 'gm-zone ' + cls }); z.appendChild(el('div', { class: 'gm-zlbl' }, label)); if (node) z.appendChild(node); return z; }
+
+  function renderBoard(Gg, p, sess) {
+    var b = el('div', { class: 'gm-board' });
+
+    // GAME STATS (top-left)
+    var gs = el('div'); gs.innerHTML = '<div style="font-size:13.5px"><b style="font-family:var(--serif,Georgia,serif)">Day ' + sess.day + '</b> · ' + esc(sess.act || '') + '</div>'
+      + (p.character ? '<div style="margin-top:3px;font-size:12px;opacity:.85">You are the <b>' + esc(p.character.archetype) + '</b> · <span style="color:' + (COLOR_HEX[p.character.color] || '#888') + '">◆' + p.character.color + '</span></div>' : '')
+      + '<div style="margin-top:5px;font-size:15px">' + potHTML(p) + '</div>'
+      + '<div style="margin-top:4px;font-size:12px;opacity:.8">Arc ' + arcStr(p) + '</div>';
+    b.appendChild(zone('z-gstat', 'Game', gs));
+
+    // MAP MARKET (top-center)
+    b.appendChild(zone('z-market', 'Map Market', renderMarket(Gg, p, sess)));
+
+    // SCORE TRACK (top-right)
+    var sc = el('div'); var s = Gg.scoreOf();
+    sc.innerHTML = '<div style="font-family:var(--serif,Georgia,serif);font-size:23px"><b>' + s + '</b><span style="opacity:.5;font-size:13px"> / 100</span></div>'
+      + '<div class="gm-track" style="margin-top:7px"><i style="width:' + Math.min(100, s) + '%"></i></div>'
+      + (s >= 100 ? '<div style="color:#2e7d32;margin-top:5px;font-size:12px">You win!</div>' : '');
+    b.appendChild(zone('z-score', 'Score Track', sc));
+
+    // CURRENT LOCATION / GOALS (left) — Events you're racing toward (stands in until Locations are entities)
+    b.appendChild(zone('z-loc', 'Events · Goals', renderGoals(Gg, p)));
+
+    // THE MAP (center) — interactive grid; character moves cell-to-cell
+    var mz = el('div', { class: 'gm-zone z-map' }); mz.appendChild(renderMap(Gg, p, sess)); b.appendChild(mz);
+
+    // OTHER LOCATION (right)
+    var ol = el('div'); ol.innerHTML = '<div style="opacity:.5;font-size:12px;line-height:1.5">Locations you discover appear here — stats keyed by icon. <i>(Locations become full entities in the next phase.)</i></div>'; b.appendChild(zone('z-oloc', 'Other Location', ol));
+
+    // TURN (bottom-left) — choose your day / act it out
+    var tn = el('div');
+    tn.appendChild(_ctx.phase !== 'act' ? renderPlan(Gg, p) : renderAct(Gg, p));
+    b.appendChild(zone('z-turn', 'Turn', tn));
+
+    // PLAYER AREA (bottom-center) — your Protagonist card, your active Emotion, your hand
+    var pl = el('div');
+    if (p.character && typeof Gg.protagonistModel === 'function') {
+      pl.appendChild(el('div', { class: 'gm-zlbl' }, 'Your Character'));
+      var pcw = el('div', { class: 'gm-pcard' }); pcw.innerHTML = gmCardHTML(Gg.protagonistModel(p)); pl.appendChild(pcw);
+    }
+    if (p.activeEmotion && typeof Gg.emotionModel === 'function') {
+      var ecw = el('div', { style: 'margin-top:8px' }); ecw.innerHTML = gmCardHTML(Gg.emotionModel(p.activeEmotion)); pl.appendChild(ecw);
+    }
+    pl.appendChild(renderHoldings(Gg, p));
+    b.appendChild(zone('z-player', 'Player Area', pl));
+
+    // OTHER PLAYER (bottom-right)
+    var op = el('div'); op.innerHTML = '<div style="opacity:.5;font-size:12px">Opponent’s open stats — <i>2-player, later.</i></div>'; b.appendChild(zone('z-oplayer', 'Opponent', op));
+
+    return b;
+  }
+
+  // MAP MARKET = the staging area for looking at new things: one of each card
+  // (the four main cards at identical size) + the Emotion card + a compact domains line.
+  function renderMarket(Gg, p, sess) {
+    var wrap = el('div');
+    var cards = el('div', { class: 'gm-mkt-cards' });
+    var models = (typeof Gg.sampleDeck === 'function') ? Gg.sampleDeck() : [];
+    models.forEach(function (m) { cards.appendChild(gmCardNode(m)); });
+    if (typeof Gg.sampleEmotion === 'function') { var e = el('div', { class: 'gm-galle' }); e.innerHTML = gmCardHTML(Gg.sampleEmotion()); cards.appendChild(e); }
+    wrap.appendChild(cards);
+    var line = el('div', { style: 'display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:6px;font-size:11px' });
+    var dm = (Gg.domainMarket() || []).map(function (t) { return '<span class="gm-tok"><span class="gm-sq" style="background:' + (COLOR_HEX[t.color] || '#888') + '"></span>' + esc(t.token) + '</span>'; }).join('') || '<span style="opacity:.5">—</span>';
+    line.innerHTML = '<span style="font-size:9px;opacity:.5;letter-spacing:.1em">DOMAINS TODAY</span> ' + dm;
+    wrap.appendChild(line);
+    return wrap;
+  }
+
+  // interactive grid map: cells are DOM, character on a cell, click an adjacent cell to move
+  function renderMap(Gg, p, sess) {
+    var wrap = el('div', { style: 'position:relative;text-align:center' });
+    var m = (typeof Gg.mapState === 'function') ? Gg.mapState() : null;
+    if (!m) { wrap.innerHTML = '<div style="opacity:.5">map…</div>'; return wrap; }
+    var grid = el('div', { class: 'gm-mapgrid', style: 'grid-template-columns:repeat(' + m.cols + ',46px);grid-template-rows:repeat(' + m.rows + ',46px)' });
+    var pp = m.playerPos;
+    var startLoc = (sess.setup && sess.setup.startLocation) ? sess.setup.startLocation.name : null;
+    var locSvg = (Gg.ICONS && Gg.ICONS.settingIcon && startLoc) ? Gg.ICONS.settingIcon(startLoc) : null;
+    var pawnSvg = (Gg.ICONS && Gg.ICONS.beingIcon && p.character) ? Gg.ICONS.beingIcon(p.character.type) : null;
+    for (var y = 0; y < m.rows; y++) {
+      for (var x = 0; x < m.cols; x++) {
+        var toks = m.tokens.filter(function (t) { return t.x === x && t.y === y; });
+        var here = (pp.x === x && pp.y === y);
+        var adj = (Math.abs(pp.x - x) + Math.abs(pp.y - y)) === 1;
+        var cell = el('div', { class: 'gm-cell' + (adj ? ' move' : '') });
+        var html = '';
+        toks.forEach(function (t) {
+          if (t.kind === 'setting') html += locSvg ? '<span class="gm-mic" title="' + esc(startLoc || 'start') + '">' + locSvg + '</span>' : '<span class="gm-mstar">★</span>';
+          else if (t.kind === 'domain') html += '<span class="gm-mtok" style="background:' + (COLOR_HEX[t.color] || '#888') + '" title="' + esc(t.group + ': ' + t.token) + '"></span>';
+          else if (t.kind === 'location') html += '<span class="gm-mloc">◈</span>';
+        });
+        cell.innerHTML = html;
+        if (here) { if (pawnSvg) { var yi = el('div', { class: 'gm-youic', title: 'you' }); yi.innerHTML = pawnSvg; cell.appendChild(yi); } else cell.appendChild(el('div', { class: 'gm-you' }, 'you')); }
+        if (adj) (function (cx, cy) { cell.addEventListener('click', function () { var r = Gg.moveTo(cx, cy); if (r && r.error) flash(r.error); renderGame(); }); })(x, y);
+        grid.appendChild(cell);
+      }
+    }
+    wrap.appendChild(grid);
+    var grab = (typeof Gg.grabbableHere === 'function') ? Gg.grabbableHere() : null;
+    var info = el('div', { style: 'font-size:10.5px;opacity:.6;margin-top:7px' });
+    info.innerHTML = 'Map · click an adjacent cell to move' + (grab ? ' · <b>you’re on ' + esc(grab.token) + '</b>' : '');
+    wrap.appendChild(info);
+    if (grab) {
+      var gb = el('button', { class: 'gm-btn go sm', style: 'margin-top:6px' });
+      gb.innerHTML = 'Grab ' + tokChip(grab) + ' into hand';
+      gb.addEventListener('click', function () { var r = Gg.grabHere(); if (r && r.error) { flash(r.error); } else { _ctx.log.push({ action: 'explore', grabbed: r.grabbed }); flash('Grabbed ' + r.grabbed.token + ' · ' + r.grabbed.group); } renderGame(); });
+      wrap.appendChild(gb);
+    }
+    var con = (typeof Gg.constructHere === 'function') ? Gg.constructHere() : null;
+    if (con) {
+      var tc = el('button', { class: 'gm-btn sm', style: 'margin-top:6px;margin-left:6px;background:#6a5a86' });
+      tc.innerHTML = 'Take ' + tokChip(con) + ' (construct)';
+      tc.addEventListener('click', function () { var r = Gg.takeConstructHere(); if (r && r.error) { flash(r.error); } else { _ctx.log.push({ action: 'develop', ordeal: 'Location', kept: 'Construct · ' + r.construct.word }); flash('Took construct · ' + r.construct.word); } renderGame(); });
+      wrap.appendChild(tc);
+    }
+    return wrap;
+  }
+
+  // (legacy static grid placeholder — kept for reference, no longer used)
+  function mapGrid(Gg, p, sess) {
+    var cols = 10, rows = 6, u = 60;
+    var W = cols * u, H = rows * u, svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="xMidYMid meet" style="position:absolute;inset:0;width:100%;height:100%">';
+    svg += '<rect x="0" y="0" width="' + W + '" height="' + H + '" fill="#ecebe7"/>';
+    for (var x = 0; x <= cols; x++) svg += '<line x1="' + (x * u) + '" y1="0" x2="' + (x * u) + '" y2="' + H + '" stroke="rgba(0,0,0,.09)" stroke-width="1"/>';
+    for (var y = 0; y <= rows; y++) svg += '<line x1="0" y1="' + (y * u) + '" x2="' + W + '" y2="' + (y * u) + '" stroke="rgba(0,0,0,.09)" stroke-width="1"/>';
+    function C(cx, cy) { return { x: cx * u + u / 2, y: cy * u + u / 2 }; }
+    // small dots at cell centres = the snap points
+    for (var cx = 0; cx < cols; cx++) for (var cy = 0; cy < rows; cy++) { var c = C(cx, cy); svg += '<circle cx="' + c.x + '" cy="' + c.y + '" r="1.4" fill="rgba(0,0,0,.12)"/>'; }
+    // a placed setting (star)
+    var st = C(3, 2); svg += '<text x="' + st.x + '" y="' + (st.y + 10) + '" text-anchor="middle" font-size="30" fill="rgba(0,0,0,.16)">★</text>';
+    // a Domain token on a cell (colour = possibility)
+    var dt = C(6, 3); svg += '<rect x="' + (dt.x - 17) + '" y="' + (dt.y - 17) + '" width="34" height="34" rx="7" fill="' + COLOR_HEX.R + '"/><text x="' + dt.x + '" y="' + (dt.y + 4) + '" text-anchor="middle" font-size="10" fill="#fff">Dom</text>';
+    // player character token
+    var pc = C(4, 4); svg += '<circle cx="' + pc.x + '" cy="' + pc.y + '" r="16" fill="' + GM_CHARCOAL + '" stroke="#e0a92e" stroke-width="2.5"/><text x="' + pc.x + '" y="' + (pc.y + 4) + '" text-anchor="middle" font-size="10" fill="#f0d9a0">you</text>';
+    svg += '</svg>';
+    svg += '<div style="position:absolute;left:9px;top:7px;font-size:9.5px;letter-spacing:.13em;text-transform:uppercase;opacity:.4">Map · grid</div>';
+    return svg;
+  }
+
+  /* ---- account gate: only the owner's signed-in account sees Game mode ---- */
+  var GAME_OWNERS = ['jeremyplante7@gmail.com'];
+  function gameAllowed() {
+    try {
+      var u = (typeof cloud !== 'undefined' && cloud) ? cloud.user : (window.cloud && window.cloud.user);
+      if (!u) return false;
+      return GAME_OWNERS.indexOf(String(u.email || '').toLowerCase().trim()) >= 0;
+    } catch (e) { return false; }
+  }
+  function removeGameUI() {
+    try {
+      document.querySelectorAll('.gm-injected').forEach(function (x) { if (x.parentNode) x.parentNode.removeChild(x); });
+      var p = $('gamePanel');
+      var wasGame = document.body.classList.contains('gamemode');
+      if (p) { p.classList.remove('show'); if (p.parentNode) p.parentNode.removeChild(p); }
+      if (wasGame) { document.body.classList.remove('gamemode'); try { if (localStorage.getItem('dystoria.uiMode') === 'game') localStorage.removeItem('dystoria.uiMode'); } catch (e) {} goModeSafe('write'); }
+    } catch (e) {}
+  }
+  function applyGate() { if (gameAllowed()) { injectCSS(); injectButtons(); wrapGoMode(); } else { removeGameUI(); } }
+
+  function boot() { applyGate(); }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
+  // re-check on auth changes (sign in / out is async) + a few delayed checks + a light periodic guard
+  try { if (typeof supa !== 'undefined' && supa && supa.auth && supa.auth.onAuthStateChange) supa.auth.onAuthStateChange(function () { setTimeout(applyGate, 80); }); } catch (e) {}
+  [400, 1200, 2500, 5000].forEach(function (ms) { setTimeout(applyGate, ms); });
+  setInterval(applyGate, 4000);
+  window.openGame = window.openGame || openGame; window.closeGame = window.closeGame || closeGame; window.__renderGame = renderGame;
+  try { console.log('[DystGame UI] M3 panel ready · account-gated'); } catch (e) {}
+})();
+
+</script>
+<script id="dyst-gamemode-polish">
+/* Dystoria — Game mode · bar polish (v.501). The July UI injects a plain "Game" pill after Wiki;
+   the app's mode bar has drawn icon medallions on every pill since v.341 (emberThemeJS decoBtn),
+   and marks the current mode with .on. This gives the Game pill the same medallion (a pawn) and
+   the .on state while body.gamemode is set — nothing else in the game is touched. */
+(function () {
+  'use strict';
+  var PAWN = 'M12 3.5a3 3 0 1 1 0 6a3 3 0 0 1 0-6zM9.5 9.5h5l1.2 4.5h-7.4zM8 19.5l1.5-5.5h5l1.5 5.5zM6.5 20.5h11';
+  function deco() {
+    if (document.body.classList.contains('eink')) return;
+    var b = document.getElementById('gameModeBtn'); if (!b || b.dataset.mpDone) return;
+    var txt = (b.textContent || '').trim();
+    var med = document.createElement('span'); med.className = 'mp-med';
+    med.innerHTML = '<svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="' + PAWN + '"/></svg>';
+    var lbl = document.createElement('span'); lbl.className = 'mp-lbl'; lbl.textContent = txt;
+    b.dataset.mpLabel = txt; b.textContent = ''; b.appendChild(med); b.appendChild(lbl); b.dataset.mpDone = '1';
+  }
+  function paint() {
+    var on = document.body.classList.contains('gamemode');
+    var g = document.getElementById('gameModeBtn'); if (g) g.classList.toggle('on', on);
+    if (on) ['notepadBtn', 'writeBtn', 'editBtn', 'readBtn', 'wikiModeBtn'].forEach(function (id) { var e = document.getElementById(id); if (e) e.classList.remove('on'); });
+  }
+  function tick() { deco(); paint(); }
+  new MutationObserver(tick).observe(document.body, { attributes: true, attributeFilter: ['class'] });
+  var bar = document.getElementById('padTools') || document.getElementById('deskbar');
+  if (bar) new MutationObserver(tick).observe(bar, { childList: true, subtree: true });
+  [600, 1500, 3000, 5200].forEach(function (ms) { setTimeout(tick, ms); });
+  tick();
+})();
+
 </script>
 </body></html>
