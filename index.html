@@ -3715,6 +3715,19 @@ body.eink .pt-rh-dev{color:#000}
   /* the mode guide sits centered in the mode bar — same understated italic as the Read-mode guide */
   #deskStatus{position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); max-width:min(680px, calc(100% - 320px)); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
     font-family:var(--serif); font-style:italic; font-size:17px; color:var(--ink); text-align:center; pointer-events:none; line-height:1.55}
+  /* The co-author line. The guide sentence it replaced was a quiet italic aside; this
+     is a statement about another person being in the room, so it is upright, sized at
+     the ladder's 15 rung, and full-strength ink rather than a whisper. */
+  #deskStatus.ds-presence{ font-family:var(--sans); font-style:normal; font-size:15px; color:var(--ink); letter-spacing:.01em; display:flex; align-items:center; gap:9px; }
+  #deskStatus .ds-peer{ display:inline-flex; align-items:center; gap:7px; min-width:0; }
+  #deskStatus .ds-av{ display:inline-flex; align-items:center; justify-content:center; width:24px; height:24px; flex:0 0 24px;
+    border-radius:50%; color:#fff; font-size:12px; font-weight:700; letter-spacing:.02em; line-height:1; }
+  #deskStatus .ds-say{ white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  #deskStatus .ds-say b{ font-weight:700; }
+  #deskStatus .ds-sep{ color:var(--ink-faint); }
+  #deskStatus .ds-more{ color:var(--ink-soft); font-size:13.5px; }
+  body.ember:not(.eink) #deskStatus.ds-presence{ color:#e8dfca; }
+  body.eink #deskStatus .ds-av{ background:#000 !important; }
   #sectionTitle{
     display:block; font-family:'Cormorant SC',var(--serif); font-size:26px; font-weight:600; letter-spacing:.04em; text-transform:none;
     border:none; background:transparent; outline:none; color:var(--ink); text-align:center;
@@ -12703,7 +12716,7 @@ function renderTimeline(){
 /* ---------------- add / remove without regenerating ---------------- */
 function addFromCategory(catId, subName){
   if (addsLocked()){ flashStatus('The session is underway \u2014 end it to add elements'); return; }
-  try{ if(!guideDone('map')){ markGuideDone('map'); var _ds=$('deskStatus'); if(_ds && !document.body.classList.contains('writing')) _ds.textContent=''; } }catch(e){}   // Map guide dismissed once an element is added
+  try{ if(!guideDone('map')) markGuideDone('map'); }catch(e){}   // v.486 — nothing to dismiss here any more; #deskStatus is the co-author line
   if (catId === 'plot'){
     const _pc = (typeof plotCount === 'function') ? plotCount() : (findPlotWord() ? 1 : 0);
     if (_pc >= 2){ plotLimitNotice(); return; }                       // two plots already → ask to remove one
@@ -23994,7 +24007,7 @@ function startWritingSession(fullscreen){
     // clear any generated prompt (prep board + full-screen surface) so the writing space is clean
     ['prepPromptText','sessionGoal','sessionNext'].forEach(function(id){ const el = $(id); if (el){ el.textContent = ''; try { el.innerHTML = ''; } catch(_){}; el.classList.remove('show','loading'); el._sig = ''; el._prev = []; } });
   }
-  try{ markGuideDone('write', $('wmGuide')); var _ds=$('deskStatus'); if(_ds) _ds.textContent=''; }catch(e){}   // Write guide dismissed once a session starts
+  try{ markGuideDone('write', $('wmGuide')); }catch(e){}   // v.486 — the in-panel write guide still dismisses; #deskStatus is no longer a guide
   if (!document.body.classList.contains('writing')) setWriting(true);
   if (window.prepSummarySync) window.prepSummarySync();   // leave the recap view; the prose editor is what the session writes into
   if (fullscreen) document.body.classList.add('insession');   // minimalist full-screen (only this path sets it)
@@ -24870,12 +24883,47 @@ function liveLeave(){
   liveRenderPresence();
   liveApplyProseLock();
 }
+/* The sentence the other writer sees: "<name> is <this>".
+   Computed HERE, on the device doing the thing, and sent with presence — because the
+   only machine that can say what someone is doing is the one they are sitting at.
+   Order matters: the most specific state wins, so a timed sprint beats "in the writing
+   room" and an open Explore beats the mode behind it. Falls back to 'here', which is
+   always true. */
+function liveMyAction(){
+  try {
+    if (liveAmSprinting()) return 'writing \u00a7' + ((state.frameIdx || 0) + 1);
+    if (document.getElementById('qaWin')) return 'exploring the story';
+    if (state.inkMode) return 'writing by hand';
+    if (document.body.classList.contains('insession')) return 'in a writing session';
+    if (document.body.classList.contains('writing')) return 'setting up a writing session';
+    { const e = document.getElementById('editMode'); if (e && e.classList.contains('show')) return 'revising the story'; }
+    { const r = document.getElementById('readMode'); if (r && r.classList.contains('show')) return 'reading the story through'; }
+    { const w = document.getElementById('wikiPanel'); if (w && w.classList.contains('show')) return 'reading the wiki'; }
+    if (document.body.classList.contains('np-open')) return 'writing notes';
+    let pv = ''; try { const on = document.querySelector('#planTabs .pl-segbtn.on'); pv = on ? (on.getAttribute('data-pv') || '') : ''; } catch(e){}
+    const PLAN = { map: 'laying out the map', narrative: 'working through the elements', plot: 'shaping the plot', bonds: 'drawing the bonds', arcs: 'tracking the arcs' };
+    if (PLAN[pv]) return PLAN[pv];
+    return 'planning';
+  } catch(e){ return 'here'; }
+}
 function liveTrack(){
   if (!live.channel || !live.on || !cloud.user) return;
-  try { live.channel.track({ id: cloud.user.id, name: myDisplayName(), frame: (state.frameIdx || 0), writing: liveAmSprinting() }); } catch (e){}
+  try {
+    live._lastAct = liveMyAction();
+    live.channel.track({ id: cloud.user.id, name: myDisplayName(), frame: (state.frameIdx || 0), writing: liveAmSprinting(), act: live._lastAct });
+  } catch (e){}
 }
 let liveTrackTimer = null;
 function liveScheduleTrack(){ clearTimeout(liveTrackTimer); liveTrackTimer = setTimeout(liveTrack, 250); }
+/* Moving between modes, views, drawers and the Explore window happens down a dozen
+   different paths, and hooking each one is a list that goes stale the first time a
+   new one is added. So POLL what I am doing and re-track only when the sentence
+   actually changes — the check is a handful of classList reads, and a presence
+   update that never fires costs nothing. (Realtime has the headroom: 864 messages
+   of 2,000,000 in the last billing period.) */
+setInterval(function(){
+  try { if (live.on && liveMyAction() !== live._lastAct) liveTrack(); } catch(e){}
+}, 3000);
 function liveRefreshPeers(){
   if (!live.channel) return;
   const peers = [];
@@ -24925,11 +24973,73 @@ function liveApplyProseLock(){
     if (_liveLockBanner) _liveLockBanner.style.display = 'none';
   }
 }
-function liveRenderPresence(){
-  // Presence tag intentionally hidden from the header; peer tracking still drives the
-  // focus-timer lock and the "shared by/with" note.
-  const el = $('tableInfo'); if (el) el.textContent = '';
+/* A stable colour per person, from their user id — so the same co-author is the same
+   colour on every device and across reloads, without storing anything. */
+function livePeerHue(id){
+  let h = 0; const t = String(id || '');
+  for (let i = 0; i < t.length; i++) h = (h * 31 + t.charCodeAt(i)) % 360;
+  return h;
 }
+function livePeerInitial(name){
+  const t = String(name || '').trim();
+  return t ? t[0].toUpperCase() : '?';
+}
+/* THE CO-AUTHOR LINE — the centre of the mode bar.
+   "<name> is <doing something>", with a disc carrying their initial. There is no
+   profile picture anywhere in Dystoria yet, so the disc IS the avatar; the moment
+   there is one, swap the disc for an <img> here and nothing else changes.
+
+   This slot used to hold the per-mode guide sentences ("Roll and gather elements…"),
+   which self-dismissed after first use and are retired as of v.486 [Jeremy]. Keeping
+   both would mean two writers for one element and a race between them; there is now
+   exactly one function that puts anything here. */
+function liveRenderPresence(){
+  const el = $('deskStatus'); if (!el) return;
+  const peers = (live.on && Array.isArray(live.peers)) ? live.peers : [];
+  if (!peers.length){ el.textContent = ''; el.classList.remove('ds-presence'); el.style.left = ''; el.style.maxWidth = ''; el.style.display = ''; return; }
+  const esc = v => String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const SHOW = 2;                       // the slot is one line — name the first two, count the rest
+  const one = p => {
+    const hue = livePeerHue(p.id);
+    return '<span class="ds-peer">'
+      + '<span class="ds-av" style="background:hsl(' + hue + ',42%,42%)">' + esc(livePeerInitial(p.name)) + '</span>'
+      + '<span class="ds-say"><b>' + esc(p.name || 'Someone') + '</b> is ' + esc(p.act || 'here') + '</span></span>';
+  };
+  let h = peers.slice(0, SHOW).map(one).join('<span class="ds-sep">\u00b7</span>');
+  if (peers.length > SHOW) h += '<span class="ds-sep">\u00b7</span><span class="ds-more">+' + (peers.length - SHOW) + ' more</span>';
+  el.innerHTML = h;
+  el.classList.add('ds-presence');
+  liveFitPresence(el);
+}
+/* Centre it in the SPACE THAT IS FREE, not in the bar.
+   `#deskStatus` is absolutely centred with `max-width: calc(100% - 320px)` — 160px
+   reserved each side, which was fine for the guide sentence in Ember and is not fine
+   in Classic, where the mode pills carry their labels inline and run past 450px. The
+   line went straight through them. A fixed reserve is a guess about a layout that
+   changes with the theme, so measure instead: find the real gap between the left-hand
+   controls and the right-hand ones, sit in the middle of THAT, and take no more room
+   than it offers. Below 220px of gap there is no honest way to show it, so don't. */
+function liveFitPresence(el){
+  try {
+    const bar = document.getElementById('deskbar'); if (!bar) return;
+    const bb = bar.getBoundingClientRect(); if (!bb.width) return;
+    const mid = bb.left + bb.width / 2;
+    let leftEdge = bb.left + 12, rightEdge = bb.right - 12;
+    Array.prototype.forEach.call(bar.children, function(c){
+      if (c === el || c.offsetParent === null) return;
+      const r = c.getBoundingClientRect();
+      if (!r.width || !r.height) return;
+      if (r.right <= mid) leftEdge = Math.max(leftEdge, r.right);
+      else if (r.left >= mid) rightEdge = Math.min(rightEdge, r.left);
+    });
+    const gap = rightEdge - leftEdge;
+    if (gap < 220){ el.style.display = 'none'; return; }
+    el.style.display = '';
+    el.style.left = ((leftEdge + rightEdge) / 2 - bb.left) + 'px';
+    el.style.maxWidth = (gap - 24) + 'px';
+  } catch(e){}
+}
+try { window.addEventListener('resize', function(){ try { const e = document.getElementById('deskStatus'); if (e && e.classList.contains('ds-presence')) liveFitPresence(e); } catch(_){ } }); } catch(e){}
 function liveBroadcast(force){
   if (!live.on || !live.channel || live.applying) return;
   const cur = liveDocStr();
@@ -29748,7 +29858,7 @@ function guideDone(k){ try{ return localStorage.getItem("dystoria.guideDone."+k)
 function markGuideDone(k,el){ try{ localStorage.setItem("dystoria.guideDone."+k,"1"); }catch(e){} if(el) el.style.display="none"; }
 // A mode's centre guide hides once the user does that mode's main action — or after onboarding (all at once).
 function markAllGuidesDone(){ ['map','write','refine','read','wiki'].forEach(function(k){ try{ localStorage.setItem("dystoria.guideDone."+k,"1"); }catch(e){} });
-  try{ var ds=$('deskStatus'); if(ds && (guideDone('map')||guideDone('write'))) ds.textContent=''; }catch(e){}
+  try{ liveRenderPresence(); }catch(e){}   // v.486 — repaint the co-author line rather than clearing a retired guide
   try{ var rg=$('rdGuide'); if(rg) rg.style.display='none'; var eg=$('edGuide'); if(eg) eg.style.display='none'; var wg=document.querySelector('.wk-guide'); if(wg) wg.style.display='none'; var wm=$('wmGuide'); if(wm) wm.style.display='none'; }catch(e){}
 }
 function setHeaderH(){ const hd=document.querySelector("header"); if(hd) document.documentElement.style.setProperty("--hH", hd.offsetHeight+"px"); }
@@ -38746,14 +38856,14 @@ function setWriting(on){
     if (!state.inkMode && document.body.classList.contains('insession')) $('editor').focus();   // only the full-screen session writes; no cursor in the prep board
     hideSessionGate();   // prior sessions show as locked .lk blocks in the editor (no overlay)
     updateEndBtn();      // set the Start/End button label + section-title lock for this entry
-    { const dg = $('deskStatus'); if (dg) dg.textContent = guideDone('write') ? '' : 'Select your story elements, guides & exercises to focus your writing session'; }
+    liveRenderPresence();   // v.486 — the mode-guide sentence is retired; this slot is the co-author line
   } else {
     hideSessionGate();
     if (typeof clearSessSel === 'function') clearSessSel();
     if (typeof cancelRedoIfPending === 'function') cancelRedoIfPending();   // abandoned a rewrite → restore the original
     renderNotepad();
     if (state.prompt) renderConstellation();
-    { const dg = $('deskStatus'); if (dg) dg.textContent = guideDone('map') ? '' : 'Roll and gather elements, shape the map, and note ideas as they come.'; }
+    liveRenderPresence();   // v.486 — retired guide sentence; the slot is the co-author line
   }
   if (typeof prepWizardSync === 'function') prepWizardSync();   // (re)enter or leave the mobile prep wizard
   { const ew = $('editorWrap'); if (ew && !document.body.classList.contains('insession')) ew.style.paddingTop = ''; }   // drop the phone in-session header offset when back in prep
@@ -39326,7 +39436,7 @@ function init(){
     const _target = _pillFor[state._bootModeTarget || ''] || 'notepadBtn';
     ['notepadBtn','writeBtn','editBtn','readBtn','wikiModeBtn'].forEach(id => { const e = $(id); if (e) e.classList.toggle('on', id === _target); }); }
   state.npActive = 'general'; renderNotepad(); renderNpElements();   // start in Notepad mode
-  { const dg = $('deskStatus'); if (dg) dg.textContent = guideDone('map') ? '' : 'Roll and gather elements, shape the map, and note ideas as they come.'; }   // Think-mode guide on load
+  liveRenderPresence();   // v.486 — retired guide sentence; the slot is the co-author line
   (function(){
     const bt = $('brandTitle');
     const blurb = 'About Dystoria \u2014 what it is, and where it came from.';
@@ -51078,8 +51188,14 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.485';
+  var APP_VERSION = '2026.07.20.486';
   var APP_CHANGELOG = [
+    { v:'2026.07.20.486', date:'August 23, 2026', notes:[
+      '**When someone else is in the story with you, the mode bar says so \u2014 and says what they are doing.** \u201cAria is writing \u00a73.\u201d \u201cBo is drawing the bonds.\u201d It sits in the middle of the mode bar with a coloured disc carrying their initial, and it changes as they move around. [Jeremy]',
+      '**The mode guide sentences that used to sit there are gone.** They were first-run hints that dismissed themselves after one use; the space is better spent on the person you are working with. Every other guide \u2014 in Write, Revise, Review and the Wiki \u2014 is untouched.',
+      'Writing a timed sprint, revising, reading, handwriting, laying out the map, drawing the bonds, exploring \u2014 each reads as itself. Two co-authors both show; more than two show the first two and a count.',
+      'And nothing at all appears when you are working alone, which is nearly always.'
+    ]},
     { v:'2026.07.20.485', date:'August 23, 2026', notes:[
       '**Explore conversations are kept now \u2014 there is an Explores tab in the Notepad.** Ending a conversation still files what you said into notes, elements and traits. What it did NOT do was keep the conversation: the transcript was read once, extracted from, and thrown away. So if something you said was missed, or filed under the wrong element, it was gone. Every conversation is now saved whole. [Jeremy]',
       '**Open one and you see it as it happened** \u2014 every question and every answer, in order, including the ones you skipped, because what you were asked and chose not to answer is part of the record too.',
@@ -60905,6 +61021,7 @@ body:not(.eink) #groupCreator .el-descgo:hover, body:not(.eink) #eventCreator .e
 
   /* --- (3) every mode's guide line gets the same illuminated flourish:
          a small diamond on either side of the sentence --- */
+  #deskStatus.ds-presence::before, #deskStatus.ds-presence::after{ content:none !important; }   /* the illuminated diamonds framed a guide sentence; they do not frame a person */
   body.ember:not(.eink) #deskStatus:not(:empty)::before, body.ember:not(.eink) #deskStatus:not(:empty)::after,
   body.ember:not(.eink) #editMode .ed-guide::before,    body.ember:not(.eink) #editMode .ed-guide::after,
   body.ember:not(.eink) #readMode .rd-guide::before,    body.ember:not(.eink) #readMode .rd-guide::after,
