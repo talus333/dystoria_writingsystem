@@ -801,6 +801,13 @@ function generate(seed, aspect){
   })();
 
   const bank=BANK.map(b=>({w:b.w,t:b.t,used:false,demote:false}));
+  /* SIZE vs EVENNESS — measured, and it is not close. Every feature word reserves a footprint the
+     interlocking mesh cannot cross, and the mesh is what makes the field dense. Raising the cap from
+     30 to 42 took thin buckets from 32 to 74; promoting long words to 2x took it to 90; making a
+     dozen short words 3x took it to 72. Thirty is what this field carries. The dial is left here at
+     zero with the numbers written down, so nobody re-runs the experiment: to get big words AND an
+     even field the placer must stop reserving exclusion zones around them — a rewrite, not a knob. */
+  for(const e of bank){ if(e.t===1 && e.w.length>=8 && rng()<0.00) e.t=2; }
   for(let i=bank.length-1;i>0;i--){const j=(rng()*(i+1))|0;[bank[i],bank[j]]=[bank[j],bank[i]];}
   bank.sort((a,b)=>(b.w.length-a.w.length)+(rng()-.5)*3);
 
@@ -843,17 +850,23 @@ function generate(seed, aspect){
   const covGet=(x,y)=>cov.get(covKey(x,y))||0;
   const bump=(w,x,y,dir)=>{const dx=dir==='H'?1:0,dy=dir==='V'?1:0;for(let i=0;i<w.length;i++){const kk=covKey(x+dx*i,y+dy*i);cov.set(kk,(cov.get(kk)||0)+1);}};
 
-  // phase 1: a FEW big feature words (varied direction), reserved footprints
+  // phase 1: the big words — many of them now, spread by coverage rather than by luck
+  const bumpT=(w,x,y,dir,k)=>{const dx=dir==='H'?1:0,dy=dir==='V'?1:0;
+    for(let i=0;i<w.length;i++){const kk=covKey(x+dx*i,y+dy*i);cov.set(kk,(cov.get(kk)||0)+k*k);}};
   let featCount=0; const FEAT_CAP=30;
   function tryFeature(e){
-    for(let att=0;att<40;att++){
+    let best=null, bs=-1e9;
+    for(let att=0;att<110;att++){
       const dir=rng()<0.5?'H':'V';
-      const x=Math.round((rng()*2-1)*TX*0.78), y=Math.round((rng()*2-1)*TY*0.78);
+      const x=Math.round((rng()*2-1)*TX*0.88), y=Math.round((rng()*2-1)*TY*0.88);
       const fp=footprintCells(x,y,dir,e.w.length,e.t);
       let inR=true; for(const c of fp){ if(Math.abs(c[0])>TX*1.04||Math.abs(c[1])>TY*1.04){inR=false;break;} }
       if(!inR) continue;
-      if(areaFree(fp)){ commit(e.w,x,y,dir,e.t); e.used=true; return true; }
+      if(!areaFree(fp)) continue;
+      const sc=-covGet(x,y)*3.2+rng()*0.8;      // put the next big word where the field is thinnest
+      if(sc>bs){ bs=sc; best={x,y,dir}; }
     }
+    if(best){ commit(e.w,best.x,best.y,best.dir,e.t); bumpT(e.w,best.x,best.y,best.dir,e.t); e.used=true; return true; }
     return false;
   }
   for(const e of bank){ if(e.t===3&&!e.used&&featCount<FEAT_CAP){ if(tryFeature(e))featCount++; else e.demote=true; } }
@@ -871,7 +884,7 @@ function generate(seed, aspect){
       }
     }
     const cx=x+dx*(word.length/2), cy=y+dy*(word.length/2);
-    let sc=c*12 - par*1.1 - covGet(cx,cy)*1.4 + rng()*2.0;   // reward crossings, punish parallel runs
+    let sc=c*12 - par*1.1 - covGet(cx,cy)*2.2 + rng()*2.0;   // reward crossings, punish parallel runs AND crowding
     if(Math.abs(cx)>TX*1.08||Math.abs(cy)>TY*1.08) sc-=10;
     return sc;
   }
@@ -906,21 +919,31 @@ function generate(seed, aspect){
       if(fits1(e.w,x,y,dir)>=0){ commit(e.w,x,y,dir,1); bump(e.w,x,y,dir); e.used=true; sIdx++; break; }
     }
   }
-  for(let pass=0;pass<6;pass++){ let any=false;
-    for(const e of mesh){ if(e.used)continue; if(placeByCross(e)) any=true; }
-    if(!any) break;
-  }
-  // fill dead zones: drop leftover words into the emptiest spots, then re-interlock onto them
-  for(const e of mesh){
-    if(e.used) continue; let best=null,bs=-1;
-    for(let t=0;t<50;t++){
-      const gx=Math.round((rng()*2-1)*TX*0.95), gy=Math.round((rng()*2-1)*TY*0.95);
-      const dir=rng()<0.5?'H':'V', dx=dir==='H'?1:0, dy=dir==='V'?1:0;
-      const x=gx-dx*((e.w.length/2)|0), y=gy-dy*((e.w.length/2)|0);
-      if(fits1(e.w,x,y,dir)>=0){ const sc=-covGet(gx,gy)*3+rng(); if(sc>bs){bs=sc;best={x,y,dir};} }
+  function seedInHoles(limit){                       // drop words where the field is emptiest
+    let n=0;
+    for(const e of mesh){
+      if(e.used) continue; if(n>=limit) break;
+      let best=null,bs=-1e9;
+      for(let q=0;q<110;q++){
+        const gx=Math.round((rng()*2-1)*TX*0.95), gy=Math.round((rng()*2-1)*TY*0.95);
+        const dir=rng()<0.5?'H':'V', dx=dir==='H'?1:0, dy=dir==='V'?1:0;
+        const x=gx-dx*((e.w.length/2)|0), y=gy-dy*((e.w.length/2)|0);
+        if(fits1(e.w,x,y,dir)>=0){ const sc=-covGet(gx,gy)*3.5+rng(); if(sc>bs){bs=sc;best={x,y,dir};} }
+      }
+      if(best){ commit(e.w,best.x,best.y,best.dir,1); bump(e.w,best.x,best.y,best.dir); e.used=true; n++; }
     }
-    if(best){ commit(e.w,best.x,best.y,best.dir,1); bump(e.w,best.x,best.y,best.dir); e.used=true; }
+    return n;
   }
+  for(let round=0;round<5;round++){
+    for(let pass=0;pass<2;pass++){ let any=false;
+      for(const e of mesh){ if(e.used)continue; if(placeByCross(e)) any=true; }
+      if(!any) break;
+    }
+    let left=0; for(const e of mesh) if(!e.used) left++;
+    if(!left) break;
+    seedInHoles(Math.max(6, Math.ceil(left*0.35)));   // and then interlock onto those next round
+  }
+  seedInHoles(1e9);
   for(let pass=0;pass<3;pass++){ let any=false;
     for(const e of mesh){ if(e.used)continue; if(placeByCross(e)) any=true; }
     if(!any) break;
