@@ -996,12 +996,14 @@ function orthoPath(pts){
    The maze used to be ~5,000 absolutely-positioned <span>s, which is why it could only shimmer:
    five thousand style writes a frame is all a DOM maze can afford (it measured 7 fps here). On a
    canvas every letter can answer to a moving point each frame — which is what the lantern, the
-   bow-wave and the lit path all need. Letters are drawn from a pre-rendered glyph atlas (one per
+   bow-wave and the thread's own vein of light all need. Letters are drawn from a pre-rendered glyph atlas (one per
    tier, in cream and in gold) so a frame is ~N drawImage calls with only globalAlpha changing:
    no per-letter fillStyle parsing, no font switching.
    generate() and the ring around the wordmark above are untouched; the <svg id="thread"> stays as
    geometry only — its corner-rounded path is measured once per build into a polyline.
-   Plan: claude/Dystoria_Landing_Hero_Plan.md — items 1 (lit path), 2 (bow-wave), 3 (arrival ring),
+   Plan: claude/Dystoria_Landing_Hero_Plan.md — items 1 (the lit route, carried by the THREAD: Jeremy,
+   2026-08-27, "don't leave the hilighted path of letters the thread touched as it interferes with the
+   thread through the labyrinth" — so the words flare and settle, and only the vein stays), 2 (bow-wave), 3 (arrival ring),
    4 (the thread starts where the visitor stands), 6 (the lantern). */
 const lab=document.getElementById('labyrinth');
 const svg=document.getElementById('thread');
@@ -1012,7 +1014,7 @@ const REDUCED=!!(window.matchMedia&&window.matchMedia('(prefers-reduced-motion: 
 
 let CELL=26; const TIER_SCALE={1:1,2:2,3:3};
 let layout=null, originX=0, originY=0;
-let LET=[];                    // one record per VISIBLE letter: {x,y,tier,gi,w,lit,litT,a}
+let LET=[];                    // one record per VISIBLE letter: {x,y,tier,gi,w,g,a}
 let WORDS=[];                  // shimmer parameters, one per placed word
 let ATLAS=[null,null,null,null];   // ATLAS[tier] = {cream, gold, box, boxD, index}
 let PATH=null, PSTEP=1, threadLen=0;
@@ -1025,7 +1027,6 @@ const RING_S   = 1.30;   // the arrival ring's expansion
 const ENTER_MS = 950;    // ring + wordmark sheen, THEN the copy
 const LANT_R   = 165;    // the lantern's reach, px
 const WAVE_R   = 170;    // the bow-wave's reach, px
-const LIT_K    = 2.7;    // in CELLs — how close to the thread a letter has to be to catch light
 
 let _pms=0;
 let threadGo=false, threadT0=null, rush=false, rushT0=0, rushFrom=0;
@@ -1079,7 +1080,7 @@ function build(seed){
       const x = p.dir==='V' ? cxpx : (cxpx-totalA/2 + box*(i+0.5));
       const y = p.dir==='V' ? (cypx-totalA/2 + box*(i+0.5)) : cypx;
       if(x<-box||x>W+box||y<-box||y>H+box) continue;      // the field runs off-screen; only paint what shows
-      LET.push({x:x, y:y, tier:p.tier, gi:at.index[p.w[i]], w:w, lit:false, litT:0, a:0});
+      LET.push({x:x, y:y, tier:p.tier, gi:at.index[p.w[i]], w:w, g:0, a:0});
     }
   }
 
@@ -1128,8 +1129,9 @@ function pointAt(s, out){
 
 /* ---------- the paint ----------
    A letter's brightness is one number: its word's shimmer, plus the lantern under the pointer,
-   plus the thread's bow-wave, plus the arrival ring — and once the copy is in, everything dims
-   EXCEPT the letters the thread lit, which stay as the solved route through the maze. */
+   plus the thread's bow-wave, plus the arrival ring. Every one of those is TRANSIENT — a word
+   flares as the thread passes and settles back. The solved route is carried by the thread's vein
+   alone, so the one gold line through the maze stays the one gold line through the maze. */
 function paint(ts, t){
   ctx.setTransform(DPR,0,0,DPR,0,0);
   ctx.clearRect(0,0,VW,VH);
@@ -1153,12 +1155,11 @@ function paint(ts, t){
     const rt=(ts-ringT)/1000/RING_S;
     if(rt<1.3){ ringR=Math.pow(rt,0.72)*Math.hypot(VW,VH)*0.62; ringS=Math.max(0,1-rt/1.3); }
   }
-  let dimA=1, litA=1;
-  if(enterT!==null){ const e=Math.min(1,(ts-enterT)/1100), k=e*e*(3-2*e); dimA=1-k*0.86; litA=1-k*0.26; }
+  let dimA=1;
+  if(enterT!==null){ const e=Math.min(1,(ts-enterT)/1100), k=e*e*(3-2*e); dimA=1-k*0.86; }
 
   const lant=lantA, LR2=2*LANT_R*LANT_R, WR2=2*WAVE_R*WAVE_R;
   const ringW=CELL*3.4, RW2=2*ringW*ringW;
-  const litR2=(CELL*LIT_K)*(CELL*LIT_K);
 
   /* Ambient shimmer and the lights are kept APART on purpose. If the lantern just added into the
      same 0..1 shimmer number it would clip against letters that are already near the top of their
@@ -1170,16 +1171,13 @@ function paint(ts, t){
     if(lant>0.004){ const dx=L.x-lantX, dy=L.y-lantY, d2=dx*dx+dy*dy;
       if(d2<LR2*2.4) boost+=lant*0.95*Math.exp(-d2/LR2); }
     if(headOn){ const dx=L.x-hx, dy=L.y-hy, d2=dx*dx+dy*dy;
-      if(d2<WR2*2.4) boost+=wave*1.05*Math.exp(-d2/WR2);
-      if(!L.lit&&d2<litR2){ L.lit=true; L.litT=ts; }          // the thread lights what it passes — and it stays lit
-    }
-    if(L.lit){ const age=(ts-L.litT)/560; if(age<1) boost+=0.75*(1-age); boost+=0.26; }
+      if(d2<WR2*2.4) boost+=wave*1.05*Math.exp(-d2/WR2); }
     if(ringR>0){ const dx=L.x-originX, dy=L.y-originY, d=Math.sqrt(dx*dx+dy*dy)-ringR;
       if(d>-ringW*3&&d<ringW*3) boost+=ringS*1.65*Math.exp(-d*d/RW2); }
     if(v<0)v=0; else if(v>1)v=1;
     let a=0.26+v*0.60+boost*0.92; if(a>1)a=1;
-    L.g=(L.lit||boost>0.26)?1:0;
-    L.a=a*(L.lit?litA:dimA);
+    L.g=boost>0.26?1:0;          // gold only while a light is ON it — every flare settles back to cream
+    L.a=a*dimA;
   }
 
   // paint: atlas by tier, cream then gold; only globalAlpha moves between letters
@@ -1287,17 +1285,7 @@ function staticFrame(){                        // prefers-reduced-motion: the so
   for(let i=0;i<WORDS.length;i++) WORDS[i].v=WORDS[i].base+WORDS[i].amp*0.5;
   // put the head at the end of the walk so the vein draws its whole length in this one frame
   if(threadLen){ threadGo=true; rush=false; threadT0=performance.now()-(TRAVEL_S*1000+600); }
-  lightWholeRoute(-1e7);
   paint(performance.now(),0);
-}
-/* light every letter along the route at once — used by the reduced-motion still, and by the rush
-   home, where the head moves too far per frame for the walk's own latch to catch them all */
-function lightWholeRoute(when){
-  if(!PATH||!threadLen) return;
-  const st=Math.max(CELL*0.4,6), r2=(CELL*LIT_K)*(CELL*LIT_K);
-  for(let s=0;s<=threadLen;s+=st){ if(!pointAt(s,_pt)) break; const hx=_pt[0], hy=_pt[1];
-    for(let i=0;i<LET.length;i++){ const L=LET[i]; if(L.lit) continue;
-      const dx=L.x-hx, dy=L.y-hy; if(dx*dx+dy*dy<r2){ L.lit=true; L.litT=when; } } }
 }
 function wake(){ if(frozen){ frozen=false; requestAnimationFrame(frame); } }
 
@@ -1331,7 +1319,7 @@ let rzT;
 window.addEventListener('resize',function(){ clearTimeout(rzT); rzT=setTimeout(function(){
   const wasIn=(enterT!==null);
   build(SEED);
-  if(REDUCED||wasIn) staticFrame();      // rebuilding loses the lit flags; re-light the whole route
+  if(REDUCED||wasIn) staticFrame();      // no loop is running in either state — repaint by hand
   else wake();
 },160); });
 
@@ -1352,21 +1340,19 @@ window.__labEnter=function(){
   if(REDUCED){ enterT=performance.now()-2000; staticFrame(); return; }   // no loop is running — repaint the settled state by hand
   const now=performance.now();
   if(!arrived&&threadLen){
-    // The visitor scrolled before the walk finished. Light the whole route NOW — at sprint speed the
-    // head jumps too far per frame to catch letters one by one — and send the head home over a time
-    // that scales with what is left, so an early scroll is a sweep and a late one is a step.
+    // The visitor scrolled before the walk finished: send the head home over a time that scales with
+    // what is left, so an early scroll is a sweep of the vein and a late one is a step.
     if(!threadGo){ threadGo=true; threadT0=now; }
     rushFrom=Math.max(0,threadHead());
     const remain=1-rushFrom/threadLen;
     RUSH_MS=450+remain*950;
-    lightWholeRoute(now);
     rushT0=now; rush=true;
   }
   enterT=now;
 };
-window.__labDbg=function(){ let lit=0; for(let i=0;i<LET.length;i++) if(LET[i].lit) lit++;
+window.__labDbg=function(){
   return {cells:(layout&&layout.corridorCells||[]).length, len:Math.round(threadLen), head:Math.round(threadHead()),
-          lit:lit, letters:LET.length, words:WORDS.length, cell:Math.round(CELL*10)/10,
+          letters:LET.length, words:WORDS.length, cell:Math.round(CELL*10)/10,
           paintMs:Math.round(_pms*100)/100, lantA:Math.round(lantA*100)/100, lantX:Math.round(lantX), lantY:Math.round(lantY), go:threadGo, arrived:arrived, entered:enterT!==null, frozen:frozen}; };
 
 // intro reveal: on the labyrinth cover, the FIRST scroll gesture only reveals the hero — the page
