@@ -1019,7 +1019,8 @@ let PATH=null, PSTEP=1, threadLen=0;
 let VW=0, VH=0, DPR=1;
 
 /* the whole intro on one clock, so every duration is legible in one place */
-const TRAVEL_S = 7.4;    // the thread's walk (it used to be ~40s — an ambient drift nobody waited out)
+const TRAVEL_S = 22.0;   // the thread's walk — slow enough to watch it think its way through
+let   RUSH_MS  = 900;    // ...and if the visitor scrolls first, the rest of the walk, scaled to what is left
 const RING_S   = 1.30;   // the arrival ring's expansion
 const ENTER_MS = 950;    // ring + wordmark sheen, THEN the copy
 const LANT_R   = 165;    // the lantern's reach, px
@@ -1027,7 +1028,7 @@ const WAVE_R   = 170;    // the bow-wave's reach, px
 const LIT_K    = 2.7;    // in CELLs — how close to the thread a letter has to be to catch light
 
 let _pms=0;
-let threadGo=false, threadT0=null, rush=false;
+let threadGo=false, threadT0=null, rush=false, rushT0=0, rushFrom=0;
 let arrived=false, ringT=null, enterT=null, frozen=false;
 let lantX=0, lantY=0, lantA=0, lantTarget=0;
 
@@ -1257,8 +1258,14 @@ function drawThread(ts){
 /* how far along the path the head is — the walk, or a rush home when the visitor skips ahead */
 function threadHead(){
   if(threadT0===null||!threadLen) return -1;
+  if(rush){                                   // a fixed sprint home from wherever it had got to, so the
+    const rt=(performance.now()-rushT0)/RUSH_MS;        // scaled to the distance left, not the walk's speed
+    if(rt>=1) return threadLen;
+    const k=rt*rt*(3-2*rt);
+    return rushFrom+(threadLen-rushFrom)*k;
+  }
   const tt=(performance.now()-threadT0)/1000;
-  const head=tt*(threadLen/TRAVEL_S)*(rush?6:1);
+  const head=tt*(threadLen/TRAVEL_S);
   return head<threadLen?head:threadLen;
 }
 
@@ -1279,12 +1286,18 @@ function frame(ts){
 function staticFrame(){                        // prefers-reduced-motion: the solved path, no motion
   for(let i=0;i<WORDS.length;i++) WORDS[i].v=WORDS[i].base+WORDS[i].amp*0.5;
   // put the head at the end of the walk so the vein draws its whole length in this one frame
-  if(threadLen){ threadGo=true; threadT0=performance.now()-(TRAVEL_S*1000+600); }
-  if(PATH&&threadLen){ const st=Math.max(CELL*0.4,6), r2=(CELL*LIT_K)*(CELL*LIT_K);
-    for(let s=0;s<=threadLen;s+=st){ if(!pointAt(s,_pt)) break; const hx=_pt[0], hy=_pt[1];
-      for(let i=0;i<LET.length;i++){ const L=LET[i]; if(L.lit) continue;
-        const dx=L.x-hx, dy=L.y-hy; if(dx*dx+dy*dy<r2){ L.lit=true; L.litT=-1e7; } } } }
+  if(threadLen){ threadGo=true; rush=false; threadT0=performance.now()-(TRAVEL_S*1000+600); }
+  lightWholeRoute(-1e7);
   paint(performance.now(),0);
+}
+/* light every letter along the route at once — used by the reduced-motion still, and by the rush
+   home, where the head moves too far per frame for the walk's own latch to catch them all */
+function lightWholeRoute(when){
+  if(!PATH||!threadLen) return;
+  const st=Math.max(CELL*0.4,6), r2=(CELL*LIT_K)*(CELL*LIT_K);
+  for(let s=0;s<=threadLen;s+=st){ if(!pointAt(s,_pt)) break; const hx=_pt[0], hy=_pt[1];
+    for(let i=0;i<LET.length;i++){ const L=LET[i]; if(L.lit) continue;
+      const dx=L.x-hx, dy=L.y-hy; if(dx*dx+dy*dy<r2){ L.lit=true; L.litT=when; } } }
 }
 function wake(){ if(frozen){ frozen=false; requestAnimationFrame(frame); } }
 
@@ -1337,7 +1350,19 @@ window.__labEnter=function(){
   if(enterT!==null) return;
   lantTarget=0;
   if(REDUCED){ enterT=performance.now()-2000; staticFrame(); return; }   // no loop is running — repaint the settled state by hand
-  enterT=performance.now(); if(!arrived) rush=true;
+  const now=performance.now();
+  if(!arrived&&threadLen){
+    // The visitor scrolled before the walk finished. Light the whole route NOW — at sprint speed the
+    // head jumps too far per frame to catch letters one by one — and send the head home over a time
+    // that scales with what is left, so an early scroll is a sweep and a late one is a step.
+    if(!threadGo){ threadGo=true; threadT0=now; }
+    rushFrom=Math.max(0,threadHead());
+    const remain=1-rushFrom/threadLen;
+    RUSH_MS=450+remain*950;
+    lightWholeRoute(now);
+    rushT0=now; rush=true;
+  }
+  enterT=now;
 };
 window.__labDbg=function(){ let lit=0; for(let i=0;i<LET.length;i++) if(LET[i].lit) lit++;
   return {cells:(layout&&layout.corridorCells||[]).length, len:Math.round(threadLen), head:Math.round(threadHead()),
