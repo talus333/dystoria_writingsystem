@@ -758,45 +758,33 @@ function generate(seed, aspect){
   (function(){
     const add=(x,y)=>{const k=key(x,y);if(!corridorSet.has(k)){corridorSet.add(k);corridorCells.push([x,y]);occ.add(k);}};
     const RX=coreX+2, RYr=coreY+2, xo=Math.round(coreX*0.10);   // ring just outside the room; xo ≈ the "o" column
-    // Enter from the BOTTOM CENTRE — the thread starts where the visitor stands — then WANDER
-    // the labyrinth through three far waypoints before closing on the wordmark. The walk is the
-    // show now (it lights what it passes), so it has to actually cross the maze.
-    let x=Math.round((rng()*2-1)*TX*0.12), y=TY; add(x,y);
-    const side=rng()<0.5?-1:1;
-    const route=[
-      [Math.round(side*TX*(0.55+rng()*0.28)), Math.round(TY*(0.30+rng()*0.26))],
-      [Math.round(-side*TX*(0.48+rng()*0.32)), Math.round(-TY*(0.18+rng()*0.30))],
-      [Math.round(side*TX*(0.30+rng()*0.22)), Math.round(-TY*(0.52+rng()*0.28))],
-      [-RX, -RYr]
-    ];
-    let guard=0;
-    for(const [tgtX,tgtY] of route){
-      while((x!==tgtX||y!==tgtY)&&guard++<20000){
-        const dxs=Math.sign(tgtX-x), dys=Math.sign(tgtY-y);
-        if(rng()<0.5 && dxs!==0) x+=dxs;
-        else if(dys!==0){ y+=(rng()<0.62?dys:(rng()<0.5?1:-1)); if(y>TY)y=TY; if(y<-TY)y=-TY; }
-        else if(dxs!==0) x+=dxs;
-        if(rng()<0.10){ y+=(rng()<0.5?1:-1); if(y>TY)y=TY; if(y<-TY)y=-TY; }
-        if(inRoom(x,y)) y = (y<0?-RYr:RYr);      // never wander in under the wordmark
-        add(x,y);
-      }
-    }
-    // loop around the wordmark: an organic ellipse that circles ~1.5x — over the top, past Dystoria,
-    // down & around, back up, then tucks in UNDER the "o". radius wobbles OUTWARD only so it never
-    // crosses the glyphs, and the staircase between samples reads as a woven, wandering thread.
-    const ax=RX, ay=RYr;
-    const start=Math.PI*1.25, sweep=Math.PI*3.0, steps=26;   // begin at top-left, 1.5 turns clockwise
+    // Enter from the BOTTOM CENTRE — the thread starts where the visitor stands — and then take
+    // the LONG way home: a wide circuit of the labyrinth that spirals inward over three turns, so
+    // the centre is somewhere the thread ARRIVES at rather than somewhere it starts.
+    let x=Math.round((rng()*2-1)*TX*0.10), y=TY; add(x,y);
+
+    const spinDir=rng()<0.5?1:-1;                       // which way round the labyrinth, per seed
+    const ph1=rng()*6.283, ph2=rng()*6.283;             // two slow harmonics so the turns are not concentric
+    const oax=TX*0.86, oay=TY*0.84;                     // the outer berth — out near the edges
+    const turns=3.0, steps=Math.max(120, Math.round(turns*52));
+    const th0=Math.PI/2;                                // begin at the bottom, where the visitor came in
     const wp=[];
     for(let i=1;i<=steps;i++){
-      const th=start+sweep*(i/steps), jr=1.0+rng()*0.20;      // outward wobble keeps ring clear of the room
-      wp.push([Math.round(Math.cos(th)*ax*jr), Math.round(Math.sin(th)*ay*jr)]);
+      const t=i/steps, k=Math.pow(t,1.85);              // stay wide, THEN tighten — a spiral, not a ramp
+      const rx=oax+(RX-oax)*k, ry=oay+(RYr-oay)*k;
+      const th=th0+spinDir*turns*2*Math.PI*t;
+      const jr=1.0+0.115*Math.sin(th*2.7+ph1)+0.06*Math.sin(th*1.3+ph2)+(rng()*2-1)*0.045;
+      let wx=Math.round(Math.cos(th)*rx*jr), wy=Math.round(Math.sin(th)*ry*jr);
+      if(wx>TX)wx=TX; if(wx<-TX)wx=-TX; if(wy>TY)wy=TY; if(wy<-TY)wy=-TY;
+      wp.push([wx,wy]);
     }
-    wp.push([xo,RYr]);                                        // final approach: in under the "o"
+    wp.push([xo,RYr]);                                  // final approach: in under the "o"
     let px=x,py=y;
     for(const [wx,wy] of wp){
-      while(px!==wx||py!==wy){
+      let g2=0;
+      while((px!==wx||py!==wy)&&g2++<600){
         if(px!==wx && (py===wy || rng()<0.5)) px+=Math.sign(wx-px); else py+=Math.sign(wy-py);
-        if(!inRoom(px,py)) add(px,py);                        // never lay the thread over the wordmark
+        if(!inRoom(px,py)) add(px,py);                  // never lay the thread over the wordmark
       }
     }
   })();
@@ -1021,7 +1009,8 @@ let PATH=null, PSTEP=1, threadLen=0;
 let VW=0, VH=0, DPR=1;
 
 /* the whole intro on one clock, so every duration is legible in one place */
-const TRAVEL_S = 22.0;   // the thread's walk — slow enough to watch it think its way through
+const WALK_PXS = 215;    // the thread's pace, px/s — a duration would speed up whenever the path grew
+let   TRAVEL_S = 22.0;   // ...so the walk's length is derived from the route in buildThread()
 let   RUSH_MS  = 900;    // ...and if the visitor scrolls first, the rest of the walk, scaled to what is left
 const RING_S   = 1.30;   // the arrival ring's expansion
 const ENTER_MS = 950;    // ring + wordmark sheen, THEN the copy
@@ -1111,6 +1100,9 @@ function buildThread(W,H){
   p.setAttribute('d', orthoPath(pts)); p.setAttribute('fill','none'); p.setAttribute('stroke','none');
   svg.appendChild(p);
   threadLen=p.getTotalLength();
+  // The route's length changes with the viewport and the seed, so pace the walk rather than time it:
+  // a fixed duration would make a longer, wider spiral move FASTER, which is the opposite of the point.
+  TRAVEL_S=Math.min(32, Math.max(18, threadLen/WALK_PXS));
   PSTEP=Math.max(2, CELL*0.10);
   const n=Math.floor(threadLen/PSTEP)+2;
   PATH=new Float32Array(n*2);
