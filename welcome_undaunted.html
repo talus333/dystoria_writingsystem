@@ -767,6 +767,7 @@ const BANK=[
 function generate(seed, aspect){
   const rng=makeRng(seed);
   const grid=new Map(), placed=[], occ=new Set();
+  const byChar=new Map();          // letter -> flat [x0,y0,x1,y1,...] of the cells holding it
   const key=(x,y)=>x+','+y;
   const cellAt=(x,y)=>grid.get(key(x,y));
 
@@ -853,7 +854,12 @@ function generate(seed, aspect){
   }
   function commit(word,x,y,dir,tier){
     const dx=dir==='H'?1:0, dy=dir==='V'?1:0;
-    for(let i=0;i<word.length;i++) grid.set(key(x+dx*i,y+dy*i),word[i]);   // letters live in grid only -> words can still CROSS each other
+    for(let i=0;i<word.length;i++){
+      const cx=x+dx*i, cy=y+dy*i, ch=word[i];
+      grid.set(key(cx,cy),ch);                       // letters live in grid only -> words can still CROSS
+      let lst=byChar.get(ch); if(!lst){ lst=[]; byChar.set(ch,lst); }
+      lst.push(cx,cy);
+    }
     if(tier>1){ for(const c of footprintCells(x,y,dir,word.length,tier)) occ.add(key(c[0],c[1])); }  // reserve big-glyph footprints (occ = footprints + corridor)
     placed.push({w:word,x,y,dir,tier});
   }
@@ -903,12 +909,12 @@ function generate(seed, aspect){
   }
   function placeByCross(e){
     const word=e.w; let best=null,bs=-1;
-    for(const [k,ch] of grid){
-      const [gx,gy]=k.split(',').map(Number);
-      for(let i=0;i<word.length;i++){
-        if(word[i]!==ch) continue;
-        for(const dir of ['H','V']){
-          const dx=dir==='H'?1:0, dy=dir==='V'?1:0;
+    for(let i=0;i<word.length;i++){
+      const lst=byChar.get(word[i]); if(!lst) continue;      // only cells that hold this letter
+      for(let n=0;n<lst.length;n+=2){
+        const gx=lst[n], gy=lst[n+1];
+        for(let d=0;d<2;d++){
+          const dir=d?'V':'H', dx=d?0:1, dy=d?1:0;
           const x=gx-dx*i, y=gy-dy*i;
           const c=fits1(word,x,y,dir);
           if(c>0){ const sc=crossScore(word,x,y,dir,c); if(sc>bs){bs=sc;best={x,y,dir};} }
@@ -1054,7 +1060,9 @@ let CELL=26; const TIER_SCALE={1:1,2:2,3:3};
 let layout=null, originX=0, originY=0;
 let LET=[];                    // one record per VISIBLE letter: {x,y,tier,gi,w,g,a}
 let WORDS=[];                  // shimmer parameters, one per placed word
-let ATLAS=[null,null,null,null];   // ATLAS[tier] = {cream, gold, box, boxD, index}
+let ATLAS=[null,null,null,null];   // ATLAS[tier] = {sheets:[t0..t3,gold], box, boxD, index}
+let BUCK=null;                     // BUCK[tier][tone] = the letters drawn from that one sheet
+const GOLDL=[];                    // the letters the torch is on this frame, refilled each paint
 let VW=0, VH=0, DPR=1;
 
 const LANT_R   = 70;     // the torch's reach, px — a held flame, not a floodlight
@@ -1072,22 +1080,51 @@ let hoverW=null, tipEl=null;
    Supersampling would fix the look too, but a 3x downscale for ~4,700 letters a frame halved the
    frame rate; whole pixels cost nothing. */
 const SS=1;                            // ...and with integer cells the sheet needs no supersampling
+
+/* THREE TIERS, THREE FACES. Every word used to be Cormorant Garamond at three sizes, which made the
+   field one texture and left tier 1 reading as grey noise. Tier 3 is now Cinzel — a Roman
+   inscriptional face, so the biggest words sit in the maze like something carved; tier 1 is Cormorant
+   SC, lighter and more widely tracked, so the small words read as an undercurrent rather than as
+   failed large ones. All three families are already in the page's one Google Fonts request. */
+const TIER_FONT={
+  1:{fam:"'Cormorant SC','Cormorant Garamond',Georgia,serif", w:500, fs:0.80, ls:'0.05em'},
+  2:{fam:"'Cormorant Garamond',Georgia,serif",                w:600, fs:0.82, ls:'0.02em'},
+  3:{fam:"'Cinzel','Cormorant SC',Georgia,serif",             w:600, fs:0.68, ls:'0.07em'}
+};
+/* INK LIKE STONE, NOT ONE GREY. Brightness already varies per word (the shimmer) but the COLOUR did
+   not, and a field of one hue at varying opacity reads flat — it is a large part of why patches look
+   bare even where they are full. Four tones, assigned per word, pre-rendered into their own sheets:
+   the tone cannot come from globalAlpha, so it has to come from the atlas. */
+const INK=['rgb(238,214,173)','rgb(219,196,159)','rgb(199,179,148)','rgb(179,162,138)'];
+const GOLD='rgb(255,205,116)';
 function buildAtlas(tier, chars){
-  const box=CELL*TIER_SCALE[tier], boxD=Math.ceil(box*DPR*SS), fs=box*0.82;
-  const weight=600;                      // the DOM used 600 at every tier; 500 made tier 1 read thin
+  const f=TIER_FONT[tier];
+  const box=CELL*TIER_SCALE[tier], boxD=Math.ceil(box*DPR*SS), fs=box*f.fs;
   const index={}; chars.forEach(function(c,i){ index[c]=i; });
   function sheet(colour){
     const c=document.createElement('canvas');
     c.width=Math.max(1,boxD*chars.length); c.height=Math.max(1,boxD);
     const g=c.getContext('2d');
     g.setTransform(DPR*SS,0,0,DPR*SS,0,0);
-    g.font=weight+" "+fs.toFixed(2)+"px 'Cormorant Garamond',Georgia,serif";
-    g.letterSpacing='0.02em';
+    g.font=f.w+" "+fs.toFixed(2)+"px "+f.fam;
+    g.letterSpacing=f.ls;
     g.textAlign='center'; g.textBaseline='middle'; g.fillStyle=colour;
     for(let i=0;i<chars.length;i++) g.fillText(chars[i], box*(i+0.5), box*0.5);
     return c;
   }
-  return {cream:sheet('rgb(240,216,175)'), gold:sheet('rgb(255,205,116)'), box:box, boxD:boxD, index:index};
+  const sheets=INK.map(sheet); sheets.push(sheet(GOLD));   // [tone0..tone3, gold]
+  return {sheets:sheets, gold:sheets.length-1, box:box, boxD:boxD, index:index};
+}
+
+/* generate() costs seconds, and build() runs twice per load — once at boot and again after
+   document.fonts.ready, purely so the wordmark can be re-measured with Tangerine. The LAYOUT does not
+   depend on the font, so the second call was paying for the same maze twice. */
+let LAYOUT_CACHE=null;
+function genCached(seed, aspect){
+  if(LAYOUT_CACHE && LAYOUT_CACHE.seed===seed && Math.abs(LAYOUT_CACHE.aspect-aspect)<1e-9) return LAYOUT_CACHE.layout;
+  const l=generate(seed, aspect);
+  LAYOUT_CACHE={seed:seed, aspect:aspect, layout:l};
+  return l;
 }
 
 /* ---------- build ---------- */
@@ -1097,7 +1134,7 @@ function build(seed){
   cv.width=Math.round(W*DPR); cv.height=Math.round(H*DPR);
   cv.style.width=W+'px'; cv.style.height=H+'px';
 
-  layout=generate(seed, aspect);
+  layout=genCached(seed, aspect);
   const Lx=Math.max(1,-layout.minX),Rx=Math.max(1,layout.maxX),Ty=Math.max(1,-layout.minY),By=Math.max(1,layout.maxY);
   // CELL is ROUNDED and the origin with it. Fractional cells put every glyph at a fractional
   // destination, so the atlas got resampled on the way out and tier 1 turned to mush — Jeremy:
@@ -1116,13 +1153,18 @@ function build(seed){
 
   const rng=makeRng(seed^0x9e3779b9);
   LET=[]; WORDS=[];
+  /* Letters bucketed by (tier, ink tone) at BUILD time. The draw loop used to make one full pass over
+     every letter per (tier, sheet) pair — six scans of 6,000 letters a frame — and four ink tones
+     would have made that fifteen. Bucketed, the passes together touch each letter exactly once. */
+  BUCK=[null,[[],[],[],[]],[[],[],[],[]],[[],[],[],[]]];
   for(const p of layout.placed){
     const k=TIER_SCALE[p.tier], box=CELL*k, L=p.w.length, at=ATLAS[p.tier];
     const dx=p.dir==='H'?1:0, dy=p.dir==='V'?1:0;
     const cxpx=originX+(p.x+dx*(L-1)/2)*CELL, cypx=originY+(p.y+dy*(L-1)/2)*CELL, totalA=L*box;
     const w={base:0.12+rng()*0.14, amp:0.42+rng()*0.26, speed:0.60+rng()*0.84, phase:rng()*6.28,
              speed2:0.26+rng()*0.48, phase2:rng()*6.28, featured:rng()<0.12, v:0,
-             txt:p.w, src:srcOf(p.w), note:noteOf(p.w), x0:1e9, y0:1e9, x1:-1e9, y1:-1e9};
+             txt:p.w, src:srcOf(p.w), note:noteOf(p.w), x0:1e9, y0:1e9, x1:-1e9, y1:-1e9,
+             tone:Math.min(3, (rng()*4)|0)};
     WORDS.push(w);
     for(let i=0;i<L;i++){
       const x = p.dir==='V' ? cxpx : (cxpx-totalA/2 + box*(i+0.5));
@@ -1135,6 +1177,7 @@ function build(seed){
       // the word's own box, for the hover that names its book
       if(x-box/2<w.x0) w.x0=x-box/2; if(x+box/2>w.x1) w.x1=x+box/2;
       if(y-box/2<w.y0) w.y0=y-box/2; if(y+box/2>w.y1) w.y1=y+box/2;
+      BUCK[p.tier][w.tone].push(LET[LET.length-1]);
     }
   }
 
@@ -1169,6 +1212,19 @@ function paint(ts, t){
     wd.v=v<0?0:(v>1?1:v);
   }
 
+  /* the chamber wall: two faint rings just outside the cleared room, so the hole the wordmark sits in
+     reads as a room somebody cleared rather than as words failing to place */
+  if(layout){
+    const rx=(layout.coreX+1.6)*CELL, ry=(layout.coreY+2.2)*CELL;
+    ctx.save(); ctx.globalCompositeOperation='lighter';
+    for(let r=0;r<2;r++){
+      ctx.beginPath();
+      ctx.ellipse(originX, originY, rx*(1+r*0.085), ry*(1+r*0.115), 0, 0, 6.2832);
+      ctx.strokeStyle='rgba(196,158,74,'+(r?0.070:0.135)+')'; ctx.lineWidth=r?1:1.5; ctx.stroke();
+    }
+    ctx.restore();
+  }
+
   /* the torch itself: a warm pool on the stage, under the letters, so the pointer reads as a light
      being carried rather than as a highlight being applied */
   if(lantA>0.02){
@@ -1183,6 +1239,7 @@ function paint(ts, t){
   }
 
   const lant=lantA, LR2=2*LANT_R*LANT_R;
+  GOLDL.length=0;
   for(let i=0;i<LET.length;i++){
     const L=LET[i]; let v=L.w.v, boost=0;
     if(lant>0.004){ const dx=L.x-lantX, dy=L.y-lantY, d2=dx*dx+dy*dy;
@@ -1192,22 +1249,34 @@ function paint(ts, t){
     L.g=boost>0.26?1:0;          // gold only while the torch is ON it — every flare settles back to cream
     L.a=a;
     if(L.w===hoverW){ L.g=1; const lift=0.66+0.30*v; if(L.a<lift) L.a=lift; }   // the word being asked about
+    if(L.g&&L.a>=0.025) GOLDL.push(L);
   }
 
-  // paint: atlas by tier, cream then gold; only globalAlpha moves between letters
+  /* Twelve short passes instead of six long ones: each (tier, tone) bucket holds only its own
+     letters, so the cream sheets together touch every letter exactly once. The gold letters are the
+     few under the torch, collected during the brightness loop above, and drawn last so light sits on
+     top of everything it falls on. Only globalAlpha changes between letters within a pass. */
   for(let tier=1;tier<=3;tier++){
-    const at=ATLAS[tier]; if(!at) continue;
-    const box=at.box, bd=at.boxD, h=box/2;
-    for(let g=0;g<2;g++){
-      const sheet=g?at.gold:at.cream; let drew=false;
-      for(let i=0;i<LET.length;i++){
-        const L=LET[i];
-        if(L.tier!==tier||L.g!==g||L.a<0.025) continue;
+    const at=ATLAS[tier]; if(!at||!BUCK) continue;
+    const box=at.box, bd=at.boxD;
+    for(let tone=0;tone<4;tone++){
+      const arr=BUCK[tier][tone], sheet=at.sheets[tone]; let drew=false;
+      for(let i=0;i<arr.length;i++){
+        const L=arr[i];
+        if(L.g||L.a<0.025) continue;
         ctx.globalAlpha=L.a; drew=true;
         ctx.drawImage(sheet, L.gi*bd, 0, bd, bd, L.px, L.py, box, box);
       }
       if(drew) ctx.globalAlpha=1;
     }
+  }
+  if(GOLDL.length){
+    for(let i=0;i<GOLDL.length;i++){
+      const L=GOLDL[i], at=ATLAS[L.tier];
+      ctx.globalAlpha=L.a;
+      ctx.drawImage(at.sheets[at.gold], L.gi*at.boxD, 0, at.boxD, at.boxD, L.px, L.py, at.box, at.box);
+    }
+    ctx.globalAlpha=1;
   }
 }
 
@@ -1230,7 +1299,19 @@ function staticFrame(){                        // prefers-reduced-motion: one st
 }
 
 /* ---------- boot ---------- */
-let SEED=71010;
+/* A DIFFERENT LABYRINTH EVERY DAY (item 10) — but a CURATED day, not a random one.
+   Seeding straight from the date was the obvious move and the wrong one: layout quality varies a
+   lot by seed, and it is not subtle. Scoring 26 candidates the way even.js does (28x17 buckets of
+   ink, the room excluded) gave 20 thin buckets on the best and 149 on the worst, and the split is
+   perfectly predicted by the cell size the layout forces — every good seed lands at CELL 9, every
+   bad one at 8 or 7, where the field stops filling the screen. Choosing at runtime is not an option
+   either: generate() costs ~2s, so trying several would block the page for ten.
+   So the seeds are picked here, offline, and cycled by the day. Fourteen of them: a fresh labyrinth
+   each morning, none of them a bad one. (They are opaque numbers, not dates.) */
+const GOOD_SEEDS=[20260885,20260864,20260808,20260906,20260829,20260878,20260969,
+                  20260801,20260941,20260836,20260913,20260955,20260850,20260934];
+let SEED=(window.__SEED!=null) ? window.__SEED
+       : GOOD_SEEDS[Math.floor(Date.now()/864e5) % GOOD_SEEDS.length];
 build(SEED);
 wake();
 
