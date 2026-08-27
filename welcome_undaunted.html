@@ -971,7 +971,7 @@ function orthoPath(pts){
   for(let i=1;i<pts.length-1;i++){const a=pts[i-1],b=pts[i],c=pts[i+1];
     if(Math.sign(b[0]-a[0])!==Math.sign(c[0]-b[0])||Math.sign(b[1]-a[1])!==Math.sign(c[1]-b[1])) cn.push(b);}
   cn.push(pts[pts.length-1]);
-  const R=CELL*0.5, dist=(a,b)=>Math.hypot(a[0]-b[0],a[1]-b[1]), unit=(a,b)=>{const l=dist(a,b)||1;return [(a[0]-b[0])/l,(a[1]-b[1])/l];};
+  const R=CELL*0.30, dist=(a,b)=>Math.hypot(a[0]-b[0],a[1]-b[1]), unit=(a,b)=>{const l=dist(a,b)||1;return [(a[0]-b[0])/l,(a[1]-b[1])/l];};
   let d=`M ${cn[0][0].toFixed(1)} ${cn[0][1].toFixed(1)} `;
   for(let i=1;i<cn.length-1;i++){const p=cn[i-1],c=cn[i],n=cn[i+1];const rr=Math.min(R,dist(p,c)/2,dist(c,n)/2);
     const u1=unit(p,c),u2=unit(n,c);const a=[c[0]+u1[0]*rr,c[1]+u1[1]*rr],b=[c[0]+u2[0]*rr,c[1]+u2[1]*rr];
@@ -1009,7 +1009,7 @@ let PATH=null, PSTEP=1, threadLen=0;
 let VW=0, VH=0, DPR=1;
 
 /* the whole intro on one clock, so every duration is legible in one place */
-const WALK_PXS = 255;    // the thread's pace, px/s — a duration would speed up whenever the path grew
+const WALK_PXS = 150;    // the thread's pace, px/s — a duration would speed up whenever the path grew
 let   TRAVEL_S = 22.0;   // ...so the walk's length is derived from the route in buildThread()
 let   RUSH_MS  = 900;    // ...and if the visitor scrolls first, the rest of the walk, scaled to what is left
 const RING_S   = 1.30;   // the arrival ring's expansion
@@ -1118,16 +1118,47 @@ function spiralRoute(W,H,seed){
   const rng=makeRng((seed^0x5bf03635)>>>0);
   const K=function(x,y){ return x+','+y; };
 
-  // the generator's own carved corridor is empty space, so the thread may use it (its ring around the
-  // wordmark is exactly the clear lane the final approach wants)
-  const corr=new Set(); const cc=layout.corridorCells||[];
-  for(let i=0;i<cc.length;i++) corr.add(K(cc[i][0],cc[i][1]));
+  /* WHICH CELLS HOLD INK. Do not use layout.occ for this — it is the generator's placement-reservation
+     set, not a glyph map: 2,365 cells covering only 304 of 5,134 letter anchors. Routing against it
+     put 36% of the path inside a glyph's own box, which is exactly what Jeremy kept seeing. The only
+     reliable source is the same geometry build() uses to draw the letters, so rebuild it here. */
+  const blocked=new Set();
+  (function(){
+    const mark=function(cx,cy,k){
+      const r=k/2+0.4;                                    // the glyph's box, plus a little air
+      const x0=Math.ceil(cx-r), x1=Math.floor(cx+r), y0=Math.ceil(cy-r), y1=Math.floor(cy+r);
+      for(let X=x0;X<=x1;X++) for(let Y=y0;Y<=y1;Y++) blocked.add(K(X,Y));
+    };
+    const pl=layout.placed;
+    for(let n=0;n<pl.length;n++){
+      const p=pl[n], k=TIER_SCALE[p.tier], L=p.w.length;
+      const dx=p.dir==='H'?1:0, dy=p.dir==='V'?1:0;
+      const c0x=p.x+dx*(L-1)/2, c0y=p.y+dy*(L-1)/2;
+      for(let i=0;i<L;i++){ const off=-L*k/2+k*(i+0.5); mark(c0x+dx*off, c0y+dy*off, k); }
+    }
+  })();
   const inRoom=function(x,y){ return Math.abs(x)<=CX&&Math.abs(y)<=CY; };
+  /* A cell with ink in it is not forbidden, it is EXPENSIVE. The maze is a crossword packed to ~50%
+     occupancy, so its empty cells form pockets, not lanes: routing on hard walls left a walkable pool
+     of 850 cells out of 11,500 and half the spiral unreachable. (That is why the generator's own
+     `threadCells` A* is dead code — it could not have worked either.) A wall worth WALL detours means
+     the walker will go a long way round to stay in a gap, and only squeezes across a letter where the
+     maze genuinely seals up. */
   const free=function(x,y){
     if(x<-TXv||x>TXv||y<-TYv||y>TYv) return false;      // stay on screen
-    if(inRoom(x,y)) return false;                        // never over the wordmark
-    const k=K(x,y); return corr.has(k)||!occ.has(k);
+    return !inRoom(x,y);                                 // never over the wordmark — that one IS a wall
   };
+  const WALL=45;
+  /* ...and prefer the MIDDLE of a lane. A cell that merely happens to be empty may still sit shoulder
+     to shoulder with a word; with the thread's own glow that reads as running along the letters. A
+     cell with no ink in any of its eight neighbours costs nothing; one that touches ink costs extra,
+     so the walker takes the roomier lane wherever the maze offers one. */
+  const tight=function(x,y){
+    for(let a=-1;a<=1;a++) for(let b=-1;b<=1;b++){ if(!a&&!b) continue;
+      if(blocked.has(K(x+a,y+b))) return true; }
+    return false;
+  };
+  const HUG=2.0;
 
   // one connected pool of walkable cells, flooded from the door under the "o"
   let door=null;
@@ -1172,7 +1203,7 @@ function spiralRoute(W,H,seed){
       return top; };
     gsc.set(K(s[0],s[1]),0); push(0,0,s[0],s[1],0,0);
     let guard=0;
-    while(heap.length&&guard++<120000){
+    while(heap.length&&guard++<220000){
       const top=pop(), cg=top[1], cx=top[2], cy=top[3], ck=K(cx,cy);
       if(cg>(gsc.has(ck)?gsc.get(ck):1e18)) continue;
       if(ck===gk){ const out=[]; let k=gk;
@@ -1182,7 +1213,9 @@ function spiralRoute(W,H,seed){
       for(let d=0;d<4;d++){
         const dx=DIRS[d][0], dy=DIRS[d][1], nx=cx+dx, ny=cy+dy, nk=K(nx,ny);
         if(!pool.has(nk)) continue;
-        const turn=(cd&&(cd[0]!==dx||cd[1]!==dy))?TURN:0, tg=cg+1+turn;
+        const turn=(cd&&(cd[0]!==dx||cd[1]!==dy))?TURN:0;
+        const ink=blocked.has(nk)?WALL:(tight(nx,ny)?HUG:0);
+        const tg=cg+1+turn+ink;
         if(tg<(gsc.has(nk)?gsc.get(nk):1e18)){
           came.set(nk,ck); gsc.set(nk,tg); din.set(nk,[dx,dy]);
           push(tg+Math.abs(nx-g[0])+Math.abs(ny-g[1]), tg, nx, ny, dx, dy);
@@ -1208,16 +1241,18 @@ function spiralRoute(W,H,seed){
 
   const out=[], seen=new Set();
   const add=function(x,y){ const k=K(x,y); if(!seen.has(k)){ seen.add(k); out.push([x,y]); } };
-  let cur=null;
+  let cur=null, nSnapFail=0, nSegFail=0;
   for(let i=0;i<guide.length;i++){
-    const g=guide[i]; if(!g) continue;
+    const g=guide[i]; if(!g){ nSnapFail++; continue; }
     if(!cur){ cur=g; add(g[0],g[1]); continue; }
     if(g[0]===cur[0]&&g[1]===cur[1]) continue;
     const seg=astar(cur,g);
-    if(!seg) continue;                                   // unreachable waypoint: skip, keep walking
+    if(!seg){ nSegFail++; continue; }                    // unreachable waypoint: skip, keep walking
     for(let n=1;n<seg.length;n++) add(seg[n][0],seg[n][1]);
     cur=g;
   }
+  var _ink=0; for(var q=0;q<out.length;q++) if(blocked.has(K(out[q][0],out[q][1]))) _ink++;
+  window.__labRouteDbg={pool:pool.size, blocked:blocked.size, guide:guide.length, snapFail:nSnapFail, segFail:nSegFail, cells:out.length, inkCells:_ink};
   return out.length>8?out:null;
 }
 
@@ -1229,15 +1264,16 @@ function buildThread(W,H,seed){
   const cells=spiralRoute(W,H,seed)||layout.corridorCells;   // pathfinding failed: fall back to the carved corridor
   if(!cells||cells.length<2) return;
   let pts=cells.map(function(c){ return [originX+c[0]*CELL, originY+c[1]*CELL]; });
-  { const p0=pts[0],p1=pts[1],dx=p0[0]-p1[0],dy=p0[1]-p1[1],l=Math.hypot(dx,dy)||1,reach=Math.max(W,H)*0.14;
-    pts.unshift([p0[0]+dx/l*reach,p0[1]+dy/l*reach]); }
+  // the tail that runs in from off-screen goes straight DOWN out of the frame — following the first
+  // segment's own direction sent it sideways across the field, over every word in its way
+  { const p0=pts[0]; pts.unshift([p0[0], p0[1]+Math.max(W,H)*0.14]); }
   const p=document.createElementNS(NSVG,'path');
   p.setAttribute('d', orthoPath(pts)); p.setAttribute('fill','none'); p.setAttribute('stroke','none');
   svg.appendChild(p);
   threadLen=p.getTotalLength();
   // The route's length changes with the viewport and the seed, so pace the walk rather than time it:
   // a fixed duration would make a longer, wider spiral move FASTER, which is the opposite of the point.
-  TRAVEL_S=Math.min(40, Math.max(18, threadLen/WALK_PXS));
+  TRAVEL_S=Math.min(70, Math.max(20, threadLen/WALK_PXS));
   PSTEP=Math.max(2, CELL*0.10);
   const n=Math.floor(threadLen/PSTEP)+2;
   PATH=new Float32Array(n*2);
@@ -1308,6 +1344,14 @@ function paint(ts, t){
     L.a=a*dimA;
   }
 
+  /* THE THREAD GOES DOWN FIRST, UNDER THE LETTERS. The maze is a crossword packed to ~51% occupancy,
+     which is below the percolation threshold: its 5,963 empty cells break into 389 pockets, the
+     largest only 960 cells. There is no connected lane network across it, so no route can avoid every
+     word — the router takes gaps wherever they exist and squeezes across where the maze seals up.
+     Drawing the thread beneath the glyphs turns those squeezes into the right picture anyway: the
+     thread passes BEHIND the words, dimming as it goes under them and coming back in the open. */
+  if(headOn) drawThread(ts);
+
   // paint: atlas by tier, cream then gold; only globalAlpha moves between letters
   for(let tier=1;tier<=3;tier++){
     const at=ATLAS[tier]; if(!at) continue;
@@ -1323,8 +1367,6 @@ function paint(ts, t){
       if(drew) ctx.globalAlpha=1;
     }
   }
-
-  if(headOn) drawThread(ts);
 }
 
 /* the thread: a tapering trail of light, drawn additively so the glow builds where it doubles back */
@@ -1478,6 +1520,7 @@ window.__labEnter=function(){
   }
   enterT=now;
 };
+window.__labPATH=function(){ return {PATH:Array.from(PATH||[]), PSTEP:PSTEP, CELL:CELL, ox:originX, oy:originY, LET:LET.map(function(L){return [L.x,L.y,L.tier];})}; };
 window.__labDbg=function(){
   return {cells:(layout&&layout.corridorCells||[]).length, len:Math.round(threadLen), head:Math.round(threadHead()),
           letters:LET.length, words:WORDS.length, cell:Math.round(CELL*10)/10,
