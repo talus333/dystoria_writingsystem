@@ -1107,14 +1107,21 @@ const TIER_FONT={
    the tone cannot come from globalAlpha, so it has to come from the atlas. */
 const INK=['rgb(238,214,173)','rgb(219,196,159)','rgb(199,179,148)','rgb(179,162,138)'];
 const GOLD='rgb(255,205,116)';
-/* DEPTH (item 9). The four ink tones ARE the four planes: a word further back is both darker and
-   moves less when the reader moves the pointer — atmospheric perspective plus parallax, out of one
-   number already on every letter. It costs nothing per glyph either, because the draw loop is
-   already bucketed by tone: each plane's offset is applied once per bucket, and it stays a whole
-   number, so nothing resamples and the letters stay crisp. */
-const PAR_AMP=13;                      // how far the nearest plane swings, px, corner to corner
+/* DEPTH (item 9), and the thing that makes per-word parallax impossible here.
+   The first cut moved each ink tone by a different amount — four planes, further back moving less.
+   It looked right in a still and was wrong in motion, because THIS IS A CROSSWORD: words share
+   letters. Measured, 900 cells are shared by two words and 659 of them — 73% — had their two words
+   on different planes, so the shared letter was drawn twice, several pixels apart, and both words
+   came apart at the join. Jeremy saw it immediately: "the depth shifts the words so the words that
+   cross each other are offset and harder to read."
+   There is no fixing that by assigning planes more cleverly: the crossings are what the layout IS,
+   and they nearly all belong to one connected component. So the letter field moves as ONE rigid
+   plane against the things that do NOT move — the wordmark, the chamber rings, the vignette — which
+   still reads as the maze being a surface behind them. Depth survives as the four ink TONES:
+   atmospheric perspective, which needs no motion and breaks nothing. */
+const PAR_AMP=9;                       // how far the whole field drifts, px, corner to corner
 let parX=0, parY=0;                    // eased pointer, -1..1
-const PLX=[0,0,0,0], PLY=[0,0,0,0];    // this frame's offset per plane
+const PLX=[0,0,0,0], PLY=[0,0,0,0];    // this frame's field offset (same in every slot, by design)
 function buildAtlas(tier, chars){
   const f=TIER_FONT[tier];
   const box=CELL*TIER_SCALE[tier], boxD=Math.ceil(box*DPR*SS), fs=box*f.fs;
@@ -1258,8 +1265,8 @@ function paint(ts, t){
 
   { const tx=lantA*((lantX/(VW||1))*2-1), ty=lantA*((lantY/(VH||1))*2-1);
     parX+=(tx-parX)*0.055; parY+=(ty-parY)*0.055;
-    for(let t=0;t<4;t++){ const k=(3-t)/3;
-      PLX[t]=Math.round(-parX*PAR_AMP*k); PLY[t]=Math.round(-parY*PAR_AMP*0.62*k); } }
+    const ox=Math.round(-parX*PAR_AMP), oy=Math.round(-parY*PAR_AMP*0.62);
+    for(let t=0;t<4;t++){ PLX[t]=ox; PLY[t]=oy; } }        // one offset: every crossing stays joined
 
   const lant=lantA, LR2=2*LANT_R*LANT_R;
   GOLDL.length=0;
