@@ -1107,21 +1107,13 @@ const TIER_FONT={
    the tone cannot come from globalAlpha, so it has to come from the atlas. */
 const INK=['rgb(238,214,173)','rgb(219,196,159)','rgb(199,179,148)','rgb(179,162,138)'];
 const GOLD='rgb(255,205,116)';
-/* DEPTH (item 9), and the thing that makes per-word parallax impossible here.
-   The first cut moved each ink tone by a different amount — four planes, further back moving less.
-   It looked right in a still and was wrong in motion, because THIS IS A CROSSWORD: words share
-   letters. Measured, 900 cells are shared by two words and 659 of them — 73% — had their two words
-   on different planes, so the shared letter was drawn twice, several pixels apart, and both words
-   came apart at the join. Jeremy saw it immediately: "the depth shifts the words so the words that
-   cross each other are offset and harder to read."
-   There is no fixing that by assigning planes more cleverly: the crossings are what the layout IS,
-   and they nearly all belong to one connected component. So the letter field moves as ONE rigid
-   plane against the things that do NOT move — the wordmark, the chamber rings, the vignette — which
-   still reads as the maze being a surface behind them. Depth survives as the four ink TONES:
-   atmospheric perspective, which needs no motion and breaks nothing. */
-const PAR_AMP=9;                       // how far the whole field drifts, px, corner to corner
-let parX=0, parY=0;                    // eased pointer, -1..1
-const PLX=[0,0,0,0], PLY=[0,0,0,0];    // this frame's field offset (same in every slot, by design)
+/* ITEM 9 (depth layers) WAS BUILT AND REMOVED, 2026-08-27. Per-word parallax tore the crossword
+   apart — 900 cells are shared by two words and 73% of them ended up on different planes. Moving the
+   whole field as one rigid plane fixed that and kept a little drift, and Jeremy's verdict on what
+   was left was that it neither worked nor earned its place: "I don't think the depth part works or
+   is needed." So the motion is gone entirely and the field is fixed.
+   What survives is from item 11, not item 9: the four INK TONES. They are the reason `tone` is still
+   on every word and the reason the draw loop is bucketed by it. */
 function buildAtlas(tier, chars){
   const f=TIER_FONT[tier];
   const box=CELL*TIER_SCALE[tier], boxD=Math.ceil(box*DPR*SS), fs=box*f.fs;
@@ -1189,7 +1181,7 @@ function build(seed){
     const w={base:0.12+rng()*0.14, amp:0.42+rng()*0.26, speed:0.60+rng()*0.84, phase:rng()*6.28,
              speed2:0.26+rng()*0.48, phase2:rng()*6.28, featured:rng()<0.12, v:0,
              txt:p.w, src:srcOf(p.w), note:noteOf(p.w), x0:1e9, y0:1e9, x1:-1e9, y1:-1e9,
-             tone:Math.min(3, Math.max(0, ((rng()*4)|0) - (p.tier>1?1:0) + (rng()<0.22?1:0)))};
+             tone:Math.min(3, Math.max(0, ((rng()*4)|0) - (p.tier>1?1:0) + (rng()<0.22?1:0)))};   // ink, biased brighter for the larger words
     WORDS.push(w);
     for(let i=0;i<L;i++){
       const x = p.dir==='V' ? cxpx : (cxpx-totalA/2 + box*(i+0.5));
@@ -1263,17 +1255,11 @@ function paint(ts, t){
     ctx.restore();
   }
 
-  { const tx=lantA*((lantX/(VW||1))*2-1), ty=lantA*((lantY/(VH||1))*2-1);
-    parX+=(tx-parX)*0.055; parY+=(ty-parY)*0.055;
-    const ox=Math.round(-parX*PAR_AMP), oy=Math.round(-parY*PAR_AMP*0.62);
-    for(let t=0;t<4;t++){ PLX[t]=ox; PLY[t]=oy; } }        // one offset: every crossing stays joined
-
   const lant=lantA, LR2=2*LANT_R*LANT_R;
   GOLDL.length=0;
   for(let i=0;i<LET.length;i++){
     const L=LET[i]; let v=L.w.v, boost=0;
-    if(lant>0.004){ const t=L.w.tone;                    // the torch follows the plane the word is on
-      const dx=L.x+PLX[t]-lantX, dy=L.y+PLY[t]-lantY, d2=dx*dx+dy*dy;
+    if(lant>0.004){ const dx=L.x-lantX, dy=L.y-lantY, d2=dx*dx+dy*dy;
       if(d2<LR2*2.4) boost+=lant*0.92*Math.exp(-d2/LR2); }
     if(v<0)v=0; else if(v>1)v=1;
     let a=0.26+v*0.60+boost*0.92; if(a>1)a=1;
@@ -1292,21 +1278,20 @@ function paint(ts, t){
     const box=at.box, bd=at.boxD;
     for(let tone=0;tone<4;tone++){
       const arr=BUCK[tier][tone], sheet=at.sheets[tone]; let drew=false;
-      const ox=PLX[tone], oy=PLY[tone];              // the whole plane moves together
       for(let i=0;i<arr.length;i++){
         const L=arr[i];
         if(L.g||L.a<0.025) continue;
         ctx.globalAlpha=L.a; drew=true;
-        ctx.drawImage(sheet, L.gi*bd, 0, bd, bd, L.px+ox, L.py+oy, box, box);
+        ctx.drawImage(sheet, L.gi*bd, 0, bd, bd, L.px, L.py, box, box);
       }
       if(drew) ctx.globalAlpha=1;
     }
   }
   if(GOLDL.length){
     for(let i=0;i<GOLDL.length;i++){
-      const L=GOLDL[i], at=ATLAS[L.tier], t=L.w.tone;
+      const L=GOLDL[i], at=ATLAS[L.tier];
       ctx.globalAlpha=L.a;
-      ctx.drawImage(at.sheets[at.gold], L.gi*at.boxD, 0, at.boxD, at.boxD, L.px+PLX[t], L.py+PLY[t], at.box, at.box);
+      ctx.drawImage(at.sheets[at.gold], L.gi*at.boxD, 0, at.boxD, at.boxD, L.px, L.py, at.box, at.box);
     }
     ctx.globalAlpha=1;
   }
@@ -1441,8 +1426,8 @@ window.addEventListener('resize',function(){ clearTimeout(rzT); rzT=setTimeout(f
   function wordAt(x,y){
     let best=null, bd=1e18;
     for(let i=0;i<LET.length;i++){
-      const L=LET[i], h=CELL*TIER_SCALE[L.tier]*0.5, t=L.w.tone;
-      const dx=x-(L.x+PLX[t]), dy=y-(L.y+PLY[t]);
+      const L=LET[i], h=CELL*TIER_SCALE[L.tier]*0.5;
+      const dx=x-L.x, dy=y-L.y;
       if(dx>h||dx<-h||dy>h||dy<-h) continue;
       const d=dx*dx+dy*dy-L.tier*36;
       if(d<bd){ bd=d; best=L.w; }
