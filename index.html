@@ -43962,6 +43962,7 @@ document.addEventListener('DOMContentLoaded', init);
           }
         } catch(e){}
       }
+      try{ if(window.__stakeCardSection) window.__stakeCardSection(body, w, key); }catch(_e){}   /* #46 1a — bearer & threat on a stake element */
       if (w && w.role !== 'being' && w.cat && ['setting','object','org','concept','event'].indexOf(w.cat) >= 0){   // any concrete element can carry named characteristics (setting/object/org have curated pools; concept/event free-name via the picker)
       const tr=document.createElement('div'); tr.className='npc-traits npc-chars';
       const trlead=document.createElement('span'); trlead.className='npc-seclbl'; trlead.textContent=(w && w.role==='being')?'Traits':'Characteristics'; tr.appendChild(trlead);
@@ -51477,9 +51478,13 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.561';
+  var APP_VERSION = '2026.07.20.562';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.562', date:'September 1, 2026', notes:[
+      '**A stake can say who could lose it, and what is taking it.** Open a Stakes element in the Notepad and you’ll find **At risk** — two slots, **Bearer** and **Threat**, each picking any element in your story. A stake with neither filled is still a stake; nothing asks you to finish it. [Jeremy]',
+      '**A scene card now shows the stake of whoever is standing on it.** Link a character who bears a stake to a card and that stake appears there, with the character’s name beside it in place of the thread or story stake it would otherwise echo — so the card tells you whose risk is in the room, not just which scale it came from. Setting a stake on the card itself still wins, and a story with no bearers set looks exactly as it did before.',
+    ]},
     { v:'2026.07.20.561', date:'September 1, 2026', notes:[
       '**Bonds keeps the arrangement you made.** Lay a group out the way you want it and press **Save arrangement**; a **Restore saved** button then sits beside it, and one press puts every element back exactly where it was — after a bond moved something, after you tried something else, whenever. Each group keeps one saved arrangement per structure, so a family tree and a social web of the same people are saved separately. Anything you added since the save keeps its own place rather than being dragged into an old picture. [Jeremy]',
       '**And “Arrange” is called “Auto-arrange”,** because that is what it does: it throws away the positions you set and lays the group out from scratch. It never touches your saved arrangement — which is what makes it safe to press. [Jeremy]',
@@ -56850,6 +56855,7 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
   // The stake in force for a card, with its scale — the most local set stake wins; else it inherits (echoes) from thread → part → story.
   function resolveCardStake(i, col){
     var a=api();
+    try{ var _bw=(window.__stakeByBearer&&window.__stakeByBearer(i,col)); if(_bw) return _bw; }catch(_e){}   /* #46 1a — a stake whose bearer is linked to this card */
     var own=cardStake(i,col); if(own) return { text:own, level:'card', own:true };
     var ts=colStake(col); if(ts) return { text:ts, level:'thread', own:false };
     var pid=a?a.partIdForSection(i):null; var ps=(a&&pid)?a.partStake(pid):''; if(ps) return { text:ps, level:'part', own:false };
@@ -78604,5 +78610,191 @@ html body.eink #expRight .xb-row .xb-ex{ opacity:1; }
   tick();
 })();
 
+</script>
+
+<style id="dyst-stake-bearer">
+/* Dystoria — Stakes: bearer & threat (#46 phase 1a). No change to the stake pills themselves:
+   a bearer stake reuses the shipped echo pill and puts the bearer's NAME in the level slot. */
+.npc-stakebt{display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin:6px 0 2px}
+.stk-slot{display:inline-flex; align-items:baseline; gap:6px; padding:3px 9px; border:1px solid #d8cba8;
+  border-radius:14px; background:#fffdf6; cursor:pointer; font-size:12.5px; line-height:1.5; color:#4a4336}
+.stk-slot:hover{background:#f6efdd}
+.stk-slot-cap{font-size:10.5px; letter-spacing:.08em; text-transform:uppercase; color:#9a8f78}
+.stk-slot-val{font-weight:500}
+.stk-slot-val.stk-slot-empty{font-weight:400; font-style:italic; color:#9a8f78}
+.stk-desc{flex:0 0 100%; font-size:12px; line-height:1.5; color:#7d735f; margin:2px 0 0}
+
+.stk-menu{position:fixed; z-index:9600; min-width:206px; max-width:300px; max-height:320px; overflow:auto;
+  padding:4px; background:#fffdf6; border:1px solid #d8cba8; border-radius:9px;
+  box-shadow:0 8px 24px rgba(60,50,30,.2)}
+.stk-menu-row{display:flex; align-items:baseline; justify-content:space-between; gap:10px; width:100%;
+  text-align:left; padding:5px 9px; border:0; background:none; cursor:pointer; border-radius:5px;
+  font:inherit; font-size:13px; color:#4a4336}
+.stk-menu-row:hover{background:#f0ead9}
+.stk-menu-row.on{background:#efe6cf; font-weight:600}
+.stk-menu-sub{font-size:10.5px; letter-spacing:.06em; text-transform:uppercase; color:#9a8f78; flex:none}
+.stk-menu-empty{padding:8px 9px; font-size:12.5px; color:#9a8f78}
+
+body.eink .stk-slot,body.eink .stk-menu{background:#fff; border-color:#000; box-shadow:none; color:#000}
+body.eink .stk-slot-cap,body.eink .stk-menu-sub,body.eink .stk-slot-val.stk-slot-empty{color:#000}
+</style>
+<script id="dyst-stake-bearer-js">
+/* Dystoria — Stakes: bearer & threat (#46 phase 1a)
+   Additive by construction: with no bearer filled anywhere, resolveCardStake returns exactly what it
+   returned before, pill for pill. Storage is state.session.stakeData, keyed by element key, section-free. */
+(function(){
+  'use strict';
+
+  /* ---------- storage ---------- */
+  /* NB: `state` is a script-scoped let — it is NOT on window. Reach it through the shared global
+     lexical scope (this is a classic script, same as the app's), never as window.state. */
+  function sess(){ try { return (typeof state !== 'undefined' && state && state.session) ? state.session : null; } catch(e){ return null; } }
+  function bag(make){
+    var s = sess(); if(!s) return null;
+    if(!s.stakeData || typeof s.stakeData !== 'object'){ if(!make) return null; s.stakeData = {}; }
+    return s.stakeData;
+  }
+  function rec(key){ var b = bag(false); return (b && key && b[key]) || null; }
+  function setField(key, field, val){
+    var b = bag(true); if(!b || !key) return;
+    var r = b[key] || (b[key] = {});
+    val = (val == null ? '' : String(val).trim());
+    if(val) r[field] = val; else delete r[field];
+    if(!r.bearer && !r.threat) delete b[key];
+    try { if(typeof scheduleAutosave === 'function') scheduleAutosave(400); } catch(e){}
+  }
+  window.__stakeData = { rec: rec, set: setField, all: function(){ return bag(false) || {}; } };
+
+  /* ---------- element lookups (all through the __dystPlan bridge) ---------- */
+  function plan(){ return window.__dystPlan || null; }
+  function elFor(key){ try { var p = plan(); return (p && p.npFindEl) ? p.npFindEl(key) : null; } catch(e){ return null; } }
+  function nameFor(key){
+    var w = elFor(key); if(!w) return '';
+    try { var p = plan(); if(p && p.displayName){ var d = p.displayName(w); if(d) return d; } } catch(e){}
+    return w.name || w.word || '';
+  }
+  function catNameFor(id){ try { var p = plan(); return (p && p.catName) ? (p.catName(id) || id) : id; } catch(e){ return id; } }
+  function stakeText(key){ var w = elFor(key); return w ? String(w.name || w.word || '').trim() : ''; }
+
+  /* ---------- resolver step 1 — a stake whose BEARER is linked to this card ----------
+     The grid's caller checks an explicitly-set card stake BEFORE consulting the resolver, so an
+     explicit local stake still wins; this fires for cards that would otherwise show an echo. */
+  function cardKeys(i, col){
+    var out = [], list = [];
+    try {
+      if(!col) return out;
+      if(col.id === 'main'){ list = (window.__planSectionEls ? window.__planSectionEls(i) : []) || []; }
+      else { list = (window.__planThreadCardEls ? window.__planThreadCardEls(col.id, i) : []) || []; }
+    } catch(e){ return out; }
+    for(var j = 0; j < list.length; j++){
+      var e = list[j], k = e && (e.nkey || e.key);
+      if(k) out.push(k);
+    }
+    return out;
+  }
+
+  window.__stakeByBearer = function(i, col){
+    var b = bag(false); if(!b) return null;
+    var keys = cardKeys(i, col); if(!keys.length) return null;
+    var on = {}, j;
+    for(j = 0; j < keys.length; j++) on[keys[j]] = 1;
+    for(var sk in b){
+      if(!Object.prototype.hasOwnProperty.call(b, sk)) continue;
+      var r = b[sk];
+      if(!r || !r.bearer || !on[r.bearer]) continue;
+      var tx = stakeText(sk); if(!tx) continue;
+      /* level carries WHOSE rather than which scale — the caller renders it in the echo's level slot */
+      return { text: tx, level: nameFor(r.bearer) || 'bearer', own: false, bearer: r.bearer, stakeKey: sk };
+    }
+    return null;
+  };
+
+  /* ---------- the picker menu ---------- */
+  function closeMenu(){ var m = document.getElementById('stkPickMenu'); if(m && m.parentNode) m.parentNode.removeChild(m); }
+  document.addEventListener('click', function(e){
+    var m = document.getElementById('stkPickMenu');
+    if(m && !m.contains(e.target)) closeMenu();
+  }, true);
+
+  function openPicker(anchor, curKey, onPick){
+    closeMenu();
+    var menu = document.createElement('div'); menu.id = 'stkPickMenu'; menu.className = 'stk-menu';
+
+    var row = function(label, sub, val, isCur){
+      var b = document.createElement('button'); b.type = 'button'; b.className = 'stk-menu-row' + (isCur ? ' on' : '');
+      var t = document.createElement('span'); t.className = 'stk-menu-tx'; t.textContent = label; b.appendChild(t);
+      if(sub){ var s = document.createElement('span'); s.className = 'stk-menu-sub'; s.textContent = sub; b.appendChild(s); }
+      b.addEventListener('click', function(ev){ ev.stopPropagation(); closeMenu(); onPick(val); });
+      return b;
+    };
+
+    menu.appendChild(row('— none —', '', '', !curKey));
+
+    var els = [];
+    try { var p = plan(); els = (p && p.storyElements) ? (p.storyElements() || []) : []; } catch(e){ els = []; }
+    var seen = {}, listed = 0;
+    for(var j = 0; j < els.length; j++){
+      var it = els[j], k = it && (it.key || it.nkey), w = it && (it.w || it);
+      if(!k || seen[k]) continue;
+      if(w && w.cat === 'stakes') continue;               /* a stake is not its own bearer or threat */
+      seen[k] = 1; listed++;
+      menu.appendChild(row(nameFor(k) || (w && (w.name || w.word)) || k, catNameFor(w && w.cat), k, k === curKey));
+    }
+    if(!listed){
+      var none = document.createElement('div'); none.className = 'stk-menu-empty';
+      none.textContent = 'No elements in this story yet.';
+      menu.appendChild(none);
+    }
+
+    document.body.appendChild(menu);
+    var r = anchor.getBoundingClientRect();
+    var top = r.bottom + 4, left = r.left;
+    menu.style.left = Math.max(8, Math.min(left, window.innerWidth - menu.offsetWidth - 8)) + 'px';
+    menu.style.top = Math.max(8, Math.min(top, window.innerHeight - menu.offsetHeight - 8)) + 'px';
+  }
+
+  /* ---------- the npCard section ---------- */
+  window.__stakeCardSection = function(body, w, key){
+    try {
+      if(!body || !w || w.cat !== 'stakes' || !key) return;
+      if(body.querySelector('.npc-stakebt')) return;      /* renderNpCard rebuilds; never double-append */
+
+      var sec = document.createElement('div'); sec.className = 'npc-stakebt';
+      var lab = document.createElement('span'); lab.className = 'npc-seclbl'; lab.textContent = 'At risk';
+      sec.appendChild(lab);
+
+      var slot = function(field, caption, hint){
+        var pill = document.createElement('span'); pill.className = 'stk-slot';
+        var cap = document.createElement('span'); cap.className = 'stk-slot-cap'; cap.textContent = caption; pill.appendChild(cap);
+        var val = document.createElement('span'); val.className = 'stk-slot-val';
+        var cur = (rec(key) || {})[field] || '';
+        val.textContent = cur ? (nameFor(cur) || cur) : hint;
+        if(!cur) val.classList.add('stk-slot-empty');
+        pill.appendChild(val);
+        pill.title = caption + ' — ' + hint;
+        pill.addEventListener('click', function(ev){
+          ev.stopPropagation();
+          openPicker(pill, (rec(key) || {})[field] || '', function(picked){
+            setField(key, field, picked);
+            var nk = (rec(key) || {})[field] || '';
+            val.textContent = nk ? (nameFor(nk) || nk) : hint;
+            val.classList.toggle('stk-slot-empty', !nk);
+            try { if(typeof window.__planRefreshPlot === 'function') window.__planRefreshPlot(); } catch(e){}
+          });
+        });
+        return pill;
+      };
+
+      sec.appendChild(slot('bearer', 'Bearer', 'who could lose it'));
+      sec.appendChild(slot('threat', 'Threat', 'what is taking it'));
+
+      var d = '';
+      try { if(typeof descFor === 'function') d = descFor(w) || ''; } catch(e){}
+      if(d){ var dd = document.createElement('div'); dd.className = 'stk-desc'; dd.textContent = d; sec.appendChild(dd); }
+
+      body.appendChild(sec);
+    } catch(e){}
+  };
+})();
 </script>
 </body></html>
