@@ -271,10 +271,24 @@ const FILE = process.argv[2] || (__dirname + '/../out.html');
     let list = [], stored = [];
     try { list = (BONDS.groupList() || []).map(g => ({ id: g.id, name: g.name, type: g.type, n: (g.members || []).length })); }
     catch (e) { list = [{ id: 'ERR ' + e.message }]; }
-    try { const s = JSON.parse(localStorage.getItem('dystoria.bonds.v1.' + (typeof storyId === 'function' ? storyId() : '')) || '{}');
+    // storyId() is private to the Bonds module: the old spelling read '' and got
+    // {}, so "the party was not copied into the store" passed by measuring
+    // nothing. Find the store by prefix and report whether it was found at all.
+    let key = null;
+    for (let i = 0; i < localStorage.length; i++) {
+      const n = localStorage.key(i);
+      if (n && n.indexOf('dystoria.bonds.v1.') === 0) { key = n; break; }
+    }
+    try { const s = JSON.parse(localStorage.getItem(key) || '{}');
       stored = ((s && s.groups) || []).map(g => g.id); } catch (e) {}
-    return { list, stored };
+    return { list, stored, storeKey: key };
   });
+  // What actually proves "read, not copied" is the ID PREFIX: `src:party:` is
+  // minted by sourced() on every read and is never what saveGroup() writes — a
+  // materialised group carries its own `bg<n>` id. The store check below is the
+  // second line of defence and is CONDITIONAL on a store existing, because Bonds
+  // writes nothing until the writer does something that needs writing; an absent
+  // store is the strongest form of "nothing was copied", not a hole in the test.
   const parties = bonds.list.filter(g => /^src:party:/.test(g.id));
   const charts = bonds.list.filter(g => /^src:chart:/.test(g.id));
   ok(parties.length === 1, 'Bonds shows ' + parties.length + ' party groups: ' + JSON.stringify(bonds.list));
@@ -282,7 +296,9 @@ const FILE = process.argv[2] || (__dirname + '/../out.html');
   if (parties[0]) {
     ok(parties[0].type === 'social', 'the party is type "' + parties[0].type + '", not social');
     ok(parties[0].n === 4, 'the party carries ' + parties[0].n + ' members in Bonds (3 people + its own group element)');
-    ok(bonds.stored.indexOf(parties[0].id) < 0, 'the party was COPIED into the Bonds store — it must only be read');
+    ok(/^src:party:/.test(parties[0].id), 'the party carries a stored id (' + parties[0].id + ') — it was materialised, not read');
+    ok(!bonds.storeKey || bonds.stored.indexOf(parties[0].id) < 0,
+       'the party was COPIED into the Bonds store (' + bonds.storeKey + ') — it must only be read');
   }
 
   // ---- 8. renaming the party renames its element -------------------------
