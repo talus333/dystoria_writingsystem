@@ -20730,11 +20730,17 @@ function wordKey(w){ return (w.set || 0) + '|' + w.cat + '|' + w.word + (w.iid ?
 // story — so the common single-being case is untouched, but duplicates ("three Gods") become distinct elements.
 function ensureDistinctBeing(built){
   try {
-    if (!built || built.role !== 'being' || built.iid) return;
-    const same = w => w && w !== built && w.role === 'being' && (w.set || 0) === (built.set || 0) && w.cat === built.cat && w.word === built.word;
+    if (!built || built.iid) return;
+    /* v.557b: orgs need this as much as beings. A group's identity is its NAME and
+       wordKey does not carry one, so two guilds were one element. */
+    const kind = (built.role === 'being') ? 'being' : (built.cat === 'org' ? 'org' : null);
+    if (!kind) return;
+    const same = w => w && w !== built
+      && ((kind === 'being') ? (w.role === 'being') : (w.cat === 'org'))
+      && (w.set || 0) === (built.set || 0) && w.cat === built.cat && w.word === built.word;
     let clash = ((state.prompt && state.prompt.words) || []).some(same);
     if (!clash && state.frames) clash = state.frames.some(fr => (((fr.prompt && fr.prompt.words) || []).some(same)));
-    if (clash) built.iid = 'b' + Math.random().toString(36).slice(2, 8) + (Date.now() % 100000).toString(36);
+    if (clash) built.iid = (kind === 'being' ? 'b' : 'o') + Math.random().toString(36).slice(2, 8) + (Date.now() % 100000).toString(36);
   } catch(e){}
 }
 // ---- Threads: colour-coded storylines grouping beings/stakes/motivations/events (keyed by wordKey so they hold across sections) ----
@@ -42370,6 +42376,7 @@ document.addEventListener('DOMContentLoaded', init);
       const attrs=[]; GB.slots.forEach(sl=>{ if(sl.sub==='Kind') return; if(!sl.word) return; attrs.push({ word:sl.word, sub:sl.sub }); });
       built.attrs=attrs;
       const nm=(GB.name||'').trim(); if(nm) built.name=nm;
+      try{ if(typeof ensureDistinctBeing==='function') ensureDistinctBeing(built); }catch(e){}   /* v.557b: two guilds are two elements */
       const idx=state.prompt.words.length;
       state.prompt.words.push(built);
       const desc=(GB.desc||'').trim();
@@ -51392,7 +51399,7 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.556';
+  var APP_VERSION = '2026.07.20.557';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
     { v:'2026.07.20.522', date:'August 27, 2026', notes:[
@@ -68357,6 +68364,36 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
     return out;
   };
 
+  /* v.557: make (or find) the org element that stands for a group. Lives here
+     because it writes into state.prompt.words, which is this file's business and
+     not the Bonds module's. Returns the element key, or null if it could not.
+     Idempotent on name, so making "The Night Court" twice does not make two. */
+  window.dystEnsureGroupElement = function(name){
+    try{
+      var nm = String(name || '').trim(); if (!nm) return null;
+      if (typeof state === 'undefined' || typeof wordKey !== 'function') return null;
+      if (typeof ensureSession === 'function') ensureSession();
+      if (!state.prompt){ state.prompt = { words:[], sets:1, links:[], removedLinks:[] };
+        state.activeSet = 0; state.frames = [{ gap:null, prompt:state.prompt }]; state.frameIdx = 0; }
+      var low = nm.toLowerCase();
+      var hit = (state.prompt.words || []).find(function(w){
+        return w && w.cat === 'org' && String(w.name || w.word || '').trim().toLowerCase() === low; });
+      if (hit) return wordKey(hit);
+      var s = Math.min(state.activeSet || 0, (state.prompt.sets || 1) - 1);
+      var built = (typeof ecBuildItem === 'function')
+        ? ecBuildItem('Organization', '', s, 'org')
+        : { word:'Organization', cat:'org', sub:'', set:s, role:'word', scope:'story' };
+      built.name = nm;
+      try{ if (typeof ensureDistinctBeing === 'function') ensureDistinctBeing(built); }catch(e){}
+      state.prompt.words.push(built);
+      if (state.session) state.session.words = state.prompt.words;
+      if (typeof layoutConstellation === 'function') layoutConstellation();
+      if (typeof scheduleAutosave === 'function') scheduleAutosave();
+      if (typeof renderNpElements === 'function') renderNpElements();
+      if (typeof renderStoryLibrary === 'function') renderStoryLibrary();
+      return wordKey(built);
+    }catch(e){ return null; }
+  };
   B.roster = roster;   // for verification
 })();
 </script>
@@ -69939,12 +69976,18 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
     try{ by = BONDS.roster(); }catch(e){ return out; }
     var d = planBlob();
     var trees = d.groupTrees || {};
-    Object.keys(trees).forEach(function(gk){
+    /* v.557: walk the ROSTER, not the charts. Every element of cat:'org' IS a
+       group here — the chart supplies members when one exists, and an org with
+       no chart yet is still a group the writer named and should be able to open.
+       The old `ks.length < 2` guard is gone with the old loop: it kept a
+       half-built chart out of the band, and in doing so kept every new group out
+       of Bonds until a chart had been drawn for it. */
+    Object.keys(by).forEach(function(gk){
+      if (!by[gk] || by[gk].cat !== 'org') return;
       var t = trees[gk] || {}, ks = [];
       (t.nodes || []).forEach(function(nd){ if (nd && nd.beingKey && by[nd.beingKey] && ks.indexOf(nd.beingKey) < 0) ks.push(nd.beingKey); });
-      if (by[gk] && ks.indexOf(gk) < 0) ks.unshift(gk);
-      if (ks.length < 2) return;
-      out.push({ id:'src:chart:' + gk, name:(by[gk] && by[gk].label) || 'A group chart',
+      if (ks.indexOf(gk) < 0) ks.unshift(gk);
+      out.push({ id:'src:chart:' + gk, name:(by[gk] && by[gk].label) || 'A group',
                  type:'political', lens:'faction', members:ks,
                  source:{ kind:'chart', key:gk } });
     });
@@ -69977,6 +70020,7 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
       have[g.id] = g;
       if (g.source) from[g.source.kind + ':' + g.source.key] = 1;
       if (g.fromGroup) from[g.fromGroup] = 1;      /* an older imported copy stands in for it */
+      if (g.el) from['chart:' + g.el] = 1;         /* v.557: this group IS that org element — do not read it twice */
     });
     var hiddenIds = {}; (s.groups || []).forEach(function(g){ if (g && g.hidden) hiddenIds[g.id] = 1; });
     var out = kept.slice();
@@ -70535,6 +70579,15 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
         var have = {}; gp.members.forEach(function(k){ have[k] = 1; });
         chosen.forEach(function(k){ if (!have[k]){ have[k] = 1; gp.members.push(k); } });
       }
+      /* v.557: the group is also an ELEMENT, so it reaches Elements, the notepad,
+         the Story Legend and the wiki — every one of which reads the word list.
+         Stamped onto the group as `el` so groups() knows the two are one thing
+         and does not list it twice. Failure here must not lose the group, which
+         is why the element is attempted BEFORE saveGroup and only recorded if it
+         actually came back. */
+      try{ var _ek = (typeof window.dystEnsureGroupElement === 'function')
+                     ? window.dystEnsureGroupElement(nm) : null;
+           if (_ek) gp.el = _ek; }catch(e){}
       saveGroup(gp);
       m.ui.group = gp.id; m.ui.kind = lensOfGroup(gp); m.ui.sel = null;
       close(); V.render(m);
