@@ -159,6 +159,44 @@ const eq = (got, want, label) => ok(got === want, label + ' (got ' + JSON.string
   ok(gl.orgNames.indexOf('Suite Order') >= 0, 'and it is an element too (v.557)');
   eq(gl.names.filter(n=>n==='Suite Order').length, 1, 'it appears in Bonds exactly once');
 
+  // ---- v.558: the group's own node is the title, not a peer ---------------
+  const anchor = await p.evaluate(async () => {
+    const ros = BONDS.roster();
+    const beings = Object.keys(ros).filter(k=>ros[k].cat==='being').slice(0,3);
+    const ek = window.dystEnsureGroupElement ? window.dystEnsureGroupElement('Anchor Test') : null;
+    if (!ek) return { skip:'no dystEnsureGroupElement' };
+    const k = 'dystoria.bonds.v1.' + state.session.id;
+    const st = JSON.parse(localStorage.getItem(k)||'{}');
+    st.groups = st.groups || [];
+    st.groups.push({ id:'ganchortest', name:'Anchor Test', type:'political', lens:'faction',
+                     el:ek, members:[ek].concat(beings) });
+    localStorage.setItem(k, JSON.stringify(st));
+    try{ goMode('notepad'); }catch(e){}
+    await new Promise(r=>setTimeout(r,700));
+    try{ if(window.__planSetView) window.__planSetView('bonds'); }catch(e){}
+    await new Promise(r=>setTimeout(r,2000));
+    const pill = [...document.querySelectorAll('.bn-set')].find(x=>/Anchor Test/.test(x.textContent));
+    if (pill) pill.click();
+    await new Promise(r=>setTimeout(r,2000));
+    const ns = [...document.querySelectorAll('.bn-node')].map(x=>{ const cs=getComputedStyle(x);
+      return { anchor:x.classList.contains('bn-anchor'), radius:cs.borderTopLeftRadius,
+               bg:cs.backgroundColor, border:parseFloat(cs.borderTopWidth)||0 }; });
+    return { nodes:ns.length, anchors:ns.filter(n=>n.anchor), members:ns.filter(n=>!n.anchor) };
+  });
+  if (anchor.skip) { fails.push('anchor case skipped: ' + anchor.skip); }
+  else {
+    ok(anchor.nodes > 1, 'the canvas drew the group and its members (' + anchor.nodes + ' nodes)');
+    eq(anchor.anchors.length, 1, 'exactly ONE node is the anchor');
+    const a = anchor.anchors[0] || {}, m0 = anchor.members[0] || {};
+    ok(a.radius && m0.radius && a.radius !== m0.radius,
+       'the anchor has a different corner radius from a member (' + a.radius + ' vs ' + m0.radius + ')');
+    ok(a.bg && m0.bg && a.bg !== m0.bg,
+       'the anchor has a different ground from a member (' + a.bg + ' vs ' + m0.bg + ')');
+    ok(a.border > 0, 'the anchor carries a border a member does not');
+    ok(anchor.members.every(x => x.radius === m0.radius),
+       'every member keeps the pill radius — only the anchor changed');
+  }
+
   ok(errs.length === 0, 'no page errors (' + errs.slice(0,2).join(' | ') + ')');
 
   console.log('t_bonds: ' + pass + ' passed, ' + fails.length + ' failed  (' + require('path').basename(FILE) + ')');
