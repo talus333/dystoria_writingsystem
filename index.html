@@ -21849,7 +21849,8 @@ function openElementEdit(key){
 try{ window.openElementEdit = openElementEdit; }catch(e){}
 // When an element's identity word (and thus its wordKey) changes, move every piece of data indexed by the old key
 // to the new key so nothing is orphaned: notepad notes (incl. per-section / connection / part composites), images,
-// dossier text, Writing-Focus membership, and (via the plan bridge) arcs, goal links, and group-chart membership.
+// dossier text, image positions, aliases, stake records (and the bearer/threat INSIDE them), standing bonds,
+// Explore links, and (via the plan bridge) arcs, goal links, group-chart membership and a thread's linked elements.
 function migrateElementKey(oldKey, newKey){
   try{
     if (!oldKey || !newKey || oldKey === newKey) return;
@@ -21871,6 +21872,32 @@ function migrateElementKey(oldKey, newKey){
       remapExact(s.npNoteMeta);
       remapDossier(s.npDossier);
       if (Array.isArray(s.npEls)) s.npEls = s.npEls.map(k => k === oldKey ? newKey : k);
+      /* v.570 — SIX stores that were keyed by element key and were not being followed. Each was
+         verified broken before the fix and green after; the audit harness is `renameaudit.js`.
+         The comment above this function lists what it carries: keep that list and this code in step. */
+      remapExact(s.npImagePos);      /* sat ONE LINE from npImages in the delete path, and was missed here */
+      remapExact(s.elAliases);       /* v.458's one canonical alias map — a rename dropped every alias */
+      remapExact(s.stakeData);       /* v.562 — the stake's own record: bearer, threat and axis, all lost */
+      /* stakeData's VALUES are element keys too: a renamed character stops being anyone's bearer. */
+      if (s.stakeData) Object.keys(s.stakeData).forEach(k => {
+        const r = s.stakeData[k]; if (!r) return;
+        if (r.bearer === oldKey) r.bearer = newKey;
+        if (r.threat === oldKey) r.threat = newKey;
+      });
+      /* standing bonds (v.412) are keyed by element key and have NEVER been migrated — a rename
+         silently detached the renamed element from every relationship it stood in. */
+      if (Array.isArray(s.bonds)) s.bonds.forEach(bd => {
+        if (!bd) return;
+        if (bd.a === oldKey) bd.a = newKey;
+        if (bd.b === oldKey) bd.b = newKey;
+      });
+      /* expLinks entries are `<wordKey>>><libKey>`. '>>' is deliberately NOT added to the rekey
+         regex's delimiter set — that regex also runs over npNotes, and widening it there to serve
+         one store would be a change nobody could see the blast radius of. */
+      if (Array.isArray(s.expLinks)) s.expLinks = s.expLinks.map(k => {
+        const t = String(k), p = t.indexOf('>>');
+        return (p > 0 && t.slice(0, p) === oldKey) ? (newKey + t.slice(p)) : k;
+      });
     }
     if (typeof state !== 'undefined' && Array.isArray(state.focusKeys)) state.focusKeys = state.focusKeys.map(k => k === oldKey ? newKey : k);
     if (typeof window.__dystMigrateKey === 'function') window.__dystMigrateKey(oldKey, newKey);   // plan layer: arcs, goal links, group-chart nodes
@@ -51504,9 +51531,20 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.568';
+  var APP_VERSION = '2026.07.20.571';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.571', date:'September 2, 2026', notes:[
+      '**Your story’s stakes are now actually on the Plot grid.** A quiet **STORY STAKES** bar sits above the grid with what’s ultimately at risk, and every card’s popup opens with a **Stakes** line showing the stake in force there — the card’s own if you’ve pinned one, otherwise the one it inherits, labelled with where it came from (story, thread or part). **All of this was written, styled and finished long ago and simply never placed on the page**; the line that put it there had never been written. ',
+      '**And a stake pill will now take you to the stake.** Press the feather on one and you land on what’s behind it — **its element card**, with who bears it, what threatens it and the axis of the struggle, if you’ve made it an element (the Story Legend’s ›＋ add‹ does that in one press); otherwise the story or thread stake’s own notes.',
+      '_The stake note chips inside a card now read **Story stake** and **Thread stake** rather than repeating the stake’s words, which the new Stakes line above them already says — and two different stakes are told apart by their level instead of by remembering which name was whose._',
+    ]},
+    { v:'2026.07.20.570', date:'September 2, 2026', notes:[
+      '**Renaming an element no longer quietly detaches it from your story.** Eight things that point at an element by name were not following it when you changed that name: its **relationships** (a renamed character silently stood in none of them), its **stake record** — and anywhere it was named as a stake’s bearer or threat — its **other names**, the **position of its picture** on its card, its **Explore links**, and, on a thread, the **linked element row and the note you wrote on it**. All eight now move with the rename, the way notes and images already did.',
+    ]},
+    { v:'2026.07.20.569', date:'September 2, 2026', notes:[
+      '**The Legend’s stake offer now counts every stake in the story.** It could already see the ones on your story, your Parts and your threads; it now also sees the ones pinned to individual **scene cards** and the **cost** on an arc — so the number it gives you is the real one.',
+    ]},
     { v:'2026.07.20.568', date:'September 2, 2026', notes:[
       '**The stakes you already set can become elements, when you say so.** If your story, a Part or a thread carries a stake that is only a word, the Story Legend now says so at the bottom — _“3 stakes here aren’t elements yet”_ — with a **＋ add** beside it. Press it and each becomes a proper Stakes element with its own card, its Bearer, Threat and Axis. **Nothing is created until you press it**, and the line disappears when there is nothing left to add. [Jeremy]',
     ]},
@@ -55586,6 +55624,14 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
       if(data.groupTrees[oldKey]!==undefined && data.groupTrees[newKey]===undefined){ data.groupTrees[newKey]=data.groupTrees[oldKey]; delete data.groupTrees[oldKey]; }
       Object.keys(data.groupTrees).forEach(function(gk){ var t=data.groupTrees[gk]; if(!t||!Array.isArray(t.nodes)) return; t.nodes.forEach(function(n){ if(n && n.beingKey===oldKey) n.beingKey=newKey; }); });
     }
+    /* v.570 — a thread's linked elements and their per-element notes. `plotDefEls`/`plotDefElNote`
+       are read by the plot card, the card popup and __planColFacts; a rename left the row pointing at
+       an element that no longer exists, so its label went blank and its note became unreachable. */
+    if(data.plotDefs) Object.keys(data.plotDefs).forEach(function(cid){
+      var r=data.plotDefs[cid]; if(!r) return;
+      if(Array.isArray(r.els)) r.els.forEach(function(el){ if(el && el.nkey===oldKey) el.nkey=newKey; });
+      if(r.elNotes && r.elNotes[oldKey]!==undefined){ if(r.elNotes[newKey]===undefined) r.elNotes[newKey]=r.elNotes[oldKey]; delete r.elNotes[oldKey]; }
+    });
     if(data.conceptMap && Array.isArray(data.conceptMap.nodes)){ data.conceptMap.nodes.forEach(function(n){ if(n && n.conceptKey===oldKey) n.conceptKey=newKey; }); }
     if(Array.isArray(data.conceptGroups)){ data.conceptGroups.forEach(function(g){ if(g&&g.map&&Array.isArray(g.map.nodes)) g.map.nodes.forEach(function(n){ if(n && n.conceptKey===oldKey) n.conceptKey=newKey; }); }); }
     save();
@@ -56916,7 +56962,19 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     var tx=document.createElement('span'); tx.className='pl-stake-tx'; tx.textContent=text; pill.appendChild(tx);
     if(opts.level && !opts.own){ var lv=document.createElement('span'); lv.className='pl-stake-lvl'; lv.textContent=opts.level; pill.appendChild(lv); }
     if(opts.onEdit){ pill.title=(opts.own?'Edit':'Set')+' — what’s at risk here'; pill.addEventListener('click', function(e){ e.stopPropagation(); opts.onEdit(pill); }); pill.style.cursor='pointer'; }
-    if(opts.onFeather){ var qf=document.createElement('span'); qf.className='pl-stake-feather'; qf.title='Open this stake’s notes in the notepad'; qf.innerHTML=(typeof ICONS!=='undefined'&&ICONS.feather)?ICONS.feather:'✎';
+    /* v.571 — the feather was BUILT (this option), STYLED in both themes (.pl-stake-feather, plus a
+       v.529 Classic hover rule) and given two destinations — openStoryStakeNote / openThreadStakeNote,
+       each commented "this is what the plot grid's ... feather targets" — and **no caller ever passed
+       onFeather**, so none of it was ever on screen and neither function was ever reached.
+       Resolving the destination HERE means every pill gets it and any future call site does too
+       (one maker per control). Where the stake's words name a Stakes ELEMENT that element's card is
+       its home — bearer, threat, axis and its notes are all on it — and that is #46 1b's convergence:
+       the pill starts reaching the card the moment the Story Legend's ＋ add is pressed. Where they
+       do not, the caller's own note is the home the stake has always had. */
+    var _stEl = null;
+    try { if(typeof window.__stakeElByText === 'function') _stEl = window.__stakeElByText(text); } catch(e){}
+    if(_stEl) opts.onFeather = function(){ try{ if(window.__openStakeEl) window.__openStakeEl(_stEl); }catch(e){} };
+    if(opts.onFeather){ var qf=document.createElement('span'); qf.className='pl-stake-feather'; qf.title=_stEl?'Open this stake’s card':'Open this stake’s notes in the notepad'; qf.innerHTML=(typeof ICONS!=='undefined'&&ICONS.feather)?ICONS.feather:'✎';
       var _qs=qf.querySelector('svg'); if(_qs){ _qs.setAttribute('width','11'); _qs.setAttribute('height','11'); _qs.style.width='11px'; _qs.style.height='11px'; _qs.style.display='block'; _qs.style.flex='none'; }   // constrain inline (some SVGs ship no width/height and balloon to fill the pill)
       qf.addEventListener('click', function(e){ e.stopPropagation(); opts.onFeather(); }); pill.appendChild(qf); }
     if(opts.own && opts.onClear){ var x=document.createElement('span'); x.className='pl-stake-x'; x.textContent='×'; x.title='Clear this stake'; x.addEventListener('click', function(e){ e.stopPropagation(); opts.onClear(); }); pill.appendChild(x); }
@@ -56973,19 +57031,28 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     var bar=document.createElement('div'); bar.className='pl-storystake'+(s?'':' pl-storystake-empty');
     var lbl=document.createElement('span'); lbl.className='pl-storystake-lbl'; lbl.textContent='Story stakes'; bar.appendChild(lbl);
     var edit=function(_an){ editStake(_an, a.storyStake(), 'What’s ultimately at risk in this story?', function(v){ a.setStoryStake(v); scheduleReplot(); }); };
-    if(s){ bar.appendChild(stakePill(s, { own:true, onEdit:edit, onClear:function(){ a.setStoryStake(''); scheduleReplot(); } })); }
+    if(s){ bar.appendChild(stakePill(s, { own:true, onEdit:edit, onFeather:(a&&a.openStoryStakeNote)?function(){ a.openStoryStakeNote(); }:null, onClear:function(){ a.setStoryStake(''); scheduleReplot(); } })); }
     else { bar.appendChild(stakeAdd(edit)); }
     return bar;
   }
   // The stake row inside the card popup: this card's own stake (editable), or the stake it inherits, with a ＋ to pin a local one.
   function buildCardStakeRow(i, col){
+    var a=api();                       /* v.571 — was reading an outer `a`; declare it, as every sibling does */
     var row=document.createElement('div'); row.className='pl-cardpop-stakerow';
     var lbl=document.createElement('span'); lbl.className='pl-cardpop-stakelbl'; lbl.textContent='Stakes'; row.appendChild(lbl);
     var refresh=function(){ if(row.parentNode) row.parentNode.replaceChild(buildCardStakeRow(i, col), row); };
     var edit=function(_an){ editStake(_an, cardStake(i, col), 'What’s at risk in this scene?', function(v){ cardStakeSet(i, col, v); refresh(); scheduleReplot(); }); };
     var own=cardStake(i, col);
     if(own){ row.appendChild(stakePill(own, { own:true, onEdit:edit, onClear:function(){ cardStakeSet(i, col, ''); refresh(); scheduleReplot(); } })); }
-    else { var r=resolveCardStake(i, col); if(r){ row.appendChild(stakePill(r.text, { own:false, level:r.level, onEdit:edit })); } else { row.appendChild(stakeAdd(edit)); } }
+    else { var r=resolveCardStake(i, col);
+      if(r){
+        /* the echo's fallback destination is the LEVEL it came from, so the feather opens the note
+           that actually holds this text rather than a note for the card it is only showing on */
+        var _ef=null;
+        if(r.level==='story' && a && a.openStoryStakeNote) _ef=function(){ a.openStoryStakeNote(); };
+        else if(r.level==='thread' && a && a.openThreadStakeNote) _ef=function(){ a.openThreadStakeNote(col.id); };
+        row.appendChild(stakePill(r.text, { own:false, level:r.level, onEdit:edit, onFeather:_ef }));
+      } else { row.appendChild(stakeAdd(edit)); } }
     return row;
   }
   // One-time: the old "Main Plot" column is gone. Convert its content into a real, nameable thread that becomes the
@@ -57471,6 +57538,9 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
       var _endsp=document.createElement('div'); _endsp.className='pl-pcell pl-rowend'; grid.appendChild(_endsp);
       grid.appendChild(insertRow(i));   // full-width insert row after this section (between-sections + end)
     })(i); }
+    /* v.571 — storyStakeBanner has existed, complete, since the stakes work went in, and NOTHING
+       CALLED IT. Same for buildCardStakeRow below. This is the line that was never written. */
+    try{ var _ssb=storyStakeBanner(); if(_ssb) host.appendChild(_ssb); }catch(e){}
     wrap.appendChild(grid); host.appendChild(wrap);
     if(_psx||_psy){ wrap.scrollLeft=_psx; wrap.scrollTop=_psy; if(typeof requestAnimationFrame==='function') requestAnimationFrame(function(){ try{ wrap.scrollLeft=_psx; wrap.scrollTop=_psy; }catch(e){} }); }   // restore scroll after the rebuild so a drop doesn't jump the panel
     if(typeof requestAnimationFrame==='function') requestAnimationFrame(updatePlotOverflow);   // recompute which frozen bands need their separator
@@ -58094,6 +58164,20 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
      Per-section cards come along because that is the chapter an arc column IS — a
      per-section account of a change, with the goalposts that land in each section. It is
      the material `buildCellText` assembles for the .xls (v.422), read the same way. */
+  /* v.569 — the two stake surfaces that live in THIS closure's `data` and are therefore invisible to
+     an appended layer: the per-card stakes and the arcs' cost. The Story Legend's "not elements yet"
+     offer differences these against the elements that exist, so without this it could only ever
+     report what __dystPlan.allStakeValues() can see (story · Parts · threads). */
+  window.__planStakeValues = function(){ try {
+    if(typeof data==='undefined' || !data){ if(typeof load==='function') load(); }
+    if(!data) return [];
+    var out=[], seen={};
+    var add=function(t){ t=String(t==null?'':t).trim(); if(t && !seen[t.toLowerCase()]){ seen[t.toLowerCase()]=1; out.push(t); } };
+    Object.keys(data.plotCardStakes||{}).forEach(function(k){ add(data.plotCardStakes[k]); });
+    Object.keys(data.arcs||{}).forEach(function(id){ var a=data.arcs[id]; if(a) add(a.cost); });
+    return out;
+  } catch(e){ return []; } };
+
   window.__planColFacts = function(){
     try{
       if(typeof data==='undefined' || !data){ if(typeof load==='function') load(); }
@@ -58503,14 +58587,21 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
           pillsRow0.appendChild(c);
         });
         var _storyStk=(a&&a.storyStake)?a.storyStake():''; var _threadStk=colStake(col);
-        function _stakeChip(which, label){
+        /* v.571 — these chips used to be labelled with the stake's own words, which was the only
+           place the popup named the stake. The stake ROW above now names it (and says which level it
+           came from), so repeating the text one line down was the same words twice in two cases and
+           two type styles. A chip here is a NOTE TAB: it says what writing in it is about. The text
+           moves to the title, and two different stakes are now told apart by their level rather than
+           by the writer remembering which name was whose. */
+        function _stakeChip(which, label, what){
           var c=mkChip0(label, active0.stake===which, function(){ active0.key=null; active0.stake=which; loadNote0(); renderPills0(); }, 'stk');
+          c.title='How this card addresses '+(String(what||'').trim()||'the stake');
           var ft=document.createElement('span'); ft.className='pl-cpf'; ft.innerHTML=ICONS.feather; ft.title='Open this stake note under this thread in the notepad';
           ft.addEventListener('click', function(e){ e.stopPropagation(); closeCardPopup(); if(a && a.threadCardStakeNote) a.threadCardStakeNote(col.id, i, which); });
           c.appendChild(ft); pillsRow0.appendChild(c);
         }
-        if(_storyStk) _stakeChip('story', _storyStk);
-        if(_threadStk) _stakeChip('thread', _threadStk);
+        if(_storyStk) _stakeChip('story', 'Story stake', _storyStk);
+        if(_threadStk) _stakeChip('thread', 'Thread stake', _threadStk);
         list.filter(_isEv).forEach(_elChip);
         list.filter(function(el){ return !_isEv(el); }).forEach(_elChip);
         var addb=document.createElement('button'); addb.className='pl-cardpop-linkb'; addb.textContent='+ link element';
@@ -58551,7 +58642,9 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
       }
       function el0(t,c,txt){ var e=document.createElement(t); e.className=c; if(txt!=null) e.textContent=txt; return e; }
       renderPills0(); loadNote0(); renderGoals();
-      panel.appendChild(sub0); panel.appendChild(pillsRow0);
+      panel.appendChild(sub0);
+      try{ var _csr0=buildCardStakeRow(i, col); if(_csr0) panel.appendChild(_csr0); }catch(e){}
+      panel.appendChild(pillsRow0);
       if(_isArc && !_sid) panel.appendChild(goalRow);
       panel.appendChild(traitBar0);   // sub + pills + trait chips span full width; the rail begins below them
       var main0=document.createElement('div'); main0.className='pl-cardpop-main'; main0.appendChild(ta0);
@@ -58600,7 +58693,9 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     function refreshFoot(){ if(railEl && railEl.parentNode){ var nf=cardRail(i, col); railEl.parentNode.replaceChild(nf, railEl); railEl=nf; } }
     var traitBar=document.createElement('div'); traitBar.className='pl-cardpop-traits';
     renderPills(); loadNote();
-    panel.appendChild(sub); panel.appendChild(pillsRow); panel.appendChild(traitBar);   // sub + pills + trait chips span full width; the rail begins below them
+    panel.appendChild(sub);
+    try{ var _csr=buildCardStakeRow(i, col); if(_csr) panel.appendChild(_csr); }catch(e){}
+    panel.appendChild(pillsRow); panel.appendChild(traitBar);   // sub + pills + trait chips span full width; the rail begins below them
     var mainC=document.createElement('div'); mainC.className='pl-cardpop-main'; mainC.appendChild(ta);
     var bodyC=document.createElement('div'); bodyC.className='pl-cardpop-body'; bodyC.appendChild(mainC); bodyC.appendChild(railEl);
     panel.appendChild(bodyC);
@@ -79090,9 +79185,9 @@ body.eink .stk-offer-tx,body.eink .stk-offer-btn{color:#000; border-color:#000; 
   function plan(){ return window.__dystPlan || null; }
 
   /* stake values in use anywhere, minus the ones that already have an element.
-     allStakeValues() covers story · parts · threads · existing cat:'stakes' elements. Card stakes and
-     arc costs live in the Plan closure's own `data` and are not reachable from here — so this offers
-     what it can honestly see, and says a number rather than claiming completeness. */
+     allStakeValues() covers story · parts · threads · existing cat:'stakes' elements; __planStakeValues()
+     (v.569) adds the card stakes and arc costs, which live in the Plan closure's own `data`. Between
+     them that is every stake surface the app has. */
   function missing(){
     var p = plan();
     if(!p || !p.allStakeValues || !p.storyElements) return [];
@@ -79103,11 +79198,16 @@ body.eink .stk-offer-tx,body.eink .stk-offer-btn{color:#000; border-color:#000; 
       var t = String(w.name || w.word || '').trim().toLowerCase();
       if(t) have[t] = 1;
     });
-    var out = [];
-    (p.allStakeValues() || []).forEach(function(v){
-      var t = String(v == null ? '' : v).trim();
-      if(t && !have[t.toLowerCase()]) out.push(t);
-    });
+    var out = [], added = {};
+    var take = function(v){
+      var t = String(v == null ? '' : v).trim(); if(!t) return;
+      var lc = t.toLowerCase();
+      if(have[lc] || added[lc]) return;
+      added[lc] = 1; out.push(t);
+    };
+    (p.allStakeValues() || []).forEach(take);
+    /* v.569 — plus the card stakes and arc costs, which live in the Plan closure's own `data` */
+    try { if(typeof window.__planStakeValues === 'function') (window.__planStakeValues() || []).forEach(take); } catch(e){}
     return out;
   }
 
@@ -79163,5 +79263,99 @@ body.eink .stk-offer-tx,body.eink .stk-offer-btn{color:#000; border-color:#000; 
 
   window.__stakeOffer = { missing: missing, addAll: addAll, render: offer };
 })();
+</script>
+
+<style id="dyst-stake-revive">
+/* Dystoria v.571 — the stake system's CONTAINERS.
+   The pill (.pl-stake*) has been fully styled in both themes since it was written. Its two hosts —
+   the story-stake bar atop the grid and the card popup's stake row — had NO rules at all, because
+   the style passes (#43, #44) sweep surfaces that are on screen and neither of these ever was.
+   Tokens only: a new surface takes --paper/--line/--ink-faint rather than naming a colour. */
+.pl-storystake{ display:flex; align-items:center; gap:9px; padding:7px 13px; margin:0 0 7px;
+  background:var(--paper); border:1px solid var(--line); border-radius:10px; }
+.pl-storystake-lbl,
+.pl-cardpop-stakelbl{ font-family:var(--sans); font-size:10.5px; font-weight:800; letter-spacing:.09em;
+  text-transform:uppercase; color:var(--ink-faint); flex:none; }
+.pl-storystake-empty{ border-style:dashed; }
+.pl-cardpop-stakerow{ display:flex; align-items:center; gap:9px; padding:8px 16px 0; }
+
+/* The bar and the row give the pill room; the 160px cap is for a pill sitting in a grid cell. */
+.pl-storystake .pl-stake, .pl-cardpop-stakerow .pl-stake{ max-width:none; font-size:12px; }
+
+/* THE LEVEL SLOT WAS display:none — which is why phase 1a (v.562) had nothing to show: the bearer's
+   name is written into exactly this slot. It says the scale a stake was inherited from (story ·
+   thread · part), or, when a stake's bearer stands on this card, WHOSE it is. */
+.pl-stake .pl-stake-lvl{ display:inline-flex; align-items:center; font-family:var(--sans);
+  font-style:normal; font-size:9px; font-weight:700; letter-spacing:.07em; text-transform:uppercase;
+  color:rgba(154,61,54,.6); border-left:1px solid rgba(168,67,59,.28);
+  margin-left:3px; padding-left:6px; white-space:nowrap; }
+</style>
+<script id="dyst-stake-door-js">
+/* Dystoria — a stake pill is a door to the stake (#46 phase 1b)
+
+   v.567 made a stake a first-class element with the ordinary card; v.568–569 offered to mint one for
+   every stake string already in the story. What was still missing is the step BETWEEN them: a pill
+   that says "The Harvest" had no way to reach the Harvest.
+
+   This does not change where anything is stored. It resolves a stake's WORDS to the element of the
+   same name, which is the honest shape here — `wordKey(w)` is `set|cat|word|iid?`, so **the key
+   already contains the name**. Storing a companion key beside every string would buy nothing over
+   reading the name, and would cost a migration across eight surfaces. Read, never copy. */
+(function(){
+  'use strict';
+
+  function plan(){ return window.__dystPlan || null; }
+
+  function norm(t){ return String(t == null ? '' : t).replace(/\s+/g, ' ').trim().toLowerCase(); }
+
+  /* name → key over the story's Stakes elements, aliases included (v.458's elAliasList is the one
+     canonical alias map, so this asks it rather than keeping a second idea of what a thing is called).
+     Built per call: the roster is small, and a cached index is a thing that goes stale on every add,
+     rename and delete — three more places to remember. */
+  function index(){
+    var p = plan(), out = {};
+    if(!p || !p.storyElements) return out;
+    var els = p.storyElements() || [];
+    for(var i = 0; i < els.length; i++){
+      var e = els[i], w = (e && e.w) || {};
+      if(w.cat !== 'stakes' || !e.key) continue;
+      var nm = norm(w.name || w.word);
+      if(nm && !out[nm]) out[nm] = e.key;          /* first wins; two stakes of one name is the writer's call, not ours */
+      try {
+        if(typeof window.elAliasList === 'function'){
+          var al = window.elAliasList(e.key) || [];
+          for(var j = 0; j < al.length; j++){ var a = norm(al[j]); if(a && !out[a]) out[a] = e.key; }
+        }
+      } catch(err){}
+    }
+    return out;
+  }
+
+  /* The element key for a stake's words, or null. Null is the ordinary case for a story that has
+     never pressed the legend's ＋ add, and the caller must degrade to what it did before. */
+  window.__stakeElByText = function(text){
+    var t = norm(text); if(!t) return null;
+    try { return index()[t] || null; } catch(e){ return null; }
+  };
+
+  /* Open that element's card in the notepad — the app's own route (`openElementNotes`, the same one
+     the onboarding uses), with npSelect as the fallback it already falls back to there. */
+  window.__openStakeEl = function(key){
+    if(!key) return false;
+    try {
+      if(typeof window.openElementNotes === 'function'){ window.openElementNotes(key); return true; }
+      if(typeof window.npSelect === 'function'){
+        window.npSelect(key);
+        document.body.classList.add('np-open');
+        var t = document.getElementById('npTab');
+        if(t){ var l = t.querySelector('.npt-lbl'); if(l) l.textContent = 'Hide'; }
+        if(typeof window.renderNpCard === 'function') window.renderNpCard();
+        return true;
+      }
+    } catch(e){}
+    return false;
+  };
+})();
+
 </script>
 </body></html>
