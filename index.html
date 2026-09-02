@@ -42831,7 +42831,7 @@ document.addEventListener('DOMContentLoaded', init);
     }
     window.openConceptChooser=openConceptChooser; window.openConceptCreator=openConceptCreator; window.openConceptByDesc=openConceptByDesc; window.coFromDescription=coApplyDescription;
     function openObstaclePicker(i, x, y){
-      const w=state.prompt && state.prompt.words[i]; if(!w) return;
+      const w=_motWord(i); if(!w) return;
       TP={ i, cat:w.cat, sub:'', mode:'obstacle' };
       tpEl().querySelector('.tp-title').textContent='Obstacle — what stands in the way';
       tpEl().querySelector('.tp-search').placeholder='search elements or obstacle concepts…';
@@ -42860,11 +42860,11 @@ document.addEventListener('DOMContentLoaded', init);
           state.session.elemLibrary.forEach(r=>{ if(r && r.item) apply(r.item); });
       }catch(e){}
     }
-    function setMotivationWant(i, want, isNew){
+    function setMotivationWant(i, want, isNew, append){
       const w=_motWord(i); if(!w) return;
       if(isNew && typeof saveCustomWord==='function'){ try{ saveCustomWord('being', { word:want, sub:'Motivation', desc:'', g:[] }, 'story'); }catch(e){} }
       if(typeof pushUndo==='function') pushUndo();
-      w.motivation=w.motivation||{}; w.motivation.want=want;
+      w.motivation=w.motivation||{}; _mirrorWants(w.motivation, _listPut(motWants(w), want, !!arguments[3]));   /* v.572 — 4th arg appends */
       if(typeof i==='number' && state.nodes[i]) state.nodes[i].motivation=w.motivation;
       if(typeof i==='number') cascadeForward(i, 'Motivation');
       _motFanOut(w);
@@ -42872,6 +42872,49 @@ document.addEventListener('DOMContentLoaded', init);
     }
     // an obstacle can have multiple parts: element links (optionally narrowed to a being's trait) and/or obstacle concept words
     function motObstacles(w){ const m=w&&w.motivation; if(!m) return []; if(Array.isArray(m.obstacles)) return m.obstacles; if(m.obstacleKey) return [{key:m.obstacleKey}]; return []; }
+    /* v.572 — a character can want more than one thing, be blocked by more than one, and have more
+       than one thing at risk. [Jeremy] Obstacles were ALREADY a list; wants and stakes were single
+       strings, and this makes them lists **with no migration and without touching one reader**:
+       motWants/motStakes normalise exactly the way motObstacles does, and every writer mirrors
+       entry [0] back into m.want / m.stake. So `_drivesSentence`, the dossier's Drives block, the
+       arc backdrop, storyFacts and the game bridge keep reading what they always read and keep
+       saying the same sentence. The same mirror shape v.500 used for arc.goalposts → arc.beats.
+       **`set` REPLACES the first entry and `add` APPENDS** — the notepad's ✎ means "change", and if
+       set() started appending, every existing edit affordance would silently become an add. */
+    function motWants(w){ const m=w&&w.motivation; if(!m) return [];
+      if(Array.isArray(m.wants)) return m.wants.filter(Boolean);
+      return m.want ? [m.want] : []; }
+    function motStakes(w){ const m=w&&w.motivation; if(!m) return [];
+      if(Array.isArray(m.stakes)) return m.stakes.filter(Boolean);
+      return m.stake ? [m.stake] : []; }
+    function _mirrorWants(m, arr){ arr=(arr||[]).map(t=>String(t||'').trim()).filter(Boolean);
+      if(arr.length){ m.wants=arr.slice(); m.want=arr[0]; } else { delete m.want; delete m.wants; } }
+    function _mirrorStakes(m, arr){ arr=(arr||[]).map(t=>String(t||'').trim()).filter(Boolean);
+      if(arr.length){ m.stakes=arr.slice(); m.stake=arr[0]; } else { delete m.stake; delete m.stakes; } }
+    function _listPut(cur, val, append){
+      const v=String(val||'').trim(); if(!v) return cur.slice();
+      const a=cur.slice();
+      if(a.some(t=>String(t).toLowerCase()===v.toLowerCase())) return a;   /* never the same thing twice */
+      if(append){ a.push(v); return a; }
+      if(a.length) a[0]=v; else a.push(v);
+      return a; }
+    window.__motLists = { wants:motWants, stakes:motStakes, obstacles:motObstacles };
+    /* The Drive section in the element builder is an APPENDED layer and cannot see these
+       closure-scoped writers — that, not the section index, is the real reason v.565's Motivation
+       row was create-only (v.566 had already fixed the index half and the row was never revisited).
+       Exporting the app's own writers gives the builder undo, autosave, the pool's custom-word save,
+       the cross-frame fan-out and syncElementViews for free, instead of a second writer growing
+       inside the builder. Every one takes an element KEY or a section index. */
+    try{ window.__motWrite = {
+      want:           function(k,v,isNew){ return setMotivationWant(k,v,isNew,false); },
+      addWant:        function(k,v,isNew){ return setMotivationWant(k,v,isNew,true); },
+      clearWant:      function(k){ return clearMotivation(k); },
+      stake:          function(k,v,isNew){ return setMotivationStake(k,v,isNew,false); },
+      addStake:       function(k,v,isNew){ return setMotivationStake(k,v,isNew,true); },
+      clearStake:     function(k,which){ return clearMotivationStake(k,which); },
+      addObstacle:    function(k,w,sub,isNew){ return addObstacleWord(k,w,sub,isNew); },
+      removeObstacle: function(k,idx){ return removeObstaclePart(k,idx); }
+    }; }catch(e){}
     // ---- Motivator: what a motivation points at (one element/sub-element, or a free concept) + the connector word ("of", "for", "by"…) ----
     const MOT_RELS=['of','for','by','in','from','to','toward','against','over','with','about','through','upon','within','without','beyond'];
     function motMotivator(w){ const m=w&&w.motivation; return (m&&m.motivator)?m.motivator:null; }
@@ -42882,9 +42925,16 @@ document.addEventListener('DOMContentLoaded', init);
     function setMotivatorWord(i, word){ const w=state.prompt&&state.prompt.words[i]; if(!w||!word||!w.motivation) return; if(typeof pushUndo==='function') pushUndo(); w.motivation.motivator={ word }; _persistMotivation(i); if(window.syncElementViews) window.syncElementViews(); }
     function clearMotivator(i){ const w=state.prompt&&state.prompt.words[i]; if(!w||!w.motivation) return; if(typeof pushUndo==='function') pushUndo(); delete w.motivation.motivator; if(state.cardTrait==='@motivator') state.cardTrait=null; _persistMotivation(i); if(window.syncElementViews) window.syncElementViews(); }
     function setMotivatorTrait(i, trait){ const w=state.prompt&&state.prompt.words[i]; if(!w||!w.motivation||!w.motivation.motivator) return; if(typeof pushUndo==='function') pushUndo(); if(trait) w.motivation.motivator.trait=trait; else delete w.motivation.motivator.trait; _persistMotivation(i); if(window.syncElementViews) window.syncElementViews(); }
-    function setMotivationStake(i, word, isNew){ const w=state.prompt&&state.prompt.words[i]; if(!w||!word) return; if(isNew && typeof saveCustomWord==='function'){ try{ saveCustomWord('stakes', { word, sub:'Stake', desc:'', g:[] }, 'story'); }catch(e){} } if(typeof pushUndo==='function') pushUndo(); w.motivation=w.motivation||{}; w.motivation.stake=word; if(state.nodes[i]) state.nodes[i].motivation=w.motivation; cascadeForward(i, 'Motivation'); if(state.session){ state.session.words=state.prompt.words; if(typeof scheduleAutosave==='function') scheduleAutosave(); } if(window.syncElementViews) window.syncElementViews(); }
-    function clearMotivationStake(i){ const w=state.prompt&&state.prompt.words[i]; if(!w||!w.motivation) return; if(typeof pushUndo==='function') pushUndo(); delete w.motivation.stake; if(state.cardTrait==='@stake') state.cardTrait=null; _persistMotivation(i); if(window.syncElementViews) window.syncElementViews(); }
-    function openStakePicker(i, x, y){ const w=state.prompt && state.prompt.words[i]; if(!w) return; TP={ i, cat:'stakes', sub:'', mode:'stake' }; tpEl().querySelector('.tp-title').textContent='Stake \u2014 what\u2019s at risk'; tpEl().querySelector('.tp-search').placeholder='search stakes or name what\u2019s at risk\u2026'; tpOpen(i, x, y); }
+    function setMotivationStake(i, word, isNew, append){ const w=_motWord(i); if(!w||!word) return;   /* v.572 — key or index; 4th arg appends */ if(isNew && typeof saveCustomWord==='function'){ try{ saveCustomWord('stakes', { word, sub:'Stake', desc:'', g:[] }, 'story'); }catch(e){} } if(typeof pushUndo==='function') pushUndo(); w.motivation=w.motivation||{}; _mirrorStakes(w.motivation, _listPut(motStakes(w), word, !!append));
+      if(typeof i==='number' && state.nodes[i]) state.nodes[i].motivation=w.motivation;
+      if(typeof i==='number') cascadeForward(i, 'Motivation');
+      _motFanOut(w); if(state.session){ state.session.words=state.prompt.words; if(typeof scheduleAutosave==='function') scheduleAutosave(); } if(window.syncElementViews) window.syncElementViews(); }
+    function clearMotivationStake(i, which){ const w=_motWord(i); if(!w||!w.motivation) return; if(typeof pushUndo==='function') pushUndo();
+      /* `which` (a value or an index) drops ONE; omitted it clears them all, which is what every existing caller means */
+      if(which==null){ delete w.motivation.stake; delete w.motivation.stakes; }
+      else { const _a=motStakes(w).slice(); const _j=(typeof which==='number')?which:_a.indexOf(which); if(_j>=0) _a.splice(_j,1); _mirrorStakes(w.motivation,_a); }
+      _motFanOut(w); if(state.cardTrait==='@stake') state.cardTrait=null; _persistMotivation(i); if(window.syncElementViews) window.syncElementViews(); }
+    function openStakePicker(i, x, y){ const w=_motWord(i); if(!w) return; TP={ i, cat:'stakes', sub:'', mode:'stake' }; tpEl().querySelector('.tp-title').textContent='Stake \u2014 what\u2019s at risk'; tpEl().querySelector('.tp-search').placeholder='search stakes or name what\u2019s at risk\u2026'; tpOpen(i, x, y); }
     function openThreadStakePicker(tid, x, y){ TP={ i:-1, thread:tid, cat:'stakes', sub:'', mode:'stake' }; tpEl().querySelector('.tp-title').textContent='Thread stake \u2014 what\u2019s at risk'; tpEl().querySelector('.tp-search').placeholder='search stakes or name what\u2019s at risk\u2026'; tpOpen(-1, x, y); }
     function openStoryStakePicker(x, y){ TP={ i:-1, story:true, cat:'stakes', sub:'', mode:'stake' }; tpEl().querySelector('.tp-title').textContent='Story stake \u2014 what\u2019s ultimately at risk'; tpEl().querySelector('.tp-search').placeholder='search stakes or name what\u2019s at risk\u2026'; tpOpen(-1, x, y); }
     function openThreadConceptPicker(tid, x, y){ TP={ i:-1, thread:tid, cat:'concept', sub:traitSubs('concept')[0], mode:'trait' }; tpEl().querySelector('.tp-title').textContent='Thread concept'; tpEl().querySelector('.tp-search').placeholder='search or name a concept\u2026'; tpOpen(-1, x, y); }
@@ -42934,7 +42984,9 @@ document.addEventListener('DOMContentLoaded', init);
     function obstacleLabel(baseKey, id){ const bw=(typeof npFindEl==='function')?npFindEl(baseKey):null; const parts=motObstacles(bw);
       for(const p of parts){ if(obstaclePartId(p)===id){ if(p.key){ const ow=npFindEl(p.key); return (ow?elDisplayName(ow):'?')+(p.trait?(' · '+p.trait):''); } return p.word; } } return 'obstacle'; }
     window.obstaclePartId=obstaclePartId;
-    function _persistObstacles(i, arr){ const w=state.prompt&&state.prompt.words[i]; if(!w) return; w.motivation=w.motivation||{}; w.motivation.obstacles=arr; delete w.motivation.obstacleKey; if(state.nodes[i]) state.nodes[i].motivation=w.motivation; }
+    function _persistObstacles(i, arr){ const w=_motWord(i); if(!w) return; w.motivation=w.motivation||{}; w.motivation.obstacles=arr; delete w.motivation.obstacleKey;
+      if(typeof i==='number' && state.nodes[i]) state.nodes[i].motivation=w.motivation;
+      _motFanOut(w); }
     function _dropObstacleLink(i, obKey){
       const j=elIndexByKey(obKey); if(j<0) return;
       const a=Math.min(i,j), b=Math.max(i,j), side=i<j?'fwd':'rev';
@@ -42953,13 +43005,13 @@ document.addEventListener('DOMContentLoaded', init);
       if(typeof pushUndo==='function') pushUndo();
       const arr=motObstacles(w).slice(); const k=wordKey(o);
       if(!arr.some(p=>p.key===k)) arr.push({ key:k });
-      _persistObstacles(i, arr); _makeObstacleLink(i, j);
+      _persistObstacles(i, arr); if(typeof i==='number') _makeObstacleLink(i, j);
       if(state.session){ state.session.words=state.prompt.words; }
       if(typeof saveLinksAndRender==='function') saveLinksAndRender(); renderNpCard();
       if(window.syncElementViews) window.syncElementViews();
     }
     function addObstacleWord(i, word, sub, isNew){
-      const w=state.prompt && state.prompt.words[i]; if(!w||!word) return;
+      const w=_motWord(i); if(!w||!word) return;   /* v.572 — key or index */
       if(isNew && typeof saveCustomWord==='function'){ try{ saveCustomWord('obstacle', { word, sub:sub||'Circumstance', desc:'', g:[] }, 'story'); }catch(e){} }
       if(typeof pushUndo==='function') pushUndo();
       const arr=motObstacles(w).slice();
@@ -42970,11 +43022,11 @@ document.addEventListener('DOMContentLoaded', init);
       if(window.syncElementViews) window.syncElementViews();
     }
     function removeObstaclePart(i, idx){
-      const w=state.prompt && state.prompt.words[i]; if(!w) return;
+      const w=_motWord(i); if(!w) return;   /* v.572 — key or index */
       const arr=motObstacles(w).slice(); const part=arr[idx]; if(!part) return;
       if(typeof pushUndo==='function') pushUndo();
       arr.splice(idx,1); _persistObstacles(i, arr);
-      if(part.key) _dropObstacleLink(i, part.key);
+      if(part.key && typeof i==='number') _dropObstacleLink(i, part.key);   /* a map link belongs to a section */
       if(state.session){ state.session.words=state.prompt.words; }
       if(typeof saveLinksAndRender==='function') saveLinksAndRender(); renderNpCard();
       if(window.syncElementViews) window.syncElementViews();
@@ -51531,9 +51583,14 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.571';
+  var APP_VERSION = '2026.07.20.572';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.572', date:'September 2, 2026', notes:[
+      '**A character’s Drive is now built where you build the character.** The element builder gains a **Drive** section under the traits — **Motivation · Obstacle · Stake**, each a line you fill in, and you can add **more than one of each**. It works while you are creating someone and, for the first time, while you are editing them: the old row could only be set at creation and was read-only afterwards. [Jeremy]',
+      'A character can now want more than one thing, be held back by more than one, and have more than one thing at risk. Everywhere that already says what someone wants — their card, the dossier’s Drives line, the arc backdrop — keeps saying the first one, so nothing you have written reads differently.',
+      '_Still editable from the notepad and the map, exactly as before — the builder is now simply the fullest place to do it._',
+    ]},
     { v:'2026.07.20.571', date:'September 2, 2026', notes:[
       '**Your story’s stakes are now actually on the Plot grid.** A quiet **STORY STAKES** bar sits above the grid with what’s ultimately at risk, and every card’s popup opens with a **Stakes** line showing the stake in force there — the card’s own if you’ve pinned one, otherwise the one it inherits, labelled with where it came from (story, thread or part). **All of this was written, styled and finished long ago and simply never placed on the page**; the line that put it there had never been written. ',
       '**And a stake pill will now take you to the stake.** Press the feather on one and you land on what’s behind it — **its element card**, with who bears it, what threatens it and the axis of the struggle, if you’ve made it an element (the Story Legend’s ›＋ add‹ does that in one press); otherwise the story or thread stake’s own notes.',
@@ -79040,122 +79097,246 @@ body.eink .stk-slot-cap,body.eink .stk-menu-sub,body.eink .stk-slot-val.stk-slot
 })();
 </script>
 
-<script id="dyst-cc-motivation-js">
-/* Dystoria — Motivation in the character builder (#49 phase 0)
-   The pool and the composer already exist: a want is drawn from the `being` category's Motivation
-   subcategory through the shared trait picker, and the element card composes the sentence. What was
-   missing was a door — the builder, where a writer is actually deciding who someone is, could not set
-   it at all. This adds that one door and nothing else.
 
-   Scope, deliberately: the CREATE path only. Setting a motivation on an EXISTING character has to go
-   through setMotivationWant(i, …), whose `i` is an index into the CURRENT SECTION's words, and which
-   runs cascadeForward() so a change propagates from that section onward. Writing it by element key
-   would either miss the character's other per-section copies or flatten a deliberate mid-story change.
-   So in edit mode the row shows the current want and says where to change it. */
+<style id="dyst-cc-drive-css">
+/* v.572 — the Drive block in the element builder. It reuses .cc-slot / .cc-dim / .cc-word / .cc-ctl
+   so a Drive line and a trait line are the same object to the eye; only the heading separates them.
+   Tokens only — a new surface takes --line / --ink-faint rather than naming a colour. */
+/* No border and no margin of its own: the block now opens with the builder's own .cc-seclbl,
+   which brings the same rhythm CHARACTERISTICS has, so Drive reads as a peer section rather than
+   as a panel bolted under the traits. */
+.cc-drive{ display:block; }
+/* NB: NOT display:contents. That dissolves the block's own box, so its children become flex items of
+   the builder body with no `order` of their own — and the whole section jumps to the top of the card.
+   The block keeps its box and carries one order value for the group. */
+/* NB: the class is `-more`, not `-add`. A rule elsewhere in the builder matches on an `add`
+   class token and puts padding-left:16px on the row, which pushed these off the value column.
+   Not matching it is the fix; a specificity war over a rule you cannot find is not. */
+.cc-drive-more .cc-word{ font-style:italic; }
+.cc-drive-morebtn{ cursor:pointer; }
+.cc-drive-morebtn:hover{ color:var(--gold); }
+</style>
+<script id="dyst-cc-drive-js">
+/* Dystoria — the Drive section in the element builder (#49 phase 0, v.572)
+   [Jeremy, 2026-09-02] "the Motivation is still only editable from the notepad and map… Maybe we
+   should have the whole Drive as a separate section from the traits, same structure, with each
+   element of the drive as a line you can fill out. Motivations, Obstacles, Stakes, with the ability
+   to add more than one of each. This seems the most natural place to build it, though it can still
+   be edited in the map and notepad."
+
+   This REPLACES v.565's single #ccMotRow. Two things had to change underneath before it could exist,
+   and both are in the app rather than here:
+     · wants and stakes became LISTS (motWants / motStakes normalise, writers mirror [0] back into
+       m.want / m.stake, so every existing reader is untouched);
+     · the app's motivation writers are exported as window.__motWrite, because they are closure-scoped
+       and an appended layer cannot see them. **That, not the section index, is why v.565 was
+       create-only** — v.566 had already made the want key-addressable and this row was never revisited.
+
+   So the builder writes through the app's OWN writers: undo, autosave, the pool's custom-word save,
+   the cross-frame fan-out and syncElementViews all come free, and there is no second writer growing
+   inside the builder to drift from the notepad's. */
 (function(){
   'use strict';
 
-  var want = '';        // pending motivation for the character being created
-  var editing = false;  // opened with {edit:key} — read-only here
-  var editWant = '';
+  /* Pending lists for the CREATE path — there is no element to write to until commit. */
+  var pend = { wants: [], obstacles: [], stakes: [] };
+  var editKey = null;
 
+  function W(){ try { return editKey && typeof npFindEl === 'function' ? npFindEl(editKey) : null; } catch(e){ return null; } }
+  function lists(){
+    if(editKey){
+      var w = W(), L = window.__motLists;
+      if(!w || !L) return { wants:[], obstacles:[], stakes:[] };
+      return { wants: L.wants(w) || [], obstacles: L.obstacles(w) || [], stakes: L.stakes(w) || [] };
+    }
+    return pend;
+  }
   function nameNow(){ var n = document.getElementById('ccName'); return n ? String(n.value || '').trim() : ''; }
 
-  function row(){
+  /* the stakes category's first subcategory, the way the thread dossier's stake picker asks for it */
+  function subOf(catId, dflt){
+    try { var c = (typeof getCat === 'function') ? getCat(catId) : null;
+          if(c && c.subcategories && c.subcategories.length) return c.subcategories[0].name; } catch(e){}
+    return dflt;
+  }
+
+  var SPECS = [
+    { id:'wants',     label:'Motivation', cat:'being',    sub:'Motivation', dflt:'Motivation',
+      title:'Motivation', ph:'search or name what they want…', add:'＋ motivation' },
+    { id:'obstacles', label:'Obstacle',   cat:'obstacle', sub:null,         dflt:'Circumstance',
+      title:'Obstacle — what stands in the way', ph:'search or name what blocks them…', add:'＋ obstacle' },
+    { id:'stakes',    label:'Stake',      cat:'stakes',   sub:null,         dflt:'At Stake',
+      title:'Stake — what’s at risk', ph:'search or name what’s at risk…', add:'＋ stake' }
+  ];
+
+  function textOf(spec, entry){
+    if(spec.id !== 'obstacles') return String(entry || '');
+    if(!entry) return '';
+    if(entry.word) return entry.word;
+    try { var w = (typeof npFindEl === 'function') ? npFindEl(entry.key) : null;
+          if(w) return (typeof elDisplayName === 'function' ? elDisplayName(w) : (w.name || w.word)) || ''; } catch(e){}
+    return '';
+  }
+
+  function put(spec, value, isNew){
+    var M = window.__motWrite;
+    if(editKey && M){
+      if(spec.id === 'wants')     M.addWant(editKey, value, isNew);
+      if(spec.id === 'stakes')    M.addStake(editKey, value, isNew);
+      if(spec.id === 'obstacles') M.addObstacle(editKey, value, spec.sub || spec.dflt, isNew);
+    } else {
+      var arr = pend[spec.id];
+      var seen = arr.some(function(e){ return String(textOf(spec, e)).toLowerCase() === String(value).toLowerCase(); });
+      if(!seen) arr.push(spec.id === 'obstacles' ? { word:value, sub:(spec.sub || spec.dflt) } : value);
+      /* a typed word joins the pool now, exactly as the app's own writers do */
+      if(isNew && typeof saveCustomWord === 'function'){
+        try { saveCustomWord(spec.cat, { word:value, sub:(spec.sub || spec.dflt), desc:'', g:[] }, 'story'); } catch(e){}
+      }
+    }
+    render();
+  }
+
+  function drop(spec, idx){
+    var M = window.__motWrite;
+    if(editKey && M){
+      if(spec.id === 'wants'){
+        var ws = lists().wants.slice(); ws.splice(idx, 1);
+        /* no per-want remove in the app: clear, then re-set the survivors through the same writers */
+        M.clearWant(editKey);
+        ws.forEach(function(v, n){ n === 0 ? M.want(editKey, v, false) : M.addWant(editKey, v, false); });
+      }
+      if(spec.id === 'stakes')    M.clearStake(editKey, idx);
+      if(spec.id === 'obstacles') M.removeObstacle(editKey, idx);
+    } else {
+      pend[spec.id].splice(idx, 1);
+    }
+    render();
+  }
+
+  function pick(spec, ev){
+    if(typeof window.openWordPicker !== 'function') return;
+    var who = editKey ? '' : nameNow();
+    window.openWordPicker({
+      cat: spec.cat,
+      sub: spec.sub || subOf(spec.cat, spec.dflt),
+      title: spec.title + (who ? ' — ' + who : ''),
+      placeholder: spec.ph,
+      x: ev.clientX, y: ev.clientY,
+      onPick: function(picked, isNew){
+        var v = String(picked == null ? '' : picked).trim();
+        if(v) put(spec, v, isNew);
+      }
+    });
+  }
+
+  function render(){
     var host = document.getElementById('ccSlots');
     if(!host || !host.parentNode) return;
 
-    var old = document.getElementById('ccMotRow');
+    var old = document.getElementById('ccDrive');
     if(old && old.parentNode) old.parentNode.removeChild(old);
 
-    /* mirrors ccRenderSlots' own row idiom: .cc-slot > .cc-dim + .cc-word + .cc-ctl */
-    var r = document.createElement('div'); r.className = 'cc-slot'; r.id = 'ccMotRow';
-    var dim = document.createElement('span'); dim.className = 'cc-dim'; dim.textContent = 'Motivation'; r.appendChild(dim);
+    var box = document.createElement('div'); box.id = 'ccDrive'; box.className = 'cc-drive';
 
-    var wd = document.createElement('span');
-    if(editing){
-      wd.className = 'cc-word' + (editWant ? '' : ' empty');
-      wd.textContent = editWant || '—';
-      wd.title = 'Motivation is changed from this character’s own card';
-      wd.style.cursor = 'default';
-    } else {
-      wd.className = 'cc-word' + (want ? '' : ' empty');
-      wd.textContent = want || '—';
-      wd.title = 'What do they want?';
-      wd.addEventListener('click', function(ev){
-        ev.stopPropagation();
-        if(typeof window.openWordPicker !== 'function') return;
-        var who = nameNow();
-        window.openWordPicker({
-          cat: 'being', sub: 'Motivation',
-          title: 'Motivation' + (who ? ' — ' + who : ''),
-          placeholder: 'search or name what they want…',
-          x: ev.clientX, y: ev.clientY,
-          onPick: function(picked, isNew){
-            want = String(picked == null ? '' : picked).trim();
-            /* a typed word joins the pool, exactly as setMotivationWant does */
-            if(want && isNew && typeof saveCustomWord === 'function'){
-              try { saveCustomWord('being', { word: want, sub: 'Motivation', desc: '', g: [] }, 'story'); } catch(e){}
-            }
-            row();
-          }
-        });
+    /* [Jeremy, v.572] "Drive should be a Header like Characteristics" — so it takes the builder's own
+       section label, `.cc-seclbl`, rather than a header of its own invention. The one-line gloss
+       rides as the title, because CHARACTERISTICS carries no subtitle and matching it means matching
+       it. */
+    var hd = document.createElement('div'); hd.className = 'cc-seclbl'; hd.textContent = 'Drive';
+    hd.title = 'What they want · what blocks them · what is at risk';
+    box.appendChild(hd);
+
+    var L = lists();
+    SPECS.forEach(function(spec){
+      var arr = L[spec.id] || [];
+      arr.forEach(function(entry, idx){
+        var r = document.createElement('div'); r.className = 'cc-slot';
+        var dim = document.createElement('span'); dim.className = 'cc-dim'; dim.textContent = spec.label; r.appendChild(dim);
+        var wd = document.createElement('span'); wd.className = 'cc-word'; wd.textContent = textOf(spec, entry) || '—';
+        wd.title = spec.title; r.appendChild(wd);
+        var x = document.createElement('span'); x.className = 'cc-ctl'; x.textContent = '×'; x.title = 'Remove';
+        x.addEventListener('click', function(ev){ ev.stopPropagation(); drop(spec, idx); });
+        r.appendChild(x);
+        box.appendChild(r);
       });
-    }
-    r.appendChild(wd);
+      var a = document.createElement('div'); a.className = 'cc-slot cc-drive-more';
+      /* the label is always rendered so the ＋ lines up under the values; when the group already
+         has entries it is hidden with visibility, which keeps the column's width (v.429's rule:
+         hide with visibility where the space must be held) */
+      var ad = document.createElement('span'); ad.className = 'cc-dim'; ad.textContent = spec.label;
+      if(arr.length) ad.style.visibility = 'hidden';
+      a.appendChild(ad);
+      var ab = document.createElement('span'); ab.className = 'cc-word empty cc-drive-morebtn'; ab.textContent = spec.add;
+      ab.addEventListener('click', function(ev){ ev.stopPropagation(); pick(spec, ev); });
+      a.appendChild(ab);
+      /* the value rows carry a × after the word; without a matching item the add row's flex layout
+         differs and the ＋ drifts off the value column. Match the STRUCTURE rather than fighting it
+         with text-align — a flex item is not moved by aligning text inside it. */
+      var sp = document.createElement('span'); sp.className = 'cc-ctl'; sp.textContent = '×';
+      sp.style.visibility = 'hidden'; sp.setAttribute('aria-hidden', 'true');
+      a.appendChild(sp);
+      box.appendChild(a);
+    });
 
-    if(!editing && want){
-      var x = document.createElement('span'); x.className = 'cc-ctl'; x.textContent = '×'; x.title = 'Clear';
-      x.addEventListener('click', function(ev){ ev.stopPropagation(); want = ''; row(); });
-      r.appendChild(x);
-    }
-
-    /* AFTER #ccSlots, not inside it — ccRenderSlots() clears its own host on every complexity change.
-       And the builder's beautification layer (v.340) reorders the flow with flex `order`, so DOM
-       position alone puts an un-ordered row at the TOP of the card: take #ccSlots' own order value so
-       this lands with the rows it belongs to. Equal order falls back to document order. */
+    /* AFTER #ccSlots, and taking its computed flex `order`.
+       v.565's lesson, and it cost a build: <style id="dyst-elcreator-beauty"> reorders the builder's
+       flow with flex `order`, so an un-ordered block sorts to 0 and floats to the TOP of the card
+       while every DOM assertion still passes. DOM position is not visual position in this card. */
+    /* [Jeremy, v.572] "Dimensions should be part of the Characteristics section" — ＋ add a dimension
+       and ⚭ hybridize belong to the traits, so Drive goes AFTER them, not between the slots and the
+       buttons. They sit at flex order 6 and the next section label at 7, so this takes THEIR order
+       and goes last in DOM order among equals. Reading the order off the real neighbour rather than
+       hard-coding 6 is what keeps this correct if the builder is ever re-ordered.
+       (v.565's lesson stands: <style id="dyst-elcreator-beauty"> lays this card out with flex
+       `order`, so DOM position is not visual position and an un-ordered block floats to the top.) */
+    var anchor = document.getElementById('ccHybrid') || document.getElementById('ccAdd') || host;
     try {
-      var ord = window.getComputedStyle(host).order;
-      if(ord && ord !== 'auto') r.style.order = ord;
+      var ord = window.getComputedStyle(anchor).order;
+      if(ord && ord !== 'auto') box.style.order = ord;
     } catch(e){}
-    host.parentNode.insertBefore(r, host.nextSibling);
+    anchor.parentNode.insertBefore(box, anchor.nextSibling);
   }
 
-  /* wrap the opener: opts tells us create vs edit without reading the closure's CC */
+  /* ---- hook the builder ------------------------------------------------------------------ */
   var _open = window.openCharCreator;
   if(typeof _open === 'function'){
     window.openCharCreator = function(opts){
-      var out = _open.apply(this, arguments);
-      try {
-        opts = opts || {};
-        editing = !!opts.edit;
-        want = ''; editWant = '';
-        if(editing && typeof npFindEl === 'function'){
-          var w = npFindEl(opts.edit);
-          editWant = (w && w.motivation && w.motivation.want) || '';
-        }
-        setTimeout(row, 0);
-      } catch(e){}
-      return out;
+      var r = _open.apply(this, arguments);
+      opts = opts || {};
+      editKey = opts.edit || null;
+      if(!opts.keep && !editKey) pend = { wants: [], obstacles: [], stakes: [] };
+      try { render(); } catch(e){}
+      return r;
     };
   }
 
-  /* ccCommit calls window.__qaOnElementAdd(built) with the freshly pushed word — the app's own
-     extension point, and the reason none of this needs to reach into a closure. */
-  var _prev = window.__qaOnElementAdd;
+  /* ccRenderSlots() clears and rebuilds #ccSlots on every complexity change, which leaves the Drive
+     block where it is — but the tabs also re-run it, so re-render after to keep the order correct. */
+  var _rs = window.ccRenderSlots;
+  if(typeof _rs === 'function'){
+    window.ccRenderSlots = function(){ var r = _rs.apply(this, arguments); try { render(); } catch(e){} return r; };
+  }
+
+  /* CREATE: the chained hook fires with the freshly pushed word, so the pending lists land through
+     the app's own writers with the new element's key. */
+  var _add = window.__qaOnElementAdd;
   window.__qaOnElementAdd = function(built){
     try {
-      if(built && built.role === 'being' && want){
-        built.motivation = built.motivation || {};
-        built.motivation.want = want;
-        want = '';
-        if(typeof scheduleAutosave === 'function') scheduleAutosave(400);
-        if(typeof window.syncElementViews === 'function') window.syncElementViews();
+      var M = window.__motWrite;
+      if(M && built && typeof wordKey === 'function'){
+        var k = wordKey(built);
+        pend.wants.forEach(function(v, n){ n === 0 ? M.want(k, v, false) : M.addWant(k, v, false); });
+        pend.stakes.forEach(function(v, n){ n === 0 ? M.stake(k, v, false) : M.addStake(k, v, false); });
+        pend.obstacles.forEach(function(o){ if(o && o.word) M.addObstacle(k, o.word, o.sub, false); });
       }
     } catch(e){}
-    if(typeof _prev === 'function'){ try { return _prev.apply(this, arguments); } catch(e){} }
+    pend = { wants: [], obstacles: [], stakes: [] };
+    if(typeof _add === 'function'){ try { return _add.apply(this, arguments); } catch(e){} }
   };
+
+  window.__ccDrive = { render: render, lists: lists, pending: function(){ return pend; } };
 })();
+
 </script>
 
 <style id="dyst-stake-offer">
