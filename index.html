@@ -41579,7 +41579,7 @@ document.addEventListener('DOMContentLoaded', init);
       tpOpen(i, x, y);
     }
     function openMotivationPicker(i, x, y){
-      const w=state.prompt && state.prompt.words[i]; if(!w) return;
+      const w=_motWord(i); if(!w) return;
       TP={ i, cat:'being', sub:'Motivation', mode:'motivation' };
       tpEl().querySelector('.tp-title').textContent='Motivation — '+((typeof elDisplayName==='function')?elDisplayName(w):(w.word||''));
       tpEl().querySelector('.tp-search').placeholder='search or name what they want…';
@@ -42811,13 +42811,36 @@ document.addEventListener('DOMContentLoaded', init);
       tpOpen(i, x, y);
     }
     // ---- Motivation (elevated) + Obstacle link ----
+    /* v.566 — a motivation is ONE fact about a character, not a per-section one. These two let the
+       motivation writers take an element KEY as well as a current-section index, and keep every copy
+       of a character (one per frame, plus the library record) carrying the same motivation. A want
+       that changes over the story is an ARC, not a different value on a later frame. [Jeremy] */
+    function _motWord(iOrKey){
+      if(typeof iOrKey === 'number') return (state.prompt && state.prompt.words[iOrKey]) || null;
+      if(!iOrKey) return null;
+      return (typeof npFindEl === 'function') ? npFindEl(iOrKey) : null;
+    }
+    function _motFanOut(w){
+      try{
+        if(!w || typeof wordKey !== 'function') return;
+        const k = wordKey(w);
+        const src = w.motivation ? JSON.parse(JSON.stringify(w.motivation)) : null;
+        const apply = (x)=>{ if(!x || x === w) return; if(wordKey(x) !== k) return;
+          if(src) x.motivation = JSON.parse(JSON.stringify(src)); else delete x.motivation; };
+        (state.frames||[]).forEach(fr=>(((fr.prompt&&fr.prompt.words)||[]).forEach(apply)));
+        ((state.prompt&&state.prompt.words)||[]).forEach(apply);
+        if(state.session && Array.isArray(state.session.elemLibrary))
+          state.session.elemLibrary.forEach(r=>{ if(r && r.item) apply(r.item); });
+      }catch(e){}
+    }
     function setMotivationWant(i, want, isNew){
-      const w=state.prompt && state.prompt.words[i]; if(!w) return;
+      const w=_motWord(i); if(!w) return;
       if(isNew && typeof saveCustomWord==='function'){ try{ saveCustomWord('being', { word:want, sub:'Motivation', desc:'', g:[] }, 'story'); }catch(e){} }
       if(typeof pushUndo==='function') pushUndo();
       w.motivation=w.motivation||{}; w.motivation.want=want;
-      if(state.nodes[i]) state.nodes[i].motivation=w.motivation;
-      cascadeForward(i, 'Motivation');
+      if(typeof i==='number' && state.nodes[i]) state.nodes[i].motivation=w.motivation;
+      if(typeof i==='number') cascadeForward(i, 'Motivation');
+      _motFanOut(w);
       if(state.session){ state.session.words=state.prompt.words; if(typeof scheduleAutosave==='function') scheduleAutosave(); }
     }
     // an obstacle can have multiple parts: element links (optionally narrowed to a being's trait) and/or obstacle concept words
@@ -42956,10 +42979,11 @@ document.addEventListener('DOMContentLoaded', init);
       menu.style.display='block';
     }
     function clearMotivation(i){
-      const w=state.prompt && state.prompt.words[i]; if(!w||!w.motivation) return;
+      const w=_motWord(i); if(!w||!w.motivation) return;
       if(typeof pushUndo==='function') pushUndo();
-      motObstacles(w).forEach(p=>{ if(p.key) _dropObstacleLink(i, p.key); });
-      delete w.motivation; if(state.nodes[i]) delete state.nodes[i].motivation;
+      if(typeof i==='number') motObstacles(w).forEach(p=>{ if(p.key) _dropObstacleLink(i, p.key); });   /* map links are this section's; off-section there are none to drop */
+      delete w.motivation; if(typeof i==='number' && state.nodes[i]) delete state.nodes[i].motivation;
+      _motFanOut(w);
       if(state.session){ state.session.words=state.prompt.words; if(typeof scheduleAutosave==='function') scheduleAutosave(); }
       if(typeof saveLinksAndRender==='function') saveLinksAndRender(); renderNpCard();
       if(window.syncElementViews) window.syncElementViews();
@@ -42974,6 +42998,7 @@ document.addEventListener('DOMContentLoaded', init);
     }
     function buildMotivationSentence(w){
       const key=wordKey(w); const bi=(typeof elIndexByKey==='function')?elIndexByKey(key):-1; const mot=w.motivation||null;
+      const mk=(bi>=0?bi:key);   /* v.566 — the WANT is reachable from any section; index-only things still use bi */
       const sen=document.createElement('div'); sen.className='npc-sentence';
       const lead1=document.createElement('span'); lead1.className='lead'; lead1.textContent='Motivated by '; sen.appendChild(lead1);
       if(mot && mot.want){
@@ -42981,8 +43006,8 @@ document.addEventListener('DOMContentLoaded', init);
         const lbl=document.createElement('span'); lbl.textContent=mot.want; pill.appendChild(lbl);
         pill.appendChild(_noteFeather(w,'@motivation'));
         pill.addEventListener('click', e=>{ e.stopPropagation(); setTrait('@motivation'); });
-        if(bi>=0){ const ed=document.createElement('span'); ed.className='pmini pen-dl'; ed.textContent='✎'; ed.title='Change'; ed.addEventListener('click',e=>{e.stopPropagation(); openMotivationPicker(bi,e.clientX,e.clientY);}); pill.appendChild(ed);
-          const x=document.createElement('span'); x.className='pmini'; x.textContent='×'; x.title='Clear motivation'; x.addEventListener('click',e=>{e.stopPropagation(); clearMotivation(bi);}); pill.appendChild(x); }
+        { const ed=document.createElement('span'); ed.className='pmini pen-dl'; ed.textContent='✎'; ed.title='Change'; ed.addEventListener('click',e=>{e.stopPropagation(); openMotivationPicker(mk,e.clientX,e.clientY);}); pill.appendChild(ed);
+          const x=document.createElement('span'); x.className='pmini'; x.textContent='×'; x.title='Clear motivation'; x.addEventListener('click',e=>{e.stopPropagation(); clearMotivation(mk);}); pill.appendChild(x); }
         sen.appendChild(pill);
         const motr=mot.motivator||null;
         if(motr || bi>=0){ const relSp=document.createElement('span'); relSp.className='npc-rel'; relSp.textContent=motRel(w); relSp.title='Change the connector';
@@ -42999,7 +43024,7 @@ document.addEventListener('DOMContentLoaded', init);
             const x2=document.createElement('span'); x2.className='pmini'; x2.textContent='×'; x2.title='Clear motivator'; x2.addEventListener('click',e=>{e.stopPropagation(); clearMotivator(bi);}); mp.appendChild(x2); }
           sen.appendChild(mp);
         } else if(bi>=0){ const madd=document.createElement('span'); madd.className='npc-add'; madd.textContent='+ motivator'; madd.title='Point this motivation at an element or something specific'; madd.addEventListener('click',e=>{e.stopPropagation(); openMotivatorPicker(bi, e.clientX, e.clientY);}); sen.appendChild(madd); }
-      } else if(bi>=0){ const add=document.createElement('span'); add.className='npc-add'; add.textContent='+ motivation'; add.addEventListener('click',e=>{e.stopPropagation(); openMotivationPicker(bi,e.clientX,e.clientY);}); sen.appendChild(add); }
+      } else if(mk!=null){ const add=document.createElement('span'); add.className='npc-add'; add.textContent='+ motivation'; add.addEventListener('click',e=>{e.stopPropagation(); openMotivationPicker(mk,e.clientX,e.clientY);}); sen.appendChild(add); }
       else { const q=document.createElement('span'); q.className='lead'; q.textContent='…'; sen.appendChild(q); }
       const _mkLead=t=>{ const s2=document.createElement('span'); s2.className='lead'; s2.textContent=t; return s2; };
       const parts=motObstacles(w);
@@ -43886,6 +43911,7 @@ document.addEventListener('DOMContentLoaded', init);
       // Motivation continues the character line as a sentence; want + obstacle pills are selectable note tabs
       if(w && w.role==='being'){
         const bi=elIndexByKey(key), mot=w.motivation||null;
+        const mk=(bi>=0?bi:key);   /* v.566 — see buildMotivationSentence */
         { const mlab=document.createElement('div'); mlab.className='npc-seclbl npc-motlbl'; mlab.textContent='Motivation'; body.appendChild(mlab); }
         const sen=document.createElement('div'); sen.className='npc-sentence';
         const lead1=document.createElement('span'); lead1.className='lead'; lead1.textContent='Motivated by '; sen.appendChild(lead1);
@@ -43893,8 +43919,8 @@ document.addEventListener('DOMContentLoaded', init);
           const pill=document.createElement('span'); pill.className='npc-pill want'+(state.cardTrait==='@motivation'?' on':''); pill.title='Click to write notes on this motivation';
           const lbl=document.createElement('span'); lbl.textContent=mot.want; pill.appendChild(lbl);
           pill.addEventListener('click', e=>{ e.stopPropagation(); setTrait('@motivation'); });
-          if(bi>=0){ const ed=document.createElement('span'); ed.className='pmini pen-dl'; ed.textContent='✎'; ed.title='Change'; ed.addEventListener('click',e=>{e.stopPropagation(); openMotivationPicker(bi,e.clientX,e.clientY);}); pill.appendChild(ed);
-            const x=document.createElement('span'); x.className='pmini'; x.textContent='×'; x.title='Clear motivation'; x.addEventListener('click',e=>{e.stopPropagation(); clearMotivation(bi);}); pill.appendChild(x); }
+          { const ed=document.createElement('span'); ed.className='pmini pen-dl'; ed.textContent='✎'; ed.title='Change'; ed.addEventListener('click',e=>{e.stopPropagation(); openMotivationPicker(mk,e.clientX,e.clientY);}); pill.appendChild(ed);
+            const x=document.createElement('span'); x.className='pmini'; x.textContent='×'; x.title='Clear motivation'; x.addEventListener('click',e=>{e.stopPropagation(); clearMotivation(mk);}); pill.appendChild(x); }
           sen.appendChild(pill);
           // connector ("of" — a dropdown of association words) + the motivator it points the motivation at
           const motr=mot.motivator||null;
@@ -43911,7 +43937,7 @@ document.addEventListener('DOMContentLoaded', init);
               const x2=document.createElement('span'); x2.className='pmini'; x2.textContent='×'; x2.title='Clear motivator'; x2.addEventListener('click',e=>{e.stopPropagation(); clearMotivator(bi);}); mp.appendChild(x2); }
             sen.appendChild(mp);
           } else if(bi>=0){ const madd=document.createElement('span'); madd.className='npc-add'; madd.textContent='+ motivator'; madd.title='Point this motivation at an element or something specific'; madd.addEventListener('click',e=>{e.stopPropagation(); openMotivatorPicker(bi, e.clientX, e.clientY);}); sen.appendChild(madd); }
-        } else if(bi>=0){ const add=document.createElement('span'); add.className='npc-add'; add.textContent='+ motivation'; add.addEventListener('click',e=>{e.stopPropagation(); openMotivationPicker(bi,e.clientX,e.clientY);}); sen.appendChild(add); }
+        } else if(mk!=null){ const add=document.createElement('span'); add.className='npc-add'; add.textContent='+ motivation'; add.addEventListener('click',e=>{e.stopPropagation(); openMotivationPicker(mk,e.clientX,e.clientY);}); sen.appendChild(add); }
         else { const q=document.createElement('span'); q.className='lead'; q.textContent='…'; sen.appendChild(q); }
         const _mkLead=t=>{ const s2=document.createElement('span'); s2.className='lead'; s2.textContent=t; return s2; };
         const parts=motObstacles(w);
@@ -51478,9 +51504,12 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.565';
+  var APP_VERSION = '2026.07.20.566';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.566', date:'September 2, 2026', notes:[
+      '**A character’s motivation is one fact about them, not a fact about a section.** You can set or change what someone wants from anywhere in the book now — the ✎ and the **+ motivation** on their card no longer disappear when you are standing on a section they do not appear in — and the change lands on that character everywhere at once instead of only from that point forward. **If what they want CHANGES over the story, that is an arc**, which is where it belongs. [Jeremy]',
+    ]},
     { v:'2026.07.20.565', date:'September 1, 2026', notes:[
       '**You can give a character their motivation while you are making them.** The character creator has a **Motivation** row beside Sex, Age and Type — the same list of wants you get everywhere else, and you can type your own. It was previously only reachable from the character’s card in the Notepad, or by selecting them on the map, which is a long way from where you are actually deciding who someone is. [Jeremy]',
     ]},
