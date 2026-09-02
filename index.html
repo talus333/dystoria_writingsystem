@@ -51583,9 +51583,13 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.574';
+  var APP_VERSION = '2026.07.20.575';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.575', date:'September 2, 2026', notes:[
+      '**Every builder now offers Sketch · Fuller · Rich where they belong — on Generate.** Settings, objects, groups, events and concepts join the character builder: the three levels have left the top of each card and live behind the **▾ beside Generate**, which rolls a whole element at the depth you choose. They were never a fact about the thing you were building — they only decide how many blank lines you start with — and they did nothing at all while you were editing something that already exists. [Jeremy]',
+      '_If you want one more line rather than three, **＋ add a dimension** is still there, and you pick which._',
+    ]},
     { v:'2026.07.20.574', date:'September 2, 2026', notes:[
       '**Hybridize moved onto the Type it applies to.** The ⚭ now sits with the ↻ on the character’s **Type** row — the one dimension that can be paired — instead of as a button at the foot of the section. It appears once they have a Type, and **goes away the moment the pair is made**; before, it stayed on the card greyed out saying you had already done it. To undo, remove the second Type. [Jeremy]',
     ]},
@@ -79137,6 +79141,11 @@ body.eink .stk-slot-cap,body.eink .stk-menu-sub,body.eink .stk-slot-val.stk-slot
    their size, colour and hover for free; only the gold hover is its own, because pairing a Type is a
    consequential act (it changes the card AND the map figure) rather than a reroll. */
 .cc-hyb{ font-size:13px; }
+/* v.575 — the hybrid pair, inline on the Type row. The ⚭ between the two words is the join; the
+   second word keeps .cc-word so it looks and behaves exactly like the first. */
+.cc-hybpair{ display:inline-flex; align-items:baseline; gap:6px; margin-left:7px;
+  flex:1 1 auto; justify-content:flex-start; }
+.cc-hybamp{ color:var(--ink-faint); font-size:12px; }
 .cc-hyb:hover{ color:var(--gold); }
 .cc-genmenu{ position:fixed; z-index:var(--z-menu, 9000); min-width:210px; background:var(--paper);
   border:1px solid var(--line); border-radius:10px; box-shadow:0 10px 28px rgba(0,0,0,.18); padding:6px; }
@@ -79486,6 +79495,52 @@ body.eink .stk-slot-cap,body.eink .stk-menu-sub,body.eink .stk-slot-val.stk-slot
     if(x) want.insertBefore(chip, x); else want.appendChild(chip);
   }
 
+  /* ---- v.575 · a hybrid reads as ONE line -------------------------------------------------
+     [Jeremy] "the hybrid should immediately be added to the same line with the element it was
+     hybridized instead of on another line at the bottom of the list. Making it one line makes it
+     clear." Right: `ccRenderSlots` renders the second Type as its own row at the END of the slot
+     list, labelled "⚭ Hybrid", so a wolf–machine read as two unrelated dimensions separated by
+     everything else on the card. A hybrid is ONE identity made of two words.
+
+     The second row's word and × are MOVED, not rebuilt — moving the real nodes carries their click
+     handlers with them, so picking the second Type and removing it keep working through the app's
+     own bindings. Idempotent, like hybridChip: it checks whether the merge is already done and
+     touches nothing if so, which is what stops the observer looping. */
+  function mergeHybrid(){
+    var host = el('ccSlots'); if(!host) return;
+    var rows = Array.from(host.querySelectorAll('.cc-slot'));
+    var first = null, second = null;
+    rows.forEach(function(r){
+      var d = r.querySelector('.cc-dim');
+      var t = d ? String(d.textContent || '').trim().toLowerCase() : '';
+      if(t === 'type' && !first) first = r;
+      else if(t.indexOf('hybrid') >= 0 && !second) second = r;
+    });
+    if(!first || !second) return;                 /* no pair on the card — nothing to merge */
+    if(first.querySelector('.cc-hybpair')) return; /* already merged — touch nothing */
+
+    var w2 = second.querySelector('.cc-word');
+    var x2 = Array.from(second.querySelectorAll('.cc-ctl')).filter(function(n){ return n.textContent === '\u00D7'; })[0];
+    var w1 = first.querySelector('.cc-word');
+    if(!w2 || !w1) return;
+
+    var pair = document.createElement('span');
+    pair.className = 'cc-hybpair';
+    var amp = document.createElement('span'); amp.className = 'cc-hybamp'; amp.textContent = '\u26AD';
+    amp.title = 'A hybrid — both Types carry to the card and to the map figure';
+    pair.appendChild(amp);
+    w2.style.flex = '0 0 auto';                    /* .cc-word is flex:1 here too — it would push its own × away */
+    pair.appendChild(w2);                          /* the real node: its picker click comes with it */
+    if(x2){ x2.title = 'Remove the second Type'; pair.appendChild(x2); }
+
+    /* .cc-word is `flex:1`, so left as-is it expands and shoves the pair over against the row's
+       controls — "Human ... ⚭ Machine ×  ↻ ×" instead of one phrase. The first word hugs its text
+       and the PAIR takes the remaining space, so the two Types read together at the left. */
+    w1.style.flex = '0 0 auto';
+    w1.parentNode.insertBefore(pair, w1.nextSibling);
+    if(second.parentNode) second.parentNode.removeChild(second);
+  }
+
   function tabs(){
     var seg = el('ccSeg'); if(!seg) return;
     /* the app's level control stays in the DOM, hidden: ccSyncSeg() keeps working on it and the
@@ -79513,62 +79568,10 @@ body.eink .stk-slot-cap,body.eink .stk-menu-sub,body.eink .stk-slot-val.stk-slot
     paint();
   }
 
-  /* ---- the Generate menu ------------------------------------------------------------------- */
-  function closeMenu(){ var m = el('ccGenMenu'); if(m && m.parentNode) m.parentNode.removeChild(m); }
-
-  function openMenu(anchor){
-    closeMenu();
-    var seg = el('ccSeg'); if(!seg) return;
-    var levels = Array.from(seg.children);
-    if(!levels.length) return;
-
-    var m = document.createElement('div'); m.id = 'ccGenMenu'; m.className = 'cc-genmenu';
-    var lb = document.createElement('div'); lb.className = 'cc-genmenu-lb';
-    lb.textContent = 'Roll a whole character';
-    m.appendChild(lb);
-
-    levels.forEach(function(btn, i){
-      var row = document.createElement('button'); row.type = 'button'; row.className = 'cc-genmenu-row';
-      var nm = document.createElement('span'); nm.className = 'cc-genmenu-nm';
-      nm.textContent = String(btn.textContent || '').trim();
-      row.appendChild(nm);
-      var sub = document.createElement('span'); sub.className = 'cc-genmenu-sub';
-      sub.textContent = ['the essentials', 'three more dimensions', 'five more dimensions'][i] || '';
-      row.appendChild(sub);
-      row.addEventListener('click', function(ev){
-        ev.stopPropagation();
-        closeMenu();
-        try { btn.click(); } catch(e){}          /* the app's own level handler sets CC.complexity + the slots */
-        var g = el('ccGen'); if(g) g.click();     /* …then roll into them */
-        TAB = 'characteristics'; paint();         /* generation fills traits — show what changed */
-      });
-      m.appendChild(row);
-    });
-
-    document.body.appendChild(m);
-    try {
-      var r = anchor.getBoundingClientRect();
-      var h = m.getBoundingClientRect().height || 140;
-      m.style.left = Math.max(8, Math.round(r.left)) + 'px';
-      m.style.top  = Math.max(8, Math.round(r.top - h - 8)) + 'px';
-    } catch(e){}
-    setTimeout(function(){
-      document.addEventListener('pointerdown', function h(ev){
-        if(ev.target && ev.target.closest && ev.target.closest('#ccGenMenu')) return;
-        closeMenu(); document.removeEventListener('pointerdown', h, true);
-      }, true);
-    }, 0);
-  }
-
-  function genCaret(){
-    var g = el('ccGen'); if(!g || !g.parentNode) return;
-    if(el('ccGenMore')) return;
-    var c = document.createElement('button'); c.type = 'button'; c.id = 'ccGenMore'; c.className = 'cc-gen cc-genmore';
-    c.textContent = '▾';
-    c.title = 'Roll a whole character — Sketch, Fuller or Rich';
-    c.addEventListener('click', function(ev){ ev.stopPropagation(); openMenu(c); });
-    g.parentNode.insertBefore(c, g.nextSibling);
-  }
+  /* The Generate ▾ used to live here. v.575 moved it into `builder_levels.js`, which wires all SIX
+     builders from one place — the level control was copy-pasted six times around one shared
+     `dystLevelSlots`, and adding a fifth and sixth copy here would have been the same mistake at a
+     larger size. This layer keeps what is genuinely character-only: the tabs and the ⚭. */
 
   /* ---- hooks ------------------------------------------------------------------------------- */
   var _open = window.openCharCreator;
@@ -79576,7 +79579,7 @@ body.eink .stk-slot-cap,body.eink .stk-menu-sub,body.eink .stk-slot-val.stk-slot
     window.openCharCreator = function(){
       var r = _open.apply(this, arguments);
       TAB = 'characteristics';               /* always open on the traits */
-      try { tabs(); genCaret(); paint(); watchSlots(); hybridChip(); } catch(e){}
+      try { tabs(); paint(); watchSlots(); mergeHybrid(); hybridChip(); } catch(e){}
       return r;
     };
   }
@@ -79590,12 +79593,147 @@ body.eink .stk-slot-cap,body.eink .stk-menu-sub,body.eink .stk-slot-val.stk-slot
   function watchSlots(){
     var host = el('ccSlots'); if(!host || _obs) return;
     try {
-      _obs = new MutationObserver(function(){ try { hybridChip(); } catch(e){} });
+      _obs = new MutationObserver(function(){ try { mergeHybrid(); hybridChip(); } catch(e){} });
       _obs.observe(host, { childList: true, subtree: true });
     } catch(e){}
   }
 
-  window.__ccTabs = { paint: paint, hybridChip: hybridChip, go: function(t){ TAB = t; paint(); }, tab: function(){ return TAB; } };
+  window.__ccTabs = { paint: paint, hybridChip: hybridChip, mergeHybrid: mergeHybrid, go: function(t){ TAB = t; paint(); }, tab: function(){ return TAB; } };
+})();
+
+</script>
+<script id="dyst-builder-levels-js">
+/* Dystoria — Sketch · Fuller · Rich becomes a generation option, in every builder (v.575, roadmap #51)
+   [Jeremy] "do the rest of the creators, removing the sketch, full, rich and moving those as
+   generation options."
+
+   v.573 made the argument on the character builder: **the level is not a property of the element, it
+   is a property of GENERATING one.** `*_LEVELS` is `extra: 0 / 3 / 5` in all six builders — its
+   entire effect is how many blank slots are offered — it is inert while editing something that
+   already exists, and generation already sets its own level and ignores the control. So it belongs
+   on Generate.
+
+   **This is deliberately ONE maker for all six.** The six builders — Character (cc), Setting (sb),
+   Object (ob), Group (gb), Event (ev), Concept (co) — are identical in shape: each has `{p}Seg`,
+   `{p}SegHint`, `{p}Gen`, `{p}Slots` and its own `*_LEVELS` / `*SyncSeg` around ONE shared
+   `dystLevelSlots`. The maker was already shared; only the control was copy-pasted six times. Doing
+   this as six more copies would have been the same mistake at a larger size, so the character's own
+   Generate menu was taken OUT of the tabs layer and folded in here.
+
+   MECHANISM (unchanged from v.573, and the reason it is safe): each builder's own seg buttons stay in
+   the DOM, hidden. The menu CLICKS them, so the level still changes through the app's own handler and
+   nothing here reimplements `dystLevelSlots`. `*SyncSeg()` goes on working on the hidden control. */
+(function(){
+  'use strict';
+
+  var BUILDERS = [
+    { p:'cc', open:'openCharCreator',    noun:'character' },
+    { p:'sb', open:'openSettingCreator', noun:'setting'   },
+    { p:'ob', open:'openObjectCreator',  noun:'object'    },
+    { p:'gb', open:'openGroupCreator',   noun:'group'     },
+    { p:'ev', open:'openEventCreator',   noun:'event'     },
+    { p:'co', open:'openConceptCreator', noun:'concept'   }
+  ];
+
+  /* what each level actually buys, in the writer's terms — `extra` is 0 / 3 / 5 in every builder */
+  var SUB = ['the essentials', 'three more dimensions', 'five more dimensions'];
+
+  function el(id){ return document.getElementById(id); }
+  function closeMenu(){ var m = el('bLevelMenu'); if(m && m.parentNode) m.parentNode.removeChild(m); }
+
+  function openMenu(b, anchor){
+    closeMenu();
+    var seg = el(b.p + 'Seg'); if(!seg) return;
+    var levels = Array.from(seg.children);
+    if(!levels.length) return;
+
+    var m = document.createElement('div'); m.id = 'bLevelMenu'; m.className = 'cc-genmenu';
+    var lb = document.createElement('div'); lb.className = 'cc-genmenu-lb';
+    lb.textContent = 'Roll a whole ' + b.noun;
+    m.appendChild(lb);
+
+    levels.forEach(function(btn, i){
+      var row = document.createElement('button'); row.type = 'button'; row.className = 'cc-genmenu-row';
+      var nm = document.createElement('span'); nm.className = 'cc-genmenu-nm';
+      nm.textContent = String(btn.textContent || '').trim();
+      row.appendChild(nm);
+      var sub = document.createElement('span'); sub.className = 'cc-genmenu-sub';
+      sub.textContent = SUB[i] || '';
+      row.appendChild(sub);
+      row.addEventListener('click', function(ev){
+        ev.stopPropagation();
+        closeMenu();
+        try { btn.click(); } catch(e){}                 /* the builder's own level handler: sets complexity + slots */
+        var g = el(b.p + 'Gen');
+        if(g){ BYPASS = true; try { g.click(); } finally { BYPASS = false; } }   /* …then roll, through the app's own handler */
+        /* the character builder has tabs; generation fills traits, so show the writer what changed */
+        try { if(b.p === 'cc' && window.__ccTabs) window.__ccTabs.go('characteristics'); } catch(e){}
+      });
+      m.appendChild(row);
+    });
+
+    document.body.appendChild(m);
+    try {
+      var r = anchor.getBoundingClientRect();
+      var h = m.getBoundingClientRect().height || 140;
+      m.style.left = Math.max(8, Math.round(r.left)) + 'px';
+      m.style.top  = Math.max(8, Math.round(r.top - h - 8)) + 'px';
+    } catch(e){}
+    setTimeout(function(){
+      document.addEventListener('pointerdown', function h(ev){
+        if(ev.target && ev.target.closest && ev.target.closest('#bLevelMenu')) return;
+        closeMenu(); document.removeEventListener('pointerdown', h, true);
+      }, true);
+    }, 0);
+  }
+
+  /* [Jeremy, v.575] "incorporate it into the generate button itself" — so there is no caret button
+     beside Generate; **Generate IS the menu.** Pressing it asks how deep, and the level you pick is
+     applied and rolled in one go. That also disposes of the caret's radius mismatch from v.573: with
+     no second button there is no pair to match.
+
+     The interception is a CAPTURE-phase listener on the button itself, so it runs before the app's
+     own click handler and `stopImmediatePropagation()` holds that handler back. The menu then
+     re-fires the click with BYPASS set, and the app generates exactly as it always did — this layer
+     never calls the builder's generate function, which is closure-scoped anyway. A synchronous flag
+     is safe HERE (unlike the v.574 observer case) because `.click()` dispatches synchronously. */
+  var BYPASS = false;
+
+  function wire(b){
+    /* the level control stays in the DOM so its own handler and *SyncSeg keep working — hidden,
+       because it is not a fact about the element being built */
+    var seg = el(b.p + 'Seg'); if(seg) seg.style.display = 'none';
+    var hint = el(b.p + 'SegHint'); if(hint) hint.style.display = 'none';
+
+    /* a caret from an earlier build of this session, if any — Generate carries the menu now */
+    var stale = el(b.p + 'GenMore'); if(stale && stale.parentNode) stale.parentNode.removeChild(stale);
+
+    var g = el(b.p + 'Gen'); if(!g) return;
+    if(g.getAttribute('data-lvlwired')) return;
+    g.setAttribute('data-lvlwired', '1');
+
+    if(String(g.textContent || '').indexOf('▾') < 0) g.textContent = String(g.textContent || '').trim() + ' ▾';
+    g.title = 'Roll a whole ' + b.noun + ' — choose Sketch, Fuller or Rich';
+
+    g.addEventListener('click', function(ev){
+      if(BYPASS) return;                       /* our own synthetic click: let the app's handler run */
+      ev.stopImmediatePropagation();
+      ev.preventDefault();
+      openMenu(b, g);
+    }, true);
+  }
+
+  BUILDERS.forEach(function(b){
+    var orig = window[b.open];
+    if(typeof orig !== 'function') return;
+    window[b.open] = function(){
+      var r = orig.apply(this, arguments);
+      try { wire(b); } catch(e){}
+      return r;
+    };
+  });
+
+  window.__builderLevels = { wire: wire, builders: BUILDERS, close: closeMenu };
 })();
 
 </script>
