@@ -51478,9 +51478,15 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.563';
+  var APP_VERSION = '2026.07.20.565';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.565', date:'September 1, 2026', notes:[
+      '**You can give a character their motivation while you are making them.** The character creator has a **Motivation** row beside Sex, Age and Type — the same list of wants you get everywhere else, and you can type your own. It was previously only reachable from the character’s card in the Notepad, or by selecting them on the map, which is a long way from where you are actually deciding who someone is. [Jeremy]',
+    ]},
+    { v:'2026.07.20.564', date:'September 1, 2026', notes:[
+      '**A stake can name the struggle it runs along.** Beside Bearer and Threat there is now an **Axis** — _Against Another · Against the Self · Against Nature · Against Society · Against Fate · Against the Divine · Against the Machine · Against the Unknown · Against Time · Against the Past_. Leave it alone and the app reads one from the threat you named, shown in grey; pick a word and it becomes yours. [Jeremy]',
+    ]},
     { v:'2026.07.20.563', date:'September 1, 2026', notes:[
       '**A card’s stake now moves with its card.** Insert, delete, merge or split a section — or reorder from the timeline — and the stake pinned to a scene card followed its note and its title everywhere except one path, so it could end up showing on the wrong chapter. It follows now, in all of them. Merging two cards that both had a stake keeps both, joined, rather than quietly dropping one.',
     ]},
@@ -78648,6 +78654,7 @@ html body.eink #expRight .xb-row .xb-ex{ opacity:1; }
 
 body.eink .stk-slot,body.eink .stk-menu{background:#fff; border-color:#000; box-shadow:none; color:#000}
 body.eink .stk-slot-cap,body.eink .stk-menu-sub,body.eink .stk-slot-val.stk-slot-empty{color:#000}
+.stk-slot-axis .stk-slot-val.stk-slot-empty{font-style:italic}
 </style>
 <script id="dyst-stake-bearer-js">
 /* Dystoria — Stakes: bearer & threat (#46 phase 1a)
@@ -78671,7 +78678,10 @@ body.eink .stk-slot-cap,body.eink .stk-menu-sub,body.eink .stk-slot-val.stk-slot
     var r = b[key] || (b[key] = {});
     val = (val == null ? '' : String(val).trim());
     if(val) r[field] = val; else delete r[field];
-    if(!r.bearer && !r.threat) delete b[key];
+    /* prune only when the record carries nothing at all — an axis-only stake is legitimate */
+    var empty = true;
+    for(var f in r){ if(Object.prototype.hasOwnProperty.call(r, f) && r[f]){ empty = false; break; } }
+    if(empty) delete b[key];
     try { if(typeof scheduleAutosave === 'function') scheduleAutosave(400); } catch(e){}
   }
   window.__stakeData = { rec: rec, set: setField, all: function(){ return bag(false) || {}; } };
@@ -78720,12 +78730,77 @@ body.eink .stk-slot-cap,body.eink .stk-menu-sub,body.eink .stk-slot-val.stk-slot
     return null;
   };
 
+  /* ---------- the axis (#46 §2.4) ----------
+     A closed vocabulary of ten, read from the stakes category's own Conflict subcategory, so the
+     words live in one place and this layer never carries its own copy of them. */
+  var AXIS_BUCKET = {
+    'against another'   : 'another',
+    'against the self'  : 'themselves'
+  };   /* everything else in the Conflict sub is a flavour of "the world" */
+
+  function axisWords(){
+    var out = [];
+    try {
+      var p = plan();
+      var pool = (p && p.stakePool) ? (p.stakePool() || []) : [];
+      for(var j = 0; j < pool.length; j++){
+        var it = pool[j];
+        if(it && String(it.sub || '').toLowerCase() === 'conflict' && it.word) out.push(it.word);
+      }
+    } catch(e){}
+    return out;
+  }
+
+  function bucketOf(word){
+    var w = String(word || '').trim().toLowerCase();
+    if(!w) return null;
+    return AXIS_BUCKET[w] || 'world';
+  }
+
+  /* declared if the writer picked one; otherwise derived from the threat's category.
+     bearer === threat means against themselves — no self-flag, no extra field. */
+  window.__stakeAxis = function(stakeKey){
+    var r = rec(stakeKey) || {};
+    if(r.axis) return { axis: r.axis, bucket: bucketOf(r.axis), source: 'declared' };
+    if(!r.threat) return { axis: '', bucket: null, source: null };
+    if(r.bearer && r.threat === r.bearer) return { axis: '', bucket: 'themselves', source: 'derived' };
+    var cat = '';
+    if(String(r.threat).indexOf('group:') === 0){ cat = 'org'; }
+    else { var w = elFor(r.threat); cat = (w && w.cat) || ''; }
+    if(!cat) return { axis: '', bucket: null, source: null };
+    return { axis: '', bucket: (cat === 'being' ? 'another' : 'world'), source: 'derived' };
+  };
+
   /* ---------- the picker menu ---------- */
   function closeMenu(){ var m = document.getElementById('stkPickMenu'); if(m && m.parentNode) m.parentNode.removeChild(m); }
   document.addEventListener('click', function(e){
     var m = document.getElementById('stkPickMenu');
     if(m && !m.contains(e.target)) closeMenu();
   }, true);
+
+  /* one menu builder for both slots: rows are {label, sub, value} */
+  function openMenu(anchor, cur, rows, onPick){
+    closeMenu();
+    var menu = document.createElement('div'); menu.id = 'stkPickMenu'; menu.className = 'stk-menu';
+    var mk = function(label, sub, val, isCur){
+      var b = document.createElement('button'); b.type = 'button'; b.className = 'stk-menu-row' + (isCur ? ' on' : '');
+      var t = document.createElement('span'); t.className = 'stk-menu-tx'; t.textContent = label; b.appendChild(t);
+      if(sub){ var s2 = document.createElement('span'); s2.className = 'stk-menu-sub'; s2.textContent = sub; b.appendChild(s2); }
+      b.addEventListener('click', function(ev){ ev.stopPropagation(); closeMenu(); onPick(val); });
+      return b;
+    };
+    menu.appendChild(mk('— none —', '', '', !cur));
+    if(!rows.length){
+      var none = document.createElement('div'); none.className = 'stk-menu-empty';
+      none.textContent = 'Nothing to choose from yet.';
+      menu.appendChild(none);
+    }
+    for(var j = 0; j < rows.length; j++) menu.appendChild(mk(rows[j].label, rows[j].sub, rows[j].value, rows[j].value === cur));
+    document.body.appendChild(menu);
+    var r = anchor.getBoundingClientRect();
+    menu.style.left = Math.max(8, Math.min(r.left, window.innerWidth - menu.offsetWidth - 8)) + 'px';
+    menu.style.top = Math.max(8, Math.min(r.bottom + 4, window.innerHeight - menu.offsetHeight - 8)) + 'px';
+  }
 
   function openPicker(anchor, curKey, onPick){
     closeMenu();
@@ -78799,12 +78874,156 @@ body.eink .stk-slot-cap,body.eink .stk-menu-sub,body.eink .stk-slot-val.stk-slot
       sec.appendChild(slot('bearer', 'Bearer', 'who could lose it'));
       sec.appendChild(slot('threat', 'Threat', 'what is taking it'));
 
+      /* Axis — the ten Conflict words. Left empty it DERIVES from the threat, so this slot shows
+         the derived reading in italics until the writer overrides it with a claim of their own. */
+      (function(){
+        var pill = document.createElement('span'); pill.className = 'stk-slot stk-slot-axis';
+        var cap = document.createElement('span'); cap.className = 'stk-slot-cap'; cap.textContent = 'Axis'; pill.appendChild(cap);
+        var val = document.createElement('span'); val.className = 'stk-slot-val'; pill.appendChild(val);
+        var paint = function(){
+          var cur = (rec(key) || {}).axis || '';
+          if(cur){ val.textContent = cur; val.classList.remove('stk-slot-empty'); pill.title = 'Axis — the struggle this risk runs along'; return; }
+          var d = window.__stakeAxis(key) || {};
+          val.textContent = d.bucket ? ('against ' + (d.bucket === 'themselves' ? 'themselves' : d.bucket === 'another' ? 'another' : 'the world')) : 'the axis it runs along';
+          val.classList.add('stk-slot-empty');
+          pill.title = d.bucket ? 'Read from the threat — pick a word to say it yourself' : 'Axis — the struggle this risk runs along';
+        };
+        paint();
+        pill.addEventListener('click', function(ev){
+          ev.stopPropagation();
+          var words = axisWords();
+          openMenu(pill, (rec(key) || {}).axis || '', words.map(function(w){ return { label: w, sub: '', value: w }; }), function(picked){
+            setField(key, 'axis', picked); paint();
+            try { if(typeof window.__planRefreshPlot === 'function') window.__planRefreshPlot(); } catch(e){}
+          });
+        });
+        sec.appendChild(pill);
+      })();
+
       var d = '';
       try { if(typeof descFor === 'function') d = descFor(w) || ''; } catch(e){}
       if(d){ var dd = document.createElement('div'); dd.className = 'stk-desc'; dd.textContent = d; sec.appendChild(dd); }
 
       body.appendChild(sec);
     } catch(e){}
+  };
+})();
+</script>
+
+<script id="dyst-cc-motivation-js">
+/* Dystoria — Motivation in the character builder (#49 phase 0)
+   The pool and the composer already exist: a want is drawn from the `being` category's Motivation
+   subcategory through the shared trait picker, and the element card composes the sentence. What was
+   missing was a door — the builder, where a writer is actually deciding who someone is, could not set
+   it at all. This adds that one door and nothing else.
+
+   Scope, deliberately: the CREATE path only. Setting a motivation on an EXISTING character has to go
+   through setMotivationWant(i, …), whose `i` is an index into the CURRENT SECTION's words, and which
+   runs cascadeForward() so a change propagates from that section onward. Writing it by element key
+   would either miss the character's other per-section copies or flatten a deliberate mid-story change.
+   So in edit mode the row shows the current want and says where to change it. */
+(function(){
+  'use strict';
+
+  var want = '';        // pending motivation for the character being created
+  var editing = false;  // opened with {edit:key} — read-only here
+  var editWant = '';
+
+  function nameNow(){ var n = document.getElementById('ccName'); return n ? String(n.value || '').trim() : ''; }
+
+  function row(){
+    var host = document.getElementById('ccSlots');
+    if(!host || !host.parentNode) return;
+
+    var old = document.getElementById('ccMotRow');
+    if(old && old.parentNode) old.parentNode.removeChild(old);
+
+    /* mirrors ccRenderSlots' own row idiom: .cc-slot > .cc-dim + .cc-word + .cc-ctl */
+    var r = document.createElement('div'); r.className = 'cc-slot'; r.id = 'ccMotRow';
+    var dim = document.createElement('span'); dim.className = 'cc-dim'; dim.textContent = 'Motivation'; r.appendChild(dim);
+
+    var wd = document.createElement('span');
+    if(editing){
+      wd.className = 'cc-word' + (editWant ? '' : ' empty');
+      wd.textContent = editWant || '—';
+      wd.title = 'Motivation is changed from this character’s own card';
+      wd.style.cursor = 'default';
+    } else {
+      wd.className = 'cc-word' + (want ? '' : ' empty');
+      wd.textContent = want || '—';
+      wd.title = 'What do they want?';
+      wd.addEventListener('click', function(ev){
+        ev.stopPropagation();
+        if(typeof window.openWordPicker !== 'function') return;
+        var who = nameNow();
+        window.openWordPicker({
+          cat: 'being', sub: 'Motivation',
+          title: 'Motivation' + (who ? ' — ' + who : ''),
+          placeholder: 'search or name what they want…',
+          x: ev.clientX, y: ev.clientY,
+          onPick: function(picked, isNew){
+            want = String(picked == null ? '' : picked).trim();
+            /* a typed word joins the pool, exactly as setMotivationWant does */
+            if(want && isNew && typeof saveCustomWord === 'function'){
+              try { saveCustomWord('being', { word: want, sub: 'Motivation', desc: '', g: [] }, 'story'); } catch(e){}
+            }
+            row();
+          }
+        });
+      });
+    }
+    r.appendChild(wd);
+
+    if(!editing && want){
+      var x = document.createElement('span'); x.className = 'cc-ctl'; x.textContent = '×'; x.title = 'Clear';
+      x.addEventListener('click', function(ev){ ev.stopPropagation(); want = ''; row(); });
+      r.appendChild(x);
+    }
+
+    /* AFTER #ccSlots, not inside it — ccRenderSlots() clears its own host on every complexity change.
+       And the builder's beautification layer (v.340) reorders the flow with flex `order`, so DOM
+       position alone puts an un-ordered row at the TOP of the card: take #ccSlots' own order value so
+       this lands with the rows it belongs to. Equal order falls back to document order. */
+    try {
+      var ord = window.getComputedStyle(host).order;
+      if(ord && ord !== 'auto') r.style.order = ord;
+    } catch(e){}
+    host.parentNode.insertBefore(r, host.nextSibling);
+  }
+
+  /* wrap the opener: opts tells us create vs edit without reading the closure's CC */
+  var _open = window.openCharCreator;
+  if(typeof _open === 'function'){
+    window.openCharCreator = function(opts){
+      var out = _open.apply(this, arguments);
+      try {
+        opts = opts || {};
+        editing = !!opts.edit;
+        want = ''; editWant = '';
+        if(editing && typeof npFindEl === 'function'){
+          var w = npFindEl(opts.edit);
+          editWant = (w && w.motivation && w.motivation.want) || '';
+        }
+        setTimeout(row, 0);
+      } catch(e){}
+      return out;
+    };
+  }
+
+  /* ccCommit calls window.__qaOnElementAdd(built) with the freshly pushed word — the app's own
+     extension point, and the reason none of this needs to reach into a closure. */
+  var _prev = window.__qaOnElementAdd;
+  window.__qaOnElementAdd = function(built){
+    try {
+      if(built && built.role === 'being' && want){
+        built.motivation = built.motivation || {};
+        built.motivation.want = want;
+        want = '';
+        if(typeof scheduleAutosave === 'function') scheduleAutosave(400);
+        if(typeof window.syncElementViews === 'function') window.syncElementViews();
+      }
+    } catch(e){}
+    if(typeof _prev === 'function'){ try { return _prev.apply(this, arguments); } catch(e){} }
   };
 })();
 </script>
