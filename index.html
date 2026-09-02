@@ -51583,9 +51583,12 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.573';
+  var APP_VERSION = '2026.07.20.574';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.574', date:'September 2, 2026', notes:[
+      '**Hybridize moved onto the Type it applies to.** The ⚭ now sits with the ↻ on the character’s **Type** row — the one dimension that can be paired — instead of as a button at the foot of the section. It appears once they have a Type, and **goes away the moment the pair is made**; before, it stayed on the card greyed out saying you had already done it. To undo, remove the second Type. [Jeremy]',
+    ]},
     { v:'2026.07.20.573', date:'September 2, 2026', notes:[
       '**The character builder is now two tabs — Characteristics and Drive — and Sketch / Fuller / Rich has moved to where it actually applies.** Those three were never a fact about your character; they only decide **how many blank trait lines you are offered**, and they sat at the top of the card even when you were editing someone who already exists. They now live behind the **▾ beside Generate**, which is what they were always for: roll a whole character at the depth you want. [Jeremy]',
       '_If you want one more dimension rather than five, that is what **＋ add a dimension** has always been — and you get to choose which one._',
@@ -79130,6 +79133,11 @@ body.eink .stk-slot-cap,body.eink .stk-menu-sub,body.eink .stk-slot-val.stk-slot
    the two edges would have meant out-specifying a rule that exists to keep every button one shape.
    Matching the shape is the rule; winning a specificity war against it is not. */
 .cc-genmore{ padding-left:12px; padding-right:12px; border-radius:999px; }
+/* v.574 — the hybridize control, on the Type row. It is a .cc-ctl like the ↻ and the ×, so it takes
+   their size, colour and hover for free; only the gold hover is its own, because pairing a Type is a
+   consequential act (it changes the card AND the map figure) rather than a reroll. */
+.cc-hyb{ font-size:13px; }
+.cc-hyb:hover{ color:var(--gold); }
 .cc-genmenu{ position:fixed; z-index:var(--z-menu, 9000); min-width:210px; background:var(--paper);
   border:1px solid var(--line); border-radius:10px; box-shadow:0 10px 28px rgba(0,0,0,.18); padding:6px; }
 .cc-genmenu-lb{ font-family:var(--sans); font-size:10px; font-weight:800; letter-spacing:.11em;
@@ -79334,12 +79342,10 @@ body.eink .stk-slot-cap,body.eink .stk-menu-sub,body.eink .stk-slot-val.stk-slot
     };
   }
 
-  /* ccRenderSlots() clears and rebuilds #ccSlots on every complexity change, which leaves the Drive
-     block where it is — but the tabs also re-run it, so re-render after to keep the order correct. */
-  var _rs = window.ccRenderSlots;
-  if(typeof _rs === 'function'){
-    window.ccRenderSlots = function(){ var r = _rs.apply(this, arguments); try { render(); } catch(e){} return r; };
-  }
+  /* NB (corrected v.574): there is no `window.ccRenderSlots` — it is closure-scoped, so the wrapper
+     that used to sit here never ran. Nothing was lost by it: ccRenderSlots clears and rebuilds
+     #ccSlots only, and the Drive block is a sibling that it never touches. Removed rather than left
+     in place, because a hook that looks live and is not is worse than no hook. */
 
   /* CREATE: the chained hook fires with the freshly pushed word, so the pending lists land through
      the app's own writers with the new element's key. */
@@ -79411,7 +79417,7 @@ body.eink .stk-slot-cap,body.eink .stk-menu-sub,body.eink .stk-slot-val.stk-slot
     show(charLabel(), false);              /* the tab already names the section */
     show(el('ccSlots'),  isChar);
     show(el('ccAdd'),    isChar);
-    show(el('ccHybrid'), isChar);
+    show(el('ccHybrid'), false);       /* v.574 — retired as a button; kept in the DOM as the click proxy */
     show(el('ccDrive'), !isChar);
     var d = el('ccDrive');
     if(d){ var h = d.querySelector('.cc-seclbl'); show(h, false); }
@@ -79419,6 +79425,65 @@ body.eink .stk-slot-cap,body.eink .stk-menu-sub,body.eink .stk-slot-val.stk-slot
     if(strip) Array.from(strip.children).forEach(function(btn){
       btn.classList.toggle('on', btn.getAttribute('data-tab') === TAB);
     });
+  }
+
+  /* ---- v.574 · hybridize, on the row it acts on ------------------------------------------
+     [Jeremy] "move the hybridize button to just the little hybridize icon to the left of the ×
+     on the dimensions that can be hybridized, and as soon as a hybridize is done, the button
+     disappears." Right on both counts, and for a reason the card already showed: `ccRemovable()`
+     gives the FIRST Type row no ×, so there is an empty control slot exactly where the ⚭ belongs —
+     and the old button did not disappear when the pair was full, it stayed visible but dimmed
+     (`cc-add-off`) with the title "Already a hybrid". A door that goes nowhere.
+
+     Only **Type** can be hybridized (the cap is two, v.468), so the control appears on one row and
+     only while the pair can still be made. It is also held back until the first Type HAS a word —
+     offering to pair nothing reads as a bug. Undoing is the × on the second row, which is why the
+     ⚭ can vanish rather than dim: the reverse action exists and is visible.
+
+     It CLICKS the hidden #ccHybrid rather than calling ccAddDim, which is closure-scoped — the same
+     one-maker trick the Generate menu uses on the level buttons. */
+  /* This runs from a MutationObserver, and its own edits mutate the node it watches. A synchronous
+     re-entrancy flag does NOT help — observer callbacks are delivered as microtasks, so the flag is
+     always clear again by the time the callback lands, and remove-then-add loops forever.
+     The fix is to make the pass IDEMPOTENT: work out what should be on the row, compare it with what
+     is already there, and touch the DOM only when they differ. A pass that changes nothing fires no
+     mutation, so the loop settles after one. */
+  function hybridChip(){
+    var host = el('ccSlots'); if(!host) return;
+
+    var rows = host.querySelectorAll('.cc-slot'), typeRows = [], first = null, i;
+    for(i = 0; i < rows.length; i++){
+      var d = rows[i].querySelector('.cc-dim');
+      var t = d ? String(d.textContent || '').trim().toLowerCase() : '';
+      /* ccRenderSlots labels the SECOND Type "\u26AD Hybrid", so both spellings must count — otherwise
+         a finished pair reads as a single Type and the chip comes back */
+      if(t === 'type' || t.indexOf('hybrid') >= 0){ typeRows.push(rows[i]); if(!first) first = rows[i]; }
+    }
+
+    var want = null;                       /* the row the chip belongs on, or null for "no chip" */
+    if(typeRows.length === 1 && first){
+      var word = first.querySelector('.cc-word');
+      var txt = word ? String(word.textContent || '').trim() : '';
+      if(txt && txt !== '\u2014') want = first;   /* pick a Type first: offering to pair nothing reads as a bug */
+    }
+
+    var have = host.querySelector('.cc-hyb');
+    if(want && have && have.parentNode === want) return;    /* already correct — touch nothing */
+    if(!want && !have) return;                              /* already correct — touch nothing */
+
+    if(have && have.parentNode) have.parentNode.removeChild(have);
+    if(!want) return;
+
+    var chip = document.createElement('span');
+    chip.className = 'cc-ctl cc-hyb';
+    chip.textContent = '\u26AD';
+    chip.title = 'Give them a second Type \u2014 a true hybrid (wolf\u2013machine, spirit\u2013human\u2026). Both Types show on the card, and the map figure changes.';
+    chip.addEventListener('click', function(ev){
+      ev.stopPropagation();
+      var hb = el('ccHybrid'); if(hb) hb.click();
+    });
+    var x = Array.from(want.querySelectorAll('.cc-ctl')).filter(function(n){ return n.textContent === '\u00D7'; })[0];
+    if(x) want.insertBefore(chip, x); else want.appendChild(chip);
   }
 
   function tabs(){
@@ -79511,17 +79576,26 @@ body.eink .stk-slot-cap,body.eink .stk-menu-sub,body.eink .stk-slot-val.stk-slot
     window.openCharCreator = function(){
       var r = _open.apply(this, arguments);
       TAB = 'characteristics';               /* always open on the traits */
-      try { tabs(); genCaret(); paint(); } catch(e){}
+      try { tabs(); genCaret(); paint(); watchSlots(); hybridChip(); } catch(e){}
       return r;
     };
   }
-  /* the Drive layer re-renders on every ccRenderSlots; re-apply the tab state after it */
-  var _rs = window.ccRenderSlots;
-  if(typeof _rs === 'function'){
-    window.ccRenderSlots = function(){ var r = _rs.apply(this, arguments); try { paint(); } catch(e){} return r; };
+  /* **`ccRenderSlots` is NOT on window** — it is closure-scoped, so wrapping `window.ccRenderSlots`
+     is a no-op that looks exactly like a working hook. (v.572's layer wraps it too; that wrapper has
+     never run. Harmless there, because ccRenderSlots only clears #ccSlots and leaves #ccDrive alone —
+     but it is the same trap as `window.state` in v.565: an appended layer can only reach what the app
+     actually exported.) The slots are rebuilt on every roll, reroll, pick and level change, so the
+     honest trigger is watching the node itself. */
+  var _obs = null;
+  function watchSlots(){
+    var host = el('ccSlots'); if(!host || _obs) return;
+    try {
+      _obs = new MutationObserver(function(){ try { hybridChip(); } catch(e){} });
+      _obs.observe(host, { childList: true, subtree: true });
+    } catch(e){}
   }
 
-  window.__ccTabs = { paint: paint, go: function(t){ TAB = t; paint(); }, tab: function(){ return TAB; } };
+  window.__ccTabs = { paint: paint, hybridChip: hybridChip, go: function(t){ TAB = t; paint(); }, tab: function(){ return TAB; } };
 })();
 
 </script>
