@@ -51583,9 +51583,14 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.572';
+  var APP_VERSION = '2026.07.20.573';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.573', date:'September 2, 2026', notes:[
+      '**The character builder is now two tabs — Characteristics and Drive — and Sketch / Fuller / Rich has moved to where it actually applies.** Those three were never a fact about your character; they only decide **how many blank trait lines you are offered**, and they sat at the top of the card even when you were editing someone who already exists. They now live behind the **▾ beside Generate**, which is what they were always for: roll a whole character at the depth you want. [Jeremy]',
+      '_If you want one more dimension rather than five, that is what **＋ add a dimension** has always been — and you get to choose which one._',
+      '_Your name and the line about them stay visible under both tabs. The other builders are unchanged for now._',
+    ]},
     { v:'2026.07.20.572', date:'September 2, 2026', notes:[
       '**A character’s Drive is now built where you build the character.** The element builder gains a **Drive** section under the traits — **Motivation · Obstacle · Stake**, each a line you fill in, and you can add **more than one of each**. It works while you are creating someone and, for the first time, while you are editing them: the old row could only be set at creation and was read-only afterwards. [Jeremy]',
       'A character can now want more than one thing, be held back by more than one, and have more than one thing at risk. Everywhere that already says what someone wants — their card, the dossier’s Drives line, the arc backdrop — keeps saying the first one, so nothing you have written reads differently.',
@@ -79116,6 +79121,25 @@ body.eink .stk-slot-cap,body.eink .stk-menu-sub,body.eink .stk-slot-val.stk-slot
 .cc-drive-morebtn{ cursor:pointer; }
 .cc-drive-morebtn:hover{ color:var(--gold); }
 </style>
+
+<style id="dyst-cc-tabs-css">
+/* v.573 — the Generate menu. The tab strip itself takes the builder's own `.cc-seg` class, so it
+   inherits the segmented look rather than inventing a second one; only this menu is new. */
+/* The caret sits BESIDE Generate as its own pill rather than welded to it. The style pass gives
+   these footer buttons a 999px pill radius through a selector more specific than #ccGen, so joining
+   the two edges would have meant out-specifying a rule that exists to keep every button one shape.
+   Matching the shape is the rule; winning a specificity war against it is not. */
+.cc-genmore{ padding-left:12px; padding-right:12px; border-radius:999px; }
+.cc-genmenu{ position:fixed; z-index:var(--z-menu, 9000); min-width:210px; background:var(--paper);
+  border:1px solid var(--line); border-radius:10px; box-shadow:0 10px 28px rgba(0,0,0,.18); padding:6px; }
+.cc-genmenu-lb{ font-family:var(--sans); font-size:10px; font-weight:800; letter-spacing:.11em;
+  text-transform:uppercase; color:var(--ink-faint); padding:5px 8px 6px; }
+.cc-genmenu-row{ display:flex; align-items:baseline; gap:8px; width:100%; text-align:left;
+  background:transparent; border:none; border-radius:7px; padding:7px 8px; cursor:pointer; }
+.cc-genmenu-row:hover{ background:var(--bg2, rgba(0,0,0,.05)); }
+.cc-genmenu-nm{ font-family:var(--serif); font-size:15px; color:var(--ink); }
+.cc-genmenu-sub{ font-family:var(--sans); font-size:10.5px; color:var(--ink-faint); }
+</style>
 <script id="dyst-cc-drive-js">
 /* Dystoria — the Drive section in the element builder (#49 phase 0, v.572)
    [Jeremy, 2026-09-02] "the Motivation is still only editable from the notepad and map… Maybe we
@@ -79335,6 +79359,169 @@ body.eink .stk-slot-cap,body.eink .stk-menu-sub,body.eink .stk-slot-val.stk-slot
   };
 
   window.__ccDrive = { render: render, lists: lists, pending: function(){ return pend; } };
+})();
+
+</script>
+<script id="dyst-cc-tabs-js">
+/* Dystoria — the character builder in two tabs, and the level control where it belongs (v.573)
+   [Jeremy, 2026-09-02] "instead of breaking the creators into Sketch, Fuller, Rich, why don't we have
+   a tab for Characteristics, and one for Motivation. The Generate button at the bottom can use the
+   Sketch/Fuller/Rich as dropdowns for generating from scratch a character at different levels."
+
+   The argument for it, which is stronger than "the card is long": **the level is not a property of the
+   character, it is a property of GENERATING one.** `CC_LEVELS` is `extra: 0 / 3 / 5` — its entire
+   effect is how many blank trait slots get offered. It is inert while editing an existing character,
+   where it still occupied the most prominent position on the card and offered to add five blanks to
+   someone who already exists. And generation already sets its own level and ignores the control
+   (`beingQuickGenerate()` sets complexity = 1; so does the description importer).
+
+   What is lost, deliberately: pressing *Rich* used to offer five blanks to fill in by hand. **`＋ add
+   a dimension` already does that better** — you choose which dimension instead of getting five chosen
+   for you — so the bulk version goes and the precise one stays.
+
+   Character only for now [Jeremy]: the other five builders (Setting, Object, Group, Event, Concept)
+   carry the same segmented control, but only the character has a second section to tab to.
+
+   MECHANISM: the app's own seg buttons are kept in the DOM and hidden, and the Generate menu DRIVES
+   THEM with .click(). So the level still changes through the app's own handler — one maker — and this
+   layer never reimplements `dystLevelSlots`. */
+(function(){
+  'use strict';
+
+  var TAB = 'characteristics';   // which tab is showing
+
+  function el(id){ return document.getElementById(id); }
+  function body(){ var c = el('charCreator'); return c ? c.querySelector('.cc-body') : null; }
+
+  /* the "Characteristics" section label — by TEXT, because it has no id and the description label
+     is the same class. Never match the description one: it stays visible under both tabs. */
+  function charLabel(){
+    var b = body(); if(!b) return null;
+    var ls = b.querySelectorAll('.cc-seclbl');
+    for(var i = 0; i < ls.length; i++){
+      if(String(ls[i].textContent || '').trim().toLowerCase() === 'characteristics') return ls[i];
+    }
+    return null;
+  }
+
+  function show(node, on){ if(node) node.style.display = on ? '' : 'none'; }
+
+  function paint(){
+    var isChar = (TAB === 'characteristics');
+    show(charLabel(), false);              /* the tab already names the section */
+    show(el('ccSlots'),  isChar);
+    show(el('ccAdd'),    isChar);
+    show(el('ccHybrid'), isChar);
+    show(el('ccDrive'), !isChar);
+    var d = el('ccDrive');
+    if(d){ var h = d.querySelector('.cc-seclbl'); show(h, false); }
+    var strip = el('ccTabs');
+    if(strip) Array.from(strip.children).forEach(function(btn){
+      btn.classList.toggle('on', btn.getAttribute('data-tab') === TAB);
+    });
+  }
+
+  function tabs(){
+    var seg = el('ccSeg'); if(!seg) return;
+    /* the app's level control stays in the DOM, hidden: ccSyncSeg() keeps working on it and the
+       Generate menu clicks its buttons, so the level still changes through the app's own handler */
+    seg.style.display = 'none';
+    var hint = el('ccSegHint'); if(hint) hint.style.display = 'none';
+
+    var strip = el('ccTabs');
+    if(!strip){
+      strip = document.createElement('div');
+      strip.id = 'ccTabs';
+      strip.className = 'cc-seg';        /* the builder's own segmented look, not a new one */
+      [['characteristics', 'Characteristics'], ['drive', 'Drive']].forEach(function(t){
+        var b = document.createElement('button'); b.type = 'button';
+        b.setAttribute('data-tab', t[0]); b.textContent = t[1];
+        b.addEventListener('click', function(ev){ ev.stopPropagation(); TAB = t[0]; paint(); });
+        strip.appendChild(b);
+      });
+      try {
+        var ord = window.getComputedStyle(seg).order;
+        if(ord && ord !== 'auto') strip.style.order = ord;
+      } catch(e){}
+      seg.parentNode.insertBefore(strip, seg);
+    }
+    paint();
+  }
+
+  /* ---- the Generate menu ------------------------------------------------------------------- */
+  function closeMenu(){ var m = el('ccGenMenu'); if(m && m.parentNode) m.parentNode.removeChild(m); }
+
+  function openMenu(anchor){
+    closeMenu();
+    var seg = el('ccSeg'); if(!seg) return;
+    var levels = Array.from(seg.children);
+    if(!levels.length) return;
+
+    var m = document.createElement('div'); m.id = 'ccGenMenu'; m.className = 'cc-genmenu';
+    var lb = document.createElement('div'); lb.className = 'cc-genmenu-lb';
+    lb.textContent = 'Roll a whole character';
+    m.appendChild(lb);
+
+    levels.forEach(function(btn, i){
+      var row = document.createElement('button'); row.type = 'button'; row.className = 'cc-genmenu-row';
+      var nm = document.createElement('span'); nm.className = 'cc-genmenu-nm';
+      nm.textContent = String(btn.textContent || '').trim();
+      row.appendChild(nm);
+      var sub = document.createElement('span'); sub.className = 'cc-genmenu-sub';
+      sub.textContent = ['the essentials', 'three more dimensions', 'five more dimensions'][i] || '';
+      row.appendChild(sub);
+      row.addEventListener('click', function(ev){
+        ev.stopPropagation();
+        closeMenu();
+        try { btn.click(); } catch(e){}          /* the app's own level handler sets CC.complexity + the slots */
+        var g = el('ccGen'); if(g) g.click();     /* …then roll into them */
+        TAB = 'characteristics'; paint();         /* generation fills traits — show what changed */
+      });
+      m.appendChild(row);
+    });
+
+    document.body.appendChild(m);
+    try {
+      var r = anchor.getBoundingClientRect();
+      var h = m.getBoundingClientRect().height || 140;
+      m.style.left = Math.max(8, Math.round(r.left)) + 'px';
+      m.style.top  = Math.max(8, Math.round(r.top - h - 8)) + 'px';
+    } catch(e){}
+    setTimeout(function(){
+      document.addEventListener('pointerdown', function h(ev){
+        if(ev.target && ev.target.closest && ev.target.closest('#ccGenMenu')) return;
+        closeMenu(); document.removeEventListener('pointerdown', h, true);
+      }, true);
+    }, 0);
+  }
+
+  function genCaret(){
+    var g = el('ccGen'); if(!g || !g.parentNode) return;
+    if(el('ccGenMore')) return;
+    var c = document.createElement('button'); c.type = 'button'; c.id = 'ccGenMore'; c.className = 'cc-gen cc-genmore';
+    c.textContent = '▾';
+    c.title = 'Roll a whole character — Sketch, Fuller or Rich';
+    c.addEventListener('click', function(ev){ ev.stopPropagation(); openMenu(c); });
+    g.parentNode.insertBefore(c, g.nextSibling);
+  }
+
+  /* ---- hooks ------------------------------------------------------------------------------- */
+  var _open = window.openCharCreator;
+  if(typeof _open === 'function'){
+    window.openCharCreator = function(){
+      var r = _open.apply(this, arguments);
+      TAB = 'characteristics';               /* always open on the traits */
+      try { tabs(); genCaret(); paint(); } catch(e){}
+      return r;
+    };
+  }
+  /* the Drive layer re-renders on every ccRenderSlots; re-apply the tab state after it */
+  var _rs = window.ccRenderSlots;
+  if(typeof _rs === 'function'){
+    window.ccRenderSlots = function(){ var r = _rs.apply(this, arguments); try { paint(); } catch(e){} return r; };
+  }
+
+  window.__ccTabs = { paint: paint, go: function(t){ TAB = t; paint(); }, tab: function(){ return TAB; } };
 })();
 
 </script>
