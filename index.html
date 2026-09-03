@@ -51743,9 +51743,13 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.583';
+  var APP_VERSION = '2026.07.20.584';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.584', date:'September 3, 2026', notes:[
+      '**\u002B Element on the Bonds map no longer refuses anything.** It used to hide every element the structure you were LOOKING through was not about \u2014 so viewing a group as a family tree made it impossible to put a place in it. The kinds a structure is mostly about still come first; everything else is underneath, and the list says so. **Choosing how to look at a group never decides what may go in it.** [Jeremy]',
+      '**And a group you build in the Group creator is now the same group Bonds draws.** Say who is in it while you are making it, and they are there on the map \u2014 add someone on the map, and they are there when you reopen the creator. One group, two doors. [Jeremy]',
+    ]},
     { v:'2026.07.20.583', date:'September 3, 2026', notes:[
       '**Elements now have a SHAPE on the Bonds map, not just a colour.** A character is the rounded pill; a place is a clipped plaque; an artifact is chamfered like a cut stone; a group is a shield; an event points forward like a chevron; a concept is a diamond with softened points; a stake is a notched pennant. **You can tell what something is at a glance, at any size, in a screenshot, and on the e-ink theme where colour disappears entirely.** [Jeremy]',
       '**And the map finally uses the palette it always had.** Places, artifacts, groups, events and stakes take their own element colours instead of five near-identical charcoals \u2014 warm, muted tones chosen against the parchment. The character pill stays charcoal: it is what every other pill is read against.',
@@ -70238,6 +70242,7 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
     g.nodes.forEach(function(n){
       var d = el('div','bn-node bn-cat-' + (n.cat || 'word')
                        + (shapeOf(n.cat) ? (' bn-sh-' + shapeOf(n.cat)) : '')
+                       + (n.offcast ? ' bn-offcast' : '')
                        + ((_anchorKey && n.key === _anchorKey) ? ' bn-anchor' : ''));
       d.dataset.cat = n.cat || 'word';   /* the geometry reads the CAT, not the class list */
       d.style.left = pos[n.key].x + 'px'; d.style.top = pos[n.key].y + 'px';
@@ -70955,8 +70960,15 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
     mem.forEach(function(k){
       if (have[k] || !by[k]) return;
       var n = by[k];
-      if (cats && cats.indexOf(n.cat) < 0) return;
-      g.nodes.push({ key:k, cat:n.cat, label:n.label, bucket:n.bucket, threads:n.threads, group:n.group, w:n.w, pinned:true });
+      /* v.584 — it used to `return` here, so a place put into a Martial group was stored and never
+         drawn: you could add it and it did not exist. **The view may choose what to draw, but not
+         what to hide** (v.407), and #52's decision is that the type SUGGESTS and never restricts.
+         So every member stands on the page, and the ones this lens is not about are marked
+         OFF-CAST instead of dropped — smaller and softer, which reads as secondary without reading
+         as out of scope. `concept` and `free` declare no `cats`, so nothing is off-cast there:
+         "Everything" greying most of itself would be absurd. */
+      var off = !!(cats && cats.indexOf(n.cat) < 0);
+      g.nodes.push({ key:k, cat:n.cat, label:n.label, bucket:n.bucket, threads:n.threads, group:n.group, w:n.w, pinned:true, offcast:off });
       have[k] = 1;
     });
     g.nodes.sort(function(a, b){ return a.label.localeCompare(b.label); });
@@ -71709,21 +71721,34 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
     var search = document.createElement('input');
     search.className = 'bn-add-search'; search.placeholder = 'search elements…';
     box.appendChild(search);
+    box.appendChild(el('div','bn-add-hint',''));
     var list = el('div','bn-add-list'); box.appendChild(list);
     var draw = function(){
       list.innerHTML = '';
       var q = search.value.trim().toLowerCase();
+      /* v.584 [Jeremy: "the + element in bonds is still restrictive"] — it SORTS by what the
+         lens is at home with and no longer FILTERS by it. Two things were wrong with the filter and
+         the second is the worse one: it kept elements out of a group at all, against #52's decision
+         that "the kind you picked just brings its own sort of element to the top of the list — it
+         does not keep the others out"; and it filtered by the drawn LENS, so choosing to LOOK at a
+         group as a family tree decided what you were allowed to PUT IN it. **Looking is not
+         editing** (v.408), and a picker that refuses is a rule the writer never agreed to. */
       var rows = Object.keys(by).map(function(k){ return by[k]; })
         .filter(function(n){ return !here[n.key]; })
-        .filter(function(n){ return !kind.cats || kind.cats.indexOf(n.cat) >= 0; })
         .filter(function(n){ return !q || n.label.toLowerCase().indexOf(q) >= 0; })
-        .sort(function(a, b){ return a.label.localeCompare(b.label); });
+        .sort(function(a, b){
+          var ac = (!kind.cats || kind.cats.indexOf(a.cat) >= 0) ? 0 : 1;
+          var bc = (!kind.cats || kind.cats.indexOf(b.cat) >= 0) ? 0 : 1;
+          return (ac - bc) || a.label.localeCompare(b.label);
+        });
       if (!rows.length){
-        list.appendChild(el('div','bn-add-none', kind.cats
-          ? ('Nothing left to add — ' + (kind.name || 'this map').toLowerCase() + ' holds only ' + kind.cats.join(', ') + '.')
-          : 'Nothing left to add.'));
+        list.appendChild(el('div','bn-add-none','Nothing left to add — everything in the story is already in this group.'));
         return;
       }
+      /* and the sort is only honest if it says so, since the writer can no longer tell from the
+         list alone why one element came first */
+      if (kind.cats) box.querySelector('.bn-add-hint').textContent =
+        (kind.name || 'This structure') + ' is mostly about ' + kind.cats.join(', ') + ' — those come first. Anything can go in.';
       rows.slice(0, 60).forEach(function(n){
         var b = el('button','bn-add-row', n.label); b.type = 'button';
         b.appendChild(el('span','bn-add-cat', n.cat));
@@ -72899,6 +72924,13 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
       '  border-radius:999px; padding:7px 13px; font-size:13.5px; cursor:grab; user-select:none; z-index:4;',
       '  box-shadow:0 2px 8px -3px rgba(60,44,16,.5); white-space:nowrap; }',
       '.bn-node:active{ cursor:grabbing; }',
+      /* v.584 (#52 §3.7) — a member this lens is not about. **Smaller and softer, never dimmer
+         ink**: a faded foreground says "out of scope", which is the one thing to avoid; the size is
+         what says "belongs to the group rather than one of the group's own". Size rather than a
+         reserved colour, because after v.583 the colour belongs to the writer — and because it is
+         honest to `border()`, which measures the real box a transform would have lied about. */
+      '.bn-offcast{ font-size:12px; padding:6px 11px; opacity:.84; }',
+      '.bn-offcast .bn-name{ letter-spacing:.005em; }',
       /* #53 phase 2 — the palette Bonds already had and never used. Every element category carries
          an authored colour (sage, olive, teal, tan, rose…) — a muted, warm, mid-value family chosen
          against this parchment — and Bonds drew five hand-picked near-blacks instead, four of them
@@ -73026,6 +73058,7 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
       '  font-size:12px; color:var(--gold-ochre); cursor:pointer; text-decoration:underline; font-style:normal; }',
       '.bn-add-pop{ position:fixed; z-index:60; width:258px; background:#fff; border:1px solid #ded7c7;',
       '  border-radius:11px; box-shadow:0 16px 40px -14px rgba(80,60,25,.42); padding:9px; }',
+      '.bn-add-hint{ font-size:11.5px; line-height:1.4; color:#a49c88; margin:0 2px 6px; }',
       '.bn-add-search{ width:100%; box-sizing:border-box; font-family:inherit; font-size:12px;',
       '  padding:6px 9px; border:1px solid #e6e0d1; border-radius:8px; margin-bottom:7px; }',
       '.bn-add-list{ max-height:270px; overflow:auto; }',
@@ -73306,6 +73339,46 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
     }catch(e){}
     return out;
   };
+
+  /* ---- v.584 · the Group ELEMENT ⇄ the Bonds group ---------------------------------
+     One thing with two faces, joined by `gp.el` — the field v.557 already introduced and which
+     `groups()` already reads. These two functions are the whole outside surface: everything else
+     about a group stays in here. */
+  function typeFromSub(sub){
+    var t = SET_CATS.find(function(x){ return x.name === sub; });
+    return t ? t.id : '';
+  }
+  V.groupForEl = function(elKey){
+    if (!elKey) return null;
+    var g = (store().groups || []).find(function(x){ return x && x.el === elKey; });
+    return g ? { id:g.id, name:g.name, type:g.type, lens:g.lens, members:(g.members || []).slice() } : null;
+  };
+  /* find-or-create the group this element IS, and set what the builder knows about it.
+     `members` REPLACES, because the builder's list is the whole answer to "who is in it" — but a
+     member the writer added in Bonds and never saw in the builder would be destroyed by that, so
+     the builder is required to send the list it was SHOWN (see the layer), and this refuses a
+     replace it was not given. */
+  V.linkGroupToEl = function(elKey, opts){
+    if (!elKey) return null;
+    opts = opts || {};
+    var s = store();
+    var gp = (s.groups || []).find(function(x){ return x && x.el === elKey; });
+    if (!gp){
+      gp = { id:freshGroupId(s), name:opts.name || '', members:[],
+             type:opts.type || 'social', el:elKey };
+      gp.lens = (TYPE_LENSES[gp.type] || [])[0] || 'social';
+      s.groups = s.groups || []; s.groups.push(gp);
+    }
+    if (opts.name) gp.name = opts.name;
+    if (opts.type){ gp.type = opts.type;
+      if (!gp.lens || !(TYPE_LENSES[gp.type] || []).length) gp.lens = (TYPE_LENSES[gp.type] || [])[0] || gp.lens || 'social'; }
+    if (Array.isArray(opts.members)) gp.members = opts.members.slice();
+    saveGroup(gp);
+    /* the map is the point of doing this, so it repaints — but only if it is on screen */
+    try{ if (hostOf(MAIN)) V.render(MAIN); }catch(e){}
+    return { id:gp.id, name:gp.name, type:gp.type, lens:gp.lens, members:gp.members.slice() };
+  };
+  V.typeForSub = typeFromSub;
 
   V.__open = openBondCreator;
   V.__poolFor = poolFor;   /* the harness asserts the WORDS that come back, not that a picker opened (lesson 19) */
@@ -80641,6 +80714,274 @@ body.eink .stk-offer-tx,body.eink .stk-offer-btn{color:#000; border-color:#000; 
     } catch(e){}
     return false;
   };
+})();
+
+</script>
+
+<style id="dyst-gb-who">
+/* v.584 — "Who is in it" in the Group builder. It borrows the builder's own row shape
+   (.cc-slot / .cc-dim / .gc-word / .cc-ctl) rather than inventing a second one, exactly as the
+   Drive section does in the character builder. */
+/* NOT a flex container. The builder card lays itself out with flex `order`, and the section label
+   carries `.gc-seclbl` — so making this block a flex parent handed its OWN children that same
+   `order` and the heading sorted to the bottom, under the rows it names. A block box ignores
+   `order` entirely. (v.565's lesson, one level in: in this card, DOM position is not visual
+   position unless you take the box out of the flex conversation.) */
+#groupCreator .gb-who{ display:block; }
+#groupCreator .gb-who .cc-slot{ display:flex; align-items:baseline; gap:8px; padding:6px 0; border-bottom:1px dotted var(--line); }
+#groupCreator .gb-who .cc-dim{ flex:0 0 96px; font-family:var(--sans); font-size:10.5px; font-weight:700; letter-spacing:.07em; text-transform:uppercase; color:var(--ink-faint); padding-top:4px; }
+#groupCreator .gb-who .gc-word{ flex:1; font-family:var(--serif); font-size:17px; color:var(--ink); line-height:1.25; }
+#groupCreator .gb-who .gc-word.empty{ font-style:italic; color:var(--ink-faint); cursor:pointer; }
+#groupCreator .gb-who .gc-word.empty:hover{ color:var(--gold); }
+#groupCreator .gb-who .cc-ctl{ flex:0 0 auto; font-size:15px; color:var(--ink-faint); cursor:pointer; padding:0 3px; }
+#groupCreator .gb-who .cc-ctl:hover{ color:var(--ink); }
+#groupCreator .gb-who-note{ font-family:var(--serif); font-style:italic; font-size:11.5px; color:var(--ink-faint); margin:7px 0 2px; }
+/* the picker — a plain searchable list, the same promise as Bonds' own + Element */
+.gb-who-pop{ position:fixed; z-index:var(--z-menu, 9000); width:266px; background:var(--paper);
+  border:1px solid var(--line); border-radius:10px; padding:9px; box-shadow:var(--dlg-shadow, 0 12px 34px -14px rgba(60,44,16,.5)); }
+.gb-who-search{ width:100%; box-sizing:border-box; font-family:inherit; font-size:12px; padding:6px 8px;
+  border:1px solid var(--line); border-radius:7px; background:#fff; color:var(--ink); margin-bottom:7px; }
+.gb-who-list{ max-height:262px; overflow:auto; }
+.gb-who-row{ display:flex; width:100%; align-items:center; justify-content:space-between; gap:8px;
+  border:1px solid transparent; background:none; text-align:left; font-family:inherit; font-size:13.5px;
+  color:var(--ink); padding:6px 8px; border-radius:7px; cursor:pointer; }
+.gb-who-row:hover{ background:var(--bg2, #f6f1e6); }
+.gb-who-cat{ font-style:normal; font-size:10.5px; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-faint); }
+.gb-who-none{ font-family:var(--serif); font-style:italic; font-size:12.5px; color:var(--ink-faint); padding:6px 4px; }
+</style>
+<script id="dyst-gb-who-js">
+/* Dystoria — "Who is in it" in the Group builder, and it IS the Bonds group (v.584)
+   [Jeremy, 2026-09-03] "there should be a way to add elements to a group in the group element
+   creator and have that be synced with the bonds, so that the added elements from the group element
+   creator show up for that group in the bonds map."
+
+   **Half of this bridge already existed and had only ever been driven one way.** v.557 made a group
+   created in Bonds mint an `org` ELEMENT (`dystEnsureGroupElement`) and stamp its key onto the group
+   as `gp.el`, and `groups()` reads that stamp so the two are never listed twice. What was missing is
+   the other door: the Group BUILDER made an element and no group, so a body you built as an element
+   simply did not exist on the map. This adds the members section and joins the two through the SAME
+   field — no second store, no third concept.
+
+   **v.582 is why the type needs no mapping table.** The `org` pool's subcategories now carry the same
+   eleven names as Bonds' `SET_CATS`, so a group whose Kind sits under "Kinship" becomes a Bonds group
+   of type `kinship` by lookup (`BONDSVIEW.typeForSub`). Two vocabularies that agree need no table
+   between them — which is the whole reason that version was worth shipping before this one.
+
+   MECHANISM: the app writes through `BONDSVIEW.linkGroupToEl`, exported for exactly this. Nothing
+   here reaches into the Bonds store, and nothing here keeps a second copy of a membership. */
+(function(){
+  'use strict';
+
+  var pend = [];        /* the CREATE path — there is no element to attach to yet */
+  var editKey = null;
+
+  function V(){ return window.BONDSVIEW || null; }
+  function roster(){ try { return (window.BONDS && window.BONDS.roster()) || {}; } catch(e){ return {}; } }
+
+  function nameNow(){ var n = document.getElementById('gbName'); return n ? String(n.value || '').trim() : ''; }
+  /* the Kind row's subcategory is the group's type, by name — see the header */
+  function typeNow(){
+    try {
+      var sub = '';
+      var slots = (window.__gbSlots && window.__gbSlots()) || null;
+      if (!sub && editKey && typeof npFindEl === 'function'){
+        var w = npFindEl(editKey); sub = (w && w.sub) || '';
+      }
+      if (!sub){
+        /* create path: read it off the Kind row's own title, which the builder writes */
+        var row = document.querySelector('#gbSlots .cc-slot .gc-word, #gbSlots .gc-word');
+        sub = row ? (row.getAttribute('data-sub') || '') : '';
+      }
+      var t = (V() && V().typeForSub) ? V().typeForSub(sub) : '';
+      return t || '';
+    } catch(e){ return ''; }
+  }
+
+  function members(){
+    if (editKey){
+      var g = null; try { g = V() && V().groupForEl ? V().groupForEl(editKey) : null; } catch(e){}
+      return g ? (g.members || []) : [];
+    }
+    return pend;
+  }
+
+  /* **The list this writes is the list it was SHOWN.** `linkGroupToEl` replaces the membership, so
+     writing a list the writer never saw would silently drop anyone added on the map since. The
+     section always renders from the live group first, which is what makes a replace safe. */
+  function write(list){
+    if (editKey && V() && V().linkGroupToEl){
+      V().linkGroupToEl(editKey, { name: nameNow(), type: typeNow() || undefined, members: list });
+    } else {
+      pend = list.slice();
+    }
+    render();
+  }
+
+  function labelFor(key){
+    var r = roster()[key];
+    if (r && r.label) return r.label;
+    try { var w = (typeof npFindEl === 'function') ? npFindEl(key) : null;
+          if (w) return (typeof elDisplayName === 'function' ? elDisplayName(w) : (w.name || w.word)) || key; } catch(e){}
+    return key;
+  }
+  function catFor(key){ var r = roster()[key]; return (r && r.cat) || ''; }
+
+  /* ---- the picker ------------------------------------------------------------------
+     Deliberately the same promise as Bonds' own `+ Element` after v.584: everything in the story is
+     offered, and the group's own cast floats to the top. It SORTS; it never keeps anything out. */
+  function pick(anchor){
+    var old = document.getElementById('gbAddWho'); if (old){ old.parentNode.removeChild(old); return; }
+    var by = roster(), have = {}; members().forEach(function(k){ have[k] = 1; });
+    if (editKey) have[editKey] = 1;                       /* a group is not a member of itself */
+    var cast = '';
+    try {
+      var t = typeNow();
+      var CASTS = { kinship:'being', species:'being', social:'being', political:'being', martial:'being',
+                    commercial:'being', faith:'being', knowledge:'being',
+                    concept:'concept', places:'setting', events:'event' };
+      cast = CASTS[t] || '';
+    } catch(e){}
+
+    var box = document.createElement('div'); box.id = 'gbAddWho'; box.className = 'gb-who-pop';
+    var q = document.createElement('input'); q.className = 'gb-who-search';
+    q.placeholder = 'search your elements…'; box.appendChild(q);
+    var list = document.createElement('div'); list.className = 'gb-who-list'; box.appendChild(list);
+    var draw = function(){
+      list.innerHTML = '';
+      var term = q.value.trim().toLowerCase();
+      var rows = Object.keys(by).map(function(k){ return by[k]; })
+        .filter(function(n){ return n && n.key && n.label && !have[n.key]; })
+        .filter(function(n){ return !term || String(n.label).toLowerCase().indexOf(term) >= 0; })
+        .sort(function(a, b){
+          var ac = (cast && a.cat === cast) ? 0 : 1, bc = (cast && b.cat === cast) ? 0 : 1;
+          return (ac - bc) || String(a.label).localeCompare(String(b.label));
+        });
+      if (!rows.length){
+        var e = document.createElement('div'); e.className = 'gb-who-none';
+        e.textContent = term ? 'Nothing by that name.' : 'Everything in the story is already in.';
+        list.appendChild(e); return;
+      }
+      rows.slice(0, 60).forEach(function(n){
+        var b = document.createElement('button'); b.type = 'button'; b.className = 'gb-who-row';
+        b.textContent = n.label;
+        var c = document.createElement('i'); c.className = 'gb-who-cat'; c.textContent = n.cat || '';
+        b.appendChild(c);
+        b.addEventListener('click', function(ev){
+          ev.stopPropagation();
+          write(members().concat([n.key]));
+          if (box.parentNode) box.parentNode.removeChild(box);
+        });
+        list.appendChild(b);
+      });
+    };
+    q.addEventListener('input', draw); draw();
+    document.body.appendChild(box);
+    try {
+      var r = anchor.getBoundingClientRect();
+      box.style.left = Math.max(8, Math.min(r.left, window.innerWidth - 274)) + 'px';
+      box.style.top = (r.bottom + 6) + 'px';
+    } catch(e){}
+    setTimeout(function(){ try { q.focus(); } catch(e){} }, 0);
+    setTimeout(function(){
+      document.addEventListener('pointerdown', function away(ev){
+        if (box.contains(ev.target)) return;
+        document.removeEventListener('pointerdown', away, true);
+        if (box.parentNode) box.parentNode.removeChild(box);
+      }, true);
+    }, 0);
+  }
+
+  /* ---- the section ------------------------------------------------------------------ */
+  function render(){
+    var host = document.getElementById('gbSlots');
+    if (!host || !host.parentNode) return;
+    var old = document.getElementById('gbWho');
+    if (old && old.parentNode) old.parentNode.removeChild(old);
+
+    var box = document.createElement('div'); box.id = 'gbWho'; box.className = 'gb-who';
+    var hd = document.createElement('div'); hd.className = 'gc-seclbl'; hd.textContent = 'Who is in it';
+    hd.title = 'Anything in the story can go in a group — the kind you picked only decides what is offered first';
+    box.appendChild(hd);
+
+    var list = members();
+    list.forEach(function(key, idx){
+      var r = document.createElement('div'); r.className = 'cc-slot';
+      var dim = document.createElement('span'); dim.className = 'cc-dim';
+      dim.textContent = catFor(key) || 'member';
+      r.appendChild(dim);
+      var wd = document.createElement('span'); wd.className = 'gc-word'; wd.textContent = labelFor(key);
+      r.appendChild(wd);
+      var x = document.createElement('span'); x.className = 'cc-ctl'; x.textContent = '×';
+      x.title = 'Take out of this group';
+      x.addEventListener('click', function(ev){
+        ev.stopPropagation();
+        var next = members().slice(); next.splice(idx, 1); write(next);
+      });
+      r.appendChild(x);
+      box.appendChild(r);
+    });
+
+    var a = document.createElement('div'); a.className = 'cc-slot gb-who-more';
+    var ad = document.createElement('span'); ad.className = 'cc-dim'; ad.textContent = 'member';
+    if (list.length) ad.style.visibility = 'hidden';
+    a.appendChild(ad);
+    var ab = document.createElement('span'); ab.className = 'gc-word empty gb-who-morebtn';
+    ab.textContent = '＋ someone or something';
+    ab.addEventListener('click', function(ev){ ev.stopPropagation(); pick(ab); });
+    a.appendChild(ab);
+    /* the value rows carry a × after the word; without a matching item the add row's flex layout
+       differs and the ＋ drifts off the value column (v.572's lesson, same shape) */
+    var sp = document.createElement('span'); sp.className = 'cc-ctl'; sp.textContent = '×';
+    sp.style.visibility = 'hidden'; sp.setAttribute('aria-hidden', 'true');
+    a.appendChild(sp);
+    box.appendChild(a);
+
+    var note = document.createElement('div'); note.className = 'gb-who-note';
+    note.textContent = editKey
+      ? 'This is the same group Bonds draws — anyone you add on the map is here too.'
+      : 'They go in as soon as the group is made, and Bonds draws it.';
+    box.appendChild(note);
+
+    /* AFTER the dimensions and their ＋, taking that neighbour's computed flex `order` — the
+       builder card is laid out with `order`, so an un-ordered block sorts to 0 and floats to the
+       TOP while every DOM assertion still passes (v.565). */
+    var anchor = document.getElementById('gbAdd') || host;
+    try {
+      var ord = window.getComputedStyle(anchor).order;
+      if (ord && ord !== 'auto') box.style.order = ord;
+    } catch(e){}
+    anchor.parentNode.insertBefore(box, anchor.nextSibling);
+  }
+
+  /* ---- hooks ------------------------------------------------------------------------ */
+  var _open = window.openGroupCreator;
+  if (typeof _open === 'function'){
+    window.openGroupCreator = function(opts){
+      var r = _open.apply(this, arguments);
+      opts = opts || {};
+      editKey = opts.edit || null;
+      if (!opts.keep && !editKey) pend = [];
+      try { render(); } catch(e){}
+      return r;
+    };
+  }
+
+  /* CREATE: the chained hook fires with the freshly pushed word, so the pending list lands with the
+     new element's key — the same door `cc_drive` uses for the Drive. */
+  var _add = window.__qaOnElementAdd;
+  window.__qaOnElementAdd = function(built){
+    try {
+      if (built && built.cat === 'org' && typeof wordKey === 'function' && V() && V().linkGroupToEl){
+        var k = wordKey(built);
+        var t = (V().typeForSub ? V().typeForSub(built.sub || '') : '') || '';
+        V().linkGroupToEl(k, { name:(built.name || built.word || ''), type:t || undefined, members:pend.slice() });
+      }
+    } catch(e){}
+    pend = [];
+    if (typeof _add === 'function'){ try { return _add.apply(this, arguments); } catch(e){} }
+  };
+
+  window.__gbWho = { render: render, members: members, pending: function(){ return pend; } };
 })();
 
 </script>
