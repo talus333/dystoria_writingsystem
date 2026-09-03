@@ -41945,11 +41945,20 @@ document.addEventListener('DOMContentLoaded', init);
     window.openBeingByDesc=openBeingByDesc; window.closeBeingDesc=closeDescPrompt;
     async function ccApplyDescription(text){
       text=(text||'').trim();
-      const sys='You extract ONE character from a description into structured fields for a fiction worldbuilding tool. Return ONLY compact JSON, no prose, no markdown fences. Shape: {"name":"","type":"","archetype":"","occupation":"","sex":"","age":"","traits":[{"sub":"","word":""}]}. '
+      const sys='You extract ONE character from a description into structured fields for a fiction worldbuilding tool. Return ONLY compact JSON, no prose, no markdown fences. Shape: {"name":"","type":"","archetype":"","occupation":"","sex":"","age":"","traits":[{"sub":"","word":""}],"wants":[],"obstacles":[],"stakes":[]}. '
         +'name = the proper name if the text states one, else "". type = species/kind (Human, Elf, Dwarf, Robot…), default "Human" if clearly a person. archetype = a role/pattern (Hero, Rebel, Trickster, Caregiver…) only if implied, else "". occupation only if stated. sex only if stated. age must be one of Infant/Toddler/Child/Young Adult/Adult/Elder or "". '
-        +'traits = SHORT 1–2 word characteristics, each {sub,word} with sub from EXACTLY this list: Physical Trait, Physical State, Mental State, Mood, Psychological Trait, Social Trait, Moral Trait, Skills, Flaw, Secret, Adjective. Include ONLY what the text states or clearly implies — never invent. Each word is a short adjective or brief noun, never a sentence.';
+        +'traits = SHORT 1–2 word characteristics, each {sub,word} with sub from EXACTLY this list: Physical Trait, Physical State, Mental State, Mood, Psychological Trait, Social Trait, Moral Trait, Skills, Flaw, Secret, Adjective. Include ONLY what the text states or clearly implies — never invent. Each word is a short adjective or brief noun, never a sentence. '
+        /* v.581 — the DRIVE. Each of the three is asked for as the FRAGMENT THAT COMPLETES THE
+           APP\u2019S OWN SENTENCE (`_drivesSentence`: "<name> wants X, but is held back by Y, with Z
+           hanging in the balance"), because that sentence is what the dossier prints, what the arc
+           backdrop shows and what `storyFacts` sends to every other AI surface. Asking for the shape
+           the app already says is what stops the importer inventing a fourth phrasing nobody reads. */
+        +'wants = what they are trying to get, become or avoid — each a SHORT fragment that completes "<name> wants ___" (e.g. "to get home", "her father\u2019s approval", "revenge"). '
+        +'obstacles = what stands in their way — each completing "held back by ___" (e.g. "the witch", "her own pride", "a debt she cannot pay"). '
+        +'stakes = what is at risk if they fail — each completing "___ hangs in the balance" (e.g. "the harvest", "his brother\u2019s name"). '
+        +'All three: at most 3 each, lower case unless a proper noun, no trailing punctuation, and ONLY what the text states or clearly implies. An empty array is the right answer when the text does not say — never invent a motive to fill the field.';
       const prompt='Description:\n"""\n'+text+'\n"""\n\nJSON:';
-      let out=''; try{ out=await aiCall(sys, prompt, { feature:'break_it_down', maxTokens: 520, temperature: 0, json: true }); }catch(e){ throw new Error('Could not reach the AI — try again.'); }
+      let out=''; try{ out=await aiCall(sys, prompt, { feature:'break_it_down', maxTokens: 700, temperature: 0, json: true }); }catch(e){ throw new Error('Could not reach the AI — try again.'); }
       let data=null; try{ const m=String(out).match(/\{[\s\S]*\}/); data=m?JSON.parse(m[0]):null; }catch(e){ data=null; }
       if(!data) throw new Error('Could not read that — try rephrasing.');
       const A=(typeof CC_TRAIT_DIMS!=='undefined')?CC_TRAIT_DIMS:[];
@@ -41961,7 +41970,26 @@ document.addEventListener('DOMContentLoaded', init);
       if((data.archetype||'').trim()) slots.push({ sub:'Archetype', word:String(data.archetype).trim() });
       if((data.occupation||'').trim()) slots.push({ sub:'Occupation', word:String(data.occupation).trim() });
       (Array.isArray(data.traits)?data.traits:[]).forEach(t=>{ if(t && t.word){ const sub=(A.indexOf(t.sub)>=0)?t.sub:'Adjective'; slots.push({ sub, word:String(t.word).trim() }); } });
-      var _sn={}; CC.slots=slots.filter(function(s){ var k=(s.sub||'')+'|'+String(s.word||'').trim().toLowerCase(); if(_sn[k]) return false; _sn[k]=1; return true; }); closeDescPrompt(); openCharCreator({ keep:true });   // drop exact (dimension+value) duplicates the AI sometimes returns
+      var _sn={}; CC.slots=slots.filter(function(s){ var k=(s.sub||'')+'|'+String(s.word||'').trim().toLowerCase(); if(_sn[k]) return false; _sn[k]=1; return true; });   // drop exact (dimension+value) duplicates the AI sometimes returns
+      /* v.581 — carry the EDIT session across the re-open. `openCharCreator` clears CC.editKey
+         unconditionally, so `{keep:true}` alone turned "Edit Feodor / Save changes" into
+         "Build a character / Create character" and the next press would have made a duplicate.
+         Captured before the re-open, because the re-open is what clears it. */
+      var _ek=CC.editKey, _ei=CC.editIdx;
+      closeDescPrompt();
+      openCharCreator(_ek ? { keep:true, edit:_ek, editIdx:_ei } : { keep:true });
+      /* v.581 — the Drive half. The builder's DRIVE section owns wants / obstacles / stakes and
+         writes them through the app's own `__motWrite`; handing it the parsed lists keeps ONE writer
+         for that data instead of growing a second one in here. It ADDS rather than replaces (v.579's
+         lesson about what rebuilding a compound object costs), and every writer under it dedupes
+         case-insensitively, so pressing ✦ twice on the same paragraph changes nothing. */
+      try{
+        var _dv={ wants:(Array.isArray(data.wants)?data.wants:[]),
+                  obstacles:(Array.isArray(data.obstacles)?data.obstacles:[]),
+                  stakes:(Array.isArray(data.stakes)?data.stakes:[]) };
+        var _n=(window.__ccDrive && window.__ccDrive.applyFromDescription) ? (window.__ccDrive.applyFromDescription(_dv)||0) : 0;
+        if(_n && typeof flashStatus==='function') flashStatus('Drive filled \u2014 '+_n+' line'+(_n===1?'':'s')+' under the Drive tab.');
+      }catch(e){}
     }
     window.ccFromDescription=ccApplyDescription;
 
@@ -51617,9 +51645,14 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.580';
+  var APP_VERSION = '2026.07.20.581';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.581', date:'September 3, 2026', notes:[
+      '**\u2726 Break it down now fills the Drive as well as the characteristics.** Write a line about someone \u2014 _\u201ca weary blacksmith trying to buy back his daughter\u2019s indenture before the winter fair, watched by the guild he cheated\u201d_ \u2014 and the builder now fills **what they want, what blocks them and what is at risk** alongside their type, age and traits. It **adds** rather than replaces, and never invents a motive the line does not state. [Jeremy]',
+      '**The Drive tab shows how much is under it**, so a filled Drive is visible from the Characteristics tab.',
+      '**Fixed: breaking down a line while EDITING a character turned the card into a new one.** \u201cEdit Feodor / Save changes\u201d silently became \u201cBuild a character / Create character\u201d, and saving would have made a duplicate.',
+    ]},
     { v:'2026.07.20.580', date:'September 3, 2026', notes:[
       '**The eleven kinds of group are now sorted by what they hold.** Making a group used to offer one flat menu of unlike things — Commercial beside Places beside Events. They now sit under **People · Places · Ideas · Events**, and the eight kinds of people under what actually binds them: **Birth** (kinship, species), **Power** (political, martial, commercial), **Belief** (faith, knowledge) and **Affinity** (social). Nothing is added, removed or renamed, and every group you have already made opens exactly as it did. [Jeremy]',
       '**An empty dimension now shows a ＋ where the — used to be**, in every builder — it says where to click. [Jeremy]',
@@ -79340,6 +79373,13 @@ body.eink .stk-slot-cap,body.eink .stk-menu-sub,body.eink .stk-slot-val.stk-slot
 .cc-hybamp{ color:var(--ink-faint); font-size:16px; line-height:1; flex:0 0 auto;
   display:inline-block; width:14px; text-align:center; }
 .cc-hyb:hover{ color:var(--gold); }
+/* v.581 — the Drive tab's count. It rides INSIDE the tab button, so it inherits the tab's own
+   colour in both states and only the ground has to change: a tint of the ink on the resting tab,
+   a tint of the paper on the selected one. */
+.cc-tabn{ display:inline-block; margin-left:7px; font-style:normal; font-weight:700;
+  font-size:10px; line-height:1.5; min-width:8px; padding:0 6px; border-radius:999px;
+  background:rgba(0,0,0,.10); color:inherit; vertical-align:1px; }
+#charCreator .cc-seg button.on .cc-tabn{ background:rgba(255,255,255,.22); }
 .cc-genmenu{ position:fixed; z-index:var(--z-menu, 9000); min-width:210px; background:var(--paper);
   border:1px solid var(--line); border-radius:10px; box-shadow:0 10px 28px rgba(0,0,0,.18); padding:6px; }
 .cc-genmenu-lb{ font-family:var(--sans); font-size:10px; font-weight:800; letter-spacing:.11em;
@@ -79510,6 +79550,8 @@ body.eink .stk-slot-cap,body.eink .stk-menu-sub,body.eink .stk-slot-val.stk-slot
       box.appendChild(a);
     });
 
+    try { if(window.__ccTabs && window.__ccTabs.count) window.__ccTabs.count(); } catch(e){}
+
     /* AFTER #ccSlots, and taking its computed flex `order`.
        v.565's lesson, and it cost a build: <style id="dyst-elcreator-beauty"> reorders the builder's
        flow with flex `order`, so an un-ordered block sorts to 0 and floats to the TOP of the card
@@ -79564,7 +79606,52 @@ body.eink .stk-slot-cap,body.eink .stk-menu-sub,body.eink .stk-slot-val.stk-slot
     if(typeof _add === 'function'){ try { return _add.apply(this, arguments); } catch(e){} }
   };
 
-  window.__ccDrive = { render: render, lists: lists, pending: function(){ return pend; } };
+  /* v.581 — what the description importer hands over. [Jeremy] "does the 'a line about them' box
+     have an AI button to take the written part and use the importer to fill in the dimensions AND
+     drive." It filled the dimensions and not the Drive, because `ccApplyDescription`'s JSON shape
+     predates the Drive section by a long way.
+
+     **It ADDS, it never replaces.** An existing character may already have a Drive the writer typed,
+     and v.579 is the standing lesson about what "clear and rebuild" costs a compound object. Every
+     writer underneath dedupes case-insensitively (`_listPut`, `addObstacleWord`), so pressing ✦
+     twice on the same paragraph is a no-op rather than a doubling — which is the property that makes
+     an AI button safe to press again.
+
+     `isNew` is FALSE throughout: the writer's own pools are grown by words the writer typed, not by
+     words a model returned. That is the same call the create path already made. */
+  function driveTotal(){
+    var L = lists() || {};
+    return (L.wants || []).length + (L.obstacles || []).length + (L.stakes || []).length;
+  }
+  function applyFromDescription(drive){
+    drive = drive || {};
+    var before = driveTotal(), M = window.__motWrite;
+    SPECS.forEach(function(spec){
+      var arr = drive[spec.id];
+      if(!Array.isArray(arr)) return;
+      arr.map(function(t){ return String(t == null ? '' : t).trim(); })
+         .filter(Boolean)
+         .slice(0, 3)                     /* the prompt asks for at most 3; enforce it here too */
+         .forEach(function(v){
+           if(editKey && M){
+             if(spec.id === 'wants')     M.addWant(editKey, v, false);
+             if(spec.id === 'stakes')    M.addStake(editKey, v, false);
+             if(spec.id === 'obstacles') M.addObstacle(editKey, v, spec.sub || spec.dflt, false);
+           } else {
+             var a = pend[spec.id];
+             var dup = a.some(function(e){ return String(textOf(spec, e)).toLowerCase() === v.toLowerCase(); });
+             if(!dup) a.push(spec.id === 'obstacles' ? { word:v, sub:(spec.sub || spec.dflt) } : v);
+           }
+         });
+    });
+    render();
+    /* what it actually ADDED, counted from the lists rather than from what was offered — the
+       writers dedupe, so "how many did you send" is not the same question as "what changed" */
+    return Math.max(0, driveTotal() - before);
+  }
+
+  window.__ccDrive = { render: render, lists: lists, pending: function(){ return pend; },
+                       applyFromDescription: applyFromDescription, total: driveTotal };
 })();
 
 </script>
@@ -79755,6 +79842,27 @@ body.eink .stk-slot-cap,body.eink .stk-menu-sub,body.eink .stk-slot-val.stk-slot
 
   function show(node, on){ if(node) node.style.display = on ? '' : 'none'; }
 
+  /* v.581 — how much is under the other tab. ONE maker: this computes from `__ccDrive.lists()`
+     itself rather than taking a number from a caller, so the Drive section only has to say "recount"
+     and there is no second copy of the arithmetic to drift (v.575's rule). Idempotent, because it is
+     called from paint(), from every Drive render, and after the importer. */
+  function count(){
+    var strip = el('ccTabs'); if(!strip) return 0;
+    var btn = strip.querySelector('[data-tab="drive"]'); if(!btn) return 0;
+    var n = 0;
+    try {
+      var L = (window.__ccDrive && window.__ccDrive.lists) ? window.__ccDrive.lists() : null;
+      if(L) n = (L.wants || []).length + (L.obstacles || []).length + (L.stakes || []).length;
+    } catch(e){ n = 0; }
+    var tag = btn.querySelector('.cc-tabn');
+    if(!n){ if(tag && tag.parentNode) tag.parentNode.removeChild(tag); return 0; }
+    if(!tag){ tag = document.createElement('i'); tag.className = 'cc-tabn'; btn.appendChild(tag); }
+    var t = String(n);
+    if(tag.textContent !== t) tag.textContent = t;
+    tag.title = n + ' line' + (n === 1 ? '' : 's') + ' of Drive \u2014 what they want, what blocks them, what is at risk';
+    return n;
+  }
+
   function paint(){
     var isChar = (TAB === 'characteristics');
     show(charLabel(), false);              /* the tab already names the section */
@@ -79768,6 +79876,7 @@ body.eink .stk-slot-cap,body.eink .stk-menu-sub,body.eink .stk-slot-val.stk-slot
     if(strip) Array.from(strip.children).forEach(function(btn){
       btn.classList.toggle('on', btn.getAttribute('data-tab') === TAB);
     });
+    try { count(); } catch(e){}
   }
 
   /* ---- v.574 · hybridize, on the row it acts on ------------------------------------------
@@ -79981,7 +80090,8 @@ body.eink .stk-slot-cap,body.eink .stk-menu-sub,body.eink .stk-slot-val.stk-slot
     } catch(e){}
   }
 
-  window.__ccTabs = { paint: paint, hybridChip: hybridChip, mergeHybrid: mergeHybrid, go: function(t){ TAB = t; paint(); }, tab: function(){ return TAB; } };
+  window.__ccTabs = { paint: paint, hybridChip: hybridChip, mergeHybrid: mergeHybrid, count: count,
+                      go: function(t){ TAB = t; paint(); }, tab: function(){ return TAB; } };
 })();
 
 </script>
