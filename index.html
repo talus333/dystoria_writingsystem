@@ -51743,9 +51743,14 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.588';
+  var APP_VERSION = '2026.07.20.589';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.589', date:'September 3, 2026', notes:[
+      '**A chart is arranged from the elements it is actually about again.** A family tree of six people that also holds fourteen artefacts and places was being *ranked* as twenty — six rows became seventeen, and the tree stopped looking like a tree. The chart is now laid out from the elements that carry one of its bonds, and everything else stands on a **shelf** beneath it, in clear air. Nothing is hidden: every member is still drawn, named, clickable and connectable — it simply no longer claims a place in a ranking it has nothing to do with. [Jeremy]',
+      '**And those elements go quiet.** A pill with no bond of the kind this structure draws is dimmed, and comes back to full weight the moment you point at it. **Auto-arrange** re-shelves a map you have already arranged by hand; anything you placed yourself stays where you put it.',
+      '**A structure with nothing to draw yet is laid out as a list, not as a chart.** Opening a Place blueprint on a group that has no place-to-place bonds used to put all twenty members in one rank \u2014 a row wider than five screens that framed at 23%. Nobody is dimmed there (there is no main bond to be a stranger to); they are simply set out as what they are.',
+    ]},
     { v:'2026.07.20.588', date:'September 3, 2026', notes:[
       '**Arrows now meet a pill on a face — the top, the bottom, or the very end — instead of sliding into its rounded corner.** A pill is drawn with fully round ends and was being measured as a rectangle, so a line arriving from below could come to rest two thirds of the way down the side, over background, with its head pointing at nothing. It now lands on the flat, and the curve leaves each pill square to the face it is standing on, so the head arrives straight in. [Jeremy]',
       '**The STORY STAKES band above the Plot grid is gone.** The story’s stake is still there — in the **Main Plot card’s Stake**, and on every card’s Stakes line — which is where it was being read anyway. [Jeremy]',
@@ -69899,9 +69904,81 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
     }
     return pos;
   }
+  /* ---- v.589 · THE SHELF ---------------------------------------------------------------
+     [Jeremy, 2026-09-03] "the arrangement by organization/chart type and the filtering and hiding
+     bond types that are not the main type of the organizational style (family tree, org, etc), and
+     dimming pills that are not connected with the main bond type… it was a feature — i think it may
+     have broken with all the changes to bonds recently."
+
+     IT DID CHANGE, AND NOT BY ACCIDENT. Measured across the builds: at v.582 a Family tree of a
+     twenty-member group drew SIX pills — the ones the lens was about. From v.584 it draws twenty,
+     fourteen of them marked off-cast. That was a deliberate fix for a real refusal: a Place put into
+     a Martial group was stored and never drawn, so you could add it and it did not exist. **The view
+     may choose what to draw, but not what to hide** (v.407) still holds, and this does not touch it.
+
+     WHAT v.584 DID NOT DO is stop those members SHAPING the chart. A ranked layout ranks whatever it
+     is given, so the family tree went from six rows for six nodes to SEVENTEEN rows for twenty — the
+     tree stopped reading as a tree, which is the thing Jeremy noticed and could only describe as
+     "broken". Off-cast said its piece through size and `opacity:.84`, which is far too quiet to
+     carry a chart, and it was answering the wrong question anyway: off-cast means "the wrong CAST
+     for this lens", and what a family tree is actually silent about is anyone with no kinship bond
+     in it — a criterion about EDGES, not categories.
+
+     So: the chart is laid out from the elements it has something to say about, and the rest stand on
+     a shelf beneath it, in a clear band of air, still drawn, still named, still clickable, still
+     addable. They no longer claim a rank they have no place in.
+
+     A chart that draws no bonds at all has no shelf — everyone would be on it, and a drawing that
+     says nothing about anybody cannot call anybody a stranger. */
+  function asideKeys(g){
+    var deg = {}, any = false;
+    g.edges.forEach(function(e){ deg[e.akey] = 1; deg[e.bkey] = 1; any = true; });
+    if (!any) return {};
+    var out = {}, live = 0;
+    g.nodes.forEach(function(n){ if (deg[n.key]) live++; });
+    if (!live) return {};
+    g.nodes.forEach(function(n){ if (!deg[n.key] && !n.isAnchor) out[n.key] = 1; });
+    return out;
+  }
+  /* Rows along the bottom, wrapped to the width the chart above actually came to, so the shelf
+     reads as a caption to the drawing rather than a second column competing with it. */
+  function shelve(list, pos, box){
+    if (!list.length) return pos;
+    var x0 = null, x1 = null, low = null;
+    Object.keys(pos).forEach(function(k){
+      var p = pos[k]; if (!p) return;
+      if (x0 === null || p.x < x0) x0 = p.x;
+      if (x1 === null || p.x > x1) x1 = p.x;
+      if (low === null || p.y > low) low = p.y;
+    });
+    if (x0 === null){ x0 = 20; x1 = ((box && box.w) || 920) - 180; low = 0; }
+    var span = Math.max(380, (x1 - x0) + 170);
+    var y = low + NH + 104;          /* the band of air is what says "these are not in the chart" */
+    var x = x0;
+    list.forEach(function(n){
+      var w = estW(n);
+      if (x > x0 && (x - x0) + w > span){ x = x0; y += NH + 18; }
+      pos[n.key] = { x:Math.round(x), y:Math.round(y) };
+      x += w + 22;
+    });
+    return pos;
+  }
   function autoLayout(g, box){
     var L = g.layout || '';
     var ranked = /^(generational|hierarchy|blueprint|timeline)$/.test(L);
+    var off = asideKeys(g);
+    var aside = g.nodes.filter(function(n){ return off[n.key]; });
+    if (aside.length){
+      var live = g.nodes.filter(function(n){ return !off[n.key]; });
+      var sub = { nodes:live, edges:g.edges, layout:g.layout };
+      var p1 = deRow(sub, autoLayoutRaw(sub, box), box);
+      return shelve(aside, unblock(sub, p1, ranked ? 'x' : 'both'), box);
+    }
+    /* and the other end of the same thought: a lens that draws NO bond at all has no chart to
+       arrange, and every ranked engine answers that by putting all twenty members in one rank —
+       a 5,600px row that frames at 23% zoom and reads as nothing. Nobody is dimmed (there is no
+       main bond type to be a stranger to), but they are laid out as what they are: a list. */
+    if (!g.edges.length && g.nodes.length > 3) return shelve(g.nodes, {}, box);
     var pos = deRow(g, autoLayoutRaw(g, box), box);
     return unblock(g, pos, ranked ? 'x' : 'both');
   }
@@ -70205,6 +70282,15 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
     if (!activeGroup(m)) addPins(g, m);
     narrowToSet(g, m);
     dropHidden(g, m);
+    /* v.589 — who this chart has nothing to say about, decided ONCE and read by the layout, the
+       shelf and the pill's own class. The group's anchor is never a stranger to its own group. */
+    (function(){
+      var ak = null;
+      try{ var ag = activeGroup(m); if (ag) ak = ag.anchor || (ag.source && ag.source.key) || ag.el || null; }catch(e){}
+      g.nodes.forEach(function(n){ n.isAnchor = !!(ak && n.key === ak); });
+      var off = asideKeys(g);
+      g.nodes.forEach(function(n){ n.aside = !!off[n.key]; });
+    })();
     if (!g.nodes.length){
       if (activeGroup(m)) seedOffer(m, canvas);
       else if (!groupsOf(m).length) firstRunCards(m, canvas);   // no groups at all → the "what are you mapping?" cards [v.428]
@@ -70243,8 +70329,22 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
        line under it. The row rule had nothing to say about it: she and Pietrek are
        mutual, so their shared height was legal, and the picture was still wrong.
        A bond you cannot see is the fault; keeping a saved position is not worth it. */
-    deRow(g, pos, box);
-    unblock(g, pos, /^(generational|hierarchy|blueprint|timeline)$/.test(g.layout || '') ? 'x' : 'both');
+    /* v.589 — the two display-time passes run over the CHART, not over the shelf. Both exist to
+       keep a line readable, and a shelved element is on no line; letting an edge it has nothing to
+       do with shove it sideways is how the shelf would end up looking like a second, worse row. */
+    var _liveG = { nodes:g.nodes.filter(function(n){ return !n.aside; }), edges:g.edges, layout:g.layout };
+    deRow(_liveG, pos, box);
+    unblock(_liveG, pos, /^(generational|hierarchy|blueprint|timeline)$/.test(g.layout || '') ? 'x' : 'both');
+    /* and a shelved element the writer has never placed by hand goes to the shelf on sight, rather
+       than waiting for an Arrange — one that WAS placed by hand keeps where it was put */
+    (function(){
+      var loose = g.nodes.filter(function(n){ return n.aside && !stored[n.key]; });
+      if (!loose.length) return;
+      var chart = {}; g.nodes.forEach(function(n){ if (!n.aside && pos[n.key]) chart[n.key] = pos[n.key]; });
+      if (!Object.keys(chart).length) return;
+      shelve(loose, chart, box);
+      loose.forEach(function(n){ if (chart[n.key]) pos[n.key] = chart[n.key]; });
+    })();
 
     var nodeEls = {};
     /* v.558: which node, if any, is the group ITSELF. Read once per render rather
@@ -70259,6 +70359,7 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
       var d = el('div','bn-node bn-cat-' + (n.cat || 'word')
                        + (shapeOf(n.cat) ? (' bn-sh-' + shapeOf(n.cat)) : '')
                        + (n.offcast ? ' bn-offcast' : '')
+                       + (n.aside ? ' bn-aside' : '')
                        + ((_anchorKey && n.key === _anchorKey) ? ' bn-anchor' : ''));
       d.dataset.cat = n.cat || 'word';   /* the geometry reads the CAT, not the class list */
       d.style.left = pos[n.key].x + 'px'; d.style.top = pos[n.key].y + 'px';
@@ -72198,6 +72299,18 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
          writes the other side the moment a directional bond is made. */
       return { head:head, headFrom:headFrom, arrowFrom: symmetricRel(head) ? '' : headFrom };
     }
+    /* A ranked chart ranks DOWNWARD, so its lines belong on the top and bottom faces however the two
+       nodes happen to sit sideways of each other — but ONLY once there is room for both faces. The
+       first cut used a flat 24px, and 24 is not enough: two pills 34 tall sit their faces 22px out
+       from their centres, so at any drop under 44 the lower node's TOP face is above the upper
+       node's BOTTOM face and the line runs backwards up the page — at exactly 44 it comes out dead
+       horizontal between two nodes that are not level, which reads as a lie about rank. Measured
+       from the two pills rather than guessed, with a margin, so the rule holds for a tall node and
+       a short one as well as for two of the same size. */
+    function wantV(da, db, ca, cb){
+      if (!(LAYERED || ELBOW)) return false;
+      return Math.abs(cb.y - ca.y) > (da.offsetHeight + db.offsetHeight) / 2 + 2 * FACE_GAP + 10;
+    }
     /* a pair inside a peer run that skips over somebody is not drawn at all, so it must not claim
        a place on anybody's face either */
     function runSkipped(e){
@@ -72235,7 +72348,7 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
         var da = nodeEls[e.akey], db = nodeEls[e.bkey]; if (!da || !db) return;
         if (runSkipped(e)) return;
         var ca = centre(da), cb = centre(db);
-        var wv = (LAYERED || ELBOW) && Math.abs(cb.y - ca.y) > 24;
+        var wv = wantV(da, db, ca, cb);
         var af = headOf(e, ca, cb).arrowFrom;
         mark(e.akey, da, anchorOn(da, ca, cb, wv), af === e.bkey);
         mark(e.bkey, db, anchorOn(db, cb, ca, wv), af === e.akey);
@@ -72274,10 +72387,7 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
     g.edges.forEach(function(e, idx){
       var da = nodeEls[e.akey], db = nodeEls[e.bkey]; if (!da || !db) return;
       var ca = centre(da), cb = centre(db);
-      /* a ranked chart ranks DOWNWARD, so its lines belong on the top and bottom faces however the
-         two nodes happen to sit sideways of each other — but only once there is a real drop between
-         them, or two pills standing level would each be told to leave through the floor */
-      var _wantV = (LAYERED || ELBOW) && Math.abs(cb.y - ca.y) > 24;
+      var _wantV = wantV(da, db, ca, cb);   /* see wantV */
       var _hd = headOf(e, ca, cb);
       var head = _hd.head, headFrom = _hd.headFrom, arrowFrom = _hd.arrowFrom;
       var pa = hubOr(e.akey, da, ca, cb, _wantV, arrowFrom === e.bkey);
@@ -73235,6 +73345,15 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
          honest to `border()`, which measures the real box a transform would have lied about. */
       '.bn-offcast{ font-size:12px; padding:6px 11px; opacity:.84; }',
       '.bn-offcast .bn-name{ letter-spacing:.005em; }',
+      /* v.589 — the element this chart has nothing to say about. [Jeremy] "dimming pills that are
+         not connected with the main bond type." v.584 said "smaller and softer, never dimmer ink",
+         and this is the author overruling that for a DIFFERENT question: off-cast means the wrong
+         cast for the lens, and this means no bond of the kind the lens is drawing. It is dimmer
+         because the chart has to be readable at a glance as the chart, and it comes back to full
+         weight the instant you point at it — nothing is out of reach, only out of the way. */
+      '.bn-aside{ opacity:.42; transition:opacity .12s ease; }',
+      '.bn-aside:hover, .bn-aside.bn-anchor, .bn-aside.bn-sel{ opacity:1; }',
+      'body.eink .bn-aside{ opacity:.6; }',
       /* #53 phase 2 — the palette Bonds already had and never used. Every element category carries
          an authored colour (sage, olive, teal, tan, rose…) — a muted, warm, mid-value family chosen
          against this parchment — and Bonds drew five hand-picked near-blacks instead, four of them
