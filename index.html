@@ -51743,9 +51743,14 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.582';
+  var APP_VERSION = '2026.07.20.583';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.583', date:'September 3, 2026', notes:[
+      '**Elements now have a SHAPE on the Bonds map, not just a colour.** A character is the rounded pill; a place is a clipped plaque; an artifact is chamfered like a cut stone; a group is a shield; an event points forward like a chevron; a concept is a diamond with softened points; a stake is a notched pennant. **You can tell what something is at a glance, at any size, in a screenshot, and on the e-ink theme where colour disappears entirely.** [Jeremy]',
+      '**And the map finally uses the palette it always had.** Places, artifacts, groups, events and stakes take their own element colours instead of five near-identical charcoals \u2014 warm, muted tones chosen against the parchment. The character pill stays charcoal: it is what every other pill is read against.',
+      '**Every connection still lands on the pill it belongs to.** Lines used to stop at a node\u2019s invisible rectangle, which for a diamond would have left them ending in mid-air \u2014 they now meet the shape\u2019s own outline.',
+    ]},
     { v:'2026.07.20.582', date:'September 3, 2026', notes:[
       '**Groups of places, ideas and events now have words of their own.** Bonds has offered those three kinds of group since August, but the builder\u2019s **Kind of group** list had words only for the eight kinds of people \u2014 so a Region, a Doctrine or a Chain of events had to be typed from scratch. Three new pools: **Places** (region, route, holdings, frontier\u2026), **Concepts** (doctrine, canon, lexicon, mythos\u2026) and **Events** (chain, cycle, campaign, reckoning\u2026). [Jeremy]',
       '**And the Kind list is now sorted the same way the group types are** \u2014 under **People \u00b7 Places \u00b7 Ideas \u00b7 Events**, with the eight kinds of people under **Birth \u00b7 Power \u00b7 Belief \u00b7 Affinity**. The two lists are one vocabulary, so they now read from one table: pick \u201cKinship\u201d in the builder and \u201cKinship\u201d in Bonds and you are naming the same thing. [Jeremy]',
@@ -70232,7 +70237,9 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
     }catch(e){}
     g.nodes.forEach(function(n){
       var d = el('div','bn-node bn-cat-' + (n.cat || 'word')
+                       + (shapeOf(n.cat) ? (' bn-sh-' + shapeOf(n.cat)) : '')
                        + ((_anchorKey && n.key === _anchorKey) ? ' bn-anchor' : ''));
+      d.dataset.cat = n.cat || 'word';   /* the geometry reads the CAT, not the class list */
       d.style.left = pos[n.key].x + 'px'; d.style.top = pos[n.key].y + 'px';
       d.dataset.key = n.key;
       /* the Map's own link glyph, and only while the pointer is over the pill —
@@ -71754,9 +71761,73 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
 
   /* ---- edges ------------------------------------------------------------- */
   function centre(d){ return { x: d.offsetLeft + d.offsetWidth / 2, y: d.offsetTop + d.offsetHeight / 2 }; }
+
+  /* ---- #53 phase 1 · a shape per element cast ---------------------------------------
+     [Jeremy, 2026-09-03] "different shapes for the different element types (ie. rounded pill for
+     characters, Diamond for Concepts…)" — and the swap that pays for it: **the category moves onto
+     the SHAPE, which frees the colour to become the writer's.** Shape was the one channel carrying
+     nothing at all; node colour was the category, edge colour is valence, width is intensity, dash
+     is secret.
+
+     **Why shape and not more colour.** `body.eink` flattens every colour to black and white, and the
+     app already says elsewhere that a signal carried by hue alone is a signal some readers do not
+     get. A silhouette survives that, and survives the mini previews, and survives a screenshot.
+
+     THE TRAP THIS EXISTS TO AVOID, and it is the whole engineering cost: `border()` stopped every
+     edge at the node's bounding BOX (`offsetWidth/2 + 5`). Give a node a diamond and the line ends
+     in mid-air near a corner, with the arrowhead pointing at nothing — which breaks the v.474–v.478
+     rule that a mark must say which two things it belongs to. So the silhouette is declared ONCE
+     here, as a polygon, and BOTH the drawing (`clip-path`, generated from these same numbers) and
+     the edge geometry read it. Two lists would drift the first time a corner changed. */
+  var CUT = { plaque:9, hex:11, chev:12, pennant:11 };   /* px cut into the box; shield/diamond are proportional */
+  var CAT_SHAPE = { being:'', setting:'plaque', object:'hex', org:'shield',
+                    event:'chev', concept:'diamond', stakes:'pennant' };
+  function shapeOf(cat){ return CAT_SHAPE[cat] || ''; }
+  /* the silhouette in LOCAL coordinates, centred on the node. '' (the pill) returns null and keeps
+     the rectangle path it has always had — the commonest node must not change at all. */
+  function silhouette(shape, w, h){
+    var x = w / 2, y = h / 2, c;
+    if (shape === 'plaque'){ c = Math.min(CUT.plaque, x, y);
+      return [[-x+c,-y],[x-c,-y],[x,-y+c],[x,y-c],[x-c,y],[-x+c,y],[-x,y-c],[-x,-y+c]]; }
+    if (shape === 'hex'){ c = Math.min(CUT.hex, x);
+      return [[-x+c,-y],[x-c,-y],[x,0],[x-c,y],[-x+c,y],[-x,0]]; }
+    if (shape === 'shield'){ var sy = -y + h * 0.58;
+      return [[-x,-y],[x,-y],[x,sy],[0,y],[-x,sy]]; }
+    if (shape === 'chev'){ c = Math.min(CUT.chev, x);
+      return [[-x,-y],[x-c,-y],[x,0],[x-c,y],[-x,y]]; }
+    if (shape === 'diamond'){ return [[0,-y],[x,0],[0,y],[-x,0]]; }
+    if (shape === 'pennant'){ c = Math.min(CUT.pennant, x);
+      return [[-x,-y],[x,-y],[x-c,0],[x,y],[-x,y]]; }
+    return null;
+  }
+  /* where a ray leaving the node's centre crosses its own outline, plus the 5px gap the rectangle
+     path has always left. **The FARTHEST crossing is taken**, which for the pennant's notch means
+     the hull rather than the notch floor — a line that stopped at the notch would read as piercing
+     the pill. */
+  function shapeHit(d, dx, dy){
+    var poly = silhouette(shapeOf(d && d.dataset ? d.dataset.cat : ''), d.offsetWidth, d.offsetHeight);
+    if (!poly) return null;
+    var L = Math.sqrt(dx*dx + dy*dy) || 1, ux = dx / L, uy = dy / L, best = 0;
+    for (var i = 0; i < poly.length; i++){
+      var a = poly[i], b = poly[(i + 1) % poly.length];
+      var ex = b[0] - a[0], ey = b[1] - a[1];
+      var den = ux * ey - uy * ex;
+      if (Math.abs(den) < 1e-9) continue;
+      var t = (a[0] * ey - a[1] * ex) / den;
+      if (t <= 0) continue;
+      var u = (Math.abs(ex) > Math.abs(ey)) ? (t * ux - a[0]) / ex : (t * uy - a[1]) / ey;
+      if (u < -1e-6 || u > 1 + 1e-6) continue;
+      if (t > best) best = t;
+    }
+    return best ? { x: ux * (best + 5), y: uy * (best + 5) } : null;
+  }
   function border(from, to, d){
     var dx = to.x - from.x, dy = to.y - from.y;
     if (!dx && !dy) return from;
+    /* #53 phase 1 — ask the node for its own outline first. A shaped node answers; the pill does
+       not, and falls through to the rectangle path unchanged. */
+    var hit = null; try{ hit = shapeHit(d, dx, dy); }catch(e){ hit = null; }
+    if (hit) return { x: from.x + hit.x, y: from.y + hit.y };
     var hw = d.offsetWidth / 2 + 5, hh = d.offsetHeight / 2 + 5;
     var s = Math.min(hw / Math.abs(dx || 1e-6), hh / Math.abs(dy || 1e-6));
     return { x: from.x + dx * s, y: from.y + dy * s };
@@ -72828,14 +72899,55 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
       '  border-radius:999px; padding:7px 13px; font-size:13.5px; cursor:grab; user-select:none; z-index:4;',
       '  box-shadow:0 2px 8px -3px rgba(60,44,16,.5); white-space:nowrap; }',
       '.bn-node:active{ cursor:grabbing; }',
-      '.bn-cat-setting{ background:#2f3a2c; } .bn-cat-object{ background:#3a2f22; }',
-      '.bn-cat-org{ background:#382a2a; } .bn-cat-event{ background:#3a3520; }',
+      /* #53 phase 2 — the palette Bonds already had and never used. Every element category carries
+         an authored colour (sage, olive, teal, tan, rose…) — a muted, warm, mid-value family chosen
+         against this parchment — and Bonds drew five hand-picked near-blacks instead, four of them
+         the same charcoal with a few points of hue in it: legible side by side, invisible one at a
+         time. These are the category hues taken down to a fill that holds cream text.
+         **The CHARACTER pill stays charcoal on purpose**: it is the commonest node and the thing
+         every other pill is read against, so it is the ground rather than one more hue. */
+      '.bn-cat-setting{ background:#5d6142; } .bn-cat-object{ background:#6b5c39; }',
+      '.bn-cat-org{ background:#3c6570; } .bn-cat-event{ background:#714b3d; }',
+      '.bn-cat-stakes{ background:#6f4038; }',
       /* an idea on a map of people has to be legible AS an idea at a glance — pale,
          outlined and italic rather than another dark pill [Jeremy] */
       '.bn-cat-concept{ background:#efe9fa; color:#3d3357; border:1px solid #c9bde6;',
       '  font-family:var(--serif); font-style:italic; }',
       '.bn-cat-concept .bn-link{ color:#7b62b8; }',
       'body.eink .bn-cat-concept{ background:#fff; color:#000; border-color:#000; }',
+
+      /* ---- the silhouettes, from the same numbers as `silhouette()` above -------------
+         A shape pays for its cut in PADDING, because a shape that clips a writer's word is not a
+         shape. And `clip-path` cuts the border and the box-shadow with everything else, so an
+         outlined shape (Concept) gets its outline back from stacked drop-shadows, which follow the
+         clipped alpha instead of the box. */
+      '.bn-sh-plaque{ border-radius:4px; padding:7px 15px;',
+      '  clip-path:polygon(9px 0,calc(100% - 9px) 0,100% 9px,100% calc(100% - 9px),calc(100% - 9px) 100%,9px 100%,0 calc(100% - 9px),0 9px); }',
+      '.bn-sh-hex{ border-radius:3px; padding:7px 19px;',
+      '  clip-path:polygon(11px 0,calc(100% - 11px) 0,100% 50%,calc(100% - 11px) 100%,11px 100%,0 50%); }',
+      '.bn-sh-shield{ border-radius:4px 4px 0 0; padding:7px 14px 16px;',
+      '  clip-path:polygon(0 0,100% 0,100% 58%,50% 100%,0 58%); }',
+      '.bn-sh-chev{ border-radius:3px; padding:7px 22px 7px 13px;',
+      '  clip-path:polygon(0 0,calc(100% - 12px) 0,100% 50%,calc(100% - 12px) 100%,0 100%); }',
+      '.bn-sh-pennant{ border-radius:3px; padding:7px 21px 7px 13px;',
+      '  clip-path:polygon(0 0,100% 0,calc(100% - 11px) 50%,100% 100%,0 100%); }',
+      /* [Jeremy] "very slightly rounded corners on diamond" — so it stays a true diamond and loses
+         the one thing a hard one does badly on parchment, which is look like a warning sign. The
+         radius is on the box; `path()` cannot take one, so the softening comes from the border
+         radius showing through at the points plus the drop-shadow outline riding the same alpha. */
+      '.bn-sh-diamond{ border-radius:6px; padding:12px 30px; border:none;',
+      '  clip-path:polygon(50% 1px,calc(100% - 1px) 50%,50% calc(100% - 1px),1px 50%);',
+      '  filter:drop-shadow(0 1px 0 #c9bde6) drop-shadow(0 -1px 0 #c9bde6)',
+      '         drop-shadow(1px 0 0 #c9bde6) drop-shadow(-1px 0 0 #c9bde6); box-shadow:none; }',
+      'body.eink .bn-sh-diamond{ filter:drop-shadow(0 1px 0 #000) drop-shadow(0 -1px 0 #000)',
+      '         drop-shadow(1px 0 0 #000) drop-shadow(-1px 0 0 #000); }',
+      /* the miniatures are 12px/5px, so a 9–12px cut would eat half the pill there */
+      '.bn-mini .bn-sh-plaque{ padding:5px 12px; clip-path:polygon(6px 0,calc(100% - 6px) 0,100% 6px,100% calc(100% - 6px),calc(100% - 6px) 100%,6px 100%,0 calc(100% - 6px),0 6px); }',
+      '.bn-mini .bn-sh-hex{ padding:5px 15px; clip-path:polygon(8px 0,calc(100% - 8px) 0,100% 50%,calc(100% - 8px) 100%,8px 100%,0 50%); }',
+      '.bn-mini .bn-sh-shield{ padding:5px 11px 12px; }',
+      '.bn-mini .bn-sh-chev{ padding:5px 17px 5px 11px; clip-path:polygon(0 0,calc(100% - 9px) 0,100% 50%,calc(100% - 9px) 100%,0 100%); }',
+      '.bn-mini .bn-sh-pennant{ padding:5px 16px 5px 11px; clip-path:polygon(0 0,100% 0,calc(100% - 8px) 50%,100% 100%,0 100%); }',
+      '.bn-mini .bn-sh-diamond{ padding:9px 22px; }',
       /* the link mark appears when the pointer is on the pill, and nowhere else */
       '.bn-link{ width:0; height:18px; overflow:hidden; opacity:0; flex:0 0 auto; display:flex;',
       '  align-items:center; justify-content:center; margin-left:-4px; border-radius:6px;',
@@ -76294,6 +76406,11 @@ html body:not(.eink) .bn-node.bn-anchor .bn-name{
 }
 /* e-ink keeps its black plate and says it with the corners and a heavier rule */
 html body.eink .bn-node.bn-anchor{ border:2px solid #000 !important; }
+/* v.583 — the ANCHOR keeps its plate and takes no cast silhouette. Its padding and radius are
+   `!important` here by design (a deeper ground, a gold hairline, its own corners), and a clip-path
+   over a forced padding would cut the point off a shield or the ends off a chevron. It is also the
+   one node whose cast never needs announcing: the anchor IS the group. */
+html body .bn-node.bn-anchor{ clip-path:none !important; }
 
 /* ============================================================================
    v.559 → v.560 — THE PARTY BECOMES A GROUP ROW
