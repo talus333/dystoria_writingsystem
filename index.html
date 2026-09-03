@@ -42923,6 +42923,7 @@ document.addEventListener('DOMContentLoaded', init);
       want:           function(k,v,isNew){ return setMotivationWant(k,v,isNew,false); },
       addWant:        function(k,v,isNew){ return setMotivationWant(k,v,isNew,true); },
       clearWant:      function(k){ return clearMotivation(k); },
+      removeWant:     function(k,which){ return removeMotivationWant(k,which); },
       stake:          function(k,v,isNew){ return setMotivationStake(k,v,isNew,false); },
       addStake:       function(k,v,isNew){ return setMotivationStake(k,v,isNew,true); },
       clearStake:     function(k,which){ return clearMotivationStake(k,which); },
@@ -42943,6 +42944,25 @@ document.addEventListener('DOMContentLoaded', init);
       if(typeof i==='number' && state.nodes[i]) state.nodes[i].motivation=w.motivation;
       if(typeof i==='number') cascadeForward(i, 'Motivation');
       _motFanOut(w); if(state.session){ state.session.words=state.prompt.words; if(typeof scheduleAutosave==='function') scheduleAutosave(); } if(window.syncElementViews) window.syncElementViews(); }
+    /* v.579 — remove ONE want, leaving the rest of the Drive alone. Modelled exactly on
+    clearMotivationStake below. **This exists because the alternative was silently destructive:**
+    v.572's Drive section removed a want by calling clearMotivation() and re-adding the survivors —
+    and clearMotivation does `delete w.motivation`, so the character's STAKES, OBSTACLES, motivator
+    and connector went with it. The card only showed one want, so nobody could see it happen.
+    Anything that "clears and rebuilds" a compound object throws away the parts it does not rebuild. */
+    function removeMotivationWant(i, which){
+      const w=_motWord(i); if(!w||!w.motivation) return;
+      if(typeof pushUndo==='function') pushUndo();
+      const _a=motWants(w).slice();
+      const _j=(typeof which==='number')?which:_a.indexOf(which);
+      if(_j<0) return;
+      _a.splice(_j,1);
+      _mirrorWants(w.motivation,_a);
+      _motFanOut(w);
+      if(state.cardTrait==='@motivation' && !_a.length) state.cardTrait=null;
+      _persistMotivation(i);
+      if(window.syncElementViews) window.syncElementViews();
+    }
     function clearMotivationStake(i, which){ const w=_motWord(i); if(!w||!w.motivation) return; if(typeof pushUndo==='function') pushUndo();
       /* `which` (a value or an index) drops ONE; omitted it clears them all, which is what every existing caller means */
       if(which==null){ delete w.motivation.stake; delete w.motivation.stakes; }
@@ -51597,9 +51617,12 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.578';
+  var APP_VERSION = '2026.07.20.579';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.579', date:'September 2, 2026', notes:[
+      '**A character’s card now shows every motivation and every stake**, not just the first of each — so what you enter in the builder’s **Drive** section is what the card says. Obstacles already listed in full; the other two parts of a Drive now match. Each extra carries its own **×**.',
+    ]},
     { v:'2026.07.20.578', date:'September 2, 2026', notes:[
       '**A character with more than one motivation now reads as having more than one.** Since you could add several motivations and several stakes, the sentence the app says about someone — on their dossier, behind an arc, and in what the AI is told about your story — had gone on naming only the first of each. It now names them all: _“Feo wants to get home and to be forgiven, but is held back by the witch, with the harvest and his brother’s name hanging in the balance.”_',
     ]},
@@ -79263,12 +79286,10 @@ body.eink .stk-slot-cap,body.eink .stk-menu-sub,body.eink .stk-slot-val.stk-slot
   function drop(spec, idx){
     var M = window.__motWrite;
     if(editKey && M){
-      if(spec.id === 'wants'){
-        var ws = lists().wants.slice(); ws.splice(idx, 1);
-        /* no per-want remove in the app: clear, then re-set the survivors through the same writers */
-        M.clearWant(editKey);
-        ws.forEach(function(v, n){ n === 0 ? M.want(editKey, v, false) : M.addWant(editKey, v, false); });
-      }
+      /* v.579 — was clearWant + re-add the survivors, which **deleted the whole motivation object**
+         (`clearMotivation` does `delete w.motivation`) and took the character's stakes, obstacles,
+         motivator and connector with it. The app now has a real per-want remove. */
+      if(spec.id === 'wants')     M.removeWant(editKey, idx);
       if(spec.id === 'stakes')    M.clearStake(editKey, idx);
       if(spec.id === 'obstacles') M.removeObstacle(editKey, idx);
     } else {
@@ -79397,6 +79418,149 @@ body.eink .stk-slot-cap,body.eink .stk-menu-sub,body.eink .stk-slot-val.stk-slot
   };
 
   window.__ccDrive = { render: render, lists: lists, pending: function(){ return pend; } };
+})();
+
+</script>
+<script id="dyst-np-drivepills-js">
+/* Dystoria — the element card shows EVERY motivation and every stake (v.579)
+
+   v.572 made wants and stakes lists and mirrored entry [0] back into `m.want` / `m.stake`, so that
+   no reader had to change. v.578 taught the prose sentence (`_drivesSentence`) to read the lists.
+   What was left is the card's own PILLS: they render `mot.want` and `mot.stake` — the mirror — so a
+   character with three motivations showed one. Obstacles were always plural there, which is why the
+   line read oddly: two of the three parts of a Drive could be several and one could not.
+
+   **Why this is an appended pass and not an edit to the two builders.** The pill block exists TWICE —
+   `buildMotivationSentence(w)` and the notepad card's own copy, described in source as "same
+   pills/pickers as the notepad card" — 60 intricate lines each, and editing both is exactly the
+   duplication v.566 flagged as a bill. **Both emit the same DOM** (`.npc-sentence`, `.npc-pill.want`,
+   `.npc-pill.stk`), so one pass over the rendered card covers both with a single implementation.
+   That is not a substitute for collapsing them — it is a way to not make the duplication worse while
+   closing the gap.
+
+   Removal goes through `window.__motWrite`, so undo, autosave and the cross-frame fan-out come free;
+   there is no per-want remove in the app, so a want is dropped the way the Drive section drops one —
+   clear, then re-set the survivors through the same writers. */
+(function(){
+  'use strict';
+
+  function key(){ try { return (typeof npActiveKey === 'function') ? npActiveKey() : null; } catch(e){ return null; } }
+  function word(){ try { var k = key(); return k && typeof npFindEl === 'function' ? npFindEl(k) : null; } catch(e){ return null; } }
+
+  function lists(w){
+    var L = window.__motLists;
+    if(!L || !w) return { wants: [], stakes: [] };
+    return { wants: L.wants(w) || [], stakes: L.stakes(w) || [] };
+  }
+
+  /* v.579 — through the app's own `removeWant`, NOT clearWant-and-rebuild. `clearMotivation` does
+     `delete w.motivation`, so rebuilding only the wants silently dropped the character's stakes,
+     obstacles, motivator and connector. The test that caught it removed a want and watched the
+     stakes vanish from the same sentence. */
+  function dropWant(k, idx){
+    var M = window.__motWrite; if(!M || !M.removeWant) return;
+    M.removeWant(k, idx);
+  }
+
+  function mkPill(kind, text, onDrop){
+    var pill = document.createElement('span');
+    pill.className = 'npc-pill ' + (kind === 'want' ? 'want' : 'stk') + ' npd-extra';
+    pill.setAttribute('data-npd', kind);
+    var lbl = document.createElement('span'); lbl.textContent = text; pill.appendChild(lbl);
+    var x = document.createElement('span'); x.className = 'pmini'; x.textContent = '×';
+    x.title = (kind === 'want') ? 'Remove this motivation' : 'Remove this stake';
+    x.addEventListener('click', function(ev){
+      ev.stopPropagation();
+      try { onDrop(); } catch(e){}
+      try { if(typeof renderNpCard === 'function') renderNpCard(); } catch(e){}
+    });
+    pill.appendChild(x);
+    return pill;
+  }
+
+  function lead(txt){
+    var s = document.createElement('span'); s.className = 'lead npd-extra'; s.textContent = txt;
+    return s;
+  }
+
+  function paint(){
+    var host = document.getElementById('npCard'); if(!host) return;
+    var sen = host.querySelector('.npc-sentence'); if(!sen) return;
+    var w = word(); if(!w || w.role !== 'being') return;
+
+    var L = lists(w);
+    var wantExtra  = L.wants.slice(1);
+    var stakeExtra = L.stakes.slice(1);
+
+    /* idempotence — the pass runs from a MutationObserver over the node it edits, so it must compare
+       first and touch nothing when the card already says the right thing (v.574's lesson: a
+       synchronous flag cannot guard an observer; only "change nothing" ends the loop) */
+    var have = Array.from(sen.querySelectorAll('.npc-pill.npd-extra')).map(function(p){
+      return p.getAttribute('data-npd') + ' ' + String((p.firstChild && p.firstChild.textContent) || '');
+    });
+    var wantList = wantExtra.map(function(t){ return 'want ' + t; })
+      .concat(stakeExtra.map(function(t){ return 'stake ' + t; }));
+    if(have.length === wantList.length && have.every(function(v, i){ return v === wantList[i]; })) return;
+
+    Array.from(sen.querySelectorAll('.npd-extra')).forEach(function(n){ if(n.parentNode) n.parentNode.removeChild(n); });
+    if(!wantExtra.length && !stakeExtra.length) return;
+
+    /* anchor on the APP's pill, never on one of ours, or each pass would chain off the last insert */
+    var anchorWant = sen.querySelector('.npc-pill.want:not(.npd-extra)');
+    if(anchorWant){
+      var at = anchorWant;
+      wantExtra.forEach(function(t, i){
+        var l = lead(' and '); at.parentNode.insertBefore(l, at.nextSibling); at = l;
+        var p = mkPill('want', t, dropWant.bind(null, key(), i + 1));
+        at.parentNode.insertBefore(p, at.nextSibling); at = p;
+      });
+    }
+    var anchorStake = sen.querySelector('.npc-pill.stk:not(.npd-extra)');
+    if(anchorStake){
+      var as = anchorStake;
+      stakeExtra.forEach(function(t, i){
+        var l = lead(' and '); as.parentNode.insertBefore(l, as.nextSibling); as = l;
+        var p = mkPill('stake', t, function(){
+          var M = window.__motWrite; if(M) M.clearStake(key(), i + 1);
+        });
+        as.parentNode.insertBefore(p, as.nextSibling); as = p;
+      });
+    }
+  }
+
+  /* **`renderNpCard` IS on `window`** — unlike `ccRenderSlots`, which is closure-scoped and whose
+     wrapper in two other layers silently never ran (v.574). So the card's own re-render is the
+     honest hook here: it fires exactly when the card is rebuilt, and nothing else needs watching.
+     **Check `typeof window.X` before choosing between a wrapper and an observer** — the answer is
+     different for two functions that look like siblings.
+     A MutationObserver stays as a backstop for repaints that do not go through it. */
+  var _r = window.renderNpCard;
+  if(typeof _r === 'function'){
+    window.renderNpCard = function(){
+      var out = _r.apply(this, arguments);
+      try { paint(); } catch(e){}
+      return out;
+    };
+  }
+
+  var attached = false;
+  function watch(){
+    var host = document.getElementById('npCard'); if(!host) return false;
+    try {
+      new MutationObserver(function(){ try { paint(); } catch(e){} })
+        .observe(host, { childList: true, subtree: true });
+      attached = true;
+      paint();
+      return true;
+    } catch(e){ return false; }
+  }
+
+  if(!watch()){
+    var tries = 0;
+    var iv = setInterval(function(){ if(watch() || ++tries > 40) clearInterval(iv); }, 250);
+  }
+
+  window.__npDrivePills = { paint: paint, hooked: (typeof _r === 'function'), observing: function(){ return attached; } };
 })();
 
 </script>
