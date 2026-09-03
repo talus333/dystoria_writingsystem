@@ -51743,9 +51743,13 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.584';
+  var APP_VERSION = '2026.07.20.585';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.585', date:'September 3, 2026', notes:[
+      '**\u002B Element now has two tabs: the kinds this structure is about, and everything else.** A family tree opens on **People**; a blueprint on **Places**; a chain on **Events** \u2014 and **The rest** holds everything else in the story, one click away, with a count so you can see there is something in it. **The line between "at home here" and "anything can go in" is now drawn where you can see it**, instead of being a sort you had to take on trust. Same for the Group creator\u2019s member picker. [Jeremy]',
+      'Both pickers now wear the same shape as the Plot grid\u2019s **\u002B link element** \u2014 tabs, a filter, and the element\u2019s own category beside its name in its own colour.',
+    ]},
     { v:'2026.07.20.584', date:'September 3, 2026', notes:[
       '**\u002B Element on the Bonds map no longer refuses anything.** It used to hide every element the structure you were LOOKING through was not about \u2014 so viewing a group as a family tree made it impossible to put a place in it. The kinds a structure is mostly about still come first; everything else is underneath, and the list says so. **Choosing how to look at a group never decides what may go in it.** [Jeremy]',
       '**And a group you build in the Group creator is now the same group Bonds draws.** Say who is in it while you are making it, and they are there on the map \u2014 add someone on the map, and they are there when you reopen the creator. One group, two doors. [Jeremy]',
@@ -71712,49 +71716,110 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
   /* The element picker. Offers what this KIND can hold, and says so when the kind
      is the reason something is missing — otherwise "where is my character" has no
      answer on screen. */
+  /* v.585 — what to call the tab holding a structure's own kinds. It names the CAST when the lens
+     is about one thing (People · Places · Ideas · Events, the same four words as the creation step),
+     and falls back to the structure's own name when it spans several. Reading the label off the
+     taxonomy rather than typing it here is what keeps this in step with #52. */
+  var CAST_LABEL = { being:'People', setting:'Places', concept:'Ideas', event:'Events', object:'Things', org:'Groups' };
+  function castLabel(kind){
+    var cs = (kind && kind.cats) || [];
+    if (cs.length === 1) return CAST_LABEL[cs[0]] || catName(cs[0]);
+    /* the social/faction lenses hold people, their bodies and their ideas — all one cast in the
+       writer's terms, so say the cast rather than listing three category names */
+    var only = {}; cs.forEach(function(c){ only[(c === 'org' || c === 'concept') ? 'being' : c] = 1; });
+    var ks = Object.keys(only);
+    if (ks.length === 1) return CAST_LABEL[ks[0]] || (kind.name || 'Its kinds');
+    return 'Its kinds';
+  }
+  function catName(c){
+    try{ var g = (typeof getCat === 'function') ? getCat(c) : null; if (g && g.name) return g.name; }catch(e){}
+    return c || '';
+  }
+
   function openAdd(anchor, m){
     var old = document.getElementById('bnAdd'); if (old){ old.parentNode.removeChild(old); return; }
     var by = {}; try{ by = BONDS.roster(); }catch(e){}
     var kind = BONDS.KINDS[m.ui.kind] || {};
     var here = {}; (m._graph ? m._graph.nodes : []).forEach(function(n){ here[n.key] = 1; });
-    var box = el('div','bn-add-pop'); box.id = 'bnAdd';
+    /* v.585 [Jeremy] — "sort the types so that the ones that are the defaults for that group
+       category are in one tab, and the ones that are not are in another; use the picker style from
+       the link element in plot grid."
+
+       **The tabs finish the argument v.584 started.** v.584 stopped the picker refusing anything and
+       fell back on a sort — but a sort is a claim the reader has to take on trust, and with sixty
+       rows the boundary between "at home here" and "everything else" is invisible. Two tabs SAY
+       where the line is, and the writer crosses it deliberately. It is still not a filter: the second
+       tab is one click away and holds the whole story.
+
+       The style is `.fp-*`, lifted from the Plot grid's "+ link element" add-system (and its sibling,
+       the in-session Focus picker) rather than invented here — the app has one picker shape and this
+       is it. The plot version's category dropdown is deliberately NOT copied: with the tabs doing the
+       casting, a third narrowing control would be organising information the tabs already show. */
+    var box = el('div','bn-add-pop dyst-fp'); box.id = 'bnAdd';
+    var TABBED = !!(kind.cats && kind.cats.length);
+    var tab = 'own';
+    var mine = function(n){ return !kind.cats || kind.cats.indexOf(n.cat) >= 0; };
+
+    var tabs = el('div','fp-tabs');
+    if (TABBED) box.appendChild(tabs);
     var search = document.createElement('input');
-    search.className = 'bn-add-search'; search.placeholder = 'search elements…';
+    search.className = 'fp-search'; search.placeholder = 'Filter…';
+    search.addEventListener('click', function(ev){ ev.stopPropagation(); });
     box.appendChild(search);
-    box.appendChild(el('div','bn-add-hint',''));
-    var list = el('div','bn-add-list'); box.appendChild(list);
-    var draw = function(){
-      list.innerHTML = '';
+    box.appendChild(el('div','fp-hint',''));
+    var list = el('div','fp-list'); box.appendChild(list);
+
+    var pool = function(){
       var q = search.value.trim().toLowerCase();
-      /* v.584 [Jeremy: "the + element in bonds is still restrictive"] — it SORTS by what the
-         lens is at home with and no longer FILTERS by it. Two things were wrong with the filter and
-         the second is the worse one: it kept elements out of a group at all, against #52's decision
-         that "the kind you picked just brings its own sort of element to the top of the list — it
-         does not keep the others out"; and it filtered by the drawn LENS, so choosing to LOOK at a
-         group as a family tree decided what you were allowed to PUT IN it. **Looking is not
-         editing** (v.408), and a picker that refuses is a rule the writer never agreed to. */
-      var rows = Object.keys(by).map(function(k){ return by[k]; })
-        .filter(function(n){ return !here[n.key]; })
+      return Object.keys(by).map(function(k){ return by[k]; })
+        .filter(function(n){ return n && n.key && n.label && !here[n.key]; })
         .filter(function(n){ return !q || n.label.toLowerCase().indexOf(q) >= 0; })
-        .sort(function(a, b){
-          var ac = (!kind.cats || kind.cats.indexOf(a.cat) >= 0) ? 0 : 1;
-          var bc = (!kind.cats || kind.cats.indexOf(b.cat) >= 0) ? 0 : 1;
-          return (ac - bc) || a.label.localeCompare(b.label);
+        .sort(function(a, b){ return a.label.localeCompare(b.label); });
+    };
+
+    var draw = function(){
+      var all = pool();
+      var own = all.filter(mine), rest = all.filter(function(n){ return !mine(n); });
+
+      if (TABBED){
+        tabs.innerHTML = '';
+        /* the counts are the point of the tabs: a writer must be able to see that the other tab has
+           something in it without going there */
+        [['own', castLabel(kind), own.length], ['rest', 'The rest', rest.length]].forEach(function(t){
+          var b = el('button','fp-tab' + (tab === t[0] ? ' on' : ''), t[1]); b.type = 'button';
+          if (t[2]) b.appendChild(el('i','fp-n', String(t[2])));
+          b.addEventListener('click', function(ev){ ev.stopPropagation(); tab = t[0]; draw(); });
+          tabs.appendChild(b);
         });
+      }
+      var hint = box.querySelector('.fp-hint');
+      hint.textContent = TABBED
+        /* the category NAMES, not their ids — "being, concept" is the store talking, and this line is
+           the app talking to a writer */
+        ? ((kind.name || 'This structure') + ' is mostly about '
+           + kind.cats.map(function(c){ return catName(c).toLowerCase(); }).join(', ')
+           + '. Anything can still go in.')
+        : 'Everything in the story can go in.';
+
+      var rows = TABBED ? (tab === 'own' ? own : rest) : all;
+      list.innerHTML = '';
       if (!rows.length){
-        list.appendChild(el('div','bn-add-none','Nothing left to add — everything in the story is already in this group.'));
+        list.appendChild(el('div','fp-empty', all.length
+          ? (tab === 'own' ? 'Nothing of this structure\u2019s own kinds is left \u2014 try The rest.'
+                           : 'Nothing else left to add.')
+          : 'Everything in the story is already in this group.'));
         return;
       }
-      /* and the sort is only honest if it says so, since the writer can no longer tell from the
-         list alone why one element came first */
-      if (kind.cats) box.querySelector('.bn-add-hint').textContent =
-        (kind.name || 'This structure') + ' is mostly about ' + kind.cats.join(', ') + ' — those come first. Anything can go in.';
       rows.slice(0, 60).forEach(function(n){
-        var b = el('button','bn-add-row', n.label); b.type = 'button';
-        b.appendChild(el('span','bn-add-cat', n.cat));
+        var b = el('button','fp-row'); b.type = 'button';
+        b.appendChild(el('span','fp-nm', n.label));
+        var c = el('span','fp-cat', catName(n.cat));
+        try{ if (typeof catColor === 'function') c.style.color = catColor(n.cat); }catch(e){}
+        b.appendChild(c);
         b.addEventListener('click', function(){ if (!addToSet(n.key, m)) pin(n.key, m); box.parentNode.removeChild(box); V.render(m); });
         list.appendChild(b);
       });
+      if (rows.length > 60) list.appendChild(el('div','fp-empty', (rows.length - 60) + ' more \u2014 narrow it with the filter.'));
     };
     search.addEventListener('input', draw); draw();
     var r = anchor.getBoundingClientRect();
@@ -73056,8 +73121,33 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
       '.bn-node .bn-unpin:hover{ opacity:1; color:#e8b06a; }',
       '.bn-back{ display:inline-block; margin-left:0; border:none; background:none; font-family:inherit;',
       '  font-size:12px; color:var(--gold-ochre); cursor:pointer; text-decoration:underline; font-style:normal; }',
-      '.bn-add-pop{ position:fixed; z-index:60; width:258px; background:#fff; border:1px solid #ded7c7;',
+      '.bn-add-pop{ position:fixed; z-index:60; width:272px; background:var(--paper); border:1px solid var(--line);',
       '  border-radius:11px; box-shadow:0 16px 40px -14px rgba(80,60,25,.42); padding:9px; }',
+      /* v.585 — the `.fp-*` picker, the same shape the Plot grid's "+ link element" and the
+         in-session Focus picker use. Scoped to `.dyst-fp` so both this popup and the Group
+         builder's member picker take it from one place. */
+      '.dyst-fp .fp-tabs{ display:flex; gap:5px; margin:2px 2px 7px; }',
+      '.dyst-fp .fp-tab{ flex:1; display:flex; align-items:center; justify-content:center; gap:6px;',
+      '  font-family:var(--sans); font-size:11px; font-weight:600; letter-spacing:.05em; text-transform:uppercase;',
+      '  color:var(--ink-soft); background:var(--bg2); border:1px solid var(--line); border-radius:9px;',
+      '  padding:5px 6px; cursor:pointer; }',
+      '.dyst-fp .fp-tab.on{ background:var(--ink); color:var(--paper); border-color:var(--ink); }',
+      '.dyst-fp .fp-n{ font-style:normal; font-size:10px; font-weight:700; opacity:.62; }',
+      '.dyst-fp .fp-search{ width:calc(100% - 4px); box-sizing:border-box; margin:0 2px 6px; padding:5px 9px;',
+      '  border:1px solid var(--line); border-radius:9px; font-family:var(--sans); font-size:12px;',
+      '  color:var(--ink); background:var(--paper); outline:none; }',
+      '.dyst-fp .fp-search:focus{ border-color:var(--gold-ochre); }',
+      '.dyst-fp .fp-hint{ font-family:var(--serif); font-style:italic; font-size:11.5px; line-height:1.45;',
+      '  color:var(--ink-faint); margin:0 4px 7px; }',
+      '.dyst-fp .fp-list{ display:flex; flex-direction:column; gap:2px; max-height:252px; overflow-y:auto; }',
+      '.dyst-fp .fp-row{ display:flex; align-items:center; justify-content:space-between; gap:8px; width:100%;',
+      '  text-align:left; background:transparent; border:none; border-radius:7px; padding:7px 9px; cursor:pointer;',
+      '  font-family:var(--serif); font-size:15px; color:var(--ink); line-height:1.55; }',
+      '.dyst-fp .fp-row:hover{ background:rgba(196,158,74,.12); }',
+      '.dyst-fp .fp-cat{ font-family:var(--sans); font-size:10.5px; font-weight:600; letter-spacing:.05em;',
+      '  text-transform:uppercase; flex:none; }',
+      '.dyst-fp .fp-empty{ font-family:var(--serif); font-style:italic; font-size:13.5px; color:var(--ink-faint);',
+      '  padding:8px 9px; line-height:1.55; }',
       '.bn-add-hint{ font-size:11.5px; line-height:1.4; color:#a49c88; margin:0 2px 6px; }',
       '.bn-add-search{ width:100%; box-sizing:border-box; font-family:inherit; font-size:12px;',
       '  padding:6px 9px; border:1px solid #e6e0d1; border-radius:8px; margin-bottom:7px; }',
@@ -80736,18 +80826,11 @@ body.eink .stk-offer-tx,body.eink .stk-offer-btn{color:#000; border-color:#000; 
 #groupCreator .gb-who .cc-ctl{ flex:0 0 auto; font-size:15px; color:var(--ink-faint); cursor:pointer; padding:0 3px; }
 #groupCreator .gb-who .cc-ctl:hover{ color:var(--ink); }
 #groupCreator .gb-who-note{ font-family:var(--serif); font-style:italic; font-size:11.5px; color:var(--ink-faint); margin:7px 0 2px; }
-/* the picker — a plain searchable list, the same promise as Bonds' own + Element */
-.gb-who-pop{ position:fixed; z-index:var(--z-menu, 9000); width:266px; background:var(--paper);
+/* the picker card. Everything inside it is `.fp-*`, defined once in the Bonds style layer under
+   `.dyst-fp` — v.585 [Jeremy]: "use the picker style from the link element in plot grid", and one
+   picker shape across the app is the point of saying so. */
+.gb-who-pop{ position:fixed; z-index:var(--z-menu, 9000); width:272px; background:var(--paper);
   border:1px solid var(--line); border-radius:10px; padding:9px; box-shadow:var(--dlg-shadow, 0 12px 34px -14px rgba(60,44,16,.5)); }
-.gb-who-search{ width:100%; box-sizing:border-box; font-family:inherit; font-size:12px; padding:6px 8px;
-  border:1px solid var(--line); border-radius:7px; background:#fff; color:var(--ink); margin-bottom:7px; }
-.gb-who-list{ max-height:262px; overflow:auto; }
-.gb-who-row{ display:flex; width:100%; align-items:center; justify-content:space-between; gap:8px;
-  border:1px solid transparent; background:none; text-align:left; font-family:inherit; font-size:13.5px;
-  color:var(--ink); padding:6px 8px; border-radius:7px; cursor:pointer; }
-.gb-who-row:hover{ background:var(--bg2, #f6f1e6); }
-.gb-who-cat{ font-style:normal; font-size:10.5px; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-faint); }
-.gb-who-none{ font-family:var(--serif); font-style:italic; font-size:12.5px; color:var(--ink-faint); padding:6px 4px; }
 </style>
 <script id="dyst-gb-who-js">
 /* Dystoria — "Who is in it" in the Group builder, and it IS the Bonds group (v.584)
@@ -80788,9 +80871,24 @@ body.eink .stk-offer-tx,body.eink .stk-offer-btn{color:#000; border-color:#000; 
         var w = npFindEl(editKey); sub = (w && w.sub) || '';
       }
       if (!sub){
-        /* create path: read it off the Kind row's own title, which the builder writes */
-        var row = document.querySelector('#gbSlots .cc-slot .gc-word, #gbSlots .gc-word');
-        sub = row ? (row.getAttribute('data-sub') || '') : '';
+        /* v.585 — the CREATE path. The builder writes no `data-sub` on the Kind row, so reading one
+           silently returned '' and the picker never got a cast to tab by: the tabs simply did not
+           appear, which looks like a decision rather than a bug. **Ask the pool instead** — find the
+           `org` subcategory that owns the chosen word. That works because v.582 made those
+           subcategories the same eleven names Bonds uses. */
+        var row = document.querySelector('#gbSlots .gc-word');
+        var word = row ? String(row.textContent || '').trim() : '';
+        if (word && word !== '\uFF0B' && typeof getCat === 'function'){
+          var c = getCat('org');
+          ((c && c.subcategories) || []).forEach(function(sb){
+            if (sub) return;
+            var hit = (sb.words || []).some(function(x){
+              var wv = (typeof x === 'string') ? x : (x && x.w);
+              return String(wv || '').toLowerCase() === word.toLowerCase();
+            });
+            if (hit) sub = sb.name;
+          });
+        }
       }
       var t = (V() && V().typeForSub) ? V().typeForSub(sub) : '';
       return t || '';
@@ -80842,29 +80940,63 @@ body.eink .stk-offer-tx,body.eink .stk-offer-btn{color:#000; border-color:#000; 
       cast = CASTS[t] || '';
     } catch(e){}
 
-    var box = document.createElement('div'); box.id = 'gbAddWho'; box.className = 'gb-who-pop';
-    var q = document.createElement('input'); q.className = 'gb-who-search';
-    q.placeholder = 'search your elements…'; box.appendChild(q);
-    var list = document.createElement('div'); list.className = 'gb-who-list'; box.appendChild(list);
-    var draw = function(){
-      list.innerHTML = '';
+    /* v.585 [Jeremy] — the same two tabs and the same `.fp-*` shape as Bonds' own + Element and the
+       Plot grid's + link element. The two pickers do one job from two rooms, so they look and behave
+       the same; the cast the group's KIND implies is what decides the first tab. */
+    var CAST_LABEL = { being:'People', setting:'Places', concept:'Ideas', event:'Events', object:'Things', org:'Groups' };
+    function catName(c){
+      try { var g = (typeof getCat === 'function') ? getCat(c) : null; if (g && g.name) return g.name; } catch(e){}
+      return c || '';
+    }
+    var box = document.createElement('div'); box.id = 'gbAddWho'; box.className = 'gb-who-pop dyst-fp';
+    var TABBED = !!cast, tab = 'own';
+    var tabs = document.createElement('div'); tabs.className = 'fp-tabs';
+    if (TABBED) box.appendChild(tabs);
+    var q = document.createElement('input'); q.className = 'fp-search'; q.placeholder = 'Filter…';
+    q.addEventListener('click', function(ev){ ev.stopPropagation(); });
+    box.appendChild(q);
+    var hint = document.createElement('div'); hint.className = 'fp-hint'; box.appendChild(hint);
+    var list = document.createElement('div'); list.className = 'fp-list'; box.appendChild(list);
+
+    var pool = function(){
       var term = q.value.trim().toLowerCase();
-      var rows = Object.keys(by).map(function(k){ return by[k]; })
+      return Object.keys(by).map(function(k){ return by[k]; })
         .filter(function(n){ return n && n.key && n.label && !have[n.key]; })
         .filter(function(n){ return !term || String(n.label).toLowerCase().indexOf(term) >= 0; })
-        .sort(function(a, b){
-          var ac = (cast && a.cat === cast) ? 0 : 1, bc = (cast && b.cat === cast) ? 0 : 1;
-          return (ac - bc) || String(a.label).localeCompare(String(b.label));
+        .sort(function(a, b){ return String(a.label).localeCompare(String(b.label)); });
+    };
+    var draw = function(){
+      var all = pool();
+      var own = all.filter(function(n){ return n.cat === cast; });
+      var rest = all.filter(function(n){ return n.cat !== cast; });
+      if (TABBED){
+        tabs.innerHTML = '';
+        [['own', CAST_LABEL[cast] || catName(cast), own.length],
+         ['rest', 'The rest', rest.length]].forEach(function(t){
+          var b = document.createElement('button'); b.type = 'button';
+          b.className = 'fp-tab' + (tab === t[0] ? ' on' : ''); b.textContent = t[1];
+          if (t[2]){ var i = document.createElement('i'); i.className = 'fp-n'; i.textContent = String(t[2]); b.appendChild(i); }
+          b.addEventListener('click', function(ev){ ev.stopPropagation(); tab = t[0]; draw(); });
+          tabs.appendChild(b);
         });
+      }
+      hint.textContent = TABBED
+        ? ('This kind of group is mostly ' + String(CAST_LABEL[cast] || catName(cast)).toLowerCase() + '. Anything can still go in.')
+        : 'Anything in the story can go in.';
+      var rows = TABBED ? (tab === 'own' ? own : rest) : all;
+      list.innerHTML = '';
       if (!rows.length){
-        var e = document.createElement('div'); e.className = 'gb-who-none';
-        e.textContent = term ? 'Nothing by that name.' : 'Everything in the story is already in.';
+        var e = document.createElement('div'); e.className = 'fp-empty';
+        e.textContent = all.length
+          ? (tab === 'own' ? 'None of that kind left — try The rest.' : 'Nothing else left to add.')
+          : 'Everything in the story is already in.';
         list.appendChild(e); return;
       }
       rows.slice(0, 60).forEach(function(n){
-        var b = document.createElement('button'); b.type = 'button'; b.className = 'gb-who-row';
-        b.textContent = n.label;
-        var c = document.createElement('i'); c.className = 'gb-who-cat'; c.textContent = n.cat || '';
+        var b = document.createElement('button'); b.type = 'button'; b.className = 'fp-row';
+        var nm = document.createElement('span'); nm.className = 'fp-nm'; nm.textContent = n.label; b.appendChild(nm);
+        var c = document.createElement('span'); c.className = 'fp-cat'; c.textContent = catName(n.cat);
+        try { if (typeof catColor === 'function') c.style.color = catColor(n.cat); } catch(e){}
         b.appendChild(c);
         b.addEventListener('click', function(ev){
           ev.stopPropagation();
@@ -80873,6 +81005,11 @@ body.eink .stk-offer-tx,body.eink .stk-offer-btn{color:#000; border-color:#000; 
         });
         list.appendChild(b);
       });
+      if (rows.length > 60){
+        var m2 = document.createElement('div'); m2.className = 'fp-empty';
+        m2.textContent = (rows.length - 60) + ' more — narrow it with the filter.';
+        list.appendChild(m2);
+      }
     };
     q.addEventListener('input', draw); draw();
     document.body.appendChild(box);
