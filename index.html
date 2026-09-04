@@ -51761,9 +51761,14 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.591';
+  var APP_VERSION = '2026.07.20.592';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.592', date:'September 4, 2026', notes:[
+      '**Auto-arrange stops laying charts out in a long flat strip.** A rank \u2014 a row of elements the same distance from the root \u2014 used to be a single line however many stood in it, so a chart of nine could come out five thousand pixels wide and three hundred deep, which then framed at 23% zoom and read as a smear. A rank too wide for the picture now **wraps onto further lines**, kept close together so they still read as one rank, each centred on the same axis \u2014 so a wide rank sits as a stack under the one above it and the whole thing draws as a triangle rather than a rule. [Jeremy]',
+      'The target is the width at which the drawing comes out about as wide as it is tall, and it never squeezes a genuinely deep tree sideways to get there. A chart that already fitted does not move.',
+      '**A goal\u2019s label pill centres its text**, so a goal that runs to two or three lines reads as one shape instead of a straight pill around a ragged block. [Jeremy]',
+    ]},
     { v:'2026.07.20.591', date:'September 3, 2026', notes:[
       '**Things can be a group now — and the story\u2019s artefacts stop being strangers on every chart.** **Artifact** was the one kind of element with no group type and no structure of its own, so a sword, a ledger or an oven put into a group was marked *not what this chart is about* wherever you looked. There is now a **Things** cast beside People, Places, Ideas and Events. [Jeremy]',
       '**And it arrives with three kinds, not one.** A **Regalia** is things that are one thing only together \u2014 a crown with its sceptre and orb; a **Collection** is things gathered, where the gathering is the fact \u2014 a library, a hoard, an armoury; an **Apparatus** is parts that drive each other, where taking one out stops the whole. Three different stories about the same shelf of objects.',
@@ -54096,7 +54101,11 @@ body.eink .pl-secthd h3 .pl-exstar{ color:#000; }
 .pl-goalrow{ display:flex; gap:16px; align-items:flex-start; padding:11px 2px; border-bottom:1px solid rgba(120,110,90,.14); }
 .pl-goalrow:last-of-type{ border-bottom:none; }
 .pl-glabel{ flex:none; width:158px; display:flex; align-items:flex-start; padding-top:8px; }
-.pl-glabel .pl-cat{ font-size:11px; padding:4px 11px; white-space:normal; line-height:1.3; }
+/* v.592 — [Jeremy] "the goal pills should have the text centered". The badge fills the label
+   column, so a two- or three-line goal was ragged down its right edge while the pill around it was
+   straight; centring is what makes the ragged edge symmetrical and the block read as one shape. */
+.pl-glabel .pl-cat{ font-size:11px; padding:4px 11px; white-space:normal; line-height:1.3;
+  text-align:center; width:100%; box-sizing:border-box; }
 .pl-gdescwrap{ flex:1; position:relative; }
 .pl-gdesc{ width:100%; box-sizing:border-box; font-family:var(--sans); font-size:12px; color:var(--ink); background:#fffdf8;
   border:1px solid var(--line); border-radius:8px; padding:8px 34px 8px 10px; resize:vertical; min-height:46px; line-height:1.45; }
@@ -69539,6 +69548,36 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
     var rows = {};
     g.nodes.forEach(function(n){ var r = rankOf(n); (rows[r] = rows[r] || []).push(n); });
     var pos = {}, y = 20;
+    /* ---- v.592 · A RANK MAY BE MORE THAN ONE LINE ---------------------------------------
+       [Jeremy, 2026-09-03] "the auto-arrange is really making a mess — it does not look good.
+       wide and messy. it should aim to make elegant triangles that tile and stay as wide as tall,
+       not long flat arrangements."
+
+       Measured: a faction chart of nine elements came out **5,688 × 293** — a strip forty times
+       longer than it is deep, which `fitCam` then frames at 23% zoom, and at 23% a chart is a
+       smear. The cause is that a rank has always been ONE LINE however many stand in it. That was
+       invisible while a rank held three or four; v.584 put every member of a group on the page and
+       v.589 gave the chart back only the connected ones, and what was left is charts whose widest
+       rank holds nearly everybody.
+
+       A rank is a claim about DEPTH — these are the same distance from the root. It is not a claim
+       that they are in a straight line. So a rank too wide for the picture wraps onto further
+       lines, kept close together (a little over one pill apart) so they still read as one rank
+       rather than as new ranks, and each line centred on the same axis — which is what draws the
+       triangle: a wide rank sits as a stack of centred lines under the one above it, and the
+       stacks tile.
+
+       THE TARGET WIDTH is the width at which the drawing comes out square, `sqrt(total run ×
+       row step)` — and it is floored by the natural height, so a genuinely deep tree is never
+       squeezed sideways to make it square. A chart already narrower than its target does not
+       wrap at all, so nothing that looked right before changes. */
+    var _rankKeys = Object.keys(rows).map(Number).sort(function(a, b){ return a - b; });
+    var _rowStep = NH + Math.max(124, Math.min(GAPY, GAPY * ((box && box.h) || 580) / 580));
+    var _allRun = 0;
+    g.nodes.forEach(function(n){ _allRun += estW(n) + Math.max(GAPX, 158); });
+    var TARGET = Math.max(560, _rankKeys.length * _rowStep,
+                          Math.round(Math.sqrt(_allRun * _rowStep)));
+    var SUBSTEP = NH + 54;   /* between the lines of ONE rank — close enough to read as one */
     /* the gap between two nodes in a row is where their label has to go, so it is
        sized for a label rather than for looks — siblings pushed together leave
        "Sibling of" nowhere to sit but on top of one of them */
@@ -69589,9 +69628,27 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
          So the row is laid out at the spacing its labels need, and the camera zooms
          out to take it in. Spacing is a property of the drawing; scale is a property
          of the looking, and they were tangled. */
-      var total = 0; ws.forEach(function(w, i){ total += w + (i < gaps.length ? gaps[i] : 0); });
-      var x = W / 2 - total / 2;   // may go negative; fitCam frames it
-      row.forEach(function(n, i){ pos[n.key] = { x:Math.round(x), y:y }; x += ws[i] + (i < gaps.length ? gaps[i] : 0); });
+      /* v.592 — cut the rank into lines no wider than TARGET, in the order `orderRows` chose, so
+         the crossing-minimisation that ordered them is not thrown away by the wrapping. */
+      var lines = [], cur = [], curW = 0;
+      for (var li = 0; li < row.length; li++){
+        var wNext = ws[li], gPrev = (li > 0 && cur.length) ? gaps[li - 1] : 0;
+        if (cur.length && curW + gPrev + wNext > TARGET){ lines.push(cur); cur = []; curW = 0; gPrev = 0; }
+        curW += (cur.length ? gPrev : 0) + wNext;
+        cur.push(li);
+      }
+      if (cur.length) lines.push(cur);
+
+      lines.forEach(function(idxs, ln){
+        var total = 0;
+        idxs.forEach(function(ix, k){ total += ws[ix] + (k < idxs.length - 1 ? (gaps[ix] || 0) : 0); });
+        var x = W / 2 - total / 2;   // every line on the same axis — that is what makes the triangle
+        idxs.forEach(function(ix, k){
+          pos[row[ix].key] = { x:Math.round(x), y:y };
+          x += ws[ix] + (k < idxs.length - 1 ? (gaps[ix] || 0) : 0);
+        });
+        if (ln < lines.length - 1) y += SUBSTEP;   // still the same rank
+      });
       /* the stride carries the de-row stagger as well as the row, or a nudged
          segment lands in the gap belonging to the rank below it */
       /* The stride carries the de-row stagger AND the labels on every diagonal that
@@ -69987,8 +70044,19 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
       if (x1 === null || p.x > x1) x1 = p.x;
       if (low === null || p.y > low) low = p.y;
     });
-    if (x0 === null){ x0 = 20; x1 = ((box && box.w) || 920) - 180; low = 0; }
-    var span = Math.max(380, (x1 - x0) + 170);
+    var span;
+    if (x0 === null){
+      /* nothing above it — this is the whole drawing (a structure with no bonds to arrange), so it
+         takes the same square target the ranked charts take rather than running to the panel's
+         width. v.592: 20 elements came out 1320 × 289, which is a list nobody can read at a glance
+         either. */
+      x0 = 20; low = 0;
+      var run = 0; list.forEach(function(n){ run += estW(n) + 22; });
+      span = Math.max(380, Math.round(Math.sqrt(run * (NH + 18))));
+    } else {
+      /* beneath a chart: wrap to the chart's own width, so the shelf reads as its caption */
+      span = Math.max(380, (x1 - x0) + 170);
+    }
     var y = low + NH + 104;          /* the band of air is what says "these are not in the chart" */
     var x = x0;
     list.forEach(function(n){
