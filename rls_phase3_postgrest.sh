@@ -49,9 +49,11 @@ req(){ # req METHOD PATH TOKEN [DATA]
   : > /tmp/_b                       # so a failed connection reads as empty, never as stale
   local args=(-s -o /tmp/_b -w '%{http_code}' --connect-timeout 12 --max-time 40 -X "$m" "$REST/$p"
               -H "apikey: $ANON_KEY" -H "Authorization: Bearer $tok")
-  if [ -n "$data" ]; then
-    args+=(-H 'Content-Type: application/json' -H 'Prefer: return=representation' -d "$data")
-  fi
+  # Prefer goes on EVERY write, not only those with a body: PostgREST answers a DELETE with 204
+  # whether it removed nothing or removed everything, and a probe that cannot tell those apart
+  # reports a pass.
+  [ "$m" != "GET" ] && [ "$m" != "HEAD" ] && args+=(-H 'Prefer: return=representation')
+  if [ -n "$data" ]; then args+=(-H 'Content-Type: application/json' -d "$data"); fi
   curl "${args[@]}"
 }
 rows(){ # how many JSON objects came back (0 for an error object or an empty array)
@@ -92,10 +94,13 @@ for t in stories profiles subscriptions story_collaborators ai_usage story_comme
   fi
 done
 
+# `Prefer: return=representation` means a real insert comes back as the row it created, so a 2xx
+# with nothing in it created nothing. Counting the status alone was a false FAIL waiting to happen.
 code=$(req POST "subscriptions" "$ANON_KEY" '{"user_id":"00000000-0000-0000-0000-000000000000","plan":"pro","status":"active"}')
+n=$(rows)
 if unreachable "$code"; then say_note "anon subscription insert — server unreachable"
-elif [ "$code" = "200" ] || [ "$code" = "201" ]; then say_fail "anon INSERTED a subscription ($code) — THE PAID GATE IS OPEN. $(body)"
-else say_pass "anon cannot insert a subscription ($code)"; fi
+elif { [ "$code" = "200" ] || [ "$code" = "201" ]; } && [ "$n" != "0" ]; then say_fail "anon INSERTED a subscription ($code) — THE PAID GATE IS OPEN. $(body)"
+else say_pass "anon cannot insert a subscription ($code, $n rows)"; fi
 
 code=$(req PATCH "subscriptions?user_id=neq.00000000-0000-0000-0000-000000000000" "$ANON_KEY" '{"plan":"pro"}')
 n=$(rows)
@@ -153,10 +158,10 @@ PY
     say_fail "user UPGRADED THEMSELVES to pro via PostgREST ($n rows) — THE PAID GATE IS OPEN"
   else say_pass "user cannot upgrade themselves ($code, $n rows)"; fi
 
-  code=$(req POST "subscriptions" "$USER_JWT" '{"plan":"pro","status":"active"}')
+  code=$(req POST "subscriptions" "$USER_JWT" '{"plan":"pro","status":"active"}'); n=$(rows)
   if unreachable "$code"; then say_note "user subscription insert — server unreachable"
-  elif [ "$code" = "200" ] || [ "$code" = "201" ]; then say_fail "user INSERTED a subscription ($code) — THE PAID GATE IS OPEN"
-  else say_pass "user cannot insert a subscription ($code)"; fi
+  elif { [ "$code" = "200" ] || [ "$code" = "201" ]; } && [ "$n" != "0" ]; then say_fail "user INSERTED a subscription ($code) — THE PAID GATE IS OPEN"
+  else say_pass "user cannot insert a subscription ($code, $n rows)"; fi
 
   code=$(req GET "ai_usage?select=user_id&limit=200" "$USER_JWT")
   others=$(python3 - "$USER_JWT" <<'PY' 2>/dev/null || echo -1
