@@ -52010,9 +52010,14 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.600';
+  var APP_VERSION = '2026.07.20.601';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.601', date:'September 5, 2026', notes:[
+      '**The old group charts and concept maps have retired \u2014 the Bonds map is where a group is drawn now.** In **Organize groups**, the button beside each group opens it on the Bonds map, as the structure it is (a chain of command, a family tree, a blueprint), instead of opening a chart of its own. **Nothing you drew is lost:** every connection you made in a group chart or a concept map has been read by the Bonds map since it existed, so it is all already there \u2014 and the arrangements, the shapes, the colours and the branch lines are things the old charts never had. [Jeremy]',
+      '**Concept groups moved with them**, for the same reason: making, naming, mapping and arranging them is what the Bonds map does for every other kind of group.',
+      '**And a story opened on a second machine now draws those connections too** \u2014 the last reader still looking at this browser\u2019s copy instead of the story\u2019s now reads the story\u2019s.',
+    ]},
     { v:'2026.07.20.600', date:'September 5, 2026', notes:[
       '**The groups the app always allowed and could never name.** A **Household** is a place, the people in it and the things in it; an **Expedition** is people, a route, what they carry and what happens; and there are five more \u2014 **Institution · Estate · Culture · Scene · Rite**. You could always put anything in any group; what these add is a name for the mixture, and a first suggestion. Pick Household and the member picker floats the place, then the people, then the things \u2014 an ordering to propose, never a rule to satisfy. [#52, and it closes the item]',
       '**Nothing is kept out of any of them**, exactly as before: the second tab still holds the whole story.',
@@ -55665,6 +55670,11 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     if(!data.plot.sections) data.plot.sections = [];
     if(!data.plot.columns) data.plot.columns = [];
     if(!data.layers) data.layers = [];
+    /* v.601 — `conceptGroups()` carries the one-time conversion of a pre-v.4xx `data.conceptMap`
+       into named concept groups, and its only callers were the two editors that retired in this
+       build. **A migration with no caller is a migration that never runs**, so it gets one here:
+       idempotent, and it is the read path every story goes through. */
+    try{ if(typeof conceptGroups==='function') conceptGroups(); }catch(e){}
     data.__sid = sid;
     try { if (state.session) state.session.plan = data; }catch(e){}   /* by reference: no second copy */
   }
@@ -56001,6 +56011,9 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
   // The role/bucket is story-scoped: read the first frame that has it, write it onto the element in every frame.
   function elemBucket(key){ try{ var frames=(state&&state.frames)||[]; for(var i=0;i<frames.length;i++){ var ws=(frames[i].prompt&&frames[i].prompt.words)||[]; for(var j=0;j<ws.length;j++){ if(ws[j]&&wordKey(ws[j])===key && ws[j].bucket) return ws[j].bucket; } } }catch(e){} return ''; }
   function setElemBucket(key, bucket){ try{ var frames=(state&&state.frames)||[]; frames.forEach(function(fr){ var ws=(fr&&fr.prompt&&fr.prompt.words)||[]; ws.forEach(function(w){ if(w && wordKey(w)===key){ if(bucket) w.bucket=bucket; else delete w.bucket; } }); }); if(typeof syncFramesToSession==='function') syncFramesToSession(); if(typeof scheduleAutosave==='function') scheduleAutosave(); }catch(e){} }
+  /* v.601 — exported so the harness can press the same door the category badge presses. The badge
+     is inside a rendered tab; reaching it by selector is a test of the tab's markup, not of the
+     dialog, and the dialog is what changed. */
   function openCatOrganizer(catId){
     var a=api(); if(!a) return;
     if(typeof closeMenus==='function') closeMenus();
@@ -56015,34 +56028,21 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     panel.appendChild(head);
     var sub=document.createElement('div'); sub.className='cat-org-sub'; sub.textContent='Give each '+singularOf(cName)+' a role — a quiet way to sort the cast without cluttering the map.';
     panel.appendChild(sub);
+    /* v.601 — **concept groups live on the Bonds map now.** This block was the only place they
+       could be made, renamed, mapped or deleted, and every one of those is a thing Bonds does for
+       every other kind of group — with the same picture, the same vocabulary and the same
+       arrangement. Removing a control means checking what it was the last way into (v.421): the
+       groups themselves are read into Bonds as `src:concepts:` groups, so they are all still there
+       and the door below opens on them. */
     if(catId==='concept'){
       var cgWrap=document.createElement('div'); cgWrap.className='cat-org-cgroups';
-      var cgHead=document.createElement('div'); cgHead.className='cat-org-cglabel'; cgHead.textContent='Concept maps — group related concepts and map how they relate'; cgWrap.appendChild(cgHead);
-      var cgList=document.createElement('div'); cgList.className='cat-org-cglist'; cgWrap.appendChild(cgList);
-      function renderCG(){
-        cgList.innerHTML='';
-        var gs=conceptGroups();
-        if(!gs.length){ var e=document.createElement('div'); e.className='cat-org-cgempty'; e.textContent='No concept groups yet — make one to map a cluster of related concepts.'; cgList.appendChild(e); }
-        gs.forEach(function(g){
-          var row=document.createElement('div'); row.className='cat-org-cgrow';
-          var nm=document.createElement('span'); nm.className='cat-org-cgname'; nm.textContent=g.name; nm.title='Rename';
-          nm.addEventListener('click', function(ev){ ev.stopPropagation(); (async function(){ var nn=(typeof sitePrompt==='function')?await sitePrompt('Rename concept group', g.name):null; if(nn===null) return; g.name=(nn||'').trim()||g.name; save(); renderCG(); })(); });
-          row.appendChild(nm);
-          var mn=(g.map&&g.map.nodes)?g.map.nodes.length:0;
-          var cnt=document.createElement('span'); cnt.className='cat-org-cgcount'; cnt.textContent=mn+' concept'+(mn===1?'':'s'); row.appendChild(cnt);
-          var mapb=document.createElement('button'); mapb.type='button'; mapb.className='cat-org-cgmap'; mapb.innerHTML=(ICONS.link||'')+'<span>Map</span>'; mapb.title='Open this group’s concept map';
-          mapb.addEventListener('click', function(ev){ ev.stopPropagation(); if(bd.parentNode) bd.parentNode.removeChild(bd); openConceptMap(g.id); });
-          row.appendChild(mapb);
-          var del=document.createElement('button'); del.type='button'; del.className='cat-org-cgdel'; del.innerHTML='&times;'; del.title='Delete this group';
-          del.addEventListener('click', function(ev){ ev.stopPropagation(); (async function(){ var ok=true; if(typeof siteConfirm==='function'){ ok=await siteConfirm('Delete concept group “'+g.name+'”? The map is removed; the concepts themselves are untouched.','Delete'); } if(!ok) return; data.conceptGroups=conceptGroups().filter(function(z){ return z!==g; }); save(); renderCG(); })(); });
-          row.appendChild(del);
-          cgList.appendChild(row);
-        });
-      }
-      var cgAdd=document.createElement('button'); cgAdd.type='button'; cgAdd.className='cat-org-mapbtn'; cgAdd.innerHTML='<span>＋ Concept group</span>'; cgAdd.title='Create a named group and map how its concepts relate';
-      cgAdd.addEventListener('click', function(e){ e.stopPropagation(); (async function(){ var nm=(typeof sitePrompt==='function')?await sitePrompt('Name this concept group',''):'Concepts'; if(nm===null) return; addConceptGroup(nm||'Concepts'); renderCG(); })(); });
-      cgWrap.appendChild(cgAdd);
-      renderCG();
+      var cgHead=document.createElement('div'); cgHead.className='cat-org-cglabel';
+      cgHead.textContent='Concept groups \u2014 make them, map them and arrange them on the Bonds map.';
+      cgWrap.appendChild(cgHead);
+      var cgGo=document.createElement('button'); cgGo.type='button'; cgGo.className='cat-org-mapbtn';
+      cgGo.innerHTML='<span>Open Bonds</span>'; cgGo.title='Concept groups and their maps live on the Bonds map';
+      cgGo.addEventListener('click', function(e){ e.stopPropagation(); openInBonds(null); });
+      cgWrap.appendChild(cgGo);
       panel.appendChild(cgWrap);
     }
     var body=document.createElement('div'); body.className='cat-org-body'; panel.appendChild(body);
@@ -56064,7 +56064,20 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
           if(cur) mi.push({ label:'Clear role', on:function(){ setElemBucket(it.key, ''); render(); paintTab(); } });
           if(typeof arcMenu==='function') arcMenu(ev.clientX, ev.clientY, mi);
         });
-        if(catId==='org'){ var md=groupTreeMode(it.key); var tb=document.createElement('button'); tb.type='button'; tb.className='cat-org-tree'; var lbl=(md==='hierarchy')?'Org':'Tree'; tb.title='Open this group’s '+(md==='hierarchy'?'org chart':(md==='family'?'family tree':'relations web')); tb.innerHTML=(ICONS.focus||'')+'<span>'+lbl+'</span>'; tb.addEventListener('click', function(ev){ ev.stopPropagation(); openGroupTree(it.key, it.label); }); r.appendChild(tb); }
+        /* v.601 [Jeremy] — this button used to open the group's own chart, in one of three modes,
+           on a canvas of its own. **It goes to the Bonds map now**, which is where that group already
+           lives: it says so plainly rather than naming a mode, and it carries the structure the group
+           opens on so a writer knows what they are about to see. */
+        if(catId==='org'){
+          var tb=document.createElement('button'); tb.type='button'; tb.className='cat-org-tree';
+          var _gp=null; try{ _gp=(window.DYSTGROUPS&&window.DYSTGROUPS.forEl)?window.DYSTGROUPS.forEl(it.key):null; }catch(e){}
+          tb.title = _gp && _gp.lensName
+            ? ('Open this group on the Bonds map — as a '+String(_gp.lensName).toLowerCase())
+            : 'Open this group on the Bonds map';
+          tb.innerHTML=(ICONS.focus||'')+'<span>Bonds</span>';
+          tb.addEventListener('click', function(ev){ ev.stopPropagation(); openGroupTree(it.key, it.label); });
+          r.appendChild(tb);
+        }
         r.appendChild(sel); return r;
       }
       buckets.forEach(function(b){ if(!groups[b].length) return; var gh=document.createElement('div'); gh.className='cat-org-ghead'; gh.textContent=b; body.appendChild(gh); groups[b].forEach(function(it){ body.appendChild(rowFor(it)); }); });
@@ -56075,6 +56088,8 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     bd.addEventListener('click', function(e){ if(e.target===bd && bd.parentNode) bd.parentNode.removeChild(bd); });
     document.body.appendChild(bd);
   }
+
+  try{ window.__planOpenCatOrganizer = openCatOrganizer; }catch(e){}
 
   /* ---------- Thread organizer (R8, threads category) ----------
      Threads aren't word-elements, so they get their own drawer. Two axes: structural ROLE (its weight in the plot) and
@@ -56169,8 +56184,6 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
      data.groupTrees[groupKey] = { mode:'family'|'hierarchy'|'relations', nodes:[{id,beingKey,label,x,y}],
      edges:[{from,to,type}] }. Each edge carries a connection type; the pool of types depends on the mode,
      and you can add your own (kept in data.groupTreeTypes[mode]), just like connections on the map. */
-  var TREE_MODES=['family','hierarchy','relations'];
-  var TREE_MODE_LABEL={ family:'Family tree', hierarchy:'Hierarchy', relations:'Relations' };
   var TREE_TYPE_POOLS={
     family:['Parent of','Child of','Sibling of','Twin of','Spouse of','Married to','Partner of','Betrothed to','Widow(er) of','Grandparent of','Grandchild of','Guardian of','Ward of','Adoptive parent of','Adopted by','Half-sibling of','Step-parent of','Step-child of','Cousin of','Aunt/Uncle of','Niece/Nephew of','Kin to','Chosen family with','Estranged from','Disowned by'],
     hierarchy:['Commands','Reports to','Answers to','Serves under','Deputy of','Second to','Lieutenant of','Oversees','Advises','Mentor of','Apprenticed to','Successor to','Founded','Sworn to','Superior of','Subordinate of','Represents','Rival of','Defected from'],
@@ -56178,18 +56191,7 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
   };
   // Family-mode relationship shapes: partners/siblings share a generation (drawn side by side);
   // 'down' = from is the parent (child sits below), 'up' = from is the child (parent sits above).
-  var FAM_PARTNER=['Spouse of','Married to','Partner of','Betrothed to','Widow(er) of'];
-  var FAM_SIBLING=['Sibling of','Twin of','Half-sibling of','Cousin of'];
-  var FAM_PARENT_FROM=['Parent of','Grandparent of','Guardian of','Adoptive parent of','Step-parent of','Aunt/Uncle of'];
-  var FAM_CHILD_FROM=['Child of','Grandchild of','Ward of','Adopted by','Step-child of','Niece/Nephew of'];
-  function famClass(type){ if(FAM_PARTNER.indexOf(type)>=0) return 'partner'; if(FAM_SIBLING.indexOf(type)>=0) return 'sibling'; if(FAM_PARENT_FROM.indexOf(type)>=0) return 'down'; if(FAM_CHILD_FROM.indexOf(type)>=0) return 'up'; return 'neutral'; }
   function groupTrees(){ if(!data.groupTrees) data.groupTrees={}; return data.groupTrees; }
-  function groupTreeMode(key){ try{ var m=(data.groupTrees||{})[key]; var md=(m&&m.mode); return (TREE_MODES.indexOf(md)>=0)?md:'hierarchy'; }catch(e){ return 'hierarchy'; } }
-  function getGroupTree(key){ var m=groupTrees(); var t=m[key]; if(!t){ t={ mode:'hierarchy', nodes:[], edges:[] }; m[key]=t; } if(!Array.isArray(t.nodes)) t.nodes=[]; if(!Array.isArray(t.edges)) t.edges=[]; if(TREE_MODES.indexOf(t.mode)<0) t.mode='hierarchy'; return t; }
-  function treeTypePool(mode){ return TREE_TYPE_POOLS[mode]||TREE_TYPE_POOLS.relations; }
-  function treeCustomTypes(mode){ if(!data.groupTreeTypes) data.groupTreeTypes={}; if(!Array.isArray(data.groupTreeTypes[mode])) data.groupTreeTypes[mode]=[]; return data.groupTreeTypes[mode]; }
-  function treeAllTypes(mode){ var base=treeTypePool(mode).slice(); treeCustomTypes(mode).forEach(function(w){ if(base.indexOf(w)<0) base.push(w); }); return base; }
-  function treeAddCustomType(mode,val){ val=(val||'').trim(); if(!val) return; var cu=treeCustomTypes(mode); if(cu.indexOf(val)<0 && treeTypePool(mode).indexOf(val)<0){ cu.push(val); save(); } }
   function treeBeings(){ var a=api(); if(!a) return []; var out=[], seen={}; (a.storyElements()||[]).forEach(function(o){ if(o && o.w && o.w.cat==='being'){ if(seen[o.key]) return; seen[o.key]=1; out.push({ key:o.key, label:a.displayName(o.w) }); } }); return out; }
   function groupLabelFor(gk){ try{ var a=api(); var w=(a&&a.npFindEl)?a.npFindEl(gk):null; return w?a.displayName(w):''; }catch(e){ return ''; } }
   // The trees and the map stay separate, but as a convenience: when the writer links two beings on the
@@ -56211,15 +56213,6 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
   // Each group-chart connection gets its OWN notepad note, in a namespace kept fully separate from map connections.
   var GT_SEP='||TRAIT||';
   function gconnKey(groupKey, beingA, beingB){ var lo=(beingA<beingB)?beingA:beingB, hi=(beingA<beingB)?beingB:beingA; return 'grouptree:'+groupKey+GT_SEP+'@conn:'+lo+'~~'+hi; }
-  function gconnHasNote(key){ try{ var a=api(); return !!(a && a.getPlainNote && a.getPlainNote(key)); }catch(e){ return false; } }
-  function openGConnNotes(key){ try{
-    if(typeof saveNotepad==='function') saveNotepad();
-    if(typeof npSelect==='function') npSelect(key); else { state.npActive=key; }
-    state.cardTrait=null;
-    document.body.classList.add('np-open');
-    var tb=document.getElementById('npTab'); if(tb){ var l=tb.querySelector('.npt-lbl'); if(l) l.textContent='Hide'; }
-    var n=document.getElementById('notepad'); if(n) setTimeout(function(){ try{ n.focus(); }catch(e){} }, 320);
-  }catch(e){} }
   // Read a group-chart connection from the OTHER being's side: "Parent of" seen from the child reads "Child of".
   var GT_INVERT={ 'Parent of':'Child of','Child of':'Parent of','Grandparent of':'Grandchild of','Grandchild of':'Grandparent of','Guardian of':'Ward of','Ward of':'Guardian of','Adoptive parent of':'Adopted by','Adopted by':'Adoptive parent of','Step-parent of':'Step-child of','Step-child of':'Step-parent of','Aunt/Uncle of':'Niece/Nephew of','Niece/Nephew of':'Aunt/Uncle of','Mentor of':'Apprenticed to','Apprenticed to':'Mentor of','Commands':'Answers to','Answers to':'Commands','Oversees':'Reports to','Reports to':'Oversees','Superior of':'Subordinate of','Subordinate of':'Superior of' };
   var GT_SELF={}; ['Spouse of','Married to','Partner of','Betrothed to','Widow(er) of','Sibling of','Twin of','Half-sibling of','Cousin of','Kin to','Chosen family with','Estranged from','Disowned by','Rival of','Rivals','Allied with','Befriends','Close to','Feuds with','Partners with','Conspires with','Distrusts','Once loved','Shares a secret with'].forEach(function(x){ GT_SELF[x]=1; });
@@ -56280,428 +56273,77 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     var mk=document.createElementNS(NS,'marker'); mk.setAttribute('id',id); mk.setAttribute('viewBox','0 0 10 10'); mk.setAttribute('refX','8'); mk.setAttribute('refY','5'); mk.setAttribute('markerWidth','9'); mk.setAttribute('markerHeight','9'); mk.setAttribute('markerUnits','userSpaceOnUse'); mk.setAttribute('orient','auto');
     var p=document.createElementNS(NS,'path'); p.setAttribute('d','M0 1 L9 5 L0 9 z'); p.setAttribute('class','gtree-arrow'); mk.appendChild(p); defs.appendChild(mk); svg.appendChild(defs);
   }
-  function openGroupTree(groupKey, groupLabel){
-    var a=api(); if(!a) return;
-    var t=getGroupTree(groupKey);
-    var old=document.getElementById('gtreeBd'); if(old && old.parentNode) old.parentNode.removeChild(old);
-    var pendingFrom=null, nodeEls={};
-    var bd=document.createElement('div'); bd.id='gtreeBd'; bd.className='gtree-bd';
-    var panel=document.createElement('div'); panel.className='gtree';
-    var head=document.createElement('div'); head.className='gtree-head';
-    var title=document.createElement('div'); title.className='gtree-title';
-    var tl=document.createElement('span'); title.appendChild(tl);
-    var dot0=document.createElement('span'); dot0.textContent='·'; dot0.style.opacity='.5'; title.appendChild(dot0);
-    var gn=document.createElement('span'); gn.className='gtree-gname'; gn.textContent=groupLabel||'Group'; title.appendChild(gn);
-    head.appendChild(title);
-    var sp=document.createElement('span'); sp.className='gtree-spacer'; head.appendChild(sp);
-    var mode=document.createElement('div'); mode.className='gtree-mode'; var modeBtns={};
-    TREE_MODES.forEach(function(mk){ var b=document.createElement('button'); b.textContent=TREE_MODE_LABEL[mk]; b.addEventListener('click', function(){ if(t.mode!==mk){ t.mode=mk; save(); paintMode(); render(); } }); modeBtns[mk]=b; mode.appendChild(b); });
-    head.appendChild(mode);
-    var addb=document.createElement('button'); addb.className='gtree-btn'; addb.textContent='+ Member'; head.appendChild(addb);
-    var arrb=document.createElement('button'); arrb.className='gtree-btn'; arrb.textContent='Arrange'; arrb.title='Tidy the layout from the links you drew'; head.appendChild(arrb);
-    var xb=document.createElement('button'); xb.className='gtree-x'; xb.innerHTML='&times;'; xb.title='Close'; head.appendChild(xb);
-    panel.appendChild(head);
-    var hint=document.createElement('div'); hint.className='gtree-hint'; panel.appendChild(hint);
-    var scroll=document.createElement('div'); scroll.className='gtree-scroll';
-    var canvas=document.createElement('div'); canvas.className='gtree-canvas';
-    var svg=document.createElementNS('http://www.w3.org/2000/svg','svg'); svg.setAttribute('class','gtree-svg');
-    canvas.appendChild(svg); scroll.appendChild(canvas); panel.appendChild(scroll);
-    bd.appendChild(panel);
+  /* ---- v.601 · THE GROUP CHART EDITOR RETIRES -------------------------------------------------
+     [Jeremy, 2026-09-05] "the Org button in the organize group button should shortcut to that group
+     in the Bonds section. the old org system can be removed now that we have the bonds."
 
-    function hintText(){
-      if(t.mode==='family') return 'Add members, then drag to arrange. Drag from a member’s link handle to another (or click the handle, then a member) to place the second as a child below — then name the relationship on the link.';
-      if(t.mode==='relations') return 'Add members, then drag to arrange. Drag from a member’s link handle to another to link them, then name how they relate.';
-      return 'Add members, then drag to arrange. Drag from a member’s link handle to another (or click the handle, then a member) to place the second as a report below — then name the connection on the link.';
-    }
-    function paintMode(){ TREE_MODES.forEach(function(mk){ if(modeBtns[mk]) modeBtns[mk].classList.toggle('on', t.mode===mk); }); tl.textContent=(TREE_MODE_LABEL[t.mode]||'Hierarchy'); hint.textContent=hintText(); }
-    function closeTree(){ if(bd.parentNode) bd.parentNode.removeChild(bd); }
-    xb.addEventListener('click', closeTree);
-    addb.addEventListener('click', function(ev){ ev.stopPropagation(); openAddMember(addb); });
-    arrb.addEventListener('click', function(){ autoArrange(); });
+     **The charts were never a separate set of facts.** `BONDS.graph()` has read `data.groupTrees`
+     as one of its five relationship stores since v.397, and v.410 made an org element's member
+     chart appear in Bonds as a group rather than something to COPY into one — _"the chart keeps its
+     members and Bonds reads them, so there is one list and no question of which wins."_ What this
+     canvas was, by the end, is a **second place to edit relationships the map already draws**, with
+     its own three modes, its own type pools and its own node positions — and #52 finished the job
+     of making the other place better at all three.
 
-    function nodeById(id){ for(var i=0;i<t.nodes.length;i++){ if(t.nodes[i].id===id) return t.nodes[i]; } return null; }
-    function edgeExists(f,to){ return t.edges.some(function(e){ return e.from===f && e.to===to; }); }
-    function addEdge(f,to){ if(f===to || edgeExists(f,to) || edgeExists(to,f)) return; t.edges.push({ from:f, to:to }); save(); render(); }
-    function removeEdge(f,to){ t.edges=t.edges.filter(function(e){ return !(e.from===f && e.to===to); }); save(); render(); }
-    function removeNode(id){ t.nodes=t.nodes.filter(function(n){ return n.id!==id; }); t.edges=t.edges.filter(function(e){ return e.from!==id && e.to!==id; }); if(pendingFrom===id) pendingFrom=null; save(); render(); }
-    // In family mode, spouses/siblings are same-generation, so their link reads horizontally; everything else is a top→down descent line.
-    function edgeOrient(e){ if(t.mode!=='family') return 'v'; var c=famClass(e.type); return (c==='partner'||c==='sibling')?'h':'v'; }
-    function edgeGeom(e){
-      var fe=nodeEls[e.from], te=nodeEls[e.to], fn=nodeById(e.from), tn=nodeById(e.to); if(!fe||!te||!fn||!tn) return null;
-      if(edgeOrient(e)==='h'){
-        var fromLeft=fn.x<=tn.x; var Ln=fromLeft?fn:tn, Le=fromLeft?fe:te, Rn=fromLeft?tn:fn, Re=fromLeft?te:fe;
-        var x1=Ln.x+Le.offsetWidth, y1=Ln.y+Le.offsetHeight/2, x2=Rn.x, y2=Rn.y+Re.offsetHeight/2, mx=(x1+x2)/2;
-        return { d:'M'+x1+' '+y1+' C '+mx+' '+y1+' '+mx+' '+y2+' '+x2+' '+y2, lx:(x1+x2)/2, ly:(y1+y2)/2, kind:famClass(e.type) };
-      }
-      var vx1=fn.x+fe.offsetWidth/2, vy1=fn.y+fe.offsetHeight, vx2=tn.x+te.offsetWidth/2, vy2=tn.y, vmy=(vy1+vy2)/2;
-      return { d:'M'+vx1+' '+vy1+' C '+vx1+' '+vmy+' '+vx2+' '+vmy+' '+vx2+' '+vy2, lx:(vx1+vx2)/2, ly:vmy, kind:(t.mode==='family'?famClass(e.type):'') };
-    }
-    function redrawEdges(){
-      while(svg.firstChild) svg.removeChild(svg.firstChild);
-      gmArrowDefs(svg, 'gtArrow');
-      Array.prototype.slice.call(canvas.querySelectorAll('.gtree-elabel')).forEach(function(el){ if(el.parentNode) el.parentNode.removeChild(el); });
-      t.edges.forEach(function(e){
-        var g=edgeGeom(e); if(!g) return;
-        var path=document.createElementNS('http://www.w3.org/2000/svg','path');
-        path.setAttribute('d', g.d);
-        path.setAttribute('class','gtree-edge'+(g.kind==='partner'?' gtree-edge-partner':(g.kind==='sibling'?' gtree-edge-sibling':''))); svg.appendChild(path);
-        if(g.kind!=='partner' && g.kind!=='sibling') path.setAttribute('marker-end','url(#gtArrow)');   // directional links get an arrow; symmetric spouse/sibling links stay plain
-        var lab=document.createElement('div'); lab.className='gtree-elabel'+(e.type?'':' empty'); lab.style.left=g.lx+'px'; lab.style.top=g.ly+'px';
-        var tn=document.createElement('span'); tn.className='gtree-etype'; tn.textContent=e.type||'+ type'; tn.title='Set the connection type';
-        tn.addEventListener('click', function(ev){ ev.stopPropagation(); openTypePicker(lab, e); }); lab.appendChild(tn);
-        var ex=document.createElement('span'); ex.className='gtree-ex'; ex.innerHTML=ICONS.x; ex.title='Remove connection';
-        ex.addEventListener('click', function(ev){ ev.stopPropagation(); removeEdge(e.from,e.to); }); lab.appendChild(ex);
-        canvas.appendChild(lab);
-      });
-    }
-    function addEdgeAndType(f,to){ if(f===to || edgeExists(f,to) || edgeExists(to,f)) return; var e={ from:f, to:to, type:'' }; t.edges.push(e); save(); render(); openTypePicker(nodeEls[to]||addb, e); }
-    function openTypePicker(anchor, edge){
-      var old2=document.getElementById('gtreePick'); if(old2 && old2.parentNode) old2.parentNode.removeChild(old2);
-      var pk=document.createElement('div'); pk.id='gtreePick'; pk.className='gtree-pick';
-      var inp=document.createElement('input'); inp.type='text'; inp.placeholder='Search or name a connection…'; pk.appendChild(inp);
-      var list=document.createElement('div'); list.className='gtree-pick-list'; pk.appendChild(list);
-      function close(){ if(pk.parentNode) pk.parentNode.removeChild(pk); document.removeEventListener('pointerdown', outside, true); }
-      function choose(val){ edge.type=val; save(); render(); close(); }
-      function paint(){ list.innerHTML='';
-        var qy=(inp.value||'').trim(), ql=qy.toLowerCase(); var all=treeAllTypes(t.mode);
-        if(qy && all.map(function(w){return w.toLowerCase();}).indexOf(ql)<0){ var cr=document.createElement('div'); cr.className='gtree-pick-it gtree-pick-new'; cr.textContent='+ Use “'+qy+'”'; cr.addEventListener('click', function(){ treeAddCustomType(t.mode, qy); choose(qy); }); list.appendChild(cr); }
-        var rows=all.filter(function(w){ return !ql || w.toLowerCase().indexOf(ql)>=0; });
-        rows.forEach(function(w){ var it=document.createElement('div'); it.className='gtree-pick-it'+(edge.type===w?' on':''); it.textContent=w; it.addEventListener('click', function(){ choose(w); }); list.appendChild(it); });
-        if(!rows.length && !qy){ var e=document.createElement('div'); e.className='gtree-pick-empty'; e.textContent='Type a connection.'; list.appendChild(e); }
-      }
-      inp.addEventListener('input', paint); paint();
-      document.body.appendChild(pk);
-      var r=(anchor&&anchor.getBoundingClientRect)?anchor.getBoundingClientRect():{left:120,bottom:120}; var w=280;
-      pk.style.left=Math.max(8, Math.min(r.left, window.innerWidth-w-8))+'px'; pk.style.top=Math.min((r.bottom||120)+6, window.innerHeight-60)+'px';
-      setTimeout(function(){ try{ inp.focus(); }catch(_){} }, 10);
-      function outside(ev){ if(!pk.contains(ev.target)) close(); }
-      setTimeout(function(){ document.addEventListener('pointerdown', outside, true); }, 0);
-    }
-    function beginConnect(srcId, ev){   // rubber-band drag from a member's link handle to another member
-      var fn=nodeById(srcId), fe=nodeEls[srcId]; if(!fn||!fe) return;
-      var sx0=fn.x+fe.offsetWidth/2, sy0=fn.y+fe.offsetHeight;
-      var temp=document.createElementNS('http://www.w3.org/2000/svg','path'); temp.setAttribute('class','gtree-edge gtree-temp'); svg.appendChild(temp);
-      var moved=false, startX=ev.clientX, startY=ev.clientY;
-      function pt(cx,cy){ var r=canvas.getBoundingClientRect(); return { x:cx-r.left, y:cy-r.top }; }
-      function draw(cx,cy){ var e=pt(cx,cy); var my=(sy0+e.y)/2; temp.setAttribute('d','M'+sx0+' '+sy0+' C '+sx0+' '+my+' '+e.x+' '+my+' '+e.x+' '+e.y); }
-      draw(startX,startY);
-      function mv(e2){ if(Math.abs(e2.clientX-startX)+Math.abs(e2.clientY-startY)>4) moved=true; draw(e2.clientX,e2.clientY); }
-      function up(e2){
-        document.removeEventListener('pointermove',mv,true); document.removeEventListener('pointerup',up,true); if(temp.parentNode) temp.parentNode.removeChild(temp);
-        var nd=(document.elementFromPoint(e2.clientX,e2.clientY)); nd=(nd&&nd.closest)?nd.closest('.gtree-node'):null; var tgtId=(nd&&nd.dataset)?nd.dataset.nid:null;
-        if(moved){ if(tgtId && tgtId!==srcId){ addEdgeAndType(srcId, tgtId); } pendingFrom=null; render(); }
-        else { pendingFrom=(pendingFrom===srcId)?null:srcId; render(); }
-      }
-      document.addEventListener('pointermove',mv,true); document.addEventListener('pointerup',up,true);
-    }
-    function buildNode(n){
-      var el=document.createElement('div'); el.className='gtree-node'+(pendingFrom===n.id?' pending':''); el.dataset.nid=n.id; el.style.left=((n.x||60))+'px'; el.style.top=((n.y||60))+'px'; nodeEls[n.id]=el;
-      var link=document.createElement('span'); link.className='gtree-nic gtree-link'; link.title='Drag to another member to link — or click, then click a member'; link.innerHTML=ICONS.link;
-      link.addEventListener('pointerdown', function(ev){ ev.stopPropagation(); ev.preventDefault(); beginConnect(n.id, ev); });
-      el.appendChild(link);
-      var nm=document.createElement('span'); nm.className='gt-nm'; nm.textContent=n.label||'(member)'; el.appendChild(nm);
-      var f=document.createElement('span'); f.className='gtree-nic'; f.title='Notes'; f.innerHTML=ICONS.feather;
-      f.addEventListener('pointerdown', function(ev){ ev.stopPropagation(); });
-      f.addEventListener('click', function(ev){ ev.stopPropagation(); if(n.beingKey){ closeTree(); a.notesForKey(n.beingKey); } });
-      el.appendChild(f);
-      var x=document.createElement('span'); x.className='gtree-nic'; x.title='Remove from tree'; x.innerHTML=ICONS.x;
-      x.addEventListener('pointerdown', function(ev){ ev.stopPropagation(); });
-      x.addEventListener('click', function(ev){ ev.stopPropagation(); removeNode(n.id); });
-      el.appendChild(x);
-      el.addEventListener('pointerdown', function(ev){
-        if(pendingFrom && pendingFrom!==n.id){ addEdgeAndType(pendingFrom, n.id); pendingFrom=null; return; }
-        if(pendingFrom===n.id) return;
-        var sx=ev.clientX, sy=ev.clientY, ox=n.x||60, oy=n.y||60, moved=false;
-        try{ el.setPointerCapture(ev.pointerId); }catch(_){}
-        el.classList.add('dragging');
-        function mv(e2){ var dx=e2.clientX-sx, dy=e2.clientY-sy; if(Math.abs(dx)+Math.abs(dy)>3) moved=true; n.x=Math.max(0,ox+dx); n.y=Math.max(0,oy+dy); el.style.left=n.x+'px'; el.style.top=n.y+'px'; redrawEdges(); }
-        function up(){ try{ el.releasePointerCapture(ev.pointerId); }catch(_){} el.removeEventListener('pointermove',mv); el.removeEventListener('pointerup',up); el.classList.remove('dragging'); if(moved) save(); }
-        el.addEventListener('pointermove',mv); el.addEventListener('pointerup',up);
-      });
-      return el;
-    }
-    function render(){
-      nodeEls={};
-      Array.prototype.slice.call(canvas.querySelectorAll('.gtree-node,.gtree-empty')).forEach(function(el){ if(el.parentNode) el.parentNode.removeChild(el); });
-      if(!t.nodes.length){ var em=document.createElement('div'); em.className='gtree-empty'; em.textContent='No members yet — add the characters who belong to this group with “+ Member”.'; canvas.appendChild(em); redrawEdges(); return; }
-      t.nodes.forEach(function(n){ canvas.appendChild(buildNode(n)); });
-      redrawEdges();
-    }
-    // measurement helpers so Arrange leaves room for the actual node + connection-pill sizes
-    function nodeW(id){ var el=nodeEls[id]; return (el&&el.offsetWidth)||150; }
-    function nodeH(id){ var el=nodeEls[id]; return (el&&el.offsetHeight)||30; }
-    function edgeBetween(a,b){ for(var i=0;i<t.edges.length;i++){ var e=t.edges[i]; if((e.from===a&&e.to===b)||(e.from===b&&e.to===a)) return e; } return null; }
-    function measureLabelSize(text){
-      var el=document.createElement('div'); el.className='gtree-elabel'; el.style.visibility='hidden'; el.style.left='-9999px'; el.style.top='-9999px';
-      var tn=document.createElement('span'); tn.className='gtree-etype'; tn.textContent=text||'+ type'; el.appendChild(tn);
-      var ex=document.createElement('span'); ex.className='gtree-ex'; ex.innerHTML=ICONS.x; el.appendChild(ex);
-      canvas.appendChild(el); var w=el.offsetWidth, h=el.offsetHeight; if(el.parentNode) el.parentNode.removeChild(el); return { w:w, h:h };
-    }
-    function maxLabelH(){ var m=0; t.edges.forEach(function(e){ var s=measureLabelSize(e.type); if(s.h>m) m=s.h; }); return m; }
-    function maxNodeH(){ var m=0; t.nodes.forEach(function(n){ var h=nodeH(n.id); if(h>m) m=h; }); return m; }
-    // vertical row step: parent + child never overlap the connection pill sitting between the rows
-    function rowStep(base){ return Math.max(base||120, maxNodeH()+maxLabelH()+40); }
-    function familyArrange(){
-      var nodes=t.nodes, edges=t.edges, idset={}; nodes.forEach(function(n){ idset[n.id]=n; });
-      // couples: union-find over partner edges so spouses stay adjacent as one unit
-      var cf={}; nodes.forEach(function(n){ cf[n.id]=n.id; });
-      function cfind(x){ while(cf[x]!==x){ cf[x]=cf[cf[x]]; x=cf[x]; } return x; }
-      function cunion(a,b){ var ra=cfind(a), rb=cfind(b); if(ra!==rb) cf[ra]=rb; }
-      var children={}, parents={}, sameGen=[];
-      nodes.forEach(function(n){ children[n.id]=[]; parents[n.id]=[]; });
-      edges.forEach(function(e){ if(!idset[e.from]||!idset[e.to]) return; var c=famClass(e.type);
-        if(c==='partner'){ cunion(e.from,e.to); sameGen.push([e.from,e.to]); }
-        else if(c==='sibling'){ sameGen.push([e.from,e.to]); }
-        else if(c==='down'){ children[e.from].push(e.to); parents[e.to].push(e.from); }
-        else if(c==='up'){ children[e.to].push(e.from); parents[e.from].push(e.to); }
-      });
-      // generation assignment by relaxation: child sits one row below its parent; partners/siblings equalise
-      var gen={}; nodes.forEach(function(n){ gen[n.id]=0; });
-      for(var pass=0; pass<nodes.length+4; pass++){ var changed=false;
-        edges.forEach(function(e){ var c=famClass(e.type), pa, ch; if(c==='down'){ pa=e.from; ch=e.to; } else if(c==='up'){ pa=e.to; ch=e.from; } else return; if(gen[ch]<gen[pa]+1){ gen[ch]=gen[pa]+1; changed=true; } });
-        sameGen.forEach(function(pr){ var m=Math.max(gen[pr[0]],gen[pr[1]]); if(gen[pr[0]]!==m){ gen[pr[0]]=m; changed=true; } if(gen[pr[1]]!==m){ gen[pr[1]]=m; changed=true; } });
-        if(!changed) break;
-      }
-      var byGen={}; nodes.forEach(function(n){ (byGen[gen[n.id]]=byGen[gen[n.id]]||[]).push(n); });
-      var gens=Object.keys(byGen).map(Number).sort(function(a,b){ return a-b; });
-      var placedX={}, BASEGAP=48, UNITGAP=72, HPAD=12, STARTX=80, STARTY=50;
-      var ROWY=rowStep(130);
-      gens.forEach(function(g){
-        var rowNodes=byGen[g], units={}, order=[];
-        rowNodes.forEach(function(n){ var r=cfind(n.id); if(!units[r]){ units[r]=[]; order.push(r); } units[r].push(n); });
-        function unitParentX(u){ var xs=[]; units[u].forEach(function(n){ (parents[n.id]||[]).forEach(function(p){ if(placedX[p]!=null) xs.push(placedX[p]); }); }); if(!xs.length) return null; return xs.reduce(function(a,b){ return a+b; },0)/xs.length; }
-        order.sort(function(a,b){ var pa=unitParentX(a), pb=unitParentX(b); if(pa==null&&pb==null) return 0; if(pa==null) return 1; if(pb==null) return -1; return pa-pb; });
-        // lay units left→right using real node widths; bigger gap between separate units
-        var seq=[], x=STARTX, first=true;
-        order.forEach(function(u){ if(!first) x+=(UNITGAP-BASEGAP); first=false; units[u].forEach(function(n){ placedX[n.id]=x; seq.push(n); x+=nodeW(n.id)+BASEGAP; }); });
-        // widen any adjacent pair whose horizontal connection pill (spouse/sibling) wouldn't otherwise fit between them
-        for(var i=1;i<seq.length;i++){ var L=seq[i-1], R=seq[i], need=BASEGAP, e=edgeBetween(L.id,R.id);
-          if(e && edgeOrient(e)==='h'){ need=Math.max(need, measureLabelSize(e.type).w+2*HPAD); }
-          var gapNow=placedX[R.id]-(placedX[L.id]+nodeW(L.id));
-          if(gapNow<need){ var dd=need-gapNow; for(var j=i;j<seq.length;j++){ placedX[seq[j].id]+=dd; } }
-        }
-        rowNodes.forEach(function(n){ n.y=STARTY+g*ROWY; });
-      });
-      // ---- Centering passes: pull each child toward the MIDPOINT of its parents (a couple's shared centre), and each
-      // couple toward the centroid of its children, resolving overlaps within a row. A few top-down/bottom-up sweeps
-      // converge to a tidy tree — children hang beneath their parents, and a pair sits centred over its offspring.
-      function _gapNeed(L,R){ var need=BASEGAP; var e=edgeBetween(L.id,R.id); if(e && edgeOrient(e)==='h') need=Math.max(need, measureLabelSize(e.type).w+2*HPAD); return need; }
-      function _cen(id){ return placedX[id]+nodeW(id)/2; }
-      function sweepRow(rowNodes, targetCenter){
-        if(!rowNodes || !rowNodes.length) return;
-        var us={}, ord=[];
-        rowNodes.slice().sort(function(a,b){ return placedX[a.id]-placedX[b.id]; }).forEach(function(n){ var r=cfind(n.id); if(!us[r]){ us[r]={mem:[]}; ord.push(r); } us[r].mem.push(n); });
-        ord.forEach(function(u){ var mem=us[u].mem, w=0; for(var i=0;i<mem.length;i++){ w+=nodeW(mem[i].id); if(i>0) w+=_gapNeed(mem[i-1],mem[i]); } us[u].w=w;
-          var ts=[]; mem.forEach(function(n){ var t=targetCenter(n); if(t!=null) ts.push(t); });
-          var cur=0; mem.forEach(function(n){ cur+=_cen(n.id); }); cur/=mem.length;
-          us[u].target=ts.length?(ts.reduce(function(a,b){return a+b;},0)/ts.length):cur;
-        });
-        ord.sort(function(a,b){ return us[a].target-us[b].target; });
-        var cursor=-1e9;
-        ord.forEach(function(u){ var mem=us[u].mem, w=us[u].w, left=us[u].target-w/2; if(left<cursor) left=cursor; var xx=left; for(var i=0;i<mem.length;i++){ if(i>0) xx+=_gapNeed(mem[i-1],mem[i]); placedX[mem[i].id]=xx; xx+=nodeW(mem[i].id); } cursor=left+w+(UNITGAP-BASEGAP); });
-      }
-      var parentMid=function(n){ var ps=(parents[n.id]||[]).map(function(p){ return placedX[p]!=null?_cen(p):null; }).filter(function(x){ return x!=null; }); return ps.length?(ps.reduce(function(a,b){return a+b;},0)/ps.length):null; };
-      var childMid=function(n){ var cs=(children[n.id]||[]).map(function(c){ return placedX[c]!=null?_cen(c):null; }).filter(function(x){ return x!=null; }); return cs.length?(cs.reduce(function(a,b){return a+b;},0)/cs.length):null; };
-      for(var _it=0; _it<3; _it++){
-        gens.forEach(function(g){ sweepRow(byGen[g], parentMid); });
-        gens.slice().reverse().forEach(function(g){ sweepRow(byGen[g], childMid); });
-      }
-      var minX=Infinity; nodes.forEach(function(n){ if(placedX[n.id]!=null && placedX[n.id]<minX) minX=placedX[n.id]; });
-      if(isFinite(minX)){ var shift=STARTX-minX; nodes.forEach(function(n){ if(placedX[n.id]!=null) placedX[n.id]+=shift; }); }
-      nodes.forEach(function(n){ if(placedX[n.id]!=null) n.x=placedX[n.id]; });
-      save(); render();
-    }
-    function autoArrange(){
-      if(!t.nodes.length) return;
-      if(t.mode==='family'){ familyArrange(); return; }
-      var incoming={}, out={}; t.nodes.forEach(function(n){ incoming[n.id]=0; out[n.id]=[]; });
-      t.edges.forEach(function(e){ if(incoming[e.to]!=null) incoming[e.to]++; if(out[e.from]) out[e.from].push(e.to); });
-      var depth={}, roots=t.nodes.filter(function(n){ return !incoming[n.id]; }).map(function(n){ return n.id; });
-      if(!roots.length) roots=[t.nodes[0].id];
-      var q=roots.slice(); roots.forEach(function(id){ depth[id]=0; }); var seen={};
-      while(q.length){ var id=q.shift(); if(seen[id]) continue; seen[id]=1; (out[id]||[]).forEach(function(c){ var d=(depth[id]||0)+1; if(depth[c]==null||depth[c]<d) depth[c]=d; if(!seen[c]) q.push(c); }); }
-      t.nodes.forEach(function(n){ if(depth[n.id]==null) depth[n.id]=0; });
-      var byDepth={}; t.nodes.forEach(function(n){ (byDepth[depth[n.id]]=byDepth[depth[n.id]]||[]).push(n); });
-      var ROWY2=rowStep(130);
-      Object.keys(byDepth).forEach(function(d){ var x=80; byDepth[d].forEach(function(n){ n.x=x; x+=nodeW(n.id)+72; n.y=50+(+d)*ROWY2; }); });
-      save(); render();
-    }
-    function addMember(b){
-      var bx=(scroll.scrollLeft||0)+140, by=(scroll.scrollTop||0)+70, k=t.nodes.length%6;
-      t.nodes.push({ id:uid(), beingKey:b.key, label:b.label, x:bx+k*32, y:by+k*26 }); save(); render();
-    }
-    function openAddMember(anchor){
-      var existing={}; t.nodes.forEach(function(n){ existing[n.beingKey]=1; });
-      var pool=treeBeings().filter(function(b){ return !existing[b.key]; });
-      var old2=document.getElementById('gtreePick'); if(old2 && old2.parentNode) old2.parentNode.removeChild(old2);
-      var pk=document.createElement('div'); pk.id='gtreePick'; pk.className='gtree-pick';
-      var inp=document.createElement('input'); inp.type='text'; inp.placeholder='Search characters…'; pk.appendChild(inp);
-      var list=document.createElement('div'); list.className='gtree-pick-list'; pk.appendChild(list);
-      function paint(){ list.innerHTML=''; var qy=(inp.value||'').toLowerCase().trim(); var rows=pool.filter(function(b){ return !qy || (b.label||'').toLowerCase().indexOf(qy)>=0; });
-        if(!rows.length){ var e=document.createElement('div'); e.className='gtree-pick-empty'; e.textContent=pool.length?'No match.':'Every character is already in this tree.'; list.appendChild(e); return; }
-        rows.forEach(function(b){ var it=document.createElement('div'); it.className='gtree-pick-it'; it.textContent=b.label; it.addEventListener('click', function(){ addMember(b); if(pk.parentNode) pk.parentNode.removeChild(pk); document.removeEventListener('pointerdown', outside, true); }); list.appendChild(it); }); }
-      inp.addEventListener('input', paint); paint();
-      document.body.appendChild(pk);
-      var r=anchor.getBoundingClientRect(), w=280; pk.style.left=Math.max(8, Math.min(r.left, window.innerWidth-w-8))+'px'; pk.style.top=Math.min(r.bottom+6, window.innerHeight-60)+'px';
-      setTimeout(function(){ try{ inp.focus(); }catch(_){} }, 10);
-      function outside(ev){ if(!pk.contains(ev.target) && ev.target!==anchor){ if(pk.parentNode) pk.parentNode.removeChild(pk); document.removeEventListener('pointerdown', outside, true); } }
-      setTimeout(function(){ document.addEventListener('pointerdown', outside, true); }, 0);
-    }
-    scroll.addEventListener('pointerdown', function(e){ if(e.target===scroll || e.target===canvas || e.target===svg){ if(pendingFrom){ pendingFrom=null; render(); } } });
-    bd.addEventListener('click', function(e){ if(e.target===bd && bd.parentNode) bd.parentNode.removeChild(bd); });
-    paintMode(); render();
-    document.body.appendChild(bd);
+     **Nothing is deleted.** `data.groupTrees` stays and goes on being read: by `BONDS.graph()`, by
+     the dossier's group-connection list, by the map's "you already have a standing connection"
+     suggestion, and by `sourced()`, which builds a Bonds group out of every chart. **The door
+     retires; the data does not.** And the door answers rather than 404s — it opens the same group
+     on the Bonds map. */
+  function openInBonds(groupId){
+    try {
+      var org = document.getElementById('catOrgBd'); if (org && org.parentNode) org.parentNode.removeChild(org);
+      if (typeof goMode === 'function') goMode('notepad');
+      /* the same two-step the dossier's Bonds card has used since v.474: switch the Plan view, then
+         point the panel at the group — the panel is not mounted until the view is on screen */
+      setTimeout(function(){
+        try {
+          if (typeof window.__planSetView === 'function') window.__planSetView('bonds');
+          if (window.BONDSVIEW && typeof window.BONDSVIEW.showGroup === 'function' && groupId) window.BONDSVIEW.showGroup(groupId);
+          else if (window.BONDSVIEW && typeof window.BONDSVIEW.render === 'function') window.BONDSVIEW.render();
+        } catch(e){}
+      }, 120);
+      return true;
+    } catch(e){ return false; }
   }
+  try{ window.__dystOpenInBonds = openInBonds; }catch(e){}
+  function bondsGroupIdForEl(elKey){
+    try {
+      var g = (window.DYSTGROUPS && window.DYSTGROUPS.forEl) ? window.DYSTGROUPS.forEl(elKey) : null;
+      return g ? g.id : null;
+    } catch(e){ return null; }
+  }
+  function openGroupTree(groupKey, groupLabel){ return openInBonds(bondsGroupIdForEl(groupKey)); }
 
   /* ---------- Concept map (free-form network) ----------
      A story-level web of how your concepts relate — reuses the group-chart canvas/interactions, but with NO hierarchy or
      arrange: the writer places nodes wherever they like and draws typed connections. Stored in data.conceptMap =
      { nodes:[{id,conceptKey,label,x,y}], edges:[{from,to,type}] }; custom connection types in data.conceptMapTypes. */
-  var CONCEPT_CONN_POOL=['Leads to','Emerges from','Opposes','Reinforces','Undermines','Contrasts with','Parallels','Mirrors','Symbolizes','Embodies','Enables','Requires','In tension with','Rooted in','Transforms into','Echoes','Complicates','Answers','Questions','Balances'];
   // Concepts are organized as named GROUPS, each with its own free-form map. data.conceptGroups=[{id,name,map:{nodes,edges}}].
   function conceptGroups(){ if(!Array.isArray(data.conceptGroups)) data.conceptGroups=[];
     // migrate the earlier single story map (data.conceptMap) into a default group, once
     if(data.conceptMap && Array.isArray(data.conceptMap.nodes) && data.conceptMap.nodes.length && !data._cmMigrated){ data.conceptGroups.push({ id:uid(), name:'Concepts', map:{ nodes:data.conceptMap.nodes, edges:Array.isArray(data.conceptMap.edges)?data.conceptMap.edges:[] } }); data._cmMigrated=true; try{ delete data.conceptMap; }catch(e){} save(); }
     return data.conceptGroups; }
-  function conceptGroupById(id){ var gs=conceptGroups(); for(var i=0;i<gs.length;i++){ if(gs[i].id===id) return gs[i]; } return null; }
-  function conceptGroupMap(g){ if(!g.map||typeof g.map!=='object') g.map={ nodes:[], edges:[] }; if(!Array.isArray(g.map.nodes)) g.map.nodes=[]; if(!Array.isArray(g.map.edges)) g.map.edges=[]; return g.map; }
-  function addConceptGroup(name){ var g={ id:uid(), name:(name||'Concept group').trim()||'Concept group', map:{ nodes:[], edges:[] } }; conceptGroups().push(g); save(); return g; }
-  function conceptMapTypes(){ if(!Array.isArray(data.conceptMapTypes)) data.conceptMapTypes=[]; return data.conceptMapTypes; }
-  function conceptAllTypes(){ var base=CONCEPT_CONN_POOL.slice(); conceptMapTypes().forEach(function(w){ if(base.indexOf(w)<0) base.push(w); }); return base; }
-  function conceptAddType(v){ v=(v||'').trim(); if(!v) return; var cu=conceptMapTypes(); if(cu.indexOf(v)<0 && CONCEPT_CONN_POOL.indexOf(v)<0){ cu.push(v); save(); } }
+  /* ---- v.601 · THE CONCEPT MAP EDITOR RETIRES ------------------------------------------------
+     [Jeremy, 2026-09-05] "the old org system can be removed now that we have the bonds."
+
+     **Bonds has read these maps as bonds since v.397** — `conceptEdges()` in the graph module turns
+     every edge here into an edge there, and a concept group has appeared in Bonds as a group of its
+     own (`src:concepts:<id>`) since v.410. So nothing here was a second source of truth; it was a
+     second EDITOR for facts Bonds already draws, with its own vocabulary, its own canvas and its
+     own node positions.
+
+     **Nothing is deleted.** `data.conceptGroups` stays exactly as it is and goes on being read —
+     this retires the door, not the data. And the door still ANSWERS rather than 404ing (v.421): it
+     opens the same group on the Bonds map, which is what it was always a picture of. */
   function openConceptMap(groupId){
-    var a=api(); if(!a) return;
-    var group=conceptGroupById(groupId); if(!group){ group=addConceptGroup('Concepts'); }
-    var t=conceptGroupMap(group);
-    var old=document.getElementById('gtreeBd'); if(old&&old.parentNode) old.parentNode.removeChild(old);
-    var pendingFrom=null, nodeEls={};
-    var bd=document.createElement('div'); bd.id='gtreeBd'; bd.className='gtree-bd cmap-bd';
-    var panel=document.createElement('div'); panel.className='gtree cmap';
-    var head=document.createElement('div'); head.className='gtree-head';
-    var title=document.createElement('div'); title.className='gtree-title'; var tl=document.createElement('span'); tl.textContent='Concept map'; title.appendChild(tl);
-    var dot0=document.createElement('span'); dot0.textContent='·'; dot0.style.opacity='.5'; title.appendChild(dot0);
-    var gn0=document.createElement('span'); gn0.className='gtree-gname'; gn0.textContent=group.name||'Concepts'; title.appendChild(gn0);
-    head.appendChild(title);
-    var sp=document.createElement('span'); sp.className='gtree-spacer'; head.appendChild(sp);
-    var addb=document.createElement('button'); addb.className='gtree-btn'; addb.textContent='+ Concept'; head.appendChild(addb);
-    var xb=document.createElement('button'); xb.className='gtree-x'; xb.innerHTML='&times;'; xb.title='Close'; head.appendChild(xb);
-    panel.appendChild(head);
-    var hint=document.createElement('div'); hint.className='gtree-hint'; hint.textContent='A free-form web — no hierarchy. Add concepts, drag them wherever you like, and drag from a concept’s link handle to another to connect them, then name how they relate.'; panel.appendChild(hint);
-    var scroll=document.createElement('div'); scroll.className='gtree-scroll'; var canvas=document.createElement('div'); canvas.className='gtree-canvas';
-    var svg=document.createElementNS('http://www.w3.org/2000/svg','svg'); svg.setAttribute('class','gtree-svg'); canvas.appendChild(svg); scroll.appendChild(canvas); panel.appendChild(scroll);
-    bd.appendChild(panel);
-    function closeMap(){ if(bd.parentNode) bd.parentNode.removeChild(bd); }
-    xb.addEventListener('click', closeMap);
-    addb.addEventListener('click', function(ev){ ev.stopPropagation(); openAddConcept(addb); });
-    function nodeById(id){ for(var i=0;i<t.nodes.length;i++){ if(t.nodes[i].id===id) return t.nodes[i]; } return null; }
-    function edgeExists(f,to){ return t.edges.some(function(e){ return e.from===f&&e.to===to; }); }
-    function removeEdge(f,to){ t.edges=t.edges.filter(function(e){ return !(e.from===f&&e.to===to); }); save(); render(); }
-    function removeNode(id){ t.nodes=t.nodes.filter(function(n){ return n.id!==id; }); t.edges=t.edges.filter(function(e){ return e.from!==id&&e.to!==id; }); if(pendingFrom===id) pendingFrom=null; save(); render(); }
-    function edgeGeom(e){ var fe=nodeEls[e.from], te=nodeEls[e.to], fn=nodeById(e.from), tn=nodeById(e.to); if(!fe||!te||!fn||!tn) return null;
-      var c1x=fn.x+fe.offsetWidth/2, c1y=fn.y+fe.offsetHeight/2, c2x=tn.x+te.offsetWidth/2, c2y=tn.y+te.offsetHeight/2;
-      // inset each endpoint to just outside the node's rectangle so the line — and its arrowhead — meets the node edge, not its centre
-      function edgePt(cx,cy,hw,hh,tx,ty){ var dx=tx-cx, dy=ty-cy; if(!dx&&!dy) return {x:cx,y:cy}; var s=Math.min((hw+4)/Math.abs(dx||1e-6),(hh+4)/Math.abs(dy||1e-6)); return { x:cx+dx*s, y:cy+dy*s }; }
-      var p1=edgePt(c1x,c1y,fe.offsetWidth/2,fe.offsetHeight/2,c2x,c2y);
-      var p2=edgePt(c2x,c2y,te.offsetWidth/2,te.offsetHeight/2,c1x,c1y);
-      var mx=(p1.x+p2.x)/2, my=(p1.y+p2.y)/2, dx=p2.x-p1.x, dy=p2.y-p1.y, len=Math.sqrt(dx*dx+dy*dy)||1, bow=Math.min(24, len*0.1), cx=mx-dy/len*bow, cy=my+dx/len*bow;
-      return { d:'M'+p1.x+' '+p1.y+' Q '+cx+' '+cy+' '+p2.x+' '+p2.y, lx:cx, ly:cy };
-    }
-    function redrawEdges(){ while(svg.firstChild) svg.removeChild(svg.firstChild);
-      gmArrowDefs(svg, 'cmArrow');
-      Array.prototype.slice.call(canvas.querySelectorAll('.gtree-elabel')).forEach(function(el){ if(el.parentNode) el.parentNode.removeChild(el); });
-      t.edges.forEach(function(e){ var g=edgeGeom(e); if(!g) return; var path=document.createElementNS('http://www.w3.org/2000/svg','path'); path.setAttribute('d', g.d); path.setAttribute('class','gtree-edge cmap-edge'); path.setAttribute('marker-end','url(#cmArrow)'); svg.appendChild(path);
-        var lab=document.createElement('div'); lab.className='gtree-elabel'+(e.type?'':' empty'); lab.style.left=g.lx+'px'; lab.style.top=g.ly+'px';
-        var tn=document.createElement('span'); tn.className='gtree-etype'; tn.textContent=e.type||'+ type'; tn.title='Set how these concepts relate'; tn.addEventListener('click', function(ev){ ev.stopPropagation(); openTypePicker(lab, e); }); lab.appendChild(tn);
-        var ex=document.createElement('span'); ex.className='gtree-ex'; ex.innerHTML=ICONS.x; ex.title='Remove connection'; ex.addEventListener('click', function(ev){ ev.stopPropagation(); removeEdge(e.from,e.to); }); lab.appendChild(ex);
-        canvas.appendChild(lab);
-      });
-    }
-    function addEdgeAndType(f,to){ if(f===to||edgeExists(f,to)||edgeExists(to,f)) return; var e={ from:f, to:to, type:'' }; t.edges.push(e); save(); render(); openTypePicker(nodeEls[to]||addb, e); }
-    function openTypePicker(anchor, edge){
-      var old2=document.getElementById('gtreePick'); if(old2&&old2.parentNode) old2.parentNode.removeChild(old2);
-      var pk=document.createElement('div'); pk.id='gtreePick'; pk.className='gtree-pick';
-      var inp=document.createElement('input'); inp.type='text'; inp.placeholder='Search or name a relation…'; pk.appendChild(inp);
-      var list=document.createElement('div'); list.className='gtree-pick-list'; pk.appendChild(list);
-      function close(){ if(pk.parentNode) pk.parentNode.removeChild(pk); document.removeEventListener('pointerdown', outside, true); }
-      function choose(val){ edge.type=val; save(); render(); close(); }
-      function paint(){ list.innerHTML=''; var qy=(inp.value||'').trim(), ql=qy.toLowerCase(); var all=conceptAllTypes();
-        if(qy && all.map(function(w){return w.toLowerCase();}).indexOf(ql)<0){ var cr=document.createElement('div'); cr.className='gtree-pick-it gtree-pick-new'; cr.textContent='+ Use “'+qy+'”'; cr.addEventListener('click', function(){ conceptAddType(qy); choose(qy); }); list.appendChild(cr); }
-        all.filter(function(w){ return !ql||w.toLowerCase().indexOf(ql)>=0; }).forEach(function(w){ var it=document.createElement('div'); it.className='gtree-pick-it'+(edge.type===w?' on':''); it.textContent=w; it.addEventListener('click', function(){ choose(w); }); list.appendChild(it); });
-      }
-      inp.addEventListener('input', paint); paint(); document.body.appendChild(pk);
-      var r=(anchor&&anchor.getBoundingClientRect)?anchor.getBoundingClientRect():{left:120,bottom:120}; var w=280;
-      pk.style.left=Math.max(8, Math.min(r.left, window.innerWidth-w-8))+'px'; pk.style.top=Math.min((r.bottom||120)+6, window.innerHeight-60)+'px';
-      setTimeout(function(){ try{ inp.focus(); }catch(_){} }, 10);
-      function outside(ev){ if(!pk.contains(ev.target)) close(); }
-      setTimeout(function(){ document.addEventListener('pointerdown', outside, true); }, 0);
-    }
-    function beginConnect(srcId, ev){
-      var fn=nodeById(srcId), fe=nodeEls[srcId]; if(!fn||!fe) return;
-      var sx0=fn.x+fe.offsetWidth/2, sy0=fn.y+fe.offsetHeight/2;
-      var temp=document.createElementNS('http://www.w3.org/2000/svg','path'); temp.setAttribute('class','gtree-edge gtree-temp'); svg.appendChild(temp);
-      var moved=false, startX=ev.clientX, startY=ev.clientY;
-      function pt(cx,cy){ var r=canvas.getBoundingClientRect(); return { x:cx-r.left, y:cy-r.top }; }
-      function draw(cx,cy){ var e=pt(cx,cy); temp.setAttribute('d','M'+sx0+' '+sy0+' L '+e.x+' '+e.y); }
-      draw(startX,startY);
-      function mv(e2){ if(Math.abs(e2.clientX-startX)+Math.abs(e2.clientY-startY)>4) moved=true; draw(e2.clientX,e2.clientY); }
-      function up(e2){ document.removeEventListener('pointermove',mv,true); document.removeEventListener('pointerup',up,true); if(temp.parentNode) temp.parentNode.removeChild(temp);
-        var nd=document.elementFromPoint(e2.clientX,e2.clientY); nd=(nd&&nd.closest)?nd.closest('.gtree-node'):null; var tgtId=(nd&&nd.dataset)?nd.dataset.nid:null;
-        if(moved){ if(tgtId&&tgtId!==srcId) addEdgeAndType(srcId, tgtId); pendingFrom=null; render(); }
-        else { pendingFrom=(pendingFrom===srcId)?null:srcId; render(); }
-      }
-      document.addEventListener('pointermove',mv,true); document.addEventListener('pointerup',up,true);
-    }
-    function buildNode(n){
-      var el=document.createElement('div'); el.className='gtree-node cmap-node'+(pendingFrom===n.id?' pending':''); el.dataset.nid=n.id; el.style.left=((n.x||60))+'px'; el.style.top=((n.y||60))+'px'; nodeEls[n.id]=el;
-      var link=document.createElement('span'); link.className='gtree-nic gtree-link'; link.title='Drag to another concept to connect — or click, then click a concept'; link.innerHTML=ICONS.link;
-      link.addEventListener('pointerdown', function(ev){ ev.stopPropagation(); ev.preventDefault(); beginConnect(n.id, ev); }); el.appendChild(link);
-      var nm=document.createElement('span'); nm.className='gt-nm'; nm.textContent=n.label||'(concept)'; el.appendChild(nm);
-      var f=document.createElement('span'); f.className='gtree-nic'; f.title='Notes'; f.innerHTML=ICONS.feather;
-      f.addEventListener('pointerdown', function(ev){ ev.stopPropagation(); });
-      f.addEventListener('click', function(ev){ ev.stopPropagation(); if(n.conceptKey){ closeMap(); a.notesForKey(n.conceptKey); } }); el.appendChild(f);
-      var x=document.createElement('span'); x.className='gtree-nic'; x.title='Remove from map'; x.innerHTML=ICONS.x;
-      x.addEventListener('pointerdown', function(ev){ ev.stopPropagation(); }); x.addEventListener('click', function(ev){ ev.stopPropagation(); removeNode(n.id); }); el.appendChild(x);
-      el.addEventListener('pointerdown', function(ev){
-        if(pendingFrom && pendingFrom!==n.id){ addEdgeAndType(pendingFrom, n.id); pendingFrom=null; return; }
-        if(pendingFrom===n.id) return;
-        var sx=ev.clientX, sy=ev.clientY, ox=n.x||60, oy=n.y||60, moved=false;
-        try{ el.setPointerCapture(ev.pointerId); }catch(_){}
-        el.classList.add('dragging');
-        function mv(e2){ var dx=e2.clientX-sx, dy=e2.clientY-sy; if(Math.abs(dx)+Math.abs(dy)>3) moved=true; n.x=Math.max(0,ox+dx); n.y=Math.max(0,oy+dy); el.style.left=n.x+'px'; el.style.top=n.y+'px'; redrawEdges(); }
-        function up(){ try{ el.releasePointerCapture(ev.pointerId); }catch(_){} el.removeEventListener('pointermove',mv); el.removeEventListener('pointerup',up); el.classList.remove('dragging'); if(moved) save(); }
-        el.addEventListener('pointermove',mv); el.addEventListener('pointerup',up);
-      });
-      return el;
-    }
-    function render(){ nodeEls={};
-      Array.prototype.slice.call(canvas.querySelectorAll('.gtree-node,.gtree-empty')).forEach(function(el){ if(el.parentNode) el.parentNode.removeChild(el); });
-      if(!t.nodes.length){ var em=document.createElement('div'); em.className='gtree-empty'; em.textContent='No concepts yet — add some with “+ Concept”, then drag to connect them.'; canvas.appendChild(em); redrawEdges(); return; }
-      t.nodes.forEach(function(n){ canvas.appendChild(buildNode(n)); }); redrawEdges();
-    }
-    function openAddConcept(anchor){
-      var old2=document.getElementById('gtreePick'); if(old2&&old2.parentNode) old2.parentNode.removeChild(old2);
-      var onMap={}; t.nodes.forEach(function(n){ if(n.conceptKey) onMap[n.conceptKey]=1; });
-      var items=((gatherElements().byCat['concept'])||[]).filter(function(it){ return !onMap[it.key]; });
-      var pk=document.createElement('div'); pk.id='gtreePick'; pk.className='gtree-pick';
-      var inp=document.createElement('input'); inp.type='text'; inp.placeholder='Add a concept…'; pk.appendChild(inp);
-      var list=document.createElement('div'); list.className='gtree-pick-list'; pk.appendChild(list);
-      function close(){ if(pk.parentNode) pk.parentNode.removeChild(pk); document.removeEventListener('pointerdown', outside, true); }
-      function place(it){ var col=t.nodes.length%5, row=Math.floor(t.nodes.length/5); t.nodes.push({ id:uid(), conceptKey:it.key, label:it.label, x:60+col*170, y:60+row*90 }); save(); render(); close(); }
-      function paint(){ list.innerHTML=''; var qy=(inp.value||'').trim().toLowerCase();
-        var rows=items.filter(function(it){ return !qy||String(it.label).toLowerCase().indexOf(qy)>=0; });
-        if(!rows.length){ var e=document.createElement('div'); e.className='gtree-pick-empty'; e.textContent=items.length?'No match.':'All your concepts are on the map. Add more concepts in the Elements tab.'; list.appendChild(e); }
-        rows.forEach(function(it){ var d=document.createElement('div'); d.className='gtree-pick-it'; d.textContent=it.label; d.addEventListener('click', function(){ place(it); }); list.appendChild(d); });
-      }
-      inp.addEventListener('input', paint); paint(); document.body.appendChild(pk);
-      var r=(anchor&&anchor.getBoundingClientRect)?anchor.getBoundingClientRect():{left:120,bottom:120}; var w=280;
-      pk.style.left=Math.max(8, Math.min(r.left, window.innerWidth-w-8))+'px'; pk.style.top=Math.min((r.bottom||120)+6, window.innerHeight-60)+'px';
-      setTimeout(function(){ try{ inp.focus(); }catch(_){} }, 10);
-      function outside(ev){ if(!pk.contains(ev.target)) close(); }
-      setTimeout(function(){ document.addEventListener('pointerdown', outside, true); }, 0);
-    }
-    scroll.addEventListener('pointerdown', function(e){ if(e.target===scroll||e.target===canvas||e.target===svg){ if(pendingFrom){ pendingFrom=null; render(); } } });
-    bd.addEventListener('click', function(e){ if(e.target===bd && bd.parentNode) bd.parentNode.removeChild(bd); });
-    render(); document.body.appendChild(bd);
+    var gid = null;
+    try {
+      var g = (window.DYSTGROUPS && window.DYSTGROUPS.forSource)
+        ? window.DYSTGROUPS.forSource('concepts', groupId) : null;
+      gid = g ? g.id : null;
+    } catch(e){}
+    return openInBonds(gid);
   }
   try{ window.openConceptMap = openConceptMap; }catch(e){}
 
@@ -68993,6 +68635,17 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
      The Plan layer's `data` is closure-private, but it persists to a blob whose
      key is derivable, and reading it is honest: the reader never writes. */
   function planBlob(){
+    /* v.601 — **the THIRD reader of the plan store, and the last one still going to the mirror.**
+       v.596 moved that store onto the session and v.597 fixed the copy of this function in the
+       panel module; this one, in the graph module, was still reading localStorage alone — so on a
+       fork or a fresh device every member-chart edge and every concept-map edge would have come
+       back empty, which is most of what the Bonds map draws for an older story. **A store with a
+       mirror has as many readers to fix as it has readers**, and the way to find the last one is to
+       grep for the mirror's key rather than for the function's name. */
+    try{
+      if (typeof state !== 'undefined' && state.session && state.session.plan
+          && typeof state.session.plan === 'object') return state.session.plan;
+    }catch(e){}
     try{
       var id = localStorage.getItem('dystoria.lastStory');
       if (id != null){
@@ -74877,6 +74530,22 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
     return { id:gp.id, name:gp.name, type:gp.type, lens:gp.lens, members:(gp.members || []).slice() };
   };
   V.typeForSub = typeFromSub;
+  /* v.601 — SHOW THIS GROUP. The panel already knows how to open on a group; what it did not have
+     was a way to be TOLD which one from outside, which is what the retired chart editors need in
+     order to answer rather than 404. It sets the lens the group opens on as well as the group, so
+     the writer lands on the picture the button promised. */
+  V.showGroup = function(id){
+    try{
+      if (!id) return false;
+      var gp = groupById(id); if (!gp) return false;
+      MAIN.ui.group = gp.id;
+      MAIN.ui.kind = lensOfGroup(gp);
+      MAIN.ui.scope = { type:'all' };
+      MAIN.ui.sel = null;
+      V.render(MAIN);
+      return true;
+    }catch(e){ return false; }
+  };
 
   /* ---- v.597 · #52 phase 1 · ONE ACCESSOR --------------------------------------------------
      [Jeremy, 2026-09-04] The record decision was option B — _"one record… but give the Group
@@ -74952,6 +74621,14 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
                                      lens:(TYPE_LENSES[t.id] || [])[0] || '',
                                      caps:dystKindCaps(t.id) }; });
       }catch(e){ return []; }
+    },
+    /* the group a member chart or a concept map IS — the door the retired editors redirect
+       through (v.601), and the only way in from outside to a group that has no element of its own */
+    forSource: function(kind, key){
+      try{
+        var g = groups().find(function(x){ return x && x.source && x.source.kind === kind && x.source.key === key; });
+        return g ? pubGroup(g) : null;
+      }catch(e){ return null; }
     },
     capsFor: function(kind){ try{ return dystKindCaps(kind); }catch(e){ return null; } },
     caps: function(id){ try{ var g = groupById(id); return g ? dystKindCaps(typeOf(g) || 'social') : null; }catch(e){ return null; } }
