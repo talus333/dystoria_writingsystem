@@ -51811,9 +51811,13 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.595';
+  var APP_VERSION = '2026.07.20.596';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.596', date:'September 4, 2026', notes:[
+      '**Your plot cards and your group structures now travel with the story.** Two things were being written to this browser and nowhere else: the **Bonds** groups, views, arrangements and pins, and the **Plot grid\u2019s** thread cards \u2014 their text, their titles, the columns, the plot definitions and the goal links. They did not reach the cloud, did not survive a fork, and were **not in your own backup file**. Open a story on a second machine and the prose and the elements came back while those did not. They are part of the story now, so they sync, fork and back up like everything else. [found while scoping #52]',
+      '**Nothing to run and nothing to lose.** The first time each story is opened it takes whatever this browser already has and folds it in \u2014 the same read-on-open upgrade the app has used since v.408, so there is no migration step to remember. The local copy is still written as a safety net; the story\u2019s copy is the one that counts.',
+    ]},
     { v:'2026.07.20.595', date:'September 4, 2026', notes:[
       '**Drawing a connection now offers the structure\u2019s own kinds first.** In a **family tree** that is **Kinship**; in a **social web**, Loyalty, Romance, Enmity, Debt & secrets and Mentorship; in a **faction chart**, Loyalty, Enmity and Mentorship. The group\u2019s declared type still has its say \u2014 it comes next \u2014 and nothing is cut: every word the pair can wear is still in the list. Previously the group\u2019s type led, so a family tree drawn over a group typed *Social* offered Romance above Kinship in the one place kinship is the whole subject. [Jeremy]',
       '**And the chart\u2019s own kinds are labelled as such**, so the order is something you can see rather than something you have to take on trust.',
@@ -55416,17 +55420,49 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
   function storyId(){ var e=document.getElementById('editor'); return (e && e.dataset && e.dataset.sid) || 'nostory'; }
   function key(){ return 'dystoria.plan.v1.' + storyId(); }
   function blank(){ return { view:'map', narrative:{ genre:[], context:[], theme:[], plot:[], pov:[] }, plot:{ sections:[], columns:[], cells:{} } }; }
+  /* v.596 · #52 phase 0 — see the note beside the Bonds store. The plot grid's thread cards, their
+     titles, the column list, the plot definitions and the goal links lived in localStorage alone:
+     not synced, not forked, not in `backupAll`'s JSON. They ride on the session now, adopted by
+     reference so `save()` needs no copy, with the story id stamped so a load between stories can
+     never adopt the previous story's grid. */
+  function planBox(){
+    try {
+      if (typeof state === 'undefined' || !state.session) return null;
+      var p = state.session.plan;
+      if (!p || typeof p !== 'object') return null;
+      if (p.__sid && p.__sid !== storyId()) return null;
+      return p;
+    } catch(e){ return null; }
+  }
   function load(){
     sid = storyId();
-    try { var raw = localStorage.getItem(key()); data = raw ? JSON.parse(raw) : blank(); }
-    catch(e){ data = blank(); }
+    data = planBox();
+    if (!data){
+      try { var raw = localStorage.getItem(key()); data = raw ? JSON.parse(raw) : blank(); }
+      catch(e){ data = blank(); }
+    }
     if(!data.plot) data.plot = { sections:[], columns:[], cells:{} };
     if(!data.plot.cells) data.plot.cells = {};
     if(!data.plot.sections) data.plot.sections = [];
     if(!data.plot.columns) data.plot.columns = [];
     if(!data.layers) data.layers = [];
+    data.__sid = sid;
+    try { if (state.session) state.session.plan = data; }catch(e){}   /* by reference: no second copy */
   }
-  function save(){ clearTimeout(saveT); saveT = setTimeout(function(){ try{ localStorage.setItem(key(), JSON.stringify(data)); }catch(e){} }, 400); if(typeof plotCapture==='function') plotCapture(); }
+  function save(){
+    /* the session copy is the same object, so it is already current — only the autosave and the
+       local mirror need scheduling */
+    try {
+      if (typeof state !== 'undefined' && state.session){
+        data.__sid = sid || storyId();
+        state.session.plan = data;
+        if (typeof scheduleAutosave === 'function') scheduleAutosave(700);
+      }
+    }catch(e){}
+    clearTimeout(saveT);
+    saveT = setTimeout(function(){ try{ localStorage.setItem(key(), JSON.stringify(data)); }catch(e){} }, 400);
+    if(typeof plotCapture==='function') plotCapture();
+  }
   function uid(){ return 'p' + Math.random().toString(36).slice(2,9); }
 
   /* ---------- linking to real story elements ---------- */
@@ -69210,17 +69246,71 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
 
   /* ---- persistence: only positions, and only ours --------------------- */
   function storyId(){ try{ return localStorage.getItem('dystoria.lastStory') || ''; }catch(e){ return ''; } }
+/* ---- v.596 · #52 PHASE 0 · A DURABLE HOME FOR THE SIDE STORES ------------------------
+     Found while scoping #52's one-record decision, and it is the more serious half of it.
+     **Two stores were written to localStorage and NOWHERE ELSE**, verified five ways: their save
+     functions touch only `localStorage`; their keys appear nowhere in `saveSession`; no session
+     field carries them; `backupAll` exports `sessions` only; and a probe that wipes the two keys
+     and asks the app what it still holds comes back empty.
+
+     What that cost, concretely: **the Bonds store** (groups, views, layouts, pins) and **the plan
+     store** (every non-Main thread card's text and title, the column list, the plot definitions,
+     the goal links) did not reach the cloud, did not survive a fork, and were not in the writer's
+     own backup file. Open the story on a second machine and the prose and the elements come back
+     while the plot cards and the group structures do not. The Main Plot column escaped only by
+     accident — `plotCellSet` sends that one through `setPlainNote`, which is session data.
+
+     THE FIX IS THE PATTERN THE FILE ALREADY USES. `store()` has converted `sets → groups` on read
+     since v.408 precisely so that no one has to run a migration step — *"the conversion runs on
+     read and writes itself back rather than needing a migration step nobody would run."* So this
+     is a read-time upgrade too: the first read after this build takes whatever the browser has,
+     puts it on the session, and saves. There is no migration to forget and no version to be on.
+
+     **The session is the truth; localStorage stays as a mirror.** Reads prefer the session
+     unconditionally once it has the box, so the two cannot drift — but the local copy keeps being
+     written, so a story whose cloud save fails still has its groups on the device it was made on.
+
+     AND THE BOX IS STAMPED WITH ITS STORY ID. `load()` and `store()` can both run while the app is
+     between stories, and adopting the previous story's box would be a far worse bug than the one
+     being fixed — silently showing one story's plot grid inside another. A stamp that does not
+     match falls back to this story's own local copy. */
+  function bondsBox(){
+    try {
+      if (typeof state === 'undefined' || !state.session) return null;
+      var b = state.session.bonds;
+      if (!b || typeof b !== 'object') return null;
+      if (b.__sid && b.__sid !== storyId()) return null;   /* another story's box — never adopt it */
+      return b;
+    } catch(e){ return null; }
+  }
   function store(){
-    var s = {};
-    try{ s = JSON.parse(localStorage.getItem(LS + storyId()) || '{}') || {}; }catch(e){ s = {}; }
-    /* sets became groups in v.408; the conversion runs on read and writes itself
-       back, so a store from an older build comes across the first time it is
-       opened rather than needing a migration step nobody would run */
-    if (s.sets && s.sets.length){ s = ensureGroups(s); saveStore(s); }
+    var s = bondsBox();
+    if (!s){
+      try{ s = JSON.parse(localStorage.getItem(LS + storyId()) || '{}') || {}; }catch(e){ s = {}; }
+      /* sets became groups in v.408 — same read-time conversion, kept */
+      if (s.sets && s.sets.length) s = ensureGroups(s);
+      if (!s.groups) s.groups = [];
+      s.__sid = storyId();
+      try { if (state.session) state.session.bonds = s; }catch(e){}
+      saveStore(s);
+      return s;
+    }
+    if (s.sets && s.sets.length){ s = ensureGroups(s); s.__sid = storyId();
+      try { state.session.bonds = s; }catch(e){} saveStore(s); }
     else if (!s.groups) s.groups = [];
     return s;
   }
-  function saveStore(s){ try{ localStorage.setItem(LS + storyId(), JSON.stringify(s)); }catch(e){} }
+  function saveStore(s){
+    try { s.__sid = storyId(); }catch(e){}
+    /* the session first — it is the copy that travels */
+    try {
+      if (typeof state !== 'undefined' && state.session){
+        state.session.bonds = s;
+        if (typeof scheduleAutosave === 'function') scheduleAutosave(700);
+      }
+    }catch(e){}
+    try{ localStorage.setItem(LS + storyId(), JSON.stringify(s)); }catch(e){}
+  }
   /* One slot per drawing — and a drawing is a GROUP seen through a LENS (v.408).
      Both halves matter: a tree layout is not a web layout, so toggling the lens
      must not scramble the arrangement of the one you came from. A scoped mount
