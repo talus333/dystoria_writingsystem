@@ -51811,9 +51811,15 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.596';
+  var APP_VERSION = '2026.07.20.597';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.597', date:'September 5, 2026', notes:[
+      '**Correcting yesterday\u2019s build.** v.596 gave the Bonds groups a home on the story, and put it under a name the app was already using for your **standing bonds** \u2014 the relationships that hold between two elements whether or not they share a page. On a story that had standing bonds, the groups and arrangements were not being saved at all; on a story that did not, the standing bonds could be dropped. The store now has a name of its own, and this build repairs what the last one moved: anything recoverable is put back where it belongs on the first read. **If a group or an arrangement is missing after v.596, check your most recent backup file** \u2014 and accept our apologies for the day it cost.',
+      '**A group keeps its arrangement when you first edit it.** An organization that came from anywhere other than the two group doors \u2014 the importer, the ordinary element creator, a party \u2014 was shown on the Bonds map straight away, but the first time you added a member or renamed it, the app quietly treated it as a NEW group: its saved arrangement, its layout and its chosen structure stayed attached to a name nothing answered to any more. It now keeps one identity from the moment the element exists, and everything you arranged comes with it. [#52 phase 1]',
+      '**Renaming a group no longer loses how you laid it out.** The same fault from the other side: a group read off an element carried that element\u2019s name inside its own, so renaming the element orphaned the arrangement.',
+      '**And a member chart still fills its group on a device that has never seen the story before** \u2014 the last reader that was still going to this browser\u2019s copy instead of the story\u2019s now reads the story\u2019s.',
+    ]},
     { v:'2026.07.20.596', date:'September 4, 2026', notes:[
       '**Your plot cards and your group structures now travel with the story.** Two things were being written to this browser and nowhere else: the **Bonds** groups, views, arrangements and pins, and the **Plot grid\u2019s** thread cards \u2014 their text, their titles, the columns, the plot definitions and the goal links. They did not reach the cloud, did not survive a fork, and were **not in your own backup file**. Open a story on a second machine and the prose and the elements came back while those did not. They are part of the story now, so they sync, fork and back up like everything else. [found while scoping #52]',
       '**Nothing to run and nothing to lose.** The first time each story is opened it takes whatever this browser already has and folds it in \u2014 the same read-on-open upgrade the app has used since v.408, so there is no migration step to remember. The local copy is still written as a safety net; the story\u2019s copy is the one that counts.',
@@ -69274,29 +69280,92 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
      between stories, and adopting the previous story's box would be a far worse bug than the one
      being fixed — silently showing one story's plot grid inside another. A stamp that does not
      match falls back to this story's own local copy. */
+  /* ---- v.597 · THE NAME v.596 TOOK WAS ALREADY TAKEN -------------------------------------
+     v.596 gave this store a home on the session so it would sync, fork and back up — and put it
+     at `state.session.bonds`, which has been the STANDING BONDS array since v.412. The file says
+     so out loud, four lines from where that store is declared: *"It lives in `state.session.bonds`
+     … and NOT in Bonds' own blob, which stays what it has always been: positions, groups and a
+     camera."* **The warning was written down and the name was not grepped.** v.580's lesson —
+     _"a new class name has to be checked against the FILE, not against the design"_ — one level up:
+     a session field is a name in the same namespace as every other session field.
+
+     BOTH DIRECTIONS LOSE DATA, measured on v.596 rather than reasoned about:
+     • A story WITH standing bonds: `state.session.bonds` is an array, `bondsBox()` accepts it
+       (an array is an object), and the whole store rides on it as non-index properties — where
+       **`JSON.stringify` drops every one of them**. Groups, layouts, views, pins and saved
+       arrangements were written to the session and to the mirror as `[]`. Probed: live groups 1,
+       groups surviving a save 0.
+     • A story WITHOUT them: the store lands on `state.session.bonds` as an object, and the next
+       standing-bond read runs `if (!Array.isArray(state.session.bonds)) state.session.bonds = [];`
+       — the store is gone, and so is any standing bond that was there before.
+
+     SO THE STORE MOVES TO A NAME NOTHING ELSE USES (grepped against the file, and against v.595
+     before it: `bondsStore` appears nowhere), AND `repairSessionBonds()` UNDOES WHAT v.596 DID.
+     It runs on every read, costs one type check, and is idempotent. What it can recover, it
+     recovers: properties riding on the array are lifted off; a store sitting where the array
+     belongs is moved and the array handed back. What it cannot recover it does not pretend to —
+     the standing-bond array a v.596 session replaced is not in the session any more, and the
+     honest fallbacks are the local mirror, `dystoria.bonds.v0.*`, and the writer's own backup. */
+  var SKEY = 'bondsStore';
+  var STORE_FIELDS = ['groups','layouts','hide','views','saved','pins','sets','cam','__sid'];
+  function repairSessionBonds(){
+    try {
+      if (typeof state === 'undefined' || !state.session) return;
+      var b = state.session.bonds;
+      if (!b || typeof b !== 'object') return;
+      var looksLikeStore = STORE_FIELDS.some(function(f){ return b[f] !== undefined; });
+      if (!looksLikeStore) return;
+      if (Array.isArray(b)){
+        /* the store was riding on the standing-bond array. Lift it off — the array keeps its bonds. */
+        var box = state.session[SKEY];
+        if (!box || typeof box !== 'object' || Array.isArray(box)) box = state.session[SKEY] = {};
+        STORE_FIELDS.forEach(function(f){
+          if (b[f] !== undefined && box[f] === undefined) box[f] = b[f];
+          try { delete b[f]; }catch(e){}
+        });
+      } else {
+        /* the store had REPLACED the array. Give it its own field and give the bonds theirs back. */
+        if (!state.session[SKEY] || typeof state.session[SKEY] !== 'object' || Array.isArray(state.session[SKEY])) state.session[SKEY] = b;
+        state.session.bonds = [];
+      }
+      if (typeof scheduleAutosave === 'function') scheduleAutosave(700);
+    } catch(e){}
+  }
   function bondsBox(){
     try {
       if (typeof state === 'undefined' || !state.session) return null;
-      var b = state.session.bonds;
-      if (!b || typeof b !== 'object') return null;
+      repairSessionBonds();
+      var b = state.session[SKEY];
+      if (!b || typeof b !== 'object' || Array.isArray(b)) return null;   /* an array is never this store */
       if (b.__sid && b.__sid !== storyId()) return null;   /* another story's box — never adopt it */
       return b;
     } catch(e){ return null; }
   }
+  /* The mirror a v.596 session wrote may itself be an ARRAY — `saveStore` stringified the object
+     it had been handed, and what it had been handed was the standing-bond list. An array here is
+     not a store; it is the damage. Fall back to the v.408 snapshot before giving up. */
+  function readMirror(){
+    var raw = null;
+    try{ raw = JSON.parse(localStorage.getItem(LS + storyId()) || '{}'); }catch(e){ raw = null; }
+    if (raw && typeof raw === 'object' && !Array.isArray(raw)) return raw;
+    try{ var v0 = JSON.parse(localStorage.getItem('dystoria.bonds.v0.' + storyId()) || 'null');
+      if (v0 && typeof v0 === 'object' && !Array.isArray(v0)) return v0; }catch(e){}
+    return {};
+  }
   function store(){
     var s = bondsBox();
     if (!s){
-      try{ s = JSON.parse(localStorage.getItem(LS + storyId()) || '{}') || {}; }catch(e){ s = {}; }
+      s = readMirror();
       /* sets became groups in v.408 — same read-time conversion, kept */
       if (s.sets && s.sets.length) s = ensureGroups(s);
       if (!s.groups) s.groups = [];
       s.__sid = storyId();
-      try { if (state.session) state.session.bonds = s; }catch(e){}
+      try { if (state.session) state.session[SKEY] = s; }catch(e){}
       saveStore(s);
       return s;
     }
     if (s.sets && s.sets.length){ s = ensureGroups(s); s.__sid = storyId();
-      try { state.session.bonds = s; }catch(e){} saveStore(s); }
+      try { state.session[SKEY] = s; }catch(e){} saveStore(s); }
     else if (!s.groups) s.groups = [];
     return s;
   }
@@ -69305,7 +69374,7 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
     /* the session first — it is the copy that travels */
     try {
       if (typeof state !== 'undefined' && state.session){
-        state.session.bonds = s;
+        state.session[SKEY] = s;
         if (typeof scheduleAutosave === 'function') scheduleAutosave(700);
       }
     }catch(e){}
@@ -69445,6 +69514,22 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
             var arr = s[which][k] || [];
             var i = arr.indexOf(oldKey);
             if (i >= 0){ arr[i] = newKey; touched = true; }
+          });
+        });
+        /* v.597 — a group READ off an element carries that element's key INSIDE ITS OWN ID
+           (`src:chart:<key>`), so renaming the element renames the group and orphans every slot
+           keyed to it. The sweep above cannot see that: there the key is a VALUE, here it is part
+           of the slot NAME. Same rename, two shapes, and only one of them was being handled. */
+        var _oldId = 'src:chart:' + oldKey, _newId = 'src:chart:' + newKey;
+        if (rekeyGroup(s, _oldId, _newId)) touched = true;
+        (s.groups || []).forEach(function(g){
+          if (!g) return;
+          if (g.id === _oldId){ g.id = _newId; touched = true; }
+          if (g.el === oldKey){ g.el = newKey; touched = true; }
+          if (g.source && g.source.kind === 'chart' && g.source.key === oldKey){ g.source.key = newKey; touched = true; }
+          ['extra','dropped','members'].forEach(function(f){
+            var arr = g[f]; if (!Array.isArray(arr)) return;
+            var i = arr.indexOf(oldKey); if (i >= 0){ arr[i] = newKey; touched = true; }
           });
         });
         if (touched) saveStore(s);
@@ -71081,7 +71166,18 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
 
      Nothing in this patch writes to `groupTrees` or `conceptGroups`. That is the
      safety property: phase 3 is a READ. */
+  /* v.597 — READ THE SAME COPY THE PLAN MODULE WRITES. v.596 moved the plan store onto the
+     session and left localStorage as a mirror, and this reader was still going to the mirror
+     alone — so on the one machine v.596 exists to serve (a fork, a fresh device, a cloud restore,
+     any browser whose mirror has not been written yet) every member chart and every concept map
+     would have come back empty, and with them every group read off one. **A store with a mirror
+     has two readers to fix, not one**; this is the second. */
   function planBlob(){
+    try{
+      if (typeof state !== 'undefined' && state.session && state.session.plan
+          && typeof state.session.plan === 'object'
+          && (!state.session.plan.__sid || state.session.plan.__sid === storyId())) return state.session.plan;
+    }catch(e){}
     try{
       var sid = localStorage.getItem('dystoria.lastStory') || '';
       return JSON.parse(localStorage.getItem('dystoria.plan.v1.' + sid) || '{}') || {};
@@ -71162,21 +71258,31 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
     (gp.extra || []).forEach(function(k){ if (out.indexOf(k) < 0 && !drop[k]) out.push(k); });
     return out;
   }
+  /* v.597 — a stored group is matched to its live reading by its SOURCE as well as by its id.
+     Until now `__live` only reached a stored group whose ID WAS the derived `src:chart:<elKey>`
+     string, which tied "does this group still track its chart" to "what is this group called
+     internally" — two questions with nothing to do with each other, and the tie is what made
+     giving a group a stable id cost it the chart it was reading. The `@` prefix cannot collide
+     with a real id: no id has ever started with one. */
+  function srcTag(src){ return '@' + src.kind + ':' + src.key; }
   function groups(){
     var s = store(), kept = (s.groups || []).filter(function(g){ return g && !g.hidden; });
     var have = {}, from = {};
     kept.forEach(function(g){
       have[g.id] = g;
-      if (g.source) from[g.source.kind + ':' + g.source.key] = 1;
+      if (g.source){ from[g.source.kind + ':' + g.source.key] = 1; have[srcTag(g.source)] = g; }
       if (g.fromGroup) from[g.fromGroup] = 1;      /* an older imported copy stands in for it */
       if (g.el) from['chart:' + g.el] = 1;         /* v.557: this group IS that org element — do not read it twice */
     });
-    var hiddenIds = {}; (s.groups || []).forEach(function(g){ if (g && g.hidden) hiddenIds[g.id] = 1; });
+    var hiddenIds = {};
+    (s.groups || []).forEach(function(g){ if (g && g.hidden){ hiddenIds[g.id] = 1;
+      if (g.source) hiddenIds[srcTag(g.source)] = 1; } });
     var out = kept.slice();
     sourced().forEach(function(src){
-      var mine = have[src.id];
+      var tag = srcTag(src.source);
+      var mine = have[src.id] || have[tag];
       if (mine){ mine.__live = src.members; mine.name = mine.name || src.name; return; }
-      if (hiddenIds[src.id]) return;
+      if (hiddenIds[src.id] || hiddenIds[tag]) return;
       if (from[src.source.kind + ':' + src.source.key]) return;
       out.push(src);
     });
@@ -71209,12 +71315,52 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
     if (at < 0) s.groups.push(rec); else s.groups[at] = rec;
     saveStore(s);
   }
+  /* ---- v.597 · #52 phase 1 · THE SLOT BAGS ARE ONE LIST ------------------------------------
+     Five bags are keyed by SLOT — a slot being a group seen through a lens — and until now the
+     list of them was written out by hand wherever one had to be swept: `['layouts','hide','views']`
+     in the v.408 migration, `['layouts','hide','views','saved']` in `dropGroup`, `['pins','hide']`
+     in the rename migrator. v.561 already left the standing warning that _"anything new that sweeps
+     those bags must sweep this one"_, which is a rule that needs a list to point at. This is the
+     list. `dropGroup` gains `pins` by joining it, which it should always have had.
+
+     _The v.408 `sets → groups` migration deliberately does NOT take this list: it retires pins
+     rather than remapping them (a group IS its node list, so a pin has nothing left to do there),
+     and a store old enough to speak `sets` predates `saved` entirely._ */
+  var SLOT_BAGS = ['layouts', 'hide', 'views', 'saved', 'pins'];
+  function slotPrefix(id){ return 'group:' + id + '|'; }
+  /* A group's identity may change — a reading of a member chart becomes a record the first time
+     anybody writes to it — and when it does, EVERYTHING the writer arranged has to come with it.
+     Before v.597 it did not: the arrangement, the layout and the saved copy stayed keyed to the
+     identity the group no longer had, and nothing said so. */
+  function rekeyGroup(s, oldId, newId){
+    if (!oldId || !newId || oldId === newId) return false;
+    var oldP = slotPrefix(oldId), newP = slotPrefix(newId), touched = false;
+    SLOT_BAGS.forEach(function(bag){
+      var bagv = s[bag]; if (!bagv) return;
+      Object.keys(bagv).forEach(function(k){
+        if (k.indexOf(oldP) !== 0) return;
+        var nk = newP + k.slice(oldP.length);
+        if (!(nk in bagv)) bagv[nk] = bagv[k];
+        delete bagv[k]; touched = true;
+      });
+    });
+    return touched;
+  }
+  /* Has the writer arranged this group under this identity? — the question that decides whether an
+     identity is worth carrying across rather than replacing. */
+  function hasSlots(s, id){
+    var p = slotPrefix(id);
+    return SLOT_BAGS.some(function(bag){
+      var bagv = s[bag]; if (!bagv) return false;
+      return Object.keys(bagv).some(function(k){ return k.indexOf(p) === 0; });
+    });
+  }
   function dropGroup(id){
     var s = store();
     s.groups = (s.groups || []).filter(function(x){ return x && x.id !== id; });
-    ['layouts','hide','views','saved'].forEach(function(bag){   /* v.561: a deleted group takes its saved arrangements with it */
+    SLOT_BAGS.forEach(function(bag){   /* v.561: a deleted group takes its saved arrangements with it */
       if (!s[bag]) return;
-      Object.keys(s[bag]).forEach(function(k){ if (k.indexOf('group:' + id + '|') === 0) delete s[bag][k]; });
+      Object.keys(s[bag]).forEach(function(k){ if (k.indexOf(slotPrefix(id)) === 0) delete s[bag][k]; });
     });
     saveStore(s);
   }
@@ -74314,10 +74460,30 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
     var t = SET_CATS.find(function(x){ return x.name === sub; });
     return t ? t.id : '';
   }
+  /* v.597 · #52 phase 1 — AN ELEMENT HAS ONE GROUP, NOT ONE PER DOOR.
+     Measured before it was written: an `org` element that arrived by any route other than these
+     two doors (the importer, the generic element creator, `dystEnsureGroupElement`, an AI element
+     pass) is read as a group with the derived id `src:chart:<elKey>` — and the FIRST WRITE to it
+     minted a fresh `bg*` record and left the writer's saved arrangement, layout and view keyed to
+     an id nothing answers to any more. Probed on v.596: before `src:chart:0|org|…`, after `bg3`,
+     with `group:src:chart:0|org|…|lens:faction` still sitting in `layouts` and `saved`.
+     **A record that changes its name when you write to it is two records.** */
+  function readingForEl(elKey){
+    try{ return groups().find(function(x){
+      return x && x.source && x.source.kind === 'chart' && x.source.key === elKey; }) || null;
+    }catch(e){ return null; }
+  }
+  /* The members a BUILDER should show: the group's own, minus the group element itself. The
+     chart reading puts the org at the head of its own member list so the drawing has a title
+     node (v.560) — true of the picture and nonsense in a "who is in it" list. */
+  function memberFace(gp, elKey){
+    return membersOf(gp).filter(function(k){ return k !== elKey; });
+  }
   V.groupForEl = function(elKey){
     if (!elKey) return null;
-    var g = (store().groups || []).find(function(x){ return x && x.el === elKey; });
-    return g ? { id:g.id, name:g.name, type:g.type, lens:g.lens, members:(g.members || []).slice() } : null;
+    var g = (store().groups || []).find(function(x){ return x && x.el === elKey; }) || readingForEl(elKey);
+    return g ? { id:g.id, name:g.name, type:typeOf(g), lens:lensOfGroup(g),
+                 sourced:!!g.source, members:memberFace(g, elKey) } : null;
   };
   /* find-or-create the group this element IS, and set what the builder knows about it.
      `members` REPLACES, because the builder's list is the whole answer to "who is in it" — but a
@@ -74330,6 +74496,40 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
     var s = store();
     var gp = (s.groups || []).find(function(x){ return x && x.el === elKey; });
     if (!gp){
+      /* Adopt the reading this element ALREADY is, rather than minting a rival beside it. The new
+         record takes a STABLE id — a derived one carries the element key, so a rename would orphan
+         it all over again — and `rekeyGroup` walks the arrangement across in the same breath.
+
+         **It also takes the members the reading was showing**, which is a second fault found on the
+         way to the first: the builder read `(g.members || [])` off a record that did not exist yet,
+         showed an empty list, and then saved that empty list over a group whose member chart had
+         people in it. **A replace is only honest when the writer saw what it is replacing** (v.584)
+         — and what they saw was nothing, so the replace was not.
+
+         The reading's own TYPE and LENS come across only when it had something to lose — members,
+         or a slot the writer arranged. An `org` element created a moment ago is read as a group
+         because every org is (v.557), not because anybody arranged it, and adopting `political` /
+         `faction` for an empty new group would change the default out from under the two doors
+         that already work. */
+      var readIt = readingForEl(elKey);
+      if (readIt){
+        var live = memberFace(readIt, elKey);
+        var had = live.length > 0 || hasSlots(s, readIt.id);
+        gp = { id:freshGroupId(s), el:elKey,
+               name:opts.name || readIt.name || '',
+               /* when there is nothing to preserve, this branch must land EXACTLY where the fresh
+                  mint below lands — same type, same lens. Taking the caller's type only after
+                  choosing a lens is what broke Assembly: a Regalia came out as a social web,
+                  because the lens had already been settled from the placeholder default and the
+                  later `opts.type` pass only recomputes a lens that is missing. */
+               type:(had ? (typeOf(readIt) || 'social') : (opts.type || 'social')),
+               members:live.slice() };
+        gp.lens = had ? lensOfGroup(readIt) : ((TYPE_LENSES[gp.type] || [])[0] || 'social');
+        s.groups = s.groups || []; s.groups.push(gp);
+        rekeyGroup(s, readIt.id, gp.id);
+      }
+    }
+    if (!gp){
       gp = { id:freshGroupId(s), name:opts.name || '', members:[],
              type:opts.type || 'social', el:elKey };
       gp.lens = (TYPE_LENSES[gp.type] || [])[0] || 'social';
@@ -74338,13 +74538,72 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
     if (opts.name) gp.name = opts.name;
     if (opts.type){ gp.type = opts.type;
       if (!gp.lens || !(TYPE_LENSES[gp.type] || []).length) gp.lens = (TYPE_LENSES[gp.type] || [])[0] || gp.lens || 'social'; }
-    if (Array.isArray(opts.members)) gp.members = opts.members.slice();
+    /* the group element is never a member of itself: the reading puts it at the head of its own
+       list so the drawing has a title node (v.560), which is true of the picture and nonsense in a
+       "who is in it" list */
+    if (Array.isArray(opts.members)) gp.members = opts.members.filter(function(k){ return k !== elKey; });
     saveGroup(gp);
     /* the map is the point of doing this, so it repaints — but only if it is on screen */
     try{ if (hostOf(MAIN)) V.render(MAIN); }catch(e){}
-    return { id:gp.id, name:gp.name, type:gp.type, lens:gp.lens, members:gp.members.slice() };
+    return { id:gp.id, name:gp.name, type:gp.type, lens:gp.lens, members:(gp.members || []).slice() };
   };
   V.typeForSub = typeFromSub;
+
+  /* ---- v.597 · #52 phase 1 · ONE ACCESSOR --------------------------------------------------
+     [Jeremy, 2026-09-04] The record decision was option B — _"one record… but give the Group
+     element the freedom to do things like what the party is doing on the map."_ The freedom is
+     phase 2's capability table; what phase 2 needs first is somewhere to hang it, and that is a
+     single place every part of the app asks about groups.
+
+     Today there are four doors into the same idea — the Bonds group record, the `org` element's
+     `gp.el`, a member chart read as a group, and a party on the map — and every caller outside
+     Bonds has had to know which one it was talking to. `DYSTGROUPS` answers the question they
+     were all actually asking: **what groups does this story have, and what is each one?** Every
+     answer carries its ORIGIN, so phase 2 can say what a party may do that a household may not
+     without anybody re-deriving where the record came from.
+
+     It is a door, not a window (v.431's rule for `B.groupList`): no store internals, no hidden
+     groups, no `__live`. Reads are cheap and derived; the two writers delegate to the functions
+     that already existed rather than reaching into the store. */
+  function pubGroup(g){
+    var lens = lensOfGroup(g);
+    var lk = (BONDS.KINDS && BONDS.KINDS[lens]) || null;
+    return {
+      id: g.id,
+      name: g.name || 'Untitled group',
+      type: typeOf(g),
+      typeName: typeName(typeOf(g)) || '',
+      lens: lens,
+      lensName: (lk && lk.name) || '',
+      el: g.el || null,
+      /* where the record LIVES, which is the question phase 2's capabilities turn on */
+      origin: g.source ? g.source.kind : (g.el ? 'element' : 'bonds'),
+      originKey: g.source ? g.source.key : (g.el || null),
+      members: membersOf(g).slice()
+    };
+  }
+  window.DYSTGROUPS = {
+    all: function(){ try{ return groups().map(pubGroup); }catch(e){ return []; } },
+    byId: function(id){ try{ var g = groupById(id); return g ? pubGroup(g) : null; }catch(e){ return null; } },
+    /* the group an `org` element IS — whether it has been written to yet or is still only a
+       reading of that element's member chart. One question, one answer. */
+    forEl: function(elKey){
+      if (!elKey) return null;
+      try{
+        var g = (store().groups || []).find(function(x){ return x && x.el === elKey; }) || readingForEl(elKey);
+        return g ? pubGroup(g) : null;
+      }catch(e){ return null; }
+    },
+    /* the party a group is, if it is one — parties keep their own record until phase 2 */
+    partyOf: function(id){
+      try{ var g = groupById(id);
+        if (!g || !g.source || g.source.kind !== 'party') return null;
+        return (typeof beingGroupById === 'function') ? beingGroupById(g.source.key) : null;
+      }catch(e){ return null; }
+    },
+    ensureForEl: function(elKey, opts){ try{ return V.linkGroupToEl(elKey, opts || {}); }catch(e){ return null; } },
+    drop: function(id){ try{ dropGroup(id); return true; }catch(e){ return false; } }
+  };
 
   V.__open = openBondCreator;
   V.__poolFor = poolFor;   /* the harness asserts the WORDS that come back, not that a picker opened (lesson 19) */
