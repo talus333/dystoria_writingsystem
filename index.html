@@ -20605,6 +20605,10 @@ function createPathElement(pts, color, width){
   ensureSession(); state.session.words = state.prompt.words;
   scheduleAutosave();
   flashStatus('Drew a path — keep drawing, or press Esc to stop');
+  /* v.626 — a line is offered the same naming question a shape gets the moment it is drawn. It
+     will not become a zone (no inside), but it can carry a name, and this is when you know it. */
+  var _pi = state.prompt.words.length - 1;
+  setTimeout(function(){ try{ if (typeof openZoneNamer === 'function') openZoneNamer(_pi); }catch(e){} }, 0);
 }
 // Small menu on a decoration (terrain/path) — recolour or delete. Decorations have no map label/handle,
 // so the shape itself is the click target (class .deco-shape, dataset.deco = word index).
@@ -20640,7 +20644,10 @@ function isZoneWord(w){ return !!(zoneCanBe(w) && String(w.zoneLabel||'').trim()
 function zoneWords(){ return ((state.prompt && state.prompt.words) || []).map(function(w,i){ return { w:w, i:i }; }).filter(function(o){ return isZoneWord(o.w); }); }
 function zoneLabelOf(w){ return String((w && w.zoneLabel) || '').trim(); }
 function zoneSetLabel(idx, label){
-  var w = state.prompt && state.prompt.words[idx]; if(!w || !zoneCanBe(w)) return false;
+  /* v.626 — the SETTER asks the same question the naming door asks. It was still asking
+     `zoneCanBe` (closed only) while the door had widened to `drawCanName`, so naming a line
+     silently did nothing: one question, two places, exactly as in v.620 and v.623. */
+  var w = state.prompt && state.prompt.words[idx]; if(!w || !drawCanName(w)) return false;
   if(typeof pushUndo==='function') pushUndo();
   label = String(label||'').trim();
   if(label) w.zoneLabel = label; else delete w.zoneLabel;
@@ -20713,6 +20720,36 @@ function zoneCrossings(){
   }
   return out;
 }
+/* v.626 [Jeremy] — "The shapes and line should have a small label pill with the name on it,
+   centered at the bottom of the shape or centre of the line. The boundaries should have the label
+   pill in the centre."
+
+   So a LINE can be named too. It is still NOT a zone — a line has no inside, so there is nothing
+   for it to be the boundary of, and `isZoneWord` is unchanged. What it has is a NAME, and a name
+   is worth drawing. Two predicates, one for each question, so neither has to answer the other's. */
+function drawCanName(w){ return !!(w && w.deco && (zonePoly(w) || (w.line && w.line.length > 1))); }
+/* ONE place decides where a name sits, so the three shapes cannot drift apart:
+   a boundary carries it in the MIDDLE (the boundary IS the area), a shape at the FOOT of its own
+   outline, a line at its MIDPOINT. A label the writer has deliberately pinned is left where it is. */
+function drawLabelAt(w){
+  if(!w) return null;
+  if(w.line && w.line.length > 1){
+    var m = w.line[Math.floor(w.line.length / 2)] || w.line[0];
+    return { x:Math.round(m[0]), y:Math.round(m[1]), kind:'line' };
+  }
+  var pg = zonePoly(w); if(!pg || !pg.length) return null;
+  var mnx=1e9, mxx=-1e9, mny=1e9, mxy=-1e9;
+  pg.forEach(function(q){ mnx=Math.min(mnx,q[0]); mxx=Math.max(mxx,q[0]); mny=Math.min(mny,q[1]); mxy=Math.max(mxy,q[1]); });
+  if(w.shape) return { x:Math.round((mnx+mxx)/2), y:Math.round(mxy), kind:'shape' };
+  return { x:Math.round((mnx+mxx)/2), y:Math.round((mny+mxy)/2), kind:'area' };
+}
+/* the lines this surface has NAMED — labelled, listed, but never counted as zones */
+function namedLineWords(){
+  var out=[]; try{ ((state.prompt&&state.prompt.words)||[]).forEach(function(w,i){
+    if(w && w.deco && w.line && w.line.length>1 && String(w.zoneLabel||'').trim()) out.push({ i:i, w:w });
+  }); }catch(e){}
+  return out;
+}
 function zoneDepth(idx){
   var t=zoneTree(), by={}; t.forEach(function(n){ by[n.i]=n; });
   var d=0, at=by[idx], seen={};
@@ -20721,51 +20758,30 @@ function zoneDepth(idx){
 }
 try{ window.__dystZones={ words:zoneWords, isZone:isZoneWord, canBe:zoneCanBe, poly:zonePoly, label:zoneLabelOf, setLabel:zoneSetLabel,
                           members:zoneMembers, tree:zoneTree, crossings:zoneCrossings, depth:zoneDepth,
-                          presets:ZONE_PRESETS }; }catch(e){}
+                          presets:ZONE_PRESETS, canName:drawCanName, labelAt:drawLabelAt, lines:namedLineWords }; }catch(e){}
 /* The zone naming popup: the preset pill sets, then a free label. Opened by the ✎ route on a
    drawing AND the moment a closed shape is drawn — one surface, two doors. */
 function openZoneNamer(idx, x, y){
   var w = state.prompt && state.prompt.words[idx]; if(!w) return;
-  if(typeof zoneCanBe === 'function' && !zoneCanBe(w)) return;   /* a line has no inside to name */
-  var menu = document.getElementById('aspectMenu'); if(!menu) return; menu.innerHTML = '';
-  if(menu.parentElement !== document.body) document.body.appendChild(menu);
-  var lab = (typeof zoneLabelOf === 'function') ? zoneLabelOf(w) : '';
-  var add2 = function(label, fn){ var b = document.createElement('button'); b.textContent = label;
-    b.addEventListener('click', function(ev){ ev.stopPropagation(); fn(); }); menu.appendChild(b); };
-  var head = function(t){ var h = document.createElement('div'); h.textContent = t;
-    h.style.cssText = 'font-family:var(--sans);font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-faint);padding:6px 11px 2px'; menu.appendChild(h); };
-  head(lab ? ('Zone \u2014 ' + lab) : 'Name this boundary');
-  (typeof ZONE_PRESETS !== 'undefined' ? ZONE_PRESETS : []).forEach(function(set){
-    head(set.name);
-    set.pills.forEach(function(p){ add2(p, function(){ closeAspectMenu(); zoneSetLabel(idx, p); }); });
-  });
-  head('Your own');
-  add2('\u270e Type a label\u2026', function(){
-    closeAspectMenu();
-    sitePrompt('What does this boundary mean? \u2014 a place, or something the story is doing (\u201cOff-stage\u201d, \u201cAt Stake\u201d, \u201cRemembered\u201d)', lab || '', 'Name the zone').then(function(v){
-      if(v == null) return; zoneSetLabel(idx, v);
-    });
-  });
-  if(lab) add2('\u2715 Not a zone', function(){ closeAspectMenu(); zoneSetLabel(idx, ''); });
-  else add2('\u2014 Leave it unnamed', function(){ closeAspectMenu(); });
-  /* Placed at the shape when nobody clicked — the drawing is what the question is about, so the
-     question stands next to it rather than in the middle of the screen. */
+  if(typeof drawCanName === 'function' && !drawCanName(w)) return;   /* nothing drawn, nothing to name */
+  /* v.626 [Jeremy] — "instead of this awkward drop down, can we use the ADD system with the category
+     pills and the scrollable list of options under each category, and default to the All with the
+     full list. And you should be able to just type something to create new."
+     The five preset sets ARE the category pills; their words are the list. This function keeps only
+     the part that was right: the question stands next to the drawing it is about. */
   var px = x, py = y;
   if(px == null){
     try{
       var svg = document.getElementById('skySvg'); var vv = (typeof viewBoxVals === 'function') ? viewBoxVals() : null;
-      var pg = (typeof zonePoly === 'function') ? zonePoly(w) : null;
-      if(svg && vv && pg){
-        var mnx = 1e9, mxx = -1e9, mny = 1e9; pg.forEach(function(p){ mnx = Math.min(mnx, p[0]); mxx = Math.max(mxx, p[0]); mny = Math.min(mny, p[1]); });
+      var at = (typeof drawLabelAt === 'function') ? drawLabelAt(w) : null;
+      if(svg && vv && at){
         var r = svg.getBoundingClientRect();
-        px = r.left + ((mnx + mxx) / 2 - vv[0]) / vv[2] * (r.width || vv[4] || 1) + 14;
-        py = r.top + (mny - vv[1]) / vv[3] * (r.height || vv[5] || 1);
+        px = r.left + (at.x - vv[0]) / vv[2] * (r.width || vv[4] || 1) + 16;
+        py = r.top + (at.y - vv[1]) / vv[3] * (r.height || vv[5] || 1) - 40;
       }
     }catch(e){}
   }
-  menu.style.left = Math.max(8, Math.min(px == null ? 240 : px, window.innerWidth - 210)) + 'px';
-  menu.style.top  = Math.max(8, Math.min(py == null ? 160 : py, window.innerHeight - 340)) + 'px';
-  menu.style.display = 'block';
+  if(typeof window.__dystOpenZonePicker === 'function') window.__dystOpenZonePicker(idx, px, py);
 }
 try{ window.openZoneNamer = openZoneNamer; }catch(e){}
 function openDecoMenu(idx, x, y){
@@ -20787,10 +20803,12 @@ function openDecoMenu(idx, x, y){
   }
   /* v.622 — a drawn area can be NAMED, and naming it is what makes it a zone. Only areas: a path
      is a line and a line has no inside, so there is nothing for it to be the boundary of. */
-  if (typeof zoneCanBe === 'function' && zoneCanBe(w)){   /* v.623 — any CLOSED drawing: a region, a rectangle, an ellipse. A path is a line and a line has no inside. */
+  if (typeof drawCanName === 'function' && drawCanName(w)){   /* v.626 — any drawing can carry a NAME; only a closed one is a zone (a line has no inside) */
     const _lab = (typeof zoneLabelOf === 'function') ? zoneLabelOf(w) : '';
     /* v.624 — one naming surface, called from here and from the moment a shape is drawn. */
-    add(_lab ? ('◇ Rename zone \u201c' + _lab + '\u201d\u2026') : '◇ Make this a zone\u2026',
+    const _isL = !!w.line;
+    add(_lab ? ((_isL ? '◇ Rename \u201c' : '◇ Rename zone \u201c') + _lab + '\u201d\u2026')
+             : (_isL ? '◇ Name this line\u2026' : '◇ Make this a zone\u2026'),
         () => { closeAspectMenu(); setTimeout(function(){ openZoneNamer(idx, x, y); }, 0); });
   }
   add('✕ Delete', () => { closeAspectMenu(); if (typeof removeNode === 'function') removeNode(idx); });
@@ -21363,34 +21381,54 @@ function renderConstellation(){
       /* v.622 — unless it is a ZONE, which is a decoration that carries a label. Drawn here rather
          than in the terrain painter so it sits ABOVE the wash and below the cast, which is where a
          boundary's name belongs: readable, and never in front of the people standing in it. */
-      if (typeof isZoneWord === 'function' && isZoneWord(nd)){
+      /* v.626 — a NAMED drawing carries a small label PILL: text on its own rounded plate, so the
+         name reads over a wash, a stroke or nothing at all. `drawLabelAt` says where — one answer
+         for the three shapes. The plate is sized from the text's own measured box after it is in
+         the tree, because a guess at text width is wrong in every font the app can be set to. */
+      /* THE WORD IS THE TRUTH; THE NODE IS A SNAPSHOT. `layoutConstellation` builds `state.nodes`
+         as `words.map(w => ({...w}))` — a shallow COPY per word — so anything written to a word
+         after the last layout is invisible to a node. `zoneSetLabel` writes the label and calls
+         `renderConstellation`, not `layoutConstellation`: read the label off the node and a zone
+         named right after it was drawn stayed blank until something unrelated re-laid the map.
+         Same index, so the live word is one lookup away. [v.626 — present since v.622] */
+      var _lw  = (state.prompt && state.prompt.words[i]) || nd;
+      var _lab = (typeof zoneLabelOf === 'function') ? zoneLabelOf(_lw) : '';
+      var _at  = (_lab && typeof drawLabelAt === 'function') ? drawLabelAt(_lw) : null;
+      if (_at){
         var _zg = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-        _zg.setAttribute('class', 'zone-label'); _zg.dataset.zone = i;
-        var _zx = (typeof nd.fx === 'number') ? nd.fx : 0, _zy = (typeof nd.fy === 'number') ? nd.fy : 0;
-        /* v.623 — a rectangle or ellipse carries no label anchor of its own, so the label sits at
-           the top of its own boundary, where a region's does. */
-        if (typeof nd.fx !== 'number' && nd.shape){
-          var _sp = zonePoly(nd);
-          if (_sp){ var _mnx=1e9,_mxx=-1e9,_mny=1e9; _sp.forEach(function(p){ _mnx=Math.min(_mnx,p[0]); _mxx=Math.max(_mxx,p[0]); _mny=Math.min(_mny,p[1]); });
-                    _zx = Math.round((_mnx+_mxx)/2); _zy = Math.round(_mny) + 16; }
-        }
-        _zg.setAttribute('transform', 'translate(' + _zx + ',' + _zy + ')');
+        _zg.setAttribute('class', 'zone-label zl-' + _at.kind); _zg.dataset.zone = i;
+        _zg.setAttribute('transform', 'translate(' + _at.x + ',' + _at.y + ')');
+        var _zp = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        _zp.setAttribute('class', 'zl-pill'); _zg.appendChild(_zp);
         var _zt = document.createElementNS('http://www.w3.org/2000/svg', 'text');
         _zt.setAttribute('text-anchor', 'middle'); _zt.setAttribute('class', 'zl-t');
-        _zt.textContent = zoneLabelOf(nd);
+        _zt.setAttribute('dy', '0.34em');   /* centres the glyphs on y=0 in every engine — dominant-baseline is not dependable here */
+        _zt.textContent = _lab;
         _zg.appendChild(_zt);
-        /* the count is DERIVED on every render, so it cannot disagree with the drawing */
-        var _zn = 0; try { _zn = zoneMembers(nd).length; } catch(e){}
+        /* the count is DERIVED on every render, so it cannot disagree with the drawing.
+           Only a closed drawing has one: a line has no inside to count. */
+        var _zn = 0; try { if (typeof isZoneWord === 'function' && isZoneWord(_lw)) _zn = zoneMembers(_lw).length; } catch(e){}
         if (_zn){
           var _zc = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-          _zc.setAttribute('text-anchor', 'middle'); _zc.setAttribute('y', '13'); _zc.setAttribute('class', 'zl-n');
-          _zc.textContent = _zn + (_zn === 1 ? ' inside' : ' inside');
+          _zc.setAttribute('text-anchor', 'middle'); _zc.setAttribute('class', 'zl-n');
+          _zc.textContent = _zn + ' inside';
           _zg.appendChild(_zc);
         }
         var _ztt = document.createElementNS('http://www.w3.org/2000/svg', 'title');
-        _ztt.textContent = zoneLabelOf(nd) + (_zn ? (' \u2014 ' + _zn + ' inside') : ' \u2014 nothing inside yet');
+        _ztt.textContent = _lab + (_at.kind === 'line' ? ' \u2014 a named line' : (_zn ? (' \u2014 ' + _zn + ' inside') : ' \u2014 nothing inside yet'));
         _zg.appendChild(_ztt);
         svg.appendChild(_zg);
+        try{
+          var _bb = _zt.getBBox();
+          /* EVEN, both ways: an odd height has no exact half, and Math.round(-9.5) is -9 in JS —
+             the plate sat half a pixel off its own anchor and its rx overshot its height. */
+          var _pw = Math.round(_bb.width) + 15;  if (_pw % 2) _pw++;
+          var _ph = Math.round(_bb.height) + 6;  if (_ph % 2) _ph++;
+          _zp.setAttribute('x', -_pw / 2); _zp.setAttribute('y', -_ph / 2);
+          _zp.setAttribute('width', _pw); _zp.setAttribute('height', _ph);
+          _zp.setAttribute('rx', _ph / 2);
+          if (_zn) _zc.setAttribute('y', _ph / 2 + 11);
+        }catch(e){ _zp.setAttribute('opacity','0'); if(_zn) _zc.setAttribute('y','16'); }
       }
       return;
     }
@@ -30388,6 +30426,7 @@ function renderZonesDrawer(){
     return;
   }
   var depthOf = {}; try{ (zoneTree()||[]).forEach(function(n){ try{ depthOf[n.i] = zoneDepth(n.i); }catch(e){} }); }catch(e){}
+  var _zhd = document.createElement('div'); _zhd.className = 'zw-grouphd'; _zhd.textContent = 'Zones'; body.appendChild(_zhd);
   zs.forEach(function(o){
     var row = document.createElement('div'); row.className = 'rl-row rl-zone-row';
     var d = depthOf[o.i] || 0; if (d) row.style.paddingLeft = (10 + d * 12) + 'px';
@@ -30409,6 +30448,32 @@ function renderZonesDrawer(){
     row.appendChild(del);
     body.appendChild(row);
   });
+  /* v.626 — a NAMED LINE is listed here too, under its own head, because a name you cannot find
+     again is a name you will retype. It is not a zone and never counts as one: it has no inside,
+     so it has no members and it takes no part in the nesting. */
+  var lns = []; try{ lns = namedLineWords(); }catch(e){ lns = []; }
+  if (lns.length){
+    var lhd = document.createElement('div'); lhd.className = 'zw-grouphd'; lhd.textContent = 'Named lines'; body.appendChild(lhd);
+    lns.forEach(function(o){
+      var row = document.createElement('div'); row.className = 'rl-row rl-zone-row';
+      var n3 = document.createElement('span'); n3.className = 'rl-name'; n3.textContent = zoneLabelOf(o.w); row.appendChild(n3);
+      var c3 = document.createElement('span'); c3.className = 'rl-zone-n'; c3.textContent = 'line'; row.appendChild(c3);
+      row.title = 'Press to find it on the map';
+      row.addEventListener('click', function(){ try{ state.selNode = o.i; if (typeof renderConstellation === 'function') renderConstellation(); }catch(e){} });
+      var d3 = document.createElement('button'); d3.className = 'rl-x'; d3.textContent = '\u00d7';
+      d3.title = 'Delete the line \u201c' + zoneLabelOf(o.w) + '\u201d';
+      d3.addEventListener('click', function(ev){
+        ev.stopPropagation();
+        siteConfirm('Delete \u201c' + zoneLabelOf(o.w) + '\u201d? The line goes with it.', 'Delete the line').then(function(ok){
+          if (!ok) return;
+          if (typeof removeNode === 'function') removeNode(o.i);
+          if (typeof renderZonesDrawer === 'function') renderZonesDrawer();
+        });
+      });
+      row.appendChild(d3);
+      body.appendChild(row);
+    });
+  }
 }
 try{ window.renderZonesDrawer = renderZonesDrawer; }catch(e){}
 /* ---- The Images drawer: every picture on this surface, as a thumbnail ---- */
@@ -43079,6 +43144,7 @@ document.addEventListener('DOMContentLoaded', init);
   #traitPicker .tp-cast.tp-solo > .tp-famhd{flex:0 0 58px; width:auto; margin:0}
   #traitPicker .tp-results{max-height:212px; overflow-y:auto; margin-top:4px; scrollbar-width:thin}
   #traitPicker .tp-new{cursor:pointer; border-top:1px solid var(--line-soft); margin-top:6px; padding-top:8px}
+  #traitPicker .ec-opt.tp-on{ background:rgba(196,158,74,.16); box-shadow:inset 2px 0 0 var(--gold); }   /* v.626 — the name this drawing already carries */
   #traitPicker .tp-new .ec-w{color:var(--gold)}
   #traitPicker .tp-empty{font-family:var(--serif); font-style:italic; font-size:13.5px; color:var(--ink-faint); padding:8px 2px; line-height:1.55}
   /* ---- Character-Creator (roadmap #6c) — compound being builder ---- */
@@ -43490,7 +43556,17 @@ document.addEventListener('DOMContentLoaded', init);
         document.body.appendChild(p);
         p.querySelector('.tp-x').addEventListener('click', closeTraitPicker);
         p.querySelector('.tp-search').addEventListener('input', tpRender);
-        p.querySelector('.tp-search').addEventListener('keydown', e=>{ if(e.key==='Escape') closeTraitPicker(); });
+        p.querySelector('.tp-search').addEventListener('keydown', e=>{
+          if(e.key==='Escape'){ closeTraitPicker(); return; }
+          /* v.626 [Jeremy] — "you should be able to just type something to create new." Scoped to
+             the zone picker: in trait/obstacle/stake a typed word means one of several things and
+             the writer picks the row that says which. A zone name means exactly one thing. */
+          if(e.key==='Enter' && TP.mode==='zone'){
+            e.preventDefault();
+            const v=p.querySelector('.tp-search').value.trim();
+            if(v && typeof zoneSetLabel==='function'){ zoneSetLabel(TP.i, v); closeTraitPicker(); }
+          }
+        });
       }
       return p;
     }
@@ -43509,6 +43585,21 @@ document.addEventListener('DOMContentLoaded', init);
     function tpRenderPills(){
       const p=tpEl(), host=p.querySelector('.tp-pills');
       host.innerHTML='';
+      /* v.626 — the zone namer is the ADD system now, not a dropdown: the preset SETS are the
+         category pills and their words are the list beneath, with All selected to start so the
+         full list is what you meet. */
+      if(TP.mode==='zone'){
+        host.style.display='none';
+        const zf=p.querySelector('.tp-fams');
+        if(zf){ zf.innerHTML=''; zf.style.display='flex';
+          const mkz=(name,label)=>{ const b=document.createElement('span');
+            b.className='tp-pill tp-fam'+(((TP.zset||'')===name)?' on':''); b.textContent=label;
+            b.addEventListener('click', ()=>{ TP.zset=name; tpRenderPills(); tpRender(); }); zf.appendChild(b); };
+          mkz('','All');
+          (typeof ZONE_PRESETS!=='undefined'?ZONE_PRESETS:[]).forEach(set=> mkz(set.name, set.name));
+        }
+        return;
+      }
       if(TP.mode!=='trait' || TP.single){ host.style.display='none'; }   // motivation/obstacle pickers + single-dimension builder picks have no subcategory switcher
       else {
       host.style.display='flex';
@@ -43639,6 +43730,53 @@ document.addEventListener('DOMContentLoaded', init);
     function tpRender(){
       const p=tpEl(), res=p.querySelector('.tp-results'); res.innerHTML='';
       const raw=p.querySelector('.tp-search').value.trim(), q=raw.toLowerCase();
+      if(TP.mode==='zone'){
+        const _zw=state.prompt && state.prompt.words[TP.i];
+        const _cur=(_zw && typeof zoneLabelOf==='function') ? zoneLabelOf(_zw) : '';
+        const _isLine=!!(_zw && _zw.line);
+        const _sets=(typeof ZONE_PRESETS!=='undefined'?ZONE_PRESETS:[]).filter(s=> !TP.zset || s.name===TP.zset);
+        const _seen={}, _offered=[];
+        /* no per-row subtitle: the group head above already names the set, and printing it again on
+           every row was the dropdown's noise carried into the list. */
+        const _row=(word, cls)=>{ const b=document.createElement('button'); b.className='ec-opt'+(cls||'');
+          b.innerHTML='<span class="ec-w">'+String(word).replace(/</g,'&lt;')+'</span>';
+          b.addEventListener('click', ()=>{ zoneSetLabel(TP.i, word); closeTraitPicker(); }); res.appendChild(b); return b; };
+        _sets.forEach(set=>{
+          const words=set.pills.filter(x=>!q || x.toLowerCase().indexOf(q)>=0);
+          set.pills.forEach(x=>{ _seen[x.toLowerCase()]=1; });
+          if(!words.length) return;
+          const h=document.createElement('div'); h.className='tp-grouphd'; h.textContent=set.name; res.appendChild(h);
+          words.forEach(x=>{ _offered.push(x); _row(x, (x.toLowerCase()===_cur.toLowerCase())?' tp-on':''); });
+        });
+        /* a name this story has already used is worth offering back — the whole point of the ADD
+           system is that you can reach everything the story HAS, not just the shipped words. Under
+           All only: it belongs to no preset set, so no set pill should claim it. */
+        if(!TP.zset){
+          const mine=[];
+          try{
+            const pools=[ (state.prompt&&state.prompt.words)||[] ];
+            (state.frames||[]).forEach(fr=> pools.push((fr.prompt&&fr.prompt.words)||[]));
+            pools.forEach(ws=> ws.forEach(x=>{
+              const L=(typeof zoneLabelOf==='function')?zoneLabelOf(x):''; if(!L) return;
+              const k=L.toLowerCase(); if(_seen[k]) return; _seen[k]=1;
+              if(q && k.indexOf(q)<0) return; mine.push(L);
+            }));
+          }catch(e){}
+          if(mine.length){ const h=document.createElement('div'); h.className='tp-grouphd'; h.textContent='Already in this story'; res.appendChild(h);
+            mine.slice(0,30).forEach(L=>{ _offered.push(L); _row(L, (L.toLowerCase()===_cur.toLowerCase())?' tp-on':''); }); }
+        }
+        if(raw && !_offered.some(x=>x.toLowerCase()===q)){
+          const b=document.createElement('button'); b.className='ec-opt tp-new';
+          b.innerHTML='<span class="ec-w">+ Create \u201C'+raw.replace(/</g,'&lt;')+'\u201D</span><span class="ec-sub">'+(_isLine?'name this line':'zone')+'</span>';
+          b.addEventListener('click', ()=>{ zoneSetLabel(TP.i, raw); closeTraitPicker(); }); res.appendChild(b);
+        }
+        if(_cur){ const b=document.createElement('button'); b.className='ec-opt';
+          b.innerHTML='<span class="ec-w">\u2715 '+(_isLine?'Remove the name':'Not a zone')+'</span><span class="ec-sub">clears the label</span>';
+          b.addEventListener('click', ()=>{ zoneSetLabel(TP.i, ''); closeTraitPicker(); }); res.appendChild(b); }
+        if(!_offered.length && !raw){ const e=document.createElement('div'); e.className='tp-empty';
+          e.textContent='Choose one, or type your own\u2026'; res.appendChild(e); }
+        return;
+      }
       if(TP.mode==='obstacle'){
         const wb=state.prompt&&state.prompt.words[TP.i];
         const already=motObstacles(wb);
@@ -43826,6 +43964,21 @@ document.addEventListener('DOMContentLoaded', init);
       p.style.top=Math.max(8, Math.min((y||120), window.innerHeight-ph-8))+'px';
       p.querySelector('.tp-search').focus();
     }
+    /* v.626 — the zone namer IS the add picker now. `openZoneNamer` still owns the question of
+       WHERE it opens (beside the drawing it is about); this owns what is in it. */
+    function openZonePicker(i, x, y){
+      const w=state.prompt && state.prompt.words[i]; if(!w) return;
+      const isLine=!!(w.line), lab=(typeof zoneLabelOf==='function')?zoneLabelOf(w):'';
+      TP={ i, cat:'', sub:'', mode:'zone', zset:'' };
+      tpEl().querySelector('.tp-title').textContent = isLine
+        ? (lab ? ('Name the line \u2014 ' + lab) : 'Name this line')
+        : (lab ? ('Zone \u2014 ' + lab) : 'Name this boundary');
+      tpEl().querySelector('.tp-search').placeholder = isLine
+        ? 'search, or type a name for this line\u2026'
+        : 'search a zone, or type your own\u2026';
+      tpOpen(i, x, y);
+    }
+    window.__dystOpenZonePicker = openZonePicker;
     function openGroupTraitPicker(gid, x, y){
       const g=(typeof beingGroupById==='function')?beingGroupById(gid):null; if(!g) return;
       TP={ i:-1, cat:'group', group:gid, sub:traitSubs('group')[0], mode:'trait' };
@@ -55966,11 +56119,22 @@ body.ember:not(.eink) .zone-tool-icons .draw-cat.zt-ic{ background:rgba(255,255,
 .rl-zone-row{ cursor:pointer; }
 .rl-zone-n{ font-family:var(--sans); font-size:9.5px; letter-spacing:.09em; text-transform:uppercase; color:var(--ink-faint); margin-left:auto; padding-right:6px; flex:none; }
 .zone-label{ pointer-events:none; }
-.zone-label .zl-t{ font-family:'Cormorant SC','Cormorant Garamond',serif; font-size:13px; letter-spacing:.14em; text-transform:uppercase; fill:#6a6253; opacity:.82; }
+.zone-label .zl-t{ font-family:'Cormorant SC','Cormorant Garamond',serif; font-size:12px; letter-spacing:.13em; text-transform:uppercase; fill:#5f5849; opacity:1; }
 .zone-label .zl-n{ font-family:var(--sans); font-size:8.5px; letter-spacing:.1em; text-transform:uppercase; fill:#8a8272; opacity:.75; }
-body.ember:not(.eink) .zone-label .zl-t{ fill:#cbbfa6; }
-body.ember:not(.eink) .zone-label .zl-n{ fill:#9a917f; }
+/* v.626 [Jeremy] — "a small label pill with the name on it". A plate under the words, so a name
+   reads the same over a terrain wash, over a stroke, or over bare parchment. */
+.zone-label .zl-pill{ fill:#fbf7ec; stroke:rgba(120,92,40,.30); stroke-width:1; }
+/* a BOUNDARY's name sits in the middle of its own area and is "blended in a bit more": the area
+   is already saying where it is, so the plate only has to lift the words off the wash. */
+.zone-label.zl-area .zl-pill{ fill:rgba(251,247,236,.52); stroke:rgba(120,92,40,.14); }
+.zone-label.zl-area .zl-t{ fill:#6a6253; opacity:.80; }
+body.ember:not(.eink) .zone-label .zl-pill{ fill:#f7f1e2; stroke:rgba(138,99,32,.30); }
+body.ember:not(.eink) .zone-label.zl-area .zl-pill{ fill:rgba(247,241,226,.50); stroke:rgba(138,99,32,.14); }
+body.ember:not(.eink) .zone-label .zl-t{ fill:#5f5849; }
+body.ember:not(.eink) .zone-label.zl-area .zl-t{ fill:#6a6253; }
+body.ember:not(.eink) .zone-label .zl-n{ fill:#8a8272; }
 body.eink .zone-label .zl-t{ fill:#000; opacity:1; }
+body.eink .zone-label .zl-pill{ fill:#fff; stroke:#000; }
 .map-pin-layer .map-pin{ cursor:pointer; }
 .map-pin-layer .mp-body{ fill:rgba(255,253,246,.86); stroke:#8a7a55; stroke-width:1.4; }
 .map-pin-layer .mp-dot{ fill:none; stroke:#8a7a55; stroke-width:1.4; }
@@ -68406,6 +68570,10 @@ html body.expb[data-ldrawer="images"] #expLeft #storyLibWin{ display:none !impor
   letter-spacing:.14em; text-transform:uppercase; color:#8d8a84; }   /* the Legend's own title, measured */
 #zonesWin .zw-count, #imagesWin .zw-count{ margin-left:auto; margin-right:22px; font-family:var(--sans); font-size:10px; color:#8d8a84; }
 #zonesBody, #imagesBody{ flex:1 1 auto; overflow-y:auto; min-height:0; text-align:left; }
+#zonesWin .zw-grouphd{ font-family:var(--sans); font-size:10px; font-weight:700; letter-spacing:.15em;
+  text-transform:uppercase; color:#8d8a84; margin:9px 2px 3px; }
+#zonesWin .zw-grouphd:first-child{ margin-top:2px; }
+body.eink #zonesWin .zw-grouphd{ color:#000; }
 /* the zone rows borrowed .rl-row from the Legend but not the Legend's own scoped layout for it
    (every one of those rules is under `#storyLibWin`), so they had never actually been laid out —
    photographed as a run-on line, name and count touching. Their own rules, in the same idiom. */
