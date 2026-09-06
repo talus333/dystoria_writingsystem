@@ -21936,7 +21936,15 @@ function renderGroupsBar(){ const bar = document.getElementById('groupsBar'); if
      same parties is the duplication v.557 removed, so this one stands down.
      Below 768px expb never runs, there is no rail, and the chip is still the
      only way to reach a party — which is why it is kept rather than deleted. */
-  try{ if (document.body.classList.contains('expb')) return; }catch(e){} (typeof beingGroupsList === 'function' ? beingGroupsList() : []).forEach(gr => { const lw = (typeof npFindEl === 'function') ? npFindEl(gr.leader) : null; const ln = (gr.name && gr.name.trim()) ? gr.name.trim() : (lw ? (lw.name || lw.word || 'Party') : 'Party'); const chip = document.createElement('span'); chip.className = 'group-chip' + (gr.exploded ? ' on' : ''); /* v.560: no longer a toggle button \u2014 the acts inside it are the buttons */ const dot = document.createElement('span'); dot.className = 'group-dot'; chip.appendChild(dot); const lbl = document.createElement('span'); lbl.className = 'group-lbl'; const _sz = (gr.count != null ? gr.count : ((gr.members || []).length + 1)); lbl.textContent = ln + ' \u00B7 ' + _sz; chip.appendChild(lbl); chip.title = gr.exploded ? 'Exploded \u2014 its members sit at their own positions.' : 'A party \u2014 its members are gathered behind their leader.';   /* v.560: a description, not an instruction; the arrows carry the gesture */ /* v.560: the pill is not a toggle \u2014 explode/combine is its own icon. */ const acts = document.createElement('span'); acts.className = 'group-acts'; /* v.559: an explicit explode/combine control, first in the row of acts.
+  /* v.615 — [Jeremy] "The Conspirators pill is still showing up on the map sometimes. it's not
+     needed any more, it lives now in the Groups section in the sidebar."
+     It DID stand down already — on `body.expb`, which `ensurePlanExp`'s `init()` adds and never
+     removes. But this render can run BEFORE that init, and then nothing takes the chip away again,
+     so it survived until something else forced a repaint. That is the "sometimes".
+     The condition is asked of the viewport instead, which is the same test `init()` itself uses to
+     decide whether the rail exists at all — and it cannot be early. Below 768px expb never runs,
+     there is no rail, and the chip is still the only way to reach a party, so it is kept there. */
+  try{ if (!(window.matchMedia && window.matchMedia('(max-width:768px)').matches)) return; }catch(e){} (typeof beingGroupsList === 'function' ? beingGroupsList() : []).forEach(gr => { const lw = (typeof npFindEl === 'function') ? npFindEl(gr.leader) : null; const ln = (gr.name && gr.name.trim()) ? gr.name.trim() : (lw ? (lw.name || lw.word || 'Party') : 'Party'); const chip = document.createElement('span'); chip.className = 'group-chip' + (gr.exploded ? ' on' : ''); /* v.560: no longer a toggle button \u2014 the acts inside it are the buttons */ const dot = document.createElement('span'); dot.className = 'group-dot'; chip.appendChild(dot); const lbl = document.createElement('span'); lbl.className = 'group-lbl'; const _sz = (gr.count != null ? gr.count : ((gr.members || []).length + 1)); lbl.textContent = ln + ' \u00B7 ' + _sz; chip.appendChild(lbl); chip.title = gr.exploded ? 'Exploded \u2014 its members sit at their own positions.' : 'A party \u2014 its members are gathered behind their leader.';   /* v.560: a description, not an instruction; the arrows carry the gesture */ /* v.560: the pill is not a toggle \u2014 explode/combine is its own icon. */ const acts = document.createElement('span'); acts.className = 'group-acts'; /* v.559: an explicit explode/combine control, first in the row of acts.
        The chip's click already did this; on the map floor a tooltip was enough to
        find it, in a drawer of quiet pills it was not. */
       { const aEx = document.createElement('span'); aEx.className = 'group-act group-ex';
@@ -43788,7 +43796,7 @@ document.addEventListener('DOMContentLoaded', init);
     window.openObjectChooser=openObjectChooser; window.openObjectCreator=openObjectCreator; window.openObjectByDesc=openObjectByDesc; window.obFromDescription=obApplyDescription;
 
     /* ================= Group (Organization) builder (roadmap #6d) — mirrors the Objects builder; orgs are side-panel, no map placement ================= */
-    const GB = { name:'', desc:'', complexity:1, slots:[] };
+    const GB = { name:'', desc:'', complexity:1, slots:[], place:false };
     const GB_LEVELS = [ {label:'Sketch', extra:0}, {label:'Fuller', extra:3}, {label:'Rich', extra:5} ];
     const GB_DIMS = ['Standing','Structure','Culture','Repute','Era','Adjective'];
     const GB_FAMILIES = [
@@ -43900,6 +43908,10 @@ document.addEventListener('DOMContentLoaded', init);
       /* v.603 — a caller may ask to be TOLD what was built. Kept across a `keep` reopen, because the
          description flow closes and reopens this card mid-answer and the caller never went away. */
       if(typeof opts.onCreate==='function') GB.onCreate=opts.onCreate; else if(!opts.keep) GB.onCreate=null;
+      /* v.615 — where the new group lands. Same keep-across-reopen rule as `onCreate`: the
+         description flow closes and reopens this card mid-answer, and the door you pressed has not
+         changed its mind in between. */
+      if(opts.place!=null) GB.place=!!opts.place; else if(!opts.keep) GB.place=false;
       if(!opts.keep){ GB.name=''; GB.desc=''; GB.complexity=0; }
       GB.editKey=null; GB.editIdx=null;
       if(opts.edit){ var _ew=(typeof npFindEl==='function')?npFindEl(opts.edit):null; if(_ew){ GB.editKey=opts.edit; GB.editIdx=(opts.editIdx!=null?opts.editIdx:-1); GB.name=_ew.name||''; GB.desc=''; GB.slots=(typeof window.dystElementToSlots==='function')?window.dystElementToSlots(_ew):[]; } }
@@ -43929,8 +43941,26 @@ document.addEventListener('DOMContentLoaded', init);
       built.attrs=attrs;
       const nm=(GB.name||'').trim(); if(nm) built.name=nm;
       try{ if(typeof ensureDistinctBeing==='function') ensureDistinctBeing(built); }catch(e){}   /* v.557b: two guilds are two elements */
-      const idx=state.prompt.words.length;
-      state.prompt.words.push(built);
+      /* Created FROM this section's sidebar (`+ group`) → it goes into this section, because that
+         is what the door you pressed meant. Created in Bonds, or from Elements → it goes to the
+         story and no section, and waits in the Story Legend to be added where it belongs. */
+      var _place=!!GB.place;
+      var idx=-1;
+      if(_place){ idx=state.prompt.words.length; state.prompt.words.push(built); }
+      else {
+        try{
+          if(typeof ensureSession==='function') ensureSession();
+          var _lib=state.session.elemLibrary=state.session.elemLibrary||[];
+          var _lk=(typeof libKeyOf==='function')?libKeyOf('org', built.name||built.word):null;
+          /* Same record shape `libSyncFromMap` builds, so if a copy of this group is later added to
+             a section the reconcile finds THIS record instead of minting a second one beside it. */
+          var _ex=_lk?_lib.filter(function(r){ return r && (typeof libKeyOf==='function') && libKeyOf(r.cat, r.name||r.word)===_lk; })[0]:null;
+          if(_ex){ _ex.item=JSON.parse(JSON.stringify(built)); }
+          else _lib.push({ id:'lib'+Date.now().toString(36)+Math.random().toString(36).slice(2,6),
+                           cat:'org', name:built.name||'', sub:built.sub, word:built.word,
+                           item:JSON.parse(JSON.stringify(built)), placed:false, frames:[] });
+        }catch(e){}
+      }
       const desc=(GB.desc||'').trim();
       if(desc){ try{ if(typeof ensureSession==='function') ensureSession(); state.session.npNotes=state.session.npNotes||{}; const k=wordKey(built); if(!state.session.npNotes[k]) state.session.npNotes[k]='<p>'+desc.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/\n/g,'<br>')+'</p>'; }catch(e){} }
       /* v.605 — the group's membership lands through the builder's own door, not through a global
@@ -43940,7 +43970,8 @@ document.addEventListener('DOMContentLoaded', init);
       if(window.__qaOnElementAdd){ try{ window.__qaOnElementAdd(built); }catch(e){} }
       { const se=document.getElementById('skyEmpty'); if(se) se.style.display='none'; }
       // orgs live on the side panel — no map placement
-      if(typeof layoutConstellation==='function') layoutConstellation();
+      if(_place && typeof layoutConstellation==='function') layoutConstellation();
+      if(!_place && typeof renderStoryLibrary==='function') renderStoryLibrary();   /* it is in the Legend now, so the Legend has to say so */
       if(typeof ensureSession==='function') ensureSession(); if(state.session) state.session.words=state.prompt.words;
       if(typeof renderConstellation==='function') renderConstellation();
       if(typeof renderTimeline==='function') renderTimeline();
@@ -43952,7 +43983,7 @@ document.addEventListener('DOMContentLoaded', init);
       /* AFTER the close and after `__qaOnElementAdd` — the group the caller wants to open exists by
          now, because that hook is where v.584 mints it. */
       try{ if(_oc) _oc(built); }catch(e){}
-      if(typeof flashStatus==='function') flashStatus((nm||kind)+' — added to the side panel');
+      if(typeof flashStatus==='function') flashStatus((nm||kind)+(_place?' — added to this section':' — in the Story Legend, ready to add to a section'));
     }
     function groupQuickGenerate(){ GB.name=''; GB.desc=''; GB.complexity=1; gbGenerate(); gbCommit(); }
     function openGroupChooser(){ openAddChooser([
@@ -50771,6 +50802,9 @@ body.eink #expMenu{background:#fff; border-color:#000}
     var sky = document.getElementById('sky'); if (!sky){ return; }
     if (window.matchMedia && window.matchMedia('(max-width:768px)').matches) return;   // phones keep the classic map UI — this layer is desktop-first
     document.body.classList.add('expb');
+    /* v.615 — a chip drawn by a render that ran before this init has no one to remove it: the
+       guard above is asked at DRAW time, and nothing redraws the bar on its own. Sweep once. */
+    try{ document.querySelectorAll('#mapBars .group-chip').forEach(function(n){ if(n.parentNode) n.parentNode.removeChild(n); }); }catch(e){}
     try{   // Legend is fixed to the corner in this experiment — no pin/drag
       var _slw = document.getElementById('storyLibWin');
       if (_slw){ _slw.classList.remove('unpinned'); _slw.style.left = ''; _slw.style.top = ''; _slw.style.right = ''; _slw.style.bottom = ''; }
@@ -51001,8 +51035,12 @@ body.eink #expMenu{background:#fff; border-color:#000}
     { var _rlC = document.getElementById('expLRows'); if (_rlC) _rlC.parentNode.insertBefore(ca, _rlC); }
     // + organization pill under the ORGANIZATIONS header (bottom half of the left strip)
     var oa = document.createElement('button'); oa.type = 'button'; oa.className = 'xb-add'; oa.textContent = '+ group';
-    oa.title = 'Add an organization to the story';
-    oa.addEventListener('click', function(e){ e.stopPropagation(); var tl = expMapTopLeft(); if (typeof EC !== 'undefined'){ EC.x = tl.x; EC.y = tl.y; } if (typeof openElemCard === 'function') openElemCard('org', 'add'); var _c = document.getElementById('elemCard'); if (_c){ var _r = sky.getBoundingClientRect(); var _h = Math.max(300, Math.round(_r.height - 40 - 24)); _c.style.height = _h + 'px'; _c.style.maxHeight = _h + 'px'; _c.classList.add('ec-tall'); } });   // open full-height at the map's top-left, exactly like + Element
+    /* v.615 — this pill is inside ONE section's sidebar, so it builds the group AND adds it here.
+       A group built anywhere else goes to the story and waits in the Story Legend. Routed straight
+       at the builder rather than through `openElemCard('org','add')`, which forwards to the same
+       builder but cannot say where the writer was standing when they asked. */
+    oa.title = 'Build a group and add it to this section — groups built in Bonds or Elements wait in the Story Legend';
+    oa.addEventListener('click', function(e){ e.stopPropagation(); if (typeof window.openGroupCreator === 'function'){ window.openGroupCreator({ place:true }); return; } var tl = expMapTopLeft(); if (typeof EC !== 'undefined'){ EC.x = tl.x; EC.y = tl.y; } if (typeof openElemCard === 'function') openElemCard('org', 'add'); var _c = document.getElementById('elemCard'); if (_c){ var _r = sky.getBoundingClientRect(); var _h = Math.max(300, Math.round(_r.height - 40 - 24)); _c.style.height = _h + 'px'; _c.style.maxHeight = _h + 'px'; _c.classList.add('ec-tall'); } });   // open full-height at the map's top-left, exactly like + Element
     { var _rlO = document.getElementById('expLORows'); if (_rlO) _rlO.parentNode.insertBefore(oa, _rlO); }
     // concepts + plots leave the Narrative Layers bar (concepts live on the left strip; plots live on the Timeline)
     try{ FB_GROUP_CATS.plot = 1; }catch(e){}   // plots collapse into one dropdown chip at 2+ like every other layer
@@ -52626,7 +52664,7 @@ body.eink #expMenu{background:#fff; border-color:#000}
       document.querySelector('#expRight .xb-portlayer').appendChild(lport);
     });
     if (lor){
-      if (!os.length) lor.innerHTML = '<div class="xb-empty">No groups yet — add one with “+ group”.</div>';
+      if (!os.length) lor.innerHTML = '<div class="xb-empty">No groups in this section — build one with “+ group”, or add one you already have from the Story Legend.</div>';
       os.forEach(function(o){
         var row = document.createElement('div'); row.className = 'xb-row'; row.dataset.ci = o.i;
         var col = (typeof catColor === 'function') ? catColor('org') : '#6b9aa6';
@@ -52666,6 +52704,30 @@ body.eink #expMenu{background:#fff; border-color:#000}
             lastSig = ''; refreshStrips();
           });
           row.appendChild(_pex);
+          /* the row's own pointerdown starts a link drag and its click selects — every one of
+             these must reach neither, exactly as `_pex` does. */
+          var _act = function(title, svg, fn){
+            var b = document.createElement('button'); b.type = 'button'; b.className = 'xb-ex xb-pact';
+            b.title = title; b.setAttribute('aria-label', title);
+            b.innerHTML = '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' + svg + '</svg>';
+            b.addEventListener('pointerdown', function(ev){ ev.stopPropagation(); });
+            b.addEventListener('click', function(ev){ ev.preventDefault(); ev.stopPropagation(); fn(b); });
+            row.appendChild(b);
+          };
+          _act('Open this party in the notepad',
+               (typeof LUCIDE !== 'undefined' && LUCIDE['feather']) || '<path d="M20.24 12.24a6 6 0 0 0-8.49-8.49L5 10.5V19h8.5z"/><line x1="16" y1="8" x2="2" y2="22"/>',
+               function(){ if (typeof openGroupNotes === 'function') openGroupNotes(_pty.id); });
+          _act('Edit who is in this party',
+               '<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/>',
+               function(b){ var r = b.getBoundingClientRect(); if (typeof startGroupBuild === 'function') startGroupBuild(_pty.leader, r.left + r.width / 2, r.bottom + 4); });
+          _act('Separate or disband this party',
+               '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>',
+               function(b){ var r = b.getBoundingClientRect();
+                 /* the chip's own branch: with more than one section, WHERE it separates is a
+                    question, and answering it for the writer would throw away sections of history. */
+                 if (state.frames && state.frames.length > 1){ if (typeof openGroupSplitMenu === 'function') openGroupSplitMenu(_pty.id, r.left, r.bottom + 4); }
+                 else { if (typeof dissolveBeingGroup === 'function') dissolveBeingGroup(_pty.id);
+                        if (typeof renderConstellation === 'function') renderConstellation(); lastSig = ''; refreshStrips(); } });
         }
         row.title = _disp;
         row.addEventListener('click', function(){ if (window.__expSwallowRowClick && window.__expSwallowRowClick()) return; xbSelect('L', String(o.i)); });
@@ -53111,7 +53173,7 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.614';
+  var APP_VERSION = '2026.07.20.615';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
     { v:'2026.07.20.602', date:'September 5, 2026', notes:[
@@ -55608,6 +55670,12 @@ body.eink .pl-expbtn{ color:#000; }
 /* v.614 — the separator between two values of one characteristic: a small filled circle, lighter
    than the words on either side of it, centred on their x-height. */
 .dossier-chars .dossier-vsep{ display:inline-block; width:4px; height:4px; border-radius:50%; background:#cbbb92; margin:0 9px; vertical-align:middle; }
+/* v.615 — the party row's acts, carried over from the retired map chip. Same size and hit area
+   as the explode/combine button they sit beside; the disband one reddens on hover because it is
+   the only destructive thing in the row. */
+#expAcc .xb-row .xb-pact{ opacity:.55; }
+#expAcc .xb-row:hover .xb-pact, #expAcc .xb-row .xb-pact:hover{ opacity:1; }
+#expAcc .xb-row .xb-pact:last-child:hover{ color:#a8462f; }
 .dossier-arclinks{ display:flex; flex-wrap:wrap; gap:7px; margin-top:8px; }
 .dossier-arclink{ display:inline-flex; align-items:center; gap:6px; font:inherit; font-size:12px; color:#8a6d1e; background:rgba(196,158,74,.1); border:1px solid rgba(196,158,74,.32); border-radius:999px; padding:4px 11px; cursor:pointer; transition:background .12s,border-color .12s; }
 .dossier-arclink:hover{ background:rgba(196,158,74,.2); border-color:var(--gold); }
