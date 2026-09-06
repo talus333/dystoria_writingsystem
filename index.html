@@ -807,7 +807,8 @@
   .mode-subbar .ms-secwrap button.xm-arr:disabled{opacity:.25; cursor:default}
   .mode-subbar .ms-sec{display:inline-flex; align-items:baseline; gap:7px; min-width:0; font-family:'Cinzel','Cormorant SC',serif; font-size:12px; font-weight:700; letter-spacing:.13em; text-transform:uppercase; color:var(--charcoal); white-space:nowrap; max-width:min(44vw,340px); cursor:pointer; border-radius:8px; padding:3px 7px}   /* size/spacing match the Map header selector (#expMapSec) so it doesn't shrink when switching modes */
   .mode-subbar .ms-sec:hover{background:rgba(0,0,0,.06); color:#000}
-  .mode-subbar .ms-sec .ms-dia{flex:none; font-size:7px; align-self:center; line-height:1}
+  .mode-subbar .ms-sec .ms-dia{flex:none; font-size:10px; color:#a08a56; align-self:center; line-height:1}   /* v.637 — the map picker's hollow gold diamond */
+  .mode-subbar .ms-sec .ms-car{flex:none; font-size:10px; color:#a08a56; align-self:center; line-height:1}
   .mode-subbar .ms-sec .ms-ttl{overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0}
   body.eink .mode-subbar .ms-sec{color:#000}
   @media (max-width:640px){ .mode-subbar .ms-secwrap{position:static; transform:none; margin:0 auto} .mode-subbar .ms-sec{max-width:38vw} }
@@ -4519,7 +4520,8 @@ body.eink .pt-rh-dev{color:#000}
   #prepCaption .pc-arr:disabled{opacity:.3; cursor:default}
   #prepCaption .pc-sec{display:inline-flex; align-items:baseline; gap:7px; font-family:'Cinzel','Cormorant SC',serif; font-size:12px; font-weight:700; letter-spacing:.13em; text-transform:uppercase; color:var(--charcoal); cursor:pointer; white-space:nowrap; max-width:280px; min-width:0; overflow:hidden; text-overflow:ellipsis; padding:3px 7px; border-radius:8px}   /* match the Map header's section selector (#expMapSec) */
   #prepCaption .pc-sec .pc-num{flex:none; font-family:'Cinzel','Cormorant SC',serif; font-weight:700}
-  #prepCaption .pc-sec .pc-dia{flex:none; font-size:7px; align-self:center; line-height:1}   /* small diamond between number and title, like the Map header */
+  #prepCaption .pc-sec .pc-dia{flex:none; font-size:10px; color:#a08a56; align-self:center; line-height:1}   /* v.637 — the map picker's hollow gold diamond */
+  #prepCaption .pc-sec .pc-car{flex:none; font-size:10px; color:#a08a56; align-self:center; line-height:1}
   #prepCaption .pc-sec .pc-ttl{overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0}
   #prepCaption .pc-sec:hover{color:#000; background:rgba(0,0,0,.06)}
   #prepSecMenu{position:fixed; z-index:90; background:var(--paper); border:1px solid var(--line); border-radius:10px; box-shadow:0 10px 30px rgba(0,0,0,.18); padding:4px; max-height:320px; overflow-y:auto; display:none}
@@ -30462,7 +30464,17 @@ function libSyncFromMap(){
   const seen = new Set();
   const frames = state.frames || (state.prompt ? [{ prompt: state.prompt }] : []);
   frames.forEach((fr, fi) => {
-    ((fr.prompt && fr.prompt.words) || []).forEach(w => {
+    /* v.637 [Jeremy] — a section has had more than one board since v.618, and this walked only the
+       first. Everything a writer put on scene 2 was invisible to the roster: no row, no ✓, and a ＋
+       that added a second copy. The scenes are boards of this section too. */
+    var _boards = [fr.prompt];
+    try{
+      if (typeof sceneListFor === 'function' && typeof scbEnsure === 'function'){
+        sceneListFor(fi).forEach(function(sc){ if (sc && sc.sid){ var p = scbEnsure(sc.sid); if (p && _boards.indexOf(p) < 0) _boards.push(p); } });
+      }
+    }catch(e){}
+    _boards.forEach(function(_b){
+    ((_b && _b.words) || []).forEach(w => {
       if (!ROSTERCAT[w.cat]) return;
       const isSidebar = (w.cat === 'concept' || w.cat === 'org' || w.cat === 'stakes');   // v.567 — a stake is a story element, and carries role:'frame' like the other two
       if (!isSidebar && w.role !== 'being' && w.role !== 'word') return;   // map cats: skip frame/constraint/relation nodes
@@ -30474,6 +30486,7 @@ function libSyncFromMap(){
       if (rec.frames.indexOf(fi + 1) < 0) rec.frames.push(fi + 1);   // 1-based sections this element is on
       rec.placed = true;
       try { rec.item = JSON.parse(JSON.stringify(w)); } catch (e){}   // latest snapshot, so re-adding restores traits/icon/position
+    });
     });
   });
   lib.forEach(r => { if (!seen.has(libKeyOf(r.cat, r.name || r.word))){ r.placed = false; r.frames = []; } });
@@ -31097,11 +31110,18 @@ function libEnsureFrame(){
    map's own board; in Scenes it is the section question `r.frames` was always answering. */
 function libOnCurrentSurface(rec){
   if(!rec) return false;
+  /* v.637 [Jeremy] — ONE question, asked of the board you are looking at, whatever kind it is.
+     A map asked the board (v.620); a scene asked `rec.frames`, which is a per-SECTION record and
+     cannot tell one scene of a section from another — so on scene 2 the Legend claimed things that
+     were on scene 1 and withheld the ＋ that would have put them here. `libKeyOf` is the identity
+     the roster is built with, so the row and `libSyncFromMap` cannot disagree about who is who. */
   try{
-    if(state.placesView==='maps' && state.mapId){
-      var k=rec.item ? wordKey(rec.item) : null; if(!k) return false;
-      return ((state.prompt && state.prompt.words) || []).some(function(w){ return wordKey(w)===k; });
-    }
+    var want = libKeyOf(rec.cat, rec.name || rec.word);
+    var words = (state.prompt && state.prompt.words) || [];
+    return words.some(function(w){
+      if (w.poly || w.line) return false;                              /* drawn scenery is not a roster element */
+      return libKeyOf(w.cat, w.name || w.word) === want;
+    });
   }catch(e){}
   return ((rec.frames || []).indexOf((state.frameIdx || 0) + 1) >= 0);
 }
@@ -34425,7 +34445,11 @@ function syncModeSecNav(mode){
   var k = (typeof wrap._target === 'number') ? wrap._target : (state.frameIdx || 0); if (k >= n) k = n - 1; if (k < 0) k = 0;
   var lab = msSecLabel(k); var sec = wrap.querySelector('.ms-sec');
   var esc = function(s){ return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); };
-  sec.innerHTML = '<span class="ms-num">' + lab.n + '</span>' + (lab.title ? '<span class="ms-dia">◆</span><span class="ms-ttl">' + esc(lab.title) + '</span>' : '');
+  /* v.637 [Jeremy] — the same shape as the Places navigator: the hollow diamond and the caret are
+     the control's marks, the number and title are what it says. */
+  sec.innerHTML = '<span class="ms-dia">\u25c7</span><span class="ms-num">' + lab.n + '</span>'
+    + (lab.title ? '<span class="ms-ttl">' + esc(lab.title) + '</span>' : '')
+    + '<span class="ms-car">\u25be</span>';
   var arrs = wrap.querySelectorAll('.xm-arr'); if (arrs[0]) arrs[0].disabled = k <= 0; if (arrs[1]) arrs[1].disabled = k >= n - 1;
 }
 function msOpenMenu(anchor, curTarget, go){
@@ -51081,11 +51105,13 @@ window.__dystSetupWriteMic = function(){
     // number ◆ title — same structure as the Map header (#expMapSec) and the Refine/Read selectors
     var lab = (typeof msSecLabel === 'function') ? msSecLabel(fi) : { n: fi + 1, title: sectionName(fi) };
     sec.textContent = '';
+    /* v.637 [Jeremy] — ◇ N Title ▾, the shape the other two navigators wear */
+    var ds = document.createElement('span'); ds.className = 'pc-dia'; ds.textContent = '\u25c7'; sec.appendChild(ds);
     var ns = document.createElement('span'); ns.className = 'pc-num'; ns.textContent = lab.n; sec.appendChild(ns);
     if (lab.title){
-      var ds = document.createElement('span'); ds.className = 'pc-dia'; ds.textContent = '◆'; sec.appendChild(ds);
       var ts = document.createElement('span'); ts.className = 'pc-ttl'; ts.textContent = lab.title; sec.appendChild(ts);
     }
+    var cs2 = document.createElement('span'); cs2.className = 'pc-car'; cs2.textContent = '\u25be'; sec.appendChild(cs2);
     var nav = sec.parentNode; if (!nav) return;
     var arrs = nav.querySelectorAll('.pc-arr');
     if (arrs[0]) arrs[0].disabled = fi <= 0;
@@ -54209,12 +54235,19 @@ body.eink #expMenu{background:#fff; border-color:#000}
        The map picker reads \u25c7 NAME \u25be. This read 3 \u25c6 NAME \u2014 a different-looking control in the
        same spot, doing the same job. One shape now; the number the badge carried moved into the
        tooltip, and an unnamed section says which one it is instead of showing a bare digit. */
-    var shown = name || ('Section ' + (fi + 1));
+    /* v.637 [Jeremy] — the NUMBER is back on the face of the control, between the diamond and the
+       title. `msSecLabel` is the one place that works out what a section is called and what it is
+       numbered (prologues and epilogues do not count off the same way), so all three navigators ask
+       it rather than counting for themselves. */
+    var _lab = (typeof msSecLabel === 'function') ? msSecLabel(fi) : null;
+    var shown = (_lab && _lab.title) || name || ('Section ' + (fi + 1));
+    var num = (_lab && _lab.n != null) ? String(_lab.n) : String(fi + 1);
     el.title = 'Section ' + (fi + 1) + ' of ' + (((state.frames || []).length) || 1) + ' \u2014 jump to another\u2026';
-    var sig = fi + '|' + name;
+    var sig = fi + '|' + num + '|' + shown;
     if (el.dataset.sig === sig) return;
     el.dataset.sig = sig;
-    el.innerHTML = '<span class="xm-dia">\u25c7</span><span class="xm-nm"></span><span class="xm-car">\u25be</span>';
+    el.innerHTML = '<span class="xm-dia">\u25c7</span><span class="xm-num"></span><span class="xm-nm"></span><span class="xm-car">\u25be</span>';
+    var numEl = el.querySelector('.xm-num'); if (numEl) numEl.textContent = num;
     var nmEl = el.querySelector('.xm-nm'); if (nmEl) nmEl.textContent = shown;
   }
   // hidden strips PEEK (slide over the map) while a selected element has connections to them; they tuck away on deselect
@@ -79909,7 +79942,10 @@ html body:not(.eink) .xm-arr, html body:not(.eink) .mode-subbar .ms-secwrap butt
 html body:not(.eink) #undoMapBtn svg, html body:not(.eink) #redoMapBtn svg,
 html body.ember:not(.eink) #expMapSec .xm-num, html body.ember:not(.eink) #expMapSec .xm-dia, html body.ember:not(.eink) #expMapSec .xm-car,
 html body.ember:not(.eink) .xm-arr, html body.ember:not(.eink) .mode-subbar .ms-secwrap button.xm-arr,
-html body.ember:not(.eink) .mode-subbar .ms-num, html body.ember:not(.eink) .mode-subbar .ms-dia{
+html body.ember:not(.eink) .mode-subbar .ms-num, html body.ember:not(.eink) .mode-subbar .ms-dia,
+html body.ember:not(.eink) .mode-subbar .ms-car,
+html body:not(.eink) .mode-subbar .ms-dia, html body:not(.eink) .mode-subbar .ms-car,
+html body:not(.eink) #prepCaption .pc-dia, html body:not(.eink) #prepCaption .pc-car{
   color:var(--lab-4) !important;
 }
 html body.ember:not(.eink) .mode-subbar .ms-secwrap button,
