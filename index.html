@@ -12987,6 +12987,23 @@ function placesSyncBody(){
     document.body.classList.toggle('places-hasmap', on);
   }catch(e){}
 }
+/* v.636 [Jeremy] — an OPEN is a moment when the board and the view can disagree, and it was the one
+   moment nothing re-asked. The remembered map id is per DEVICE while maps belong to a STORY, so it is
+   checked against this story's maps before it is trusted: an id carried over from the story you just
+   left names nothing here, and the first map is a better answer than none. */
+function placesOnOpen(){
+  try{
+    if(state.placesView!=='maps'){ if(typeof placesSyncBody==='function') placesSyncBody(); return false; }
+    if(!mapById(state.mapId||'')){
+      var want=null; try{ want=localStorage.getItem('dystoria.places.mapId'); }catch(e){}
+      state.mapId=(want && mapById(want)) ? want : ((mapsList()[0]||{}).id || null);
+      try{ if(state.mapId) localStorage.setItem('dystoria.places.mapId', state.mapId); }catch(e){}
+    }
+    placesRepoint();
+    try{ if(typeof window.__dystMapChanged==='function') window.__dystMapChanged(state.mapId||null); }catch(e){}
+    return true;
+  }catch(e){ return false; }
+}
 function placesRepoint(){
   placesSyncBody();
   var p=placesPromptNow();
@@ -23010,8 +23027,29 @@ function renderThreadsBar(){
     chip.appendChild(acts);
     bar.appendChild(chip);
   });
-  const add = document.createElement('span'); add.className = 'thread-add'; add.textContent = '+ thread'; add.title = 'Create a thread to group beings, stakes, motivations and events';
-  add.addEventListener('click', async () => { const nm = await sitePrompt('Name this thread (e.g. \u201CThe Crown\u201D)', ''); if (nm === null) return; const id = addThread(nm); if (typeof window.__planAddThreadCardForSection === 'function'){ try{ window.__planAddThreadCardForSection(id, state.frameIdx || 0); }catch(e){} } renderConstellation(); });
+  const add = document.createElement('span'); add.className = 'thread-add'; add.textContent = '+ thread'; add.title = 'Start a thread, or run one you already have through this section';
+  /* v.636 — the Story Legend used to carry a "＋ section" on every thread: the way to run a thread
+     you ALREADY have through the section you are in. Threads left the Legend [Jeremy], so that door
+     moves here rather than closing — one control, both answers. */
+  const mkThread = async () => { const nm = await sitePrompt('Name this thread (e.g. \u201CThe Crown\u201D)', ''); if (nm === null) return; const id = addThread(nm); if (typeof window.__planAddThreadCardForSection === 'function'){ try{ window.__planAddThreadCardForSection(id, state.frameIdx || 0); }catch(e){} } renderConstellation(); };
+  add.addEventListener('click', function(){
+    const cur = state.frameIdx || 0;
+    const PM = window.__expPickMenu;
+    let out = [];
+    try{ out = (typeof threadsList === 'function' ? threadsList() : []).filter(function(t){
+      return (typeof window.__planThreadInSection === 'function') ? !window.__planThreadInSection(t.id, cur) : false; }); }catch(e){ out = []; }
+    if (typeof PM === 'function' && out.length){
+      const items = [['--new--', '\uff0b  New thread\u2026'], '--divider--', ['--part--', 'Run one through this section']]
+        .concat(out.map(function(t){ return [t.id, t.name || 'unnamed']; }));
+      PM(add, items, function(id){
+        if (id === '--new--'){ mkThread(); return; }
+        if (typeof window.__planAddThreadCardForSection === 'function'){ try{ window.__planAddThreadCardForSection(id, cur); }catch(e){} }
+        if (typeof renderConstellation === 'function') renderConstellation();
+      });
+      return;
+    }
+    mkThread();
+  });
   bar.appendChild(add);
   if (state.activeThread){ const clr = document.createElement('span'); clr.className = 'thread-clear'; clr.textContent = 'show all'; clr.addEventListener('click', () => { state.activeThread = null; renderConstellation(); }); bar.appendChild(clr); }
 }
@@ -28544,6 +28582,13 @@ function openSession(id){
   state.placing = null; state.placeQueue = []; state.autoPlace = true; state.autoPlaceSeen = true;   // auto-place is the default
   (state.frames || []).forEach(fr => ((fr.prompt && fr.prompt.words) || []).forEach(w => { if (w.needsPlace) delete w.needsPlace; }));
   if (state.prompt && state.prompt.words) state.prompt.words.forEach(w => { if (w.needsPlace) delete w.needsPlace; });
+  /* a map's words are the same kind of thing and were never swept — one saved mid-placement stayed
+     pending for the life of the story, which is invisible on the board */
+  (mapsList() || []).forEach(m => (((m.prompt && m.prompt.words) || [])).forEach(w => { if (w.needsPlace) delete w.needsPlace; }));
+  /* v.636 [Jeremy] — and THEN the board is re-asked from the view. Everything below this line
+     (the notepad, the rail, the timeline, the Legend) reads `state.prompt`, so it has to be the
+     board the writer is actually looking at before any of them run. */
+  if (typeof placesOnOpen === 'function') placesOnOpen();
   if (state.npActive && state.npActive !== 'general' && state.npActive !== 'plotmain' && state.npActive.indexOf('goal:') !== 0 && state.npActive.indexOf('thread:') !== 0 && state.npActive.indexOf('group:') !== 0 && state.npActive.indexOf('part:') !== 0 && state.npActive.indexOf('section:') !== 0 && state.npActive.indexOf('grouptree:') !== 0 && state.npActive.indexOf('session:') !== 0 && state.npActive.indexOf('explore:') !== 0 && state.npActive.indexOf('arc:') !== 0 && typeof npFindEl === 'function' && !npFindEl(state.npActive)){ state.npActive = 'general'; state.cardTrait = null; }   // restored selection's element is gone → fall back
   renderNpElements();           // now the words/frames are loaded, so element chips resolve their real names
   if (typeof renderNotepad === 'function') renderNotepad();
@@ -30512,12 +30557,11 @@ function renderStoryLibrary(){
   const win = $('storyLibWin'); if (!win) return;
   libSyncFromMap();
   const lib = storyLibrary();
-  const threadsForLib = (typeof threadsList === 'function') ? (threadsList() || []) : [];
   // R33 — also show the Legend on an EMPTY story while on the map, so its gold ＋element is the obvious "start here" for a new user.
   const _onMap = document.body.classList.contains('plan-view-map');
   // Phase 1b — on the phone (mobile-min) the Legend IS the Plan surface, so keep it shown even on an empty story.
   const _mm = document.body.classList.contains('mobile-min');
-  win.classList.toggle('has-elements', !!(lib.length || threadsForLib.length) || (_onMap && !!(typeof state !== 'undefined' && state && state.session)));
+  win.classList.toggle('has-elements', !!lib.length || (_onMap && !!(typeof state !== 'undefined' && state && state.session)));   /* v.636 — threads are not elements; they no longer decide whether the Legend has any */
   if (_mm && state && state.session) win.classList.add('has-elements');
   // the waiting-elements count rides in the window header
   const head = $('storyLibHead');
@@ -30561,7 +30605,7 @@ function renderStoryLibrary(){
   }
   const bodyEl = $('storyLibBody'); if (!bodyEl) return;
   bodyEl.innerHTML = '';
-  if (!lib.length && !threadsForLib.length){
+  if (!lib.length){
     if (win.classList.contains('has-elements')){ const e = document.createElement('div'); e.style.cssText = 'font-family:var(--serif); font-style:italic; font-size:12px; color:var(--ink-faint); padding:8px 4px 2px'; e.textContent = 'No elements yet — add one with ＋ element above.'; bodyEl.appendChild(e); }   // R33 empty-state hint
     positionStoryLibWin(); return;
   }
@@ -30648,45 +30692,11 @@ function renderStoryLibrary(){
     });
     cat.appendChild(body); wrap.appendChild(cat);
   });
-  // Threads ride the roster too: created in Plot, addable to any section from here so they run through the map.
-  if (threadsForLib.length){
-    const cur0 = state.frameIdx || 0;
-    const inSec = tid => (typeof window.__planThreadInSection === 'function') ? window.__planThreadInSection(tid, cur0) : false;
-    const multiSec = (state.frames || []).length > 1;
-    const cat = document.createElement('div'); cat.className = 'rl-cat rl-cat-threads';
-    const colKey = 'Lib:threads';
-    const colPersist = railGroupCollapsed(colKey);
-    if (colPersist != null ? colPersist : !_mm) cat.classList.add('collapsed');
-    /* v.634 [Jeremy] — "remove the +ALL in Story Legend from the Threads." Running every
-       storyline through a section at once is not a thing you mean to do by accident; each
-       thread's own ＋ on its row is the way in. */
-    const ch = document.createElement('div'); ch.className = 'rl-cat-head';
-    ch.innerHTML = '<span class="arr">▾</span><span class="cat-dot" style="background:#8a6bd6"></span><span class="rl-cat-name">Threads <b>· ' + threadsForLib.length + '</b></span>';
-    ch.addEventListener('click', () => { cat.classList.toggle('collapsed'); setRailGroupCollapsed(colKey, cat.classList.contains('collapsed')); });
-    cat.appendChild(ch);
-    const body = document.createElement('div'); body.className = 'rl-rows';
-    /* v.634 — the same grouping for threads: the ones running through this section first. A copy,
-       because the list belongs to the story, not to this drawer. */
-    threadsForLib.slice().sort((a, b2) => (inSec(a.id) ? 0 : 1) - (inSec(b2.id) ? 0 : 1)).forEach(t => {
-      const on = inSec(t.id);
-      const row = document.createElement('div'); row.className = 'rl-row' + (on ? ' placed' : '');
-      const dot = document.createElement('span'); dot.className = 'lg-dot rl-tdot'; dot.style.background = t.color || '#8a6bd6'; row.appendChild(dot);
-      const nm = document.createElement('span'); nm.className = 'rl-nm'; nm.textContent = t.name || 'unnamed'; nm.title = t.name || 'unnamed';
-      if (_mm){ row.classList.add('rl-row-tap'); row.addEventListener('click', function(e){ if (e.target && e.target.closest && e.target.closest('.rl-x, .rl-add')) return; try { if (typeof window.openThreadCard === 'function') window.openThreadCard(t.id); } catch(_){} }); }
-      if (multiSec && typeof window.__planThreadSections === 'function'){ const secs = window.__planThreadSections(t.id) || []; if (secs.length) nm.title = (t.name || 'unnamed') + ' — sections ' + libFmtSections(secs.map(s => s + 1)); }
-      row.appendChild(nm);
-      const add = document.createElement('button'); add.className = 'rl-add'; add.textContent = on ? '✓ in section' : '+ section';
-      add.title = on ? 'This thread already runs through the current section' : 'Run this thread through the current section';
-      if (!on) add.addEventListener('click', () => { if (typeof window.__planAddThreadCardForSection === 'function') window.__planAddThreadCardForSection(t.id, cur0); renderStoryLibrary(); });
-      row.appendChild(add);
-      const del = document.createElement('button'); del.className = 'rl-x'; del.textContent = '×';
-      del.title = on ? 'Remove this thread from the current section' : 'Not in this section';
-      del.style.visibility = on ? '' : 'hidden';
-      if (on) del.addEventListener('click', e => { e.stopPropagation(); if (typeof window.__planRemoveThreadCardForSection === 'function') window.__planRemoveThreadCardForSection(t.id, cur0); renderStoryLibrary(); });
-      row.appendChild(del); body.appendChild(row);
-    });
-    cat.appendChild(body); wrap.appendChild(cat);
-  }
+  /* v.636 [Jeremy] — "Threads are supposed to be in the context menu on the right ... not in the
+     story/map legend." The Context drawer has carried them since v.617: chips, their actions, and a
+     ＋ thread pill. This was the second copy — and the one that made the Legend answer for something
+     that is not an element. The door it held, running an EXISTING thread through this section, moved
+     to that ＋ thread pill rather than closing. */
   /* v.624 — Zones left the Legend for a drawer of its own, below it [Jeremy]. */
   positionStoryLibWin();
   if (typeof renderZonesDrawer === 'function') renderZonesDrawer();
@@ -54385,7 +54395,7 @@ body.eink #expMenu{background:#fff; border-color:#000}
         document.querySelector('#expRight .xb-portlayer').appendChild(eport);
       });
     }
-    if (!ths.length) rr.innerHTML = '<div class="xb-empty">No threads in this section — add a thread card for it in the Plot view.</div>';
+    if (!ths.length) rr.innerHTML = '<div class="xb-empty">No threads run through this section yet — use “＋ thread” above, or add a thread card in the Plot view.</div>';   /* v.636 — the nearest door first */
     ths.forEach(function(t){
       var row = document.createElement('div'); row.className = 'xb-row'; row.dataset.th = t.id;
       row.style.setProperty('--xb-c', t.color || '#fa9a31');
