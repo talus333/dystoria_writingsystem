@@ -7151,6 +7151,20 @@ function zoneToolsEl(){
       /* drawn, not filled — the glyphs are open paths and a fill turns each of them into a blob */
       ic.innerHTML = '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">' + g + '</svg>';
       btn.insertBefore(ic, btn.firstChild);
+      /* v.624 [Jeremy] — the panel is a free-floating window again. It is `position:fixed`, so it
+         has to be told where: beside the icon that opened it, measured at press time rather than
+         guessed, and clamped to the viewport like every other floating surface here. */
+      btn.addEventListener('click', function(){
+        setTimeout(function(){
+          try{
+            var p = el.querySelector('.draw-panel'); if(!p || p.hidden) return;
+            var r = btn.getBoundingClientRect();
+            var pw = p.offsetWidth || 180, ph = p.offsetHeight || 200;
+            p.style.left = Math.max(8, Math.min(r.right + 8, window.innerWidth - pw - 8)) + 'px';
+            p.style.top  = Math.max(8, Math.min(r.top, window.innerHeight - ph - 8)) + 'px';
+          }catch(e){}
+        }, 0);
+      });
       /* the wrapper carries the tool's PANEL, so the wrapper moves — not just the button */
       row.appendChild(el.classList.contains('draw-tool') ? el : btn);
     });
@@ -20510,6 +20524,8 @@ function createTerrainElement(pts, style, color){
   if (color) w.color = color;
   pinLooseNodes();
   state.prompt.words.push(w);
+  { const _ti = state.prompt.words.length - 1;   /* v.624 — a boundary drawn is a boundary to name */
+    setTimeout(function(){ try{ if (typeof openZoneNamer === 'function') openZoneNamer(_ti); }catch(e){} }, 0); }
   layoutConstellation();
   ensureSession(); state.session.words = state.prompt.words;
   scheduleAutosave();
@@ -20564,7 +20580,12 @@ function createShapeElement(kind, x0, y0, x1, y1, color, width, opacity){
   layoutConstellation();
   ensureSession(); state.session.words = state.prompt.words;
   scheduleAutosave();
-  flashStatus('Drew a shape — keep drawing, or press Esc to stop');
+  /* v.624 — the naming popup opens on the shape you just drew, rather than waiting to be asked
+     [Jeremy]. Deferred one tick so the draw gesture's own click cycle finishes first — the same
+     lesson v.610 learned about focus: a menu opened inside the gesture that made it can be taken
+     straight back by the rest of that gesture. */
+  { const _i = state.prompt.words.length - 1;
+    setTimeout(function(){ try{ if (typeof openZoneNamer === 'function') openZoneNamer(_i); }catch(e){} }, 0); }
 }
 // A drawn path — a smoothed DECORATION line (deco:true, no label) with its own colour + thickness.
 // Renders over terrain, under elements; not a story element.
@@ -20701,6 +20722,52 @@ function zoneDepth(idx){
 try{ window.__dystZones={ words:zoneWords, isZone:isZoneWord, canBe:zoneCanBe, poly:zonePoly, label:zoneLabelOf, setLabel:zoneSetLabel,
                           members:zoneMembers, tree:zoneTree, crossings:zoneCrossings, depth:zoneDepth,
                           presets:ZONE_PRESETS }; }catch(e){}
+/* The zone naming popup: the preset pill sets, then a free label. Opened by the ✎ route on a
+   drawing AND the moment a closed shape is drawn — one surface, two doors. */
+function openZoneNamer(idx, x, y){
+  var w = state.prompt && state.prompt.words[idx]; if(!w) return;
+  if(typeof zoneCanBe === 'function' && !zoneCanBe(w)) return;   /* a line has no inside to name */
+  var menu = document.getElementById('aspectMenu'); if(!menu) return; menu.innerHTML = '';
+  if(menu.parentElement !== document.body) document.body.appendChild(menu);
+  var lab = (typeof zoneLabelOf === 'function') ? zoneLabelOf(w) : '';
+  var add2 = function(label, fn){ var b = document.createElement('button'); b.textContent = label;
+    b.addEventListener('click', function(ev){ ev.stopPropagation(); fn(); }); menu.appendChild(b); };
+  var head = function(t){ var h = document.createElement('div'); h.textContent = t;
+    h.style.cssText = 'font-family:var(--sans);font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-faint);padding:6px 11px 2px'; menu.appendChild(h); };
+  head(lab ? ('Zone \u2014 ' + lab) : 'Name this boundary');
+  (typeof ZONE_PRESETS !== 'undefined' ? ZONE_PRESETS : []).forEach(function(set){
+    head(set.name);
+    set.pills.forEach(function(p){ add2(p, function(){ closeAspectMenu(); zoneSetLabel(idx, p); }); });
+  });
+  head('Your own');
+  add2('\u270e Type a label\u2026', function(){
+    closeAspectMenu();
+    sitePrompt('What does this boundary mean? \u2014 a place, or something the story is doing (\u201cOff-stage\u201d, \u201cAt Stake\u201d, \u201cRemembered\u201d)', lab || '', 'Name the zone').then(function(v){
+      if(v == null) return; zoneSetLabel(idx, v);
+    });
+  });
+  if(lab) add2('\u2715 Not a zone', function(){ closeAspectMenu(); zoneSetLabel(idx, ''); });
+  else add2('\u2014 Leave it unnamed', function(){ closeAspectMenu(); });
+  /* Placed at the shape when nobody clicked — the drawing is what the question is about, so the
+     question stands next to it rather than in the middle of the screen. */
+  var px = x, py = y;
+  if(px == null){
+    try{
+      var svg = document.getElementById('skySvg'); var vv = (typeof viewBoxVals === 'function') ? viewBoxVals() : null;
+      var pg = (typeof zonePoly === 'function') ? zonePoly(w) : null;
+      if(svg && vv && pg){
+        var mnx = 1e9, mxx = -1e9, mny = 1e9; pg.forEach(function(p){ mnx = Math.min(mnx, p[0]); mxx = Math.max(mxx, p[0]); mny = Math.min(mny, p[1]); });
+        var r = svg.getBoundingClientRect();
+        px = r.left + ((mnx + mxx) / 2 - vv[0]) / vv[2] * (r.width || vv[4] || 1) + 14;
+        py = r.top + (mny - vv[1]) / vv[3] * (r.height || vv[5] || 1);
+      }
+    }catch(e){}
+  }
+  menu.style.left = Math.max(8, Math.min(px == null ? 240 : px, window.innerWidth - 210)) + 'px';
+  menu.style.top  = Math.max(8, Math.min(py == null ? 160 : py, window.innerHeight - 340)) + 'px';
+  menu.style.display = 'block';
+}
+try{ window.openZoneNamer = openZoneNamer; }catch(e){}
 function openDecoMenu(idx, x, y){
   const w = state.prompt && state.prompt.words[idx]; if (!w) return;
   const menu = $('aspectMenu'); if (!menu) return; menu.innerHTML = '';
@@ -20722,28 +20789,9 @@ function openDecoMenu(idx, x, y){
      is a line and a line has no inside, so there is nothing for it to be the boundary of. */
   if (typeof zoneCanBe === 'function' && zoneCanBe(w)){   /* v.623 — any CLOSED drawing: a region, a rectangle, an ellipse. A path is a line and a line has no inside. */
     const _lab = (typeof zoneLabelOf === 'function') ? zoneLabelOf(w) : '';
-    add(_lab ? ('◇ Rename zone \u201c' + _lab + '\u201d\u2026') : '◇ Make this a zone\u2026', () => {
-      closeAspectMenu();
-      const menu2 = $('aspectMenu'); if (!menu2) return; menu2.innerHTML = '';
-      const add2 = (label, fn, cls) => { const b = document.createElement('button'); b.textContent = label; if (cls) b.className = cls; b.addEventListener('click', ev => { ev.stopPropagation(); fn(); }); menu2.appendChild(b); };
-      const head = (t) => { const h = document.createElement('div'); h.textContent = t; h.style.cssText = 'font-family:var(--sans);font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-faint);padding:6px 11px 2px'; menu2.appendChild(h); };
-      /* the preset pills first, because a blank label is the reason this feature goes unused */
-      (typeof ZONE_PRESETS !== 'undefined' ? ZONE_PRESETS : []).forEach(set => {
-        head(set.name);
-        set.pills.forEach(p => add2(p, () => { closeAspectMenu(); zoneSetLabel(idx, p); }));
-      });
-      head('Your own');
-      add2('\u270e Type a label\u2026', () => {
-        closeAspectMenu();
-        sitePrompt('What does this boundary mean? \u2014 a place, or something the story is doing (\u201cOff-stage\u201d, \u201cAt Stake\u201d, \u201cRemembered\u201d)', _lab || '', 'Name the zone').then(v => {
-          if (v == null) return; zoneSetLabel(idx, v);
-        });
-      });
-      if (_lab) add2('\u2715 Not a zone', () => { closeAspectMenu(); zoneSetLabel(idx, ''); });
-      menu2.style.left = Math.max(8, Math.min(x, window.innerWidth - 200)) + 'px';
-      menu2.style.top = Math.max(8, Math.min(y, window.innerHeight - 320)) + 'px';
-      menu2.style.display = 'block';
-    });
+    /* v.624 — one naming surface, called from here and from the moment a shape is drawn. */
+    add(_lab ? ('◇ Rename zone \u201c' + _lab + '\u201d\u2026') : '◇ Make this a zone\u2026',
+        () => { closeAspectMenu(); setTimeout(function(){ openZoneNamer(idx, x, y); }, 0); });
   }
   add('✕ Delete', () => { closeAspectMenu(); if (typeof removeNode === 'function') removeNode(idx); });
   menu.style.left = Math.max(8, Math.min(x, window.innerWidth - 180)) + 'px';
@@ -30217,7 +30265,7 @@ function renderStoryLibrary(){
   }
   const bodyEl = $('storyLibBody'); if (!bodyEl) return;
   bodyEl.innerHTML = '';
-  if (!lib.length && !threadsForLib.length && !(typeof zoneWords === 'function' && zoneWords().length)){
+  if (!lib.length && !threadsForLib.length){
     if (win.classList.contains('has-elements')){ const e = document.createElement('div'); e.style.cssText = 'font-family:var(--serif); font-style:italic; font-size:12px; color:var(--ink-faint); padding:8px 4px 2px'; e.textContent = 'No elements yet — add one with ＋ element above.'; bodyEl.appendChild(e); }   // R33 empty-state hint
     positionStoryLibWin(); return;
   }
@@ -30306,59 +30354,66 @@ function renderStoryLibrary(){
     });
     cat.appendChild(body); wrap.appendChild(cat);
   }
-  /* ---- Zones: the drawing tools, and everything they have drawn a boundary for ---- */
-  (function(){
-    if (typeof zoneWords !== 'function') return;
-    var zs = [];
-    try { zs = zoneWords(); } catch(e){ zs = []; }
-    var cat = document.createElement('div'); cat.className = 'rl-cat rl-cat-zones';
-    var colKey = 'Lib:zones';
-    var head = document.createElement('div'); head.className = 'rl-cat-head';
-    var arr = document.createElement('span'); arr.className = 'arr'; head.appendChild(arr);
-    var nm = document.createElement('span'); nm.className = 'rl-cat-name'; nm.textContent = 'Zones'; head.appendChild(nm);
-    var ct = document.createElement('span'); ct.className = 'rl-cat-count'; ct.textContent = '· ' + zs.length; head.appendChild(ct);
-    cat.appendChild(head);
-    var body = document.createElement('div'); body.className = 'rl-rows';
-    /* the tools first, as Jeremy asked — the thing you press to make one sits above the ones you
-       have made, and each opens its own panel exactly where it always did */
-    body.appendChild(zoneToolsEl());
-    if (!zs.length){
-      var e2 = document.createElement('div'); e2.className = 'rl-zone-empty';
-      e2.textContent = 'Draw a region or a shape, press it, and name it \u2014 a boundary with a name is a zone.';
-      body.appendChild(e2);
-    }
-    /* the containment the drawing already implies, so a room reads as being in its house */
-    var depthOf = {}; try { (zoneTree()||[]).forEach(function(n){ depthOf[n.i] = 0; }); (zoneTree()||[]).forEach(function(n){ try { depthOf[n.i] = zoneDepth(n.i); } catch(e){} }); } catch(e){}
-    zs.forEach(function(o){
-      var row = document.createElement('div'); row.className = 'rl-row rl-zone-row';
-      var d = depthOf[o.i] || 0; if (d) row.style.paddingLeft = (10 + d * 12) + 'px';
-      var n2 = document.createElement('span'); n2.className = 'rl-name'; n2.textContent = zoneLabelOf(o.w); row.appendChild(n2);
-      var cnt = 0; try { cnt = zoneMembers(o.w).length; } catch(e){}
-      var c2 = document.createElement('span'); c2.className = 'rl-zone-n'; c2.textContent = cnt ? (cnt + ' inside') : 'empty'; row.appendChild(c2);
-      row.title = 'Press to find it on the map';
-      row.addEventListener('click', function(){
-        try { state.selNode = o.i; if (typeof renderConstellation === 'function') renderConstellation(); } catch(e){}
-      });
-      var del = document.createElement('button'); del.className = 'rl-x'; del.textContent = '\u00d7';
-      del.title = 'Delete the zone \u201c' + zoneLabelOf(o.w) + '\u201d and its boundary';
-      del.addEventListener('click', function(ev){
-        ev.stopPropagation();
-        siteConfirm('Delete \u201c' + zoneLabelOf(o.w) + '\u201d? The boundary goes with it \u2014 nothing standing inside it is touched.', 'Delete the zone').then(function(ok){
-          if (!ok) return;
-          if (typeof removeNode === 'function') removeNode(o.i);
-          if (typeof renderStoryLibrary === 'function') renderStoryLibrary();
-        });
-      });
-      row.appendChild(del);
-      body.appendChild(row);
-    });
-    cat.appendChild(body);
-    try { if (railGroupCollapsed(colKey) === true) cat.classList.add('collapsed'); } catch(e){}
-    head.addEventListener('click', function(){ cat.classList.toggle('collapsed'); try { setRailGroupCollapsed(colKey, cat.classList.contains('collapsed')); } catch(e){} });
-    wrap.appendChild(cat);
-  })();
+  /* v.624 — Zones left the Legend for a drawer of its own, below it [Jeremy]. */
   positionStoryLibWin();
+  if (typeof renderZonesDrawer === 'function') renderZonesDrawer();
 }
+/* ---- The Zones drawer: its own panel under the Story Legend ---- */
+function renderZonesDrawer(){
+  var host = document.getElementById('expLeft'); if (!host) return;
+  var lib = document.getElementById('storyLibWin');
+  var win = document.getElementById('zonesWin');
+  if (!win){
+    win = document.createElement('aside'); win.id = 'zonesWin';
+    var hd = document.createElement('div'); hd.id = 'zonesHead';
+    var arr = document.createElement('span'); arr.className = 'zw-arr'; arr.textContent = '\u25be'; hd.appendChild(arr);
+    var t = document.createElement('span'); t.className = 'zw-title'; t.textContent = 'Zones'; hd.appendChild(t);
+    var c = document.createElement('span'); c.className = 'zw-count'; hd.appendChild(c);
+    win.appendChild(hd);
+    var bd = document.createElement('div'); bd.id = 'zonesBody'; win.appendChild(bd);
+    hd.addEventListener('click', function(){
+      win.classList.toggle('zw-closed');
+      try{ setRailGroupCollapsed('Zones', win.classList.contains('zw-closed')); }catch(e){}
+    });
+    try{ if (railGroupCollapsed('Zones') === true) win.classList.add('zw-closed'); }catch(e){}
+    if (lib && lib.parentNode === host) host.insertBefore(win, lib.nextSibling); else host.appendChild(win);
+  }
+  var body = document.getElementById('zonesBody'); if (!body) return;
+  var zs = []; try{ zs = zoneWords(); }catch(e){ zs = []; }
+  var cEl = win.querySelector('.zw-count'); if (cEl) cEl.textContent = '\u00b7 ' + zs.length;
+  body.innerHTML = '';
+  /* the tools, moved not copied, and re-attached rather than rebuilt (v.623) */
+  try{ body.appendChild(zoneToolsEl()); }catch(e){}
+  if (!zs.length){
+    var e2 = document.createElement('div'); e2.className = 'rl-zone-empty';
+    e2.textContent = 'Draw a boundary and name it \u2014 a shape with a name is a zone.';
+    body.appendChild(e2);
+    return;
+  }
+  var depthOf = {}; try{ (zoneTree()||[]).forEach(function(n){ try{ depthOf[n.i] = zoneDepth(n.i); }catch(e){} }); }catch(e){}
+  zs.forEach(function(o){
+    var row = document.createElement('div'); row.className = 'rl-row rl-zone-row';
+    var d = depthOf[o.i] || 0; if (d) row.style.paddingLeft = (10 + d * 12) + 'px';
+    var n2 = document.createElement('span'); n2.className = 'rl-name'; n2.textContent = zoneLabelOf(o.w); row.appendChild(n2);
+    var cnt = 0; try{ cnt = zoneMembers(o.w).length; }catch(e){}
+    var c2 = document.createElement('span'); c2.className = 'rl-zone-n'; c2.textContent = cnt ? (cnt + ' inside') : 'empty'; row.appendChild(c2);
+    row.title = 'Press to find it on the map';
+    row.addEventListener('click', function(){ try{ state.selNode = o.i; if (typeof renderConstellation === 'function') renderConstellation(); }catch(e){} });
+    var del = document.createElement('button'); del.className = 'rl-x'; del.textContent = '\u00d7';
+    del.title = 'Delete the zone \u201c' + zoneLabelOf(o.w) + '\u201d and its boundary';
+    del.addEventListener('click', function(ev){
+      ev.stopPropagation();
+      siteConfirm('Delete \u201c' + zoneLabelOf(o.w) + '\u201d? The boundary goes with it \u2014 nothing standing inside it is touched.', 'Delete the zone').then(function(ok){
+        if (!ok) return;
+        if (typeof removeNode === 'function') removeNode(o.i);
+        if (typeof renderZonesDrawer === 'function') renderZonesDrawer();
+      });
+    });
+    row.appendChild(del);
+    body.appendChild(row);
+  });
+}
+try{ window.renderZonesDrawer = renderZonesDrawer; }catch(e){}
 // Pinned Legend lives at the map's bottom-right (pure CSS, opens upward like the rail); clear any drag leftovers.
 function positionStoryLibWin(){
   const win = $('storyLibWin'); if (!win) return;
@@ -53942,7 +53997,7 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.623';
+  var APP_VERSION = '2026.07.20.624';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
     { v:'2026.07.20.602', date:'September 5, 2026', notes:[
@@ -55708,19 +55763,27 @@ body.plan-ready #expMapTitle{ display:none !important; }
 /* v.623 — the toggle floats at the top-centre of the board, in the app's own segmented idiom, on
    the canvas rather than in the bar above it. */
 #placesSeg{ position:absolute; left:50%; top:14px; transform:translateX(-50%); z-index:22; display:flex; align-items:center; flex:none;
-  background:rgba(255,253,246,.9); border-radius:999px; padding:2px; box-shadow:0 2px 10px rgba(60,50,30,.10); }
-body.expb #placesSeg{ top:112px; }
+  background:rgba(255,253,246,.9); border-radius:999px; padding:1px; box-shadow:0 2px 8px rgba(60,50,30,.09); }
+body.expb #placesSeg{ top:108px; }   /* the bar ends at 104 — tucked under it [Jeremy] */
 body:not(.plan-view-map) #placesSeg{ display:none !important; }
 /* The segmented control was styled for the DARK header bar it used to sit in; on the board it takes
    the LIGHT treatment in BOTH themes, because **the map canvas is parchment in both** (v.607). An
    ember-dark pill here was the same mistake v.607 caught with the speech bubbles: a dark ground
    borrowed from the chrome and dropped onto parchment. Photographed. */
 html body:not(.eink) #placesSeg .pl-seg{ background:transparent !important; border:1px solid var(--line) !important; }
+/* the pill's height is set by the late button normaliser (`--btn-h-sm`) and by `.pl-seg`'s own
+   padding; both are named here so "smaller" is a measurement rather than a hope. */
+/* Measured: with an 18px pill and 1px of padding the track still came out 29px — the segmented
+   control carries a sliding indicator of its own, so its height is not the sum of its parts. Set,
+   not inferred. */
+html body #placesSeg .pl-seg{ padding:1px !important; gap:0 !important; height:22px !important; align-items:center !important; }
+html body #placesSeg .pl-seg::before, html body #placesSeg .pl-seg::after{ height:20px !important; }
+html body #placesSeg .pl-segbtn{ height:18px !important; min-height:0 !important; line-height:18px !important; padding:0 9px !important; }
 html body:not(.eink) #placesSeg .pl-segbtn{ color:#6b675f !important; }
 html body:not(.eink) #placesSeg .pl-segbtn:hover{ color:var(--charcoal) !important; background:rgba(196,158,74,.12) !important; }
 html body:not(.eink) #placesSeg .pl-segbtn.on{ color:#5f4a1e !important; background:rgba(196,158,74,.26) !important; }
 html body.eink #placesSeg{ background:#fff; border:1px solid #000; }
-#placesSeg .pl-segbtn{ font-size:9.5px !important; padding:3px 11px !important; letter-spacing:.12em !important; }
+#placesSeg .pl-segbtn{ font-size:9px !important; padding:0 9px !important; letter-spacing:.1em !important; height:19px !important; min-height:0 !important; }
 /* v.623 — the toggle left the bar, so the title is no longer paying for it. It keeps an ellipsis
    and a tooltip either way; this is simply the width it can afford again. */
 body.plan-view-map #expMapSec{ max-width:300px; }
@@ -55741,7 +55804,7 @@ body.places-maps #mapNavHint, body.places-maps #mapHead, body.places-maps #mapTo
   background:rgba(255,253,246,.96); border:1px solid var(--line); box-shadow:0 8px 24px rgba(60,50,30,.16);
   font-family:var(--sans); font-size:12px; color:#5c5648; max-width:min(92%,620px); }
 #sceneCarryBar[hidden]{ display:none !important; }
-body.expb #sceneCarryBar{ top:158px; }   /* v.623 — the Scenes/Maps toggle now sits at 112 */
+body.expb #sceneCarryBar{ top:148px; }   /* v.624 — clear of the toggle at 108 */
 body.places-maps #sceneCarryBar{ display:none !important; }
 #sceneCarryBar .scb-t{ font-style:italic; color:#8a8272; flex:none; }
 #sceneCarryBar .scb-yes{ font:inherit; font-size:12px; font-weight:600; color:#8a6a2a; background:rgba(196,158,74,.16); border:1px solid rgba(196,158,74,.36); border-radius:999px; padding:5px 13px; cursor:pointer; }
@@ -55760,7 +55823,16 @@ body.places-maps.places-hasmap #mapNavHint, body.places-maps.places-hasmap #mapT
 /* v.621 — a pinned child map, drawn rather than filled, like everything else on this canvas. */
 /* v.622 — a zone's name sits on its own wash: the app's small-caps label rung, quiet enough that
    the cast standing inside it still reads first. */
-.rl-cat-zones .zone-tools-host{ margin:2px 0 6px; }
+/* v.624 — Zones is its own drawer under the Story Legend, in the Legend's own idiom [Jeremy]. */
+#zonesWin{ flex:0 0 auto; margin-top:6px; border-top:1px solid var(--line); padding:6px 8px 8px 10px; max-height:46%; display:flex; flex-direction:column; min-height:0; }
+#zonesHead{ display:flex; align-items:center; gap:8px; cursor:pointer; user-select:none; padding:3px 2px 5px; }
+#zonesHead .zw-arr{ font-size:12px; line-height:1; color:var(--ink-faint); transition:transform .15s; }
+#zonesWin.zw-closed .zw-arr{ transform:rotate(-90deg); }
+#zonesHead .zw-title{ font-family:var(--sans); font-size:11px; font-weight:700; letter-spacing:.14em; text-transform:uppercase; color:var(--ink-soft, #5c5648); }
+#zonesHead .zw-count{ margin-left:auto; font-family:var(--sans); font-size:10px; color:var(--ink-faint); }
+#zonesBody{ overflow-y:auto; min-height:0; }
+#zonesWin.zw-closed #zonesBody{ display:none; }
+.zone-tools-host{ margin:2px 0 6px; }
 /* v.623 — the tools read as a row of glyphs above the zones, not as four more rows that look like
    zones themselves. The panels they open are unchanged and still open where they always did. */
 .zone-tool-icons{ display:flex; align-items:center; gap:3px; flex-wrap:wrap; padding:2px 2px 4px; }
@@ -55770,10 +55842,12 @@ body.places-maps.places-hasmap #mapNavHint, body.places-maps.places-hasmap #mapT
 .zone-tool-icons .draw-cat.zt-ic.on{ border-color:var(--gold); color:#5f4a1e; background:rgba(196,158,74,.22); }
 .zone-tool-icons .draw-cat.zt-ic .dc-name, .zone-tool-icons .draw-cat.zt-ic .dc-toggle{ display:none !important; }
 .zone-tool-icons .zt-glyph{ display:inline-flex; }
-.zone-tool-icons .draw-panel{ position:absolute; left:0; top:34px; z-index:40; min-width:150px; background:var(--paper); }
+.zone-tool-icons .draw-panel{ position:fixed; z-index:340; min-width:168px; max-width:260px; background:var(--paper);
+  border:1px solid var(--line); border-radius:12px; box-shadow:0 12px 34px rgba(60,50,30,.24); padding:10px; }
+body.ember:not(.eink) .zone-tool-icons .draw-panel{ background:var(--em-menu, #241d15); border-color:var(--em-bronze-a30, rgba(196,158,74,.3)); }
 body.ember:not(.eink) .zone-tool-icons .draw-cat.zt-ic{ background:rgba(255,255,255,.06); color:#bdb3a0; }
-.rl-cat-zones .zone-tools-host .group{ border:none; padding:0; margin:0; }
-.rl-cat-zones .zone-tools-host .group-body{ display:flex; flex-direction:column; gap:4px; }
+.zone-tools-host .group{ border:none; padding:0; margin:0; }
+.zone-tools-host .group-body{ display:flex; flex-direction:column; gap:4px; }
 .rl-zone-empty{ font-family:var(--serif); font-style:italic; font-size:11.5px; line-height:1.45; color:var(--ink-faint); padding:4px 8px 6px; }
 .rl-zone-row{ cursor:pointer; }
 .rl-zone-n{ font-family:var(--sans); font-size:9.5px; letter-spacing:.09em; text-transform:uppercase; color:var(--ink-faint); margin-left:auto; padding-right:6px; flex:none; }
@@ -62621,6 +62695,22 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
          of its own and the cluster gets to carry one thing and be centred on it. */
       var _sky=document.getElementById('sky');
       if(_sky) _sky.appendChild(pv); else bar.insertBefore(pv, tabs.nextSibling);
+      /* v.624 — placed from the BAR's own box rather than from a constant reasoned off the
+         stylesheet, which was 64px out. Re-asked on resize, because the bar's height is not a
+         constant either. */
+      var _placeSeg=function(){
+        try{
+          var bb=document.getElementById('expMapBar'), sk=document.getElementById('sky');
+          if(!bb||!sk||pv.parentElement!==sk) return;
+          var rb=bb.getBoundingClientRect(), rs=sk.getBoundingClientRect();
+          pv.style.top=Math.max(6, Math.round(rb.bottom-rs.top)+6)+'px';
+          var cb=document.getElementById('sceneCarryBar');
+          if(cb) cb.style.top=Math.max(6, Math.round(rb.bottom-rs.top)+6+(pv.offsetHeight||22)+10)+'px';
+        }catch(e){}
+      };
+      _placeSeg();
+      try{ window.addEventListener('resize', _placeSeg); setTimeout(_placeSeg, 400); setTimeout(_placeSeg, 1200); }catch(e){}
+      try{ window.__dystPlaceSeg=_placeSeg; }catch(e){}
       /* the centred cluster is still where the MAP PICKER goes — it is what the toggle switches
          between, and §13's rule that it replaces the section navigator has not changed. */
       var _sw=document.getElementById('expMapSecWrap');
