@@ -20538,6 +20538,99 @@ function createPathElement(pts, color, width){
 }
 // Small menu on a decoration (terrain/path) — recolour or delete. Decorations have no map label/handle,
 // so the shape itself is the click target (class .deco-shape, dataset.deco = word index).
+/* ---------------- Zones (#48 §5) ---------------- */
+/* Ship pill sets so nobody starts from a blank label. The first of each pair is the ordinary case
+   and the second is the one that makes the board a stage. */
+var ZONE_PRESETS = [
+  { name:'Presence',  pills:['Present','Off-stage'] },
+  { name:'Knowledge', pills:['Known','Unknown'] },
+  { name:'Risk',      pills:['Safe','At Stake'] },
+  { name:'Place',     pills:['Inside','Outside'] },
+  { name:'Time',      pills:['Now','Remembered'] }
+];
+function isZoneWord(w){ return !!(w && w.deco && w.poly && w.poly.length>2 && String(w.zoneLabel||'').trim()); }
+function zoneWords(){ return ((state.prompt && state.prompt.words) || []).map(function(w,i){ return { w:w, i:i }; }).filter(function(o){ return isZoneWord(o.w); }); }
+function zoneLabelOf(w){ return String((w && w.zoneLabel) || '').trim(); }
+function zoneSetLabel(idx, label){
+  var w = state.prompt && state.prompt.words[idx]; if(!w || !w.poly) return false;
+  if(typeof pushUndo==='function') pushUndo();
+  label = String(label||'').trim();
+  if(label) w.zoneLabel = label; else delete w.zoneLabel;
+  if(state.session){ state.session.words = state.prompt.words; if(typeof scheduleAutosave==='function') scheduleAutosave(); }
+  if(typeof renderConstellation==='function') renderConstellation();
+  return true;
+}
+/* MEMBERSHIP BELONGS TO THE BOUNDARY, AND THE BOUNDARY IS GEOMETRY. Derived on read, never stored,
+   never editable as a list — the Groups law (`the group is the node list`) with geometry doing the
+   work. Overlap is allowed on purpose: an element can be Present and At Stake at once, exactly as
+   Groups already allows two memberships. `terrainInPoly` is the app's own hit test, already used to
+   scatter terrain glyphs, so a zone and its own texture agree about what is inside it. */
+function zoneMembers(w){
+  var out=[]; if(!w || !w.poly) return out;
+  ((state.prompt && state.prompt.words) || []).forEach(function(x, j){
+    if(!x || x===w) return;
+    if(x.deco || x.poly || x.line) return;                    /* scenery is not a member of scenery */
+    if(x.role!=='being' && x.role!=='word') return;
+    var px = (typeof x.fx==='number') ? x.fx : null, py = (typeof x.fy==='number') ? x.fy : null;
+    if(px==null || py==null){ var nd=(state.nodes||[])[j]; if(nd && isFinite(nd.x)){ px=nd.x; py=nd.y; } }
+    if(px==null || py==null) return;
+    if(typeof terrainInPoly==='function' && terrainInPoly(px, py, w.poly)) out.push({ w:x, i:j });
+  });
+  return out;
+}
+function zonePolyInside(a, b){   /* every vertex of a inside b → a nests in b */
+  if(!a || !b || !a.poly || !b.poly || a===b) return false;
+  if(typeof terrainInPoly!=='function') return false;
+  for(var k=0;k<a.poly.length;k++){ if(!terrainInPoly(a.poly[k][0], a.poly[k][1], b.poly)) return false; }
+  return true;
+}
+function zonePolyTouches(a, b){  /* any vertex of a inside b, or of b inside a */
+  if(!a || !b || !a.poly || !b.poly || a===b) return false;
+  if(typeof terrainInPoly!=='function') return false;
+  for(var k=0;k<a.poly.length;k++){ if(terrainInPoly(a.poly[k][0], a.poly[k][1], b.poly)) return true; }
+  for(var m=0;m<b.poly.length;m++){ if(terrainInPoly(b.poly[m][0], b.poly[m][1], a.poly)) return true; }
+  return false;
+}
+/* [Jeremy] "Yes, and validate the brackets." Containment is DERIVED from the drawing — a zone's
+   parent is the smallest zone that wholly contains it — which is the same first-in-last-out
+   structure the MICE model uses, so this shares its shape with the Events half of #46.
+   A CROSSING is two zones that overlap without either containing the other: legal (an element may
+   be Off-stage and At Stake at once) but not a containment, so it is reported and never inferred.
+   **Reported, never refused** — a writer's figurative labels overlap on purpose. */
+function zoneTree(){
+  var zs = zoneWords();
+  var area = function(o){ var p=o.w.poly, a=0; for(var k=0;k<p.length;k++){ var q=p[(k+1)%p.length]; a += p[k][0]*q[1] - q[0]*p[k][1]; } return Math.abs(a/2); };
+  var nodes = zs.map(function(o){ return { i:o.i, w:o.w, label:zoneLabelOf(o.w), area:area(o), parent:null }; });
+  nodes.forEach(function(n){
+    var best=null;
+    nodes.forEach(function(m){
+      if(m===n) return;
+      if(!zonePolyInside(n.w, m.w)) return;
+      if(!best || m.area < best.area) best = m;               /* the SMALLEST container is the parent */
+    });
+    n.parent = best ? best.i : null;
+  });
+  return nodes;
+}
+function zoneCrossings(){
+  var zs = zoneWords(), out=[];
+  for(var a=0;a<zs.length;a++) for(var b=a+1;b<zs.length;b++){
+    var A=zs[a].w, B=zs[b].w;
+    if(!zonePolyTouches(A,B)) continue;
+    if(zonePolyInside(A,B) || zonePolyInside(B,A)) continue;  /* a proper nesting is not a crossing */
+    out.push({ a:zs[a].i, b:zs[b].i, labels:[zoneLabelOf(A), zoneLabelOf(B)] });
+  }
+  return out;
+}
+function zoneDepth(idx){
+  var t=zoneTree(), by={}; t.forEach(function(n){ by[n.i]=n; });
+  var d=0, at=by[idx], seen={};
+  while(at && at.parent!=null && !seen[at.i] && d<32){ seen[at.i]=1; at=by[at.parent]; d++; }
+  return d;
+}
+try{ window.__dystZones={ words:zoneWords, isZone:isZoneWord, label:zoneLabelOf, setLabel:zoneSetLabel,
+                          members:zoneMembers, tree:zoneTree, crossings:zoneCrossings, depth:zoneDepth,
+                          presets:ZONE_PRESETS }; }catch(e){}
 function openDecoMenu(idx, x, y){
   const w = state.prompt && state.prompt.words[idx]; if (!w) return;
   const menu = $('aspectMenu'); if (!menu) return; menu.innerHTML = '';
@@ -20554,6 +20647,33 @@ function openDecoMenu(idx, x, y){
     const widen = d => { w.lstyle = w.lstyle || { stroke: '#9a7747', width: 3.2 }; w.lstyle.width = Math.max(1, Math.min(10, (w.lstyle.width || 3.2) + d)); renderConstellation(); if (state.session){ state.session.words = state.prompt.words; scheduleAutosave(); } };
     add('＋ Thicker', () => widen(1));
     add('－ Thinner', () => widen(-1));
+  }
+  /* v.622 — a drawn area can be NAMED, and naming it is what makes it a zone. Only areas: a path
+     is a line and a line has no inside, so there is nothing for it to be the boundary of. */
+  if (w.poly && w.poly.length > 2){
+    const _lab = (typeof zoneLabelOf === 'function') ? zoneLabelOf(w) : '';
+    add(_lab ? ('◇ Rename zone \u201c' + _lab + '\u201d\u2026') : '◇ Make this a zone\u2026', () => {
+      closeAspectMenu();
+      const menu2 = $('aspectMenu'); if (!menu2) return; menu2.innerHTML = '';
+      const add2 = (label, fn, cls) => { const b = document.createElement('button'); b.textContent = label; if (cls) b.className = cls; b.addEventListener('click', ev => { ev.stopPropagation(); fn(); }); menu2.appendChild(b); };
+      const head = (t) => { const h = document.createElement('div'); h.textContent = t; h.style.cssText = 'font-family:var(--sans);font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-faint);padding:6px 11px 2px'; menu2.appendChild(h); };
+      /* the preset pills first, because a blank label is the reason this feature goes unused */
+      (typeof ZONE_PRESETS !== 'undefined' ? ZONE_PRESETS : []).forEach(set => {
+        head(set.name);
+        set.pills.forEach(p => add2(p, () => { closeAspectMenu(); zoneSetLabel(idx, p); }));
+      });
+      head('Your own');
+      add2('\u270e Type a label\u2026', () => {
+        closeAspectMenu();
+        sitePrompt('What does this boundary mean? \u2014 a place, or something the story is doing (\u201cOff-stage\u201d, \u201cAt Stake\u201d, \u201cRemembered\u201d)', _lab || '', 'Name the zone').then(v => {
+          if (v == null) return; zoneSetLabel(idx, v);
+        });
+      });
+      if (_lab) add2('\u2715 Not a zone', () => { closeAspectMenu(); zoneSetLabel(idx, ''); });
+      menu2.style.left = Math.max(8, Math.min(x, window.innerWidth - 200)) + 'px';
+      menu2.style.top = Math.max(8, Math.min(y, window.innerHeight - 320)) + 'px';
+      menu2.style.display = 'block';
+    });
   }
   add('✕ Delete', () => { closeAspectMenu(); if (typeof removeNode === 'function') removeNode(idx); });
   menu.style.left = Math.max(8, Math.min(x, window.innerWidth - 180)) + 'px';
@@ -21123,7 +21243,34 @@ function renderConstellation(){
     if (nd.role === 'frame' || nd.role === 'constraint') return;
     if (nd.cat === 'event' && nd.role === 'word') return;   // events live in the side panel now — never drawn on the map
     if (nd.needsPlace && state.placing != null) return;   // hidden until the player places/draws it
-    if (nd.deco) return;                                  // pure decoration (drawn terrain/path) → shape only, no label/icon/handle
+    if (nd.deco){                                         // pure decoration (drawn terrain/path) → shape only, no label/icon/handle
+      /* v.622 — unless it is a ZONE, which is a decoration that carries a label. Drawn here rather
+         than in the terrain painter so it sits ABOVE the wash and below the cast, which is where a
+         boundary's name belongs: readable, and never in front of the people standing in it. */
+      if (typeof isZoneWord === 'function' && isZoneWord(nd)){
+        var _zg = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+        _zg.setAttribute('class', 'zone-label'); _zg.dataset.zone = i;
+        var _zx = (typeof nd.fx === 'number') ? nd.fx : 0, _zy = (typeof nd.fy === 'number') ? nd.fy : 0;
+        _zg.setAttribute('transform', 'translate(' + _zx + ',' + _zy + ')');
+        var _zt = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        _zt.setAttribute('text-anchor', 'middle'); _zt.setAttribute('class', 'zl-t');
+        _zt.textContent = zoneLabelOf(nd);
+        _zg.appendChild(_zt);
+        /* the count is DERIVED on every render, so it cannot disagree with the drawing */
+        var _zn = 0; try { _zn = zoneMembers(nd).length; } catch(e){}
+        if (_zn){
+          var _zc = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+          _zc.setAttribute('text-anchor', 'middle'); _zc.setAttribute('y', '13'); _zc.setAttribute('class', 'zl-n');
+          _zc.textContent = _zn + (_zn === 1 ? ' inside' : ' inside');
+          _zg.appendChild(_zc);
+        }
+        var _ztt = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+        _ztt.textContent = zoneLabelOf(nd) + (_zn ? (' \u2014 ' + _zn + ' inside') : ' \u2014 nothing inside yet');
+        _zg.appendChild(_ztt);
+        svg.appendChild(_zg);
+      }
+      return;
+    }
     if (isMentalSpace(nd)) return;                        // off-scale place → lives in the mental-space sidebar
     if (state.groupBuild && nd.role !== 'being') return;                                   // forming a group → show only beings
     if (!state.groupBuild && nd.role === 'being'){ const _gk = wordKey(nd); const _grp = (typeof beingGroupOf === 'function') ? beingGroupOf(_gk) : null; if (_grp && !_grp.exploded && _grp.leader !== _gk && (typeof beingGroupActiveHere !== 'function' || beingGroupActiveHere(_grp, state.frameIdx))) return; }   // collapsed group → members tuck behind the leader (only in the group's sections)
@@ -53669,7 +53816,7 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.621';
+  var APP_VERSION = '2026.07.20.622';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
     { v:'2026.07.20.602', date:'September 5, 2026', notes:[
@@ -55472,6 +55619,14 @@ body.places-maps.places-hasmap #mapNavHint, body.places-maps.places-hasmap #mapT
 #placesEmpty .pe-p{ font-family:var(--serif); font-size:14.5px; line-height:1.55; color:#5c5648; margin:0 0 10px; }
 #placesEmpty .pe-quiet{ font-size:13px; color:#8a8272; font-style:italic; }
 /* v.621 — a pinned child map, drawn rather than filled, like everything else on this canvas. */
+/* v.622 — a zone's name sits on its own wash: the app's small-caps label rung, quiet enough that
+   the cast standing inside it still reads first. */
+.zone-label{ pointer-events:none; }
+.zone-label .zl-t{ font-family:'Cormorant SC','Cormorant Garamond',serif; font-size:13px; letter-spacing:.14em; text-transform:uppercase; fill:#6a6253; opacity:.82; }
+.zone-label .zl-n{ font-family:var(--sans); font-size:8.5px; letter-spacing:.1em; text-transform:uppercase; fill:#8a8272; opacity:.75; }
+body.ember:not(.eink) .zone-label .zl-t{ fill:#cbbfa6; }
+body.ember:not(.eink) .zone-label .zl-n{ fill:#9a917f; }
+body.eink .zone-label .zl-t{ fill:#000; opacity:1; }
 .map-pin-layer .map-pin{ cursor:pointer; }
 .map-pin-layer .mp-body{ fill:rgba(255,253,246,.86); stroke:#8a7a55; stroke-width:1.4; }
 .map-pin-layer .mp-dot{ fill:none; stroke:#8a7a55; stroke-width:1.4; }
