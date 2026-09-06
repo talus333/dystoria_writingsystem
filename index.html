@@ -11969,7 +11969,7 @@ function npCardFallbackIcon(w){
    focused, so the gesture ends with a caret in the scene rather than in a dialog. */
 function openBubbleMenu(elKey, sec, x, y){
   var old = document.getElementById('bubMenu'); if (old && old.parentNode) old.parentNode.removeChild(old);
-  var m = document.createElement('div'); m.id = 'bubMenu'; m.className = 'plan-menu bub-menu';
+  var m = document.createElement('div'); m.id = 'bubMenu'; m.className = 'plan-menu bub-menu dyst-keepsel';
   var lab = document.createElement('div'); lab.className = 'pm-lbl'; lab.textContent = 'In this scene'; m.appendChild(lab);
   var mk = function(kind, label){
     var n = bubList(elKey, sec, kind).length;
@@ -11978,8 +11978,16 @@ function openBubbleMenu(elKey, sec, x, y){
     b.addEventListener('click', function(ev){ ev.stopPropagation();
       if (m.parentNode) m.parentNode.removeChild(m);
       var nn = bubAdd(elKey, sec, kind);
-      try { state._bubEdit = bubKey(sec, kind, nn, elKey); } catch(e){}
+      /* the plate opens READY: the render below redraws the node, and the caret-restore pass at the
+         end of `renderConstellation` puts the cursor in the plate this key names. [Jeremy] "the
+         bubble should be ready with the cursor in it so you can start typing." */
+      var nk = bubKey(sec, kind, nn, elKey);
+      try { state._bubEdit = nk; } catch(e){}
       if (typeof renderConstellation === 'function') renderConstellation();
+      /* and again after the click cycle finishes: the browser is still dispatching mouseup and click
+         over a menu this handler has just removed, and whatever it settles focus on wins. **Focus
+         set inside the gesture that caused it is focus the gesture can still take back.** */
+      setTimeout(function(){ bubFocus(nk); }, 0);
     });
     m.appendChild(b);
   };
@@ -12093,6 +12101,19 @@ function bubFit(wrap){
     var mo = wrap.querySelector('.bub-more'); if (mo) mo.setAttribute('y', 15);
   } catch(e){}
 }
+/* v.610 — ONE WAY TO PUT THE CARET IN A PLATE, used by the repaint pass and by the ＋ menu. Two
+   copies of this decision would disagree the first time one changed (v.588). */
+function bubFocus(key){
+  try {
+    if (!key) return false;
+    var sel = '.bub-tx[data-bubkey="' + ((window.CSS && CSS.escape) ? CSS.escape(key) : key) + '"]';
+    var ed = document.querySelector('#skySvg ' + sel); if (!ed) return false;
+    ed.focus();
+    var r = document.createRange(); r.selectNodeContents(ed); r.collapse(false);
+    var s2 = window.getSelection(); s2.removeAllRanges(); s2.addRange(r);
+    return true;
+  } catch(e){ return false; }
+}
 function bubDraw(g, i, nd, elKey, sec){
   var NS = 'http://www.w3.org/2000/svg', XH = 'http://www.w3.org/1999/xhtml';
   ['say', 'think'].forEach(function(kind){
@@ -12104,7 +12125,11 @@ function bubDraw(g, i, nd, elKey, sec){
     var wrap = document.createElementNS(NS, 'g');
     wrap.setAttribute('class', 'bub bub-' + kind + (list.length > 1 ? ' bub-stack' : ''));
     wrap.setAttribute('data-side', side); wrap.setAttribute('data-kind', kind);
-    var ghosts = (list.length > 1) ? 2 : 1;
+    /* v.610 [Jeremy] — "don't put the offset shadow or second box behind, keep the design flat and
+       single box. ONLY ADD THE OFFSET when there's more than one speech or thought." One plate for
+       one line; the offsets appear only when there is something behind to offset. **A depth cue on
+       a stack of one is decoration telling a lie.** */
+    var ghosts = Math.max(0, Math.min(2, list.length - 1));
     for (var s = ghosts; s > 0; s--){
       var gh = document.createElementNS(NS, 'path');
       gh.setAttribute('class', 'bub-ghost');
@@ -12140,7 +12165,23 @@ function bubDraw(g, i, nd, elKey, sec){
       bubFit(wrap);   /* the plate grows with the sentence, as it is typed */
     });
     ed.addEventListener('focus', function(){ try{ state._bubEdit = bubKey(sec, kind, it.n, elKey); }catch(e){} });
-    ed.addEventListener('blur', function(){ try{ if (state._bubEdit === bubKey(sec, kind, it.n, elKey)) state._bubEdit = null; }catch(e){} });
+    /* **A blur fired by the node being REPLACED is not the writer leaving the field.**
+       `renderConstellation` tears the plate out to redraw it, and that blurs the element it is about
+       to discard — so the first cut cleared the "where the caret was" note on that blur and the
+       restore a few lines later had nothing to restore. Testing `isConnected` was not enough: the
+       blur reaches this handler while the old element is still in the document.
+
+       **So ask the question one tick later, when the answer is knowable.** If focus has landed in
+       another plate by then, the blur belonged to a repaint and nothing should be forgotten; if it
+       has gone anywhere else, the writer left and the note is cleared. */
+    ed.addEventListener('blur', function(){
+      var k2 = bubKey(sec, kind, it.n, elKey);
+      setTimeout(function(){ try{
+        var a2 = document.activeElement;
+        if (a2 && a2.classList && a2.classList.contains('bub-tx')) return;
+        if (state._bubEdit === k2) state._bubEdit = null;
+      }catch(e){} }, 0);
+    });
     fo.appendChild(ed); wrap.appendChild(fo);
     var xb = document.createElementNS(NS, 'text');
     xb.setAttribute('class', 'bub-x'); xb.setAttribute('text-anchor', 'middle');
@@ -21276,19 +21317,16 @@ function renderConstellation(){
   /* v.607 — the caret goes back where it was. A repaint of the node the writer is typing in is
      routine (a selection, a drag, an autosave); losing the cursor to one is not. The LINE is already
      safe — it is written on every keystroke — so this restores only the place. */
-  try {
-    if (state._bubEdit){
-      const _be = svg.querySelector('.bub-tx[data-bubkey="' + (window.CSS && CSS.escape ? CSS.escape(state._bubEdit) : state._bubEdit) + '"]');
-      if (_be){ _be.focus();
-        const r2 = document.createRange(); r2.selectNodeContents(_be); r2.collapse(false);
-        const s2 = window.getSelection(); s2.removeAllRanges(); s2.addRange(r2); }
-    }
-  } catch(e){}
   relOvs.forEach(ov => svg.appendChild(ov));   // relationship overlays sit on top, readable
   if (state.selNode != null){                  // keep the selected element + its option bar above every other element
     const selG = svg.querySelector('g.node.sel');
     if (selG) svg.appendChild(selG);
   }
+  /* v.610 — the caret goes back LAST, after the hoist. **Moving a DOM node blurs whatever inside it
+     had focus**, and the hoist above re-appends the selected node's whole group — so a restore that
+     ran before it was undone a line later by a move that has nothing to do with focus. The LINE was
+     never at risk (it is written on every keystroke); what was lost was the place. */
+  try { if (state._bubEdit) bubFocus(state._bubEdit); } catch(e){}
   positionConstellation(0);
   applyView();
   renderFrameBar();
@@ -40347,7 +40385,14 @@ function init(){
   document.addEventListener('mousedown', ev => {
     if (state.selNode == null) return;
     const t = ev.target;
-    if (t.closest && (t.closest('.fb-item') || t.closest('#constraintBar') || t.closest('.node') || t.closest('.evo-item') || t.closest('#mapBars') || t.closest('#traitPicker') || t.closest('#aspectMenu') || t.closest('#elemCard'))) return;   // editing the bottom bars (and their pickers/menus) must NOT drop the selection
+    /* v.610 — **`.dyst-keepsel` is the general form of this list.** Every surface below had to be
+       added here by hand the day it was written, and #54's bubble menu is the one that proved the
+       cost: pressing "＋ speech" dropped the selection before the render, so the character the
+       writer was speaking for vanished and the new line was drawn for nobody. **An allow-list is a
+       list somebody has to remember to join** (v.559, v.563) — anything that declares itself with
+       the class now keeps the selection without editing this line again. The ids stay: they are
+       shipped surfaces and nothing about them changes. */
+    if (t.closest && (t.closest('.dyst-keepsel') || t.closest('.fb-item') || t.closest('#constraintBar') || t.closest('.node') || t.closest('.evo-item') || t.closest('#mapBars') || t.closest('#traitPicker') || t.closest('#aspectMenu') || t.closest('#elemCard'))) return;   // editing the bottom bars (and their pickers/menus) must NOT drop the selection
     state.selNode = null;
     if (typeof renderConstellation === 'function') renderConstellation();
   });
@@ -52877,7 +52922,7 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.609';
+  var APP_VERSION = '2026.07.20.610';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
     { v:'2026.07.20.602', date:'September 5, 2026', notes:[
