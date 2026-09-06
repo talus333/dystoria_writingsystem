@@ -2093,9 +2093,9 @@ body.eink .pt-rh-dev{color:#000}
     border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow); transition:opacity .15s ease, transform .15s ease}
   #elemWikiCard.show{opacity:1; pointer-events:auto; transform:translate(-50%,-50%) scale(1)}
   /* icon picker */
-  #iconPickerBd{position:fixed; inset:0; z-index:175; background:rgba(20,18,16,.32); opacity:0; pointer-events:none; transition:opacity .15s}
+  #iconPickerBd{position:fixed; inset:0; z-index:var(--z-panel, 9500); background:rgba(20,18,16,.32); opacity:0; pointer-events:none; transition:opacity .15s}   /* v.612 — the picker is routed from the element card (z-card, 9300); at 175 it opened underneath it */
   #iconPickerBd.show{opacity:1; pointer-events:auto}
-  #iconPicker{position:fixed; left:50%; top:50%; transform:translate(-50%,-50%) scale(.97); opacity:0; pointer-events:none; z-index:176;
+  #iconPicker{position:fixed; left:50%; top:50%; transform:translate(-50%,-50%) scale(.97); opacity:0; pointer-events:none; z-index:calc(var(--z-panel, 9500) + 1);
     width:360px; max-width:92vw; max-height:74vh; display:flex; flex-direction:column; background:var(--paper); border:1px solid var(--line);
     border-radius:14px; box-shadow:var(--shadow); transition:opacity .15s ease, transform .15s ease}
   #iconPicker.show{opacity:1; pointer-events:auto; transform:translate(-50%,-50%) scale(1)}
@@ -18593,7 +18593,10 @@ function makeMotif(nd){
 }
 
 /* ---------------- icon picker: choose a custom icon for a setting/object ---------------- */
-function closeIconPicker(){ const p = $('iconPicker'); if (p) p.classList.remove('show'); const b = $('iconPickerBd'); if (b) b.classList.remove('show'); }
+function closeIconPicker(){ const p = $('iconPicker'); if (p) p.classList.remove('show'); const b = $('iconPickerBd'); if (b) b.classList.remove('show');
+  /* v.612 — whoever opened the picker gets told it closed. Cleared BEFORE it runs, so a handler
+     that throws (or reopens the picker) can never leave a stale one behind. */
+  try{ var _d=window.__dystIconPickerDone; window.__dystIconPickerDone=null; if(typeof _d==='function') _d(); }catch(e){} }
 function forEachElementCopy(key, scope, fn){
   const cur = state.frameIdx || 0; const frames = state.frames || [];
   if (!frames.length){ if (state.prompt) (state.prompt.words||[]).forEach(x=>{ if (wordKey(x)===key) fn(x,cur,true); }); return; }
@@ -22530,25 +22533,63 @@ function openElementDossier(key, opts){
     }
 
     // Small menu for the portrait's ✎ — mirrors the notepad card's image menu (view larger / replace / remove).
-    function _dossierImgMenu(x, y, imgKey, onDone){
+    /* Trim a name for a control that has to sit on one line, and possess it. */
+    function _shortName(n, max){ n=String(n||'').trim()||'this element'; if(n.length>max) n=n.slice(0,max-1).replace(/\s+$/,'')+'\u2026'; return n; }
+    function _poss(n){ return /s$/i.test(n) ? (n+'\u2019') : (n+'\u2019s'); }
+    /* What the MAP draws for this element — a loaded/searched image beats the vector art, which is
+       exactly the order `elIconArt` does NOT cover (it has never known about `iconImg`). */
+    function _mapArt(){
+      if(w.iconImg) return { img:w.iconImg };
+      var art=null;
+      try{
+        if(w.role==='being' && typeof window.beingTokenSVG==='function'){ var tok=window.beingTokenSVG(w); if(tok) art={vb:tok.vb, body:tok.body}; }
+        if(!art && typeof elIconArt==='function'){ var a2=elIconArt(w); if(a2) art={vb:a2.vb, body:a2.body}; }
+        if(!art && typeof npCardFallbackIcon==='function'){ var a3=npCardFallbackIcon(w); if(a3) art={vb:a3.vb, body:a3.body}; }
+      }catch(e){}
+      return art;
+    }
+    /* Where this element actually stands: the current section if it is on it, else the first one
+       that has it. A per-frame index is meaningless in another frame, so the caller re-reads. */
+    function _elemAt(k){
+      try{
+        var fr=state.frames||[], cur=state.frameIdx||0;
+        var scan=function(f){ var ws=(fr[f]&&fr[f].prompt&&fr[f].prompt.words)||[]; for(var i=0;i<ws.length;i++){ if(wordKey(ws[i])===k) return i; } return -1; };
+        var i=scan(cur); if(i>=0) return { f:cur, i:i };
+        for(var f=0; f<fr.length; f++){ var j=scan(f); if(j>=0) return { f:f, i:j }; }
+      }catch(e){}
+      return null;
+    }
+    function _dossierImgMenu(x, y, imgKey, onDone, nmOpt){
       var old=document.getElementById('dossierImgMenu'); if(old&&old.parentNode) old.parentNode.removeChild(old);
       var m=document.createElement('div'); m.id='dossierImgMenu'; m.className='dossier-imgmenu';
       var mk=function(label, fn){ var b=document.createElement('button'); b.type='button'; b.textContent=label; b.addEventListener('click', function(e){ e.stopPropagation(); if(m.parentNode) m.parentNode.removeChild(m); fn(); }); m.appendChild(b); };
       var _hasImg=!!(state.session&&state.session.npImages&&state.session.npImages[imgKey]);
+      /* v.612 — two NAMED routes, because these are two different pictures and the old menu said
+         neither name. The IMAGE is this element's own picture and fills the card's top-left; the
+         ICON is what the map draws — and now also fills the top-left when there is no image. */
+      var _who=_shortName(nmOpt||name, 18), _whos=_poss(_who);
       if(_hasImg){
         mk('⤢  View larger', function(){ var src=(state.session&&state.session.npImages&&state.session.npImages[imgKey])||''; if(typeof window.openImageLightbox==='function') window.openImageLightbox(src); });
-        mk('⟳  Replace image', function(){ if(typeof window.pickElementImage==='function') window.pickElementImage(imgKey, function(){ if(onDone) onDone(); }); });
+        mk('⟳  Replace '+_whos+' image', function(){ if(typeof window.pickElementImage==='function') window.pickElementImage(imgKey, function(){ if(onDone) onDone(); }); });
       } else {
-        mk('🖼  Load an image', function(){ if(typeof window.pickElementImage==='function') window.pickElementImage(imgKey, function(){ if(onDone) onDone(); }); });
+        mk('🖼  Add '+_whos+' image', function(){ if(typeof window.pickElementImage==='function') window.pickElementImage(imgKey, function(){ if(onDone) onDone(); }); });
       }
       /* v.606 — the map glyph is a property of the picture, so it lives with the picture. This is a
          ROUTE to `openIconPicker`, which is where the appearance scope (this section / forward /
          all) has always lived — nothing about that control moved, then or now. */
-      mk('◇  Map icon…', function(){ if(typeof window.openIconPickerFor==='function') window.openIconPickerFor(imgKey); });
+      mk('◇  Change map icon…', function(){
+        /* v.612 — the picker writes live and repaints the map and the notepad card, but it has never
+           known about this card. One slot, set here and cleared by `closeIconPicker` as it fires, so
+           the card repaints with the icon you chose instead of the one you replaced. */
+        try{ window.__dystIconPickerDone=function(){ try{ if(bd && bd.parentNode && onDone) onDone(); }catch(e){} }; }catch(e){}
+        if(typeof window.openIconPickerFor==='function') window.openIconPickerFor(imgKey); });
       if(_hasImg) mk('🗑  Remove image', function(){ if(typeof window.deleteElementImage==='function') window.deleteElementImage(imgKey, function(){ if(onDone) onDone(); }); });
       document.body.appendChild(m);
-      m.style.left=Math.max(8, Math.min(x||200, window.innerWidth-190))+'px';
-      m.style.top=Math.max(8, Math.min(y||200, window.innerHeight-140))+'px';
+      /* v.612 — measured, because the menu is no longer a fixed 190px: a named label makes it as
+         wide as it needs to be, and the old constant would have hung it off the right edge. */
+      var _mw=m.offsetWidth||190, _mh=m.offsetHeight||140;
+      m.style.left=Math.max(8, Math.min(x||200, window.innerWidth-_mw-8))+'px';
+      m.style.top=Math.max(8, Math.min(y||200, window.innerHeight-_mh-8))+'px';
       setTimeout(function(){ document.addEventListener('click', function _c(){ if(m.parentNode) m.parentNode.removeChild(m); document.removeEventListener('click', _c, true); }, true); }, 0);
     }
 
@@ -22566,18 +22607,23 @@ function openElementDossier(key, opts){
         portrait.title='Click to view full size'; portrait.style.cursor='zoom-in';
         portrait.addEventListener('click', function(e){ if(e.target && e.target.closest && e.target.closest('.dossier-imgedit')) return; if(typeof window.openImageLightbox==='function') window.openImageLightbox(img); });
         var ed=document.createElement('button'); ed.className='dossier-imgedit'; ed.innerHTML='✎'; ed.title='Change or remove image';
-        ed.addEventListener('click', function(e){ e.stopPropagation(); _dossierImgMenu(e.clientX, e.clientY, key, render); });
+        ed.addEventListener('click', function(e){ e.stopPropagation(); _dossierImgMenu(e.clientX, e.clientY, key, render, name); });
         portrait.appendChild(ed);
       }
-      else { var art=null; try{ if(w.role==='being' && typeof window.beingTokenSVG==='function'){ var tok=window.beingTokenSVG(w); if(tok) art={vb:tok.vb,body:tok.body}; } if(!art && typeof elIconArt==='function'){ var a2=elIconArt(w); if(a2) art={vb:a2.vb,body:a2.body}; } if(!art && typeof npCardFallbackIcon==='function'){ var a3=npCardFallbackIcon(w); if(a3) art={vb:a3.vb,body:a3.body}; } }catch(e){}
-        portrait.classList.add('has-icon'); if(art) portrait.innerHTML='<svg viewBox="'+art.vb+'" preserveAspectRatio="xMidYMid meet">'+art.body+'</svg>';
+      else { var art=_mapArt();
+        /* v.612 — with no image of its own, the card shows the element's MAP ICON, whatever that
+           icon is. A picture loaded or searched as the icon lives in `iconImg`, which the vector
+           chain has never covered, so replacing the icon left this square showing the old art. */
+        portrait.classList.add('has-icon');
+        if(art && art.img){ portrait.innerHTML=''; var _ii=document.createElement('img'); _ii.src=art.img; portrait.appendChild(_ii); }
+        else if(art) portrait.innerHTML='<svg viewBox="'+art.vb+'" preserveAspectRatio="xMidYMid meet">'+art.body+'</svg>';
         portrait.title='Click to load your own image'; portrait.style.cursor='pointer';
         portrait.addEventListener('click', function(e){ if(e.target && e.target.closest && e.target.closest('.dossier-imgedit')) return;
           if(typeof window.pickElementImage==='function') window.pickElementImage(key, function(){ render(); }); });
         /* v.606 — the \u270e is on the portrait whether or not there is a photo, because the map icon
            is set from here now and an element with no photo still has one. */
         var ed2=document.createElement('button'); ed2.className='dossier-imgedit'; ed2.innerHTML='\u270e'; ed2.title='Picture and map icon';
-        ed2.addEventListener('click', function(e){ e.stopPropagation(); _dossierImgMenu(e.clientX, e.clientY, key, render); });
+        ed2.addEventListener('click', function(e){ e.stopPropagation(); _dossierImgMenu(e.clientX, e.clientY, key, render, name); });
         portrait.appendChild(ed2); }
       top.appendChild(portrait);
       var htext=document.createElement('div'); htext.className='dossier-htext';
@@ -22844,8 +22890,11 @@ function openElementDossier(key, opts){
         card.appendChild(sec);
       })();
       var foot=document.createElement('div'); foot.className='dossier-foot';
-      // R27 — Write about this: close the card and drop into a focused full-screen session about this element
-      var wab=document.createElement('button'); wab.className='dossier-writeabout'; wab.innerHTML='<svg class="wa-quill" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.24 12.24a6 6 0 0 0-8.49-8.49L5 10.5V19h8.5z"/><line x1="16" y1="8" x2="2" y2="22"/><line x1="17.5" y1="15" x2="9" y2="15"/></svg> Write about this'; wab.title='Start a focused full-screen writing session about this element (its notes come along as context)';
+      // R27 — Write about <name>: close the card and drop into a focused full-screen session about this element
+      /* v.612 — the button says WHO. Appended as a text node, never interpolated into the innerHTML
+         beside the quill, because a name is the writer's own text and belongs nowhere near markup. */
+      var wab=document.createElement('button'); wab.className='dossier-writeabout'; wab.innerHTML='<svg class="wa-quill" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.24 12.24a6 6 0 0 0-8.49-8.49L5 10.5V19h8.5z"/><line x1="16" y1="8" x2="2" y2="22"/><line x1="17.5" y1="15" x2="9" y2="15"/></svg>';
+      wab.appendChild(document.createTextNode(' Write about '+_shortName(name, 22))); wab.title='Start a focused full-screen writing session about '+name+' (their notes come along as context)';
       wab.addEventListener('click', function(){ if(bd.parentNode) bd.parentNode.removeChild(bd); if(typeof window.writeAboutElement==='function') window.writeAboutElement(key); });
       foot.appendChild(wab);
       var exb=document.createElement('button'); exb.className='dossier-writeabout'; exb.textContent='\u2726 Explore'; exb.title='Explore this element \u2014 a full-screen Q&A that deepens it, then files into your notes';
@@ -22859,7 +22908,29 @@ function openElementDossier(key, opts){
         try{ obs.observe(document.body, { attributes:true, attributeFilter:['class'] }); }catch(e){}
         if(typeof openElementNotes==='function') openElementNotes(key);
       });
-      foot.appendChild(nb); card.appendChild(foot);
+      foot.appendChild(nb);
+      /* v.612 — the card's shortcut back to the map, wearing the element's own map icon. It sits at
+         the far right of the footer row and is the only square thing in it, so it reads as a place
+         rather than another action. It also makes the icon VISIBLE on the card, which is what makes
+         "◇ Change map icon…" in the ✎ menu mean something you can see the result of. */
+      var mb=document.createElement('button'); mb.type='button'; mb.className='dossier-mapbtn';
+      { var _ma=_mapArt();
+        if(_ma && _ma.img){ var _mi=document.createElement('img'); _mi.src=_ma.img; mb.appendChild(_mi); }
+        else if(_ma) mb.innerHTML='<svg viewBox="'+_ma.vb+'" preserveAspectRatio="xMidYMid meet">'+_ma.body+'</svg>';
+        else mb.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3 3 5.5v15L9 18l6 3 6-2.5v-15L15 6z"/><line x1="9" y1="3" x2="9" y2="18"/><line x1="15" y1="6" x2="15" y2="21"/></svg>'; }
+      mb.title='Show '+name+' on the map';
+      mb.addEventListener('click', function(){
+        var loc=_elemAt(key);
+        if(!loc){ if(typeof flashStatus==='function') flashStatus(name+' hasn\u2019t been placed on the map yet'); return; }
+        if(bd.parentNode) bd.parentNode.removeChild(bd);
+        try{ if(typeof goMode==='function') goMode('notepad'); }catch(e){}   /* 'notepad' IS the map — goMode's own vocabulary */
+        try{ if(typeof switchFrame==='function' && (state.frameIdx||0)!==loc.f) switchFrame(loc.f); }catch(e){}
+        setTimeout(function(){ try{
+          var l2=_elemAt(key);   /* re-read: the index was the OTHER frame's before the switch */
+          if(l2 && (state.frameIdx||0)===l2.f){ state.selNode=l2.i; if(typeof renderConstellation==='function') renderConstellation(); }
+        }catch(e){} }, 160);
+      });
+      foot.appendChild(mb); card.appendChild(foot);
     }
     render();
     document.body.appendChild(bd);
@@ -23020,7 +23091,8 @@ function openThreadCard(id){
       })();
       // Foot — write about this, open in notepad
       var foot=document.createElement('div'); foot.className='dossier-foot';
-      var wab=document.createElement('button'); wab.className='dossier-writeabout'; wab.innerHTML='<svg class="wa-quill" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.24 12.24a6 6 0 0 0-8.49-8.49L5 10.5V19h8.5z"/><line x1="16" y1="8" x2="2" y2="22"/><line x1="17.5" y1="15" x2="9" y2="15"/></svg> Write about this'; wab.title='Start a focused full-screen writing session about this thread’s elements';
+      var wab=document.createElement('button'); wab.className='dossier-writeabout'; wab.innerHTML='<svg class="wa-quill" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.24 12.24a6 6 0 0 0-8.49-8.49L5 10.5V19h8.5z"/><line x1="16" y1="8" x2="2" y2="22"/><line x1="17.5" y1="15" x2="9" y2="15"/></svg>';
+      { var _tn=String(name||'Thread'); wab.appendChild(document.createTextNode(' Write about '+(_tn.length>22?(_tn.slice(0,21).replace(/\s+$/,'')+'\u2026'):_tn))); wab.title='Start a focused full-screen writing session about '+_tn+'\u2019s elements'; }
       wab.addEventListener('click', function(){ if(bd.parentNode) bd.parentNode.removeChild(bd); var _tn='thread'; try{ var _t=(typeof threadById==='function')?threadById(id):null; if(_t&&_t.name) _tn=_t.name; }catch(e){} if(typeof window.writeAboutFocus==='function') window.writeAboutFocus(['thread:'+id], _tn); });
       foot.appendChild(wab);
       var exb2=document.createElement('button'); exb2.className='dossier-writeabout'; exb2.textContent='✦ Explore'; exb2.title='Explore this thread — a full-screen Q&A that deepens it, then files into your notes';
@@ -25424,8 +25496,12 @@ window.writeAboutElement = writeAboutElement;
 function npCardWriteAboutBtn(keys, label, ctxOpts){
   keys = (keys || []).filter(Boolean);
   if (!keys.length) return null;
-  var b = document.createElement('span'); b.className = 'npc-writeabout npc-wa-card'; b.title = 'Write about this — start a focused full-screen session with all these elements (plus this card’s notes and prose) as your focus';
-  b.insertAdjacentHTML('beforeend', '<svg class="wa-quill" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.24 12.24a6 6 0 0 0-8.49-8.49L5 10.5V19h8.5z"/><line x1="16" y1="8" x2="2" y2="22"/><line x1="17.5" y1="15" x2="9" y2="15"/></svg>'); var l = document.createElement('span'); l.className = 'npc-wa-lbl'; l.textContent = 'Write about this'; b.appendChild(l);
+  /* v.612 — the chip names the card it belongs to; `label` is what the session is filed under, so
+     the button and the session now say the same word. */
+  var _wl = String(label || '').trim();
+  var _wls = _wl ? (_wl.length>22 ? (_wl.slice(0,21).replace(/\s+$/,'')+'\u2026') : _wl) : 'this';
+  var b = document.createElement('span'); b.className = 'npc-writeabout npc-wa-card'; b.title = 'Write about ' + (_wl || 'this') + ' — start a focused full-screen session with all these elements (plus this card’s notes and prose) as your focus';
+  b.insertAdjacentHTML('beforeend', '<svg class="wa-quill" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.24 12.24a6 6 0 0 0-8.49-8.49L5 10.5V19h8.5z"/><line x1="16" y1="8" x2="2" y2="22"/><line x1="17.5" y1="15" x2="9" y2="15"/></svg>'); var l = document.createElement('span'); l.className = 'npc-wa-lbl'; l.textContent = 'Write about ' + _wls; b.appendChild(l);
   b.addEventListener('click', function(ev){ ev.stopPropagation();
     var o = ctxOpts || {};
     var ctx = { notes: waNotesFor(keys, o.noteKeys || []), prose: (o.frame != null ? waProseForFrame(o.frame) : waProseMentions(keys)) };
@@ -53003,7 +53079,7 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.611';
+  var APP_VERSION = '2026.07.20.612';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
     { v:'2026.07.20.602', date:'September 5, 2026', notes:[
@@ -55454,12 +55530,13 @@ body.eink .pl-expbtn{ color:#000; }
 .dossier-top{ display:flex; gap:16px; align-items:flex-start; }
 .dossier-portrait{ position:relative; flex:none; width:92px; height:92px; border-radius:14px; overflow:hidden; background:rgba(120,110,88,.1); display:flex; align-items:center; justify-content:center; }
 .dossier-portrait.has-photo img{ width:100%; height:100%; object-fit:cover; }
+.dossier-portrait.has-icon img{ width:74%; height:74%; object-fit:contain; }   /* v.612 — an IMAGE used as the map icon, standing in for the missing photo */
 .dossier-portrait svg{ width:74%; height:74%; }
 .dossier-imgedit{ position:absolute; right:4px; bottom:4px; width:20px; height:20px; display:flex; align-items:center; justify-content:center; font-size:11px; color:#fff; background:rgba(20,18,16,.55); border:none; border-radius:50%; cursor:pointer; opacity:0; transition:opacity .12s; }
 .dossier-portrait:hover .dossier-imgedit{ opacity:1; }
 .dossier-imgedit:hover{ background:rgba(20,18,16,.8); }
-.dossier-imgmenu{ position:fixed; z-index:460; background:#fffdf8; border:1px solid var(--line); border-radius:10px; box-shadow:0 10px 34px rgba(0,0,0,.22); padding:5px; min-width:170px; }
-.dossier-imgmenu button{ display:block; width:100%; text-align:left; font:inherit; font-size:12px; color:var(--charcoal); background:transparent; border:none; border-radius:7px; padding:7px 10px; cursor:pointer; }
+.dossier-imgmenu{ position:fixed; z-index:var(--z-panel-hi, 9600);   /* v.612 — raised FROM the card, so above the card rung (was 460, i.e. under it) */ background:#fffdf8; border:1px solid var(--line); border-radius:10px; box-shadow:0 10px 34px rgba(0,0,0,.22); padding:5px; min-width:170px; width:max-content; max-width:min(340px,88vw); }   /* v.612 — the labels carry a name, so the box is sized by them */
+.dossier-imgmenu button{ display:block; width:100%; text-align:left; font:inherit; font-size:12px; color:var(--charcoal); background:transparent; border:none; border-radius:7px; padding:7px 10px; cursor:pointer; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }   /* v.612 — one line each; the box grows to them, and a name past even that ellipsises */
 .dossier-imgmenu button:hover{ background:rgba(0,0,0,.07); }
 .dossier-htext{ flex:1; min-width:0; padding-top:2px; }
 .dossier-name{ font-family:var(--serif); font-size:26px; font-weight:700; color:var(--ink); line-height:1.1; }
@@ -55506,6 +55583,13 @@ body.eink .pl-expbtn{ color:#000; }
 .dossier-writeabout:hover{ background:rgba(196,158,74,.22); border-color:var(--gold); color:#5f4a1e; }
 .dossier-notesbtn{ font:inherit; font-size:12px; color:#6b675f; background:rgba(255,255,255,.6); border:1px solid var(--line); border-radius:999px; padding:6px 14px; cursor:pointer; }
 .dossier-notesbtn:hover{ border-color:var(--gold); color:var(--charcoal); }
+/* v.612 — the map shortcut: a square with rounded corners, a shade taller than the pills beside it,
+   wearing the element's own map icon. `margin-left:auto` puts it at the right end of the footer row. */
+.dossier-mapbtn{ margin-left:auto; flex:none; width:36px; height:36px; display:inline-flex; align-items:center; justify-content:center; padding:4px; background:rgba(255,255,255,.6); border:1px solid var(--line); border-radius:10px; cursor:pointer; color:#6b675f; transition:border-color .12s, background .12s; }
+.dossier-mapbtn:hover{ border-color:var(--gold); background:rgba(196,158,74,.12); color:var(--charcoal); }
+.dossier-mapbtn svg{ width:80%; height:80%; display:block; }
+.dossier-mapbtn img{ width:88%; height:88%; object-fit:contain; border-radius:5px; display:block; }
+body.ember:not(.eink) .dossier-mapbtn{ background:rgba(255,255,255,.06); }
 body.ember:not(.eink) .dossier{ background:var(--em-menu); border-color:var(--em-bronze-a30); }
 body.eink .dossier{ background:#fff; border-color:#000; }
 
@@ -56982,7 +57066,7 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     if(cfg.open){ nm.classList.add('pl-tagname-open'); nm.title='Open card'; nm.addEventListener('click', function(e){ e.stopPropagation(); cfg.open(); }); }
     if(cfg.tag){ var rb=document.createElement('span'); rb.className='pl-tag-role'; rb.textContent=cfg.tag; pill.appendChild(rb); }
     if(cfg.edit){ var ed=mkIc('edit2','Edit this element'); ed.className='pl-tic pl-iced'; ed.addEventListener('click', function(e){ e.stopPropagation(); cfg.edit(ed); }); pill.appendChild(ed); }
-    if(cfg.writeAbout){ var wa=document.createElement('span'); wa.className='pl-tic pl-icwa'; wa.innerHTML='<svg class="wa-quill" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.24 12.24a6 6 0 0 0-8.49-8.49L5 10.5V19h8.5z"/><line x1="16" y1="8" x2="2" y2="22"/><line x1="17.5" y1="15" x2="9" y2="15"/></svg>'; wa.title='Write about this — a focused full-screen session about this element'; wa.addEventListener('click', function(e){ e.stopPropagation(); cfg.writeAbout(); }); pill.appendChild(wa); }   // R27 — Write about this, on the Plan → Elements cards
+    if(cfg.writeAbout){ var wa=document.createElement('span'); wa.className='pl-tic pl-icwa'; wa.innerHTML='<svg class="wa-quill" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.24 12.24a6 6 0 0 0-8.49-8.49L5 10.5V19h8.5z"/><line x1="16" y1="8" x2="2" y2="22"/><line x1="17.5" y1="15" x2="9" y2="15"/></svg>'; wa.title='Write about '+(cfg.label||'this element')+' — a focused full-screen session about it'; wa.addEventListener('click', function(e){ e.stopPropagation(); cfg.writeAbout(); }); pill.appendChild(wa); }   // R27 — Write about this, on the Plan → Elements cards
     if(cfg.notes){ var f=mkIc('feather','Notes'); f.className='pl-tic'; f.addEventListener('click', function(e){ e.stopPropagation(); cfg.notes(); }); pill.appendChild(f); }
     if(cfg.del){ var x=mkIc('x','Delete'); x.className='pl-tic pl-icx'; x.addEventListener('click', function(e){ e.stopPropagation(); cfg.del(); }); pill.appendChild(x); }
     return pill;
@@ -59685,8 +59769,16 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     return bits.join('\n');
   }
   function cardWriteAbout(i, col, sid){
-    var btn=document.createElement('button'); btn.type='button'; btn.className='pl-cardpop-writeabout'; btn.title='Write about this card — a focused full-screen session with this card’s context and all its linked elements as your focus';
-    btn.innerHTML='<svg class="wa-quill" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.24 12.24a6 6 0 0 0-8.49-8.49L5 10.5V19h8.5z"/><line x1="16" y1="8" x2="2" y2="22"/><line x1="17.5" y1="15" x2="9" y2="15"/></svg> <span class="pl-wa-lbl">Write about this</span>';
+    /* v.612 — the card's label was computed inside the click handler; the BUTTON needs it too now
+       that it says what it will write about. Computed once here so the label on the button and the
+       label the session is filed under can never drift apart. */
+    var _a0=(typeof api==='function')?api():null;
+    var _sec0=(_a0&&_a0.sectionName&&_a0.sectionName(i))||('Section '+(i+1));
+    var _t0=''; try{ _t0=(typeof plotCardTitle==='function'?plotCardTitle(i,col):'')||''; }catch(_){}
+    var _lab0=_t0 || (col.id==='main' ? _sec0 : (_sec0+' · '+col.name));
+    var btn=document.createElement('button'); btn.type='button'; btn.className='pl-cardpop-writeabout'; btn.title='Write about '+_lab0+' — a focused full-screen session with this card’s context and all its linked elements as your focus';
+    btn.innerHTML='<svg class="wa-quill" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.24 12.24a6 6 0 0 0-8.49-8.49L5 10.5V19h8.5z"/><line x1="16" y1="8" x2="2" y2="22"/><line x1="17.5" y1="15" x2="9" y2="15"/></svg> <span class="pl-wa-lbl"></span>';
+    try{ btn.querySelector('.pl-wa-lbl').textContent='Write about '+(_lab0.length>24?(_lab0.slice(0,23).replace(/\s+$/,'')+'\u2026'):_lab0); }catch(_){}
     btn.addEventListener('click', function(e){ e.stopPropagation();
       var cels=_cardFocusEls(i, col, sid);
       var keys=cels.map(function(el){ return el.nkey; }).filter(Boolean);
@@ -62011,8 +62103,8 @@ body.ember:not(.eink) .ai-menu button:hover, body.ember:not(.eink) #aiSupportMen
   body:not(.eink).dyb-open #aspectMenu, body:not(.eink).dyb-open #traitPicker{
     --paper:#f6f0de; --ink:#463b26; --ink-soft:#6b5a38; --ink-faint:#967c46; --line:rgba(120,92,40,.28); --line-soft:rgba(120,92,40,.18); --gold:#b9822e; --bg2:rgba(120,92,40,.10); --shadow:0 20px 54px rgba(0,0,0,.42);
     background:var(--linen) !important; color:#463b26; border-color:rgba(120,92,40,.34) !important; }
-  body.pad-open #iconPickerBd{ z-index:205 !important; }
-  body.pad-open #iconPicker{ z-index:206 !important; }
+  body.pad-open #iconPickerBd{ z-index:calc(var(--z-panel, 9500) + 2) !important; }   /* v.612 — was 205, which is now BELOW the picker's own base; kept, re-aimed to the same rung */
+  body.pad-open #iconPicker{ z-index:calc(var(--z-panel, 9500) + 3) !important; }
   #mapImgBtn.in-head, #mapTextBtn.in-head{ padding:4px 9px; }   /* icon-only buttons */
   #mimOnlineWin{ position:fixed; z-index:301; display:none; width:314px; box-sizing:border-box; background:var(--linen); border:1px solid rgba(138,99,32,.30); border-radius:14px; box-shadow:0 18px 44px rgba(0,0,0,.3); padding:14px; font-family:var(--sans); color:var(--charcoal); }
   #mimOnlineWin.show{ display:block; }
