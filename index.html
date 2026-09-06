@@ -12838,10 +12838,11 @@ function placesSyncBody(){
 function placesRepoint(){
   placesSyncBody();
   var p=placesPromptNow();
-  if(!p) return false;
+  if(!p){ if(typeof renderStoryLibrary==='function') renderStoryLibrary(); return false; }   /* v.620 — even with no map open, the Legend must stop claiming things are on one */
   state.prompt=p; state.selNode=null; state.linkFrom=null; state.activeSet=0;
   if(typeof refreshSky==='function') refreshSky();
   if(typeof buildRail==='function') buildRail();
+  if(typeof renderStoryLibrary==='function') renderStoryLibrary();   /* v.620 — its rows answer "is it on THIS surface", so a new surface is a new answer */
   if(typeof syncFramesToSession==='function') syncFramesToSession();
   return true;
 }
@@ -29918,7 +29919,10 @@ function renderStoryLibrary(){
     const cur = (state.frameIdx || 0) + 1;
     const multiSec = (state.frames || []).length > 1;
     rows.forEach(r => {
-      const inCur = (r.frames || []).indexOf(cur) >= 0;   // "on map" means THIS section \u2014 an element living in other sections is still addable here
+      /* v.620 — "on map" means THIS SURFACE: this section in Scenes, this map in Maps. It read
+         `r.frames` unconditionally, so on a map every element that stood anywhere in the book
+         claimed to be on the map you were looking at. */
+      const inCur = libOnCurrentSurface(r);
       const row = document.createElement('div'); row.className = 'rl-row' + (inCur ? ' placed' : '');
       const nm = document.createElement('span'); nm.className = 'rl-nm'; nm.textContent = r.name || r.word; nm.title = r.name || r.word;
       row.appendChild(nm);
@@ -29928,7 +29932,9 @@ function renderStoryLibrary(){
       if (multiSec && (r.frames || []).length) nm.title = (r.name || r.word) + ' — sections ' + libFmtSections(r.frames);
       // feather / focus / wiki shortcuts removed \u2014 that space goes to the element name (was getting cut off). Row = name \u00b7 +map/\u2713on map \u00b7 \u00d7
       const add = document.createElement('button'); add.className = 'rl-add'; add.textContent = inCur ? '\u2713 on map' : '+ map';
-      add.title = inCur ? 'Already in this section' : ((r.frames || []).length ? 'Add to the current section too' : 'Place on the map');
+      add.title = inCur ? ('Already on this ' + libSurfaceWord())
+                        : (libSurfaceWord()==='map' ? 'Add it to this map'
+                           : ((r.frames || []).length ? 'Add to the current section too' : 'Place on the map'));
       if (!inCur) add.addEventListener('click', () => libAddToMap(r.id));
       row.appendChild(add);
       const del = document.createElement('button'); del.className = 'rl-x'; del.textContent = '\u00d7';
@@ -30012,17 +30018,26 @@ function libEnsureFrame(){
   if (state.frames && state.frames[state.frameIdx || 0]){ state.prompt = state.frames[state.frameIdx || 0].prompt; return; }
   state.prompt = { words: [], sets: 1, links: [], removedLinks: [] }; state.frames = [{ gap: null, prompt: state.prompt }]; state.frameIdx = 0; state.activeSet = 0;
 }
+/* Is this roster element on the surface you are LOOKING AT? On a map that is a question about the
+   map's own board; in Scenes it is the section question `r.frames` was always answering. */
+function libOnCurrentSurface(rec){
+  if(!rec) return false;
+  try{
+    if(state.placesView==='maps' && state.mapId){
+      var k=rec.item ? wordKey(rec.item) : null; if(!k) return false;
+      return ((state.prompt && state.prompt.words) || []).some(function(w){ return wordKey(w)===k; });
+    }
+  }catch(e){}
+  return ((rec.frames || []).indexOf((state.frameIdx || 0) + 1) >= 0);
+}
+function libSurfaceWord(){ return (state.placesView==='maps' && state.mapId) ? 'map' : 'section'; }
 function libAddToMap(id){
   const rec = storyLibrary().find(r => r.id === id); if (!rec || !rec.item) return;
   libEnsureFrame();
   const cur = (state.frameIdx || 0) + 1;
-  /* v.619 — on a MAP the guard asks the wrong question. "Already in this section" is about a
-     surface you are not looking at; the honest test is whether it is already on THIS BOARD. */
-  const _onMap = (state.placesView === 'maps' && state.mapId);
-  if (_onMap){
-    const _k = wordKey(rec.item);
-    if (((state.prompt && state.prompt.words) || []).some(w => wordKey(w) === _k)) return;   // already on this map
-  } else if ((rec.frames || []).indexOf(cur) >= 0) return;   // already in this section
+  /* v.620 — the one predicate, so this door and the Legend row that offers it can never disagree
+     about whether the element is already here. */
+  if (libOnCurrentSurface(rec)) return;
   if (typeof pushUndo === 'function') pushUndo();
   const clone = JSON.parse(JSON.stringify(rec.item)); clone.set = state.activeSet || 0;
   delete clone.needsPlace;
@@ -30051,7 +30066,9 @@ function libAddToMap(id){
   layoutConstellation(); renderConstellation(); saveSession();
   renderStoryLibrary();
 }
-function libAddAll(cat){ storyLibrary().filter(r => r.cat === cat && !r.placed).forEach(r => libAddToMap(r.id)); }   // "+ all" = everything not yet on the map anywhere
+function libAddAll(cat){   // "+ all" = everything not already on the surface you are looking at (v.620)
+  storyLibrary().filter(r => r.cat === cat && !libOnCurrentSurface(r) && (r.item || !r.placed)).forEach(r => libAddToMap(r.id));
+}
 // Delete an element from the story via its roster row — off every section (notes archived) and out of the Library.
 async function libDeleteFromLibrary(id){
   const rec = storyLibrary().find(r => r.id === id); if (!rec) return;
@@ -53535,7 +53552,7 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.619';
+  var APP_VERSION = '2026.07.20.620';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
     { v:'2026.07.20.602', date:'September 5, 2026', notes:[
