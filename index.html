@@ -20866,13 +20866,16 @@ function decoKindOf(w){
   if(w.shape) return (w.shape.kind === 'circle') ? 'Ellipse' : ((w.shape.kind === 'line') ? 'Line' : 'Shape');
   return 'Boundary';
 }
-function decoSelSet(idx){
+/* v.631 [Jeremy] — "move the pop-up for editing of the zones line thickness, color etc onto the map
+   where you click." v.628 put a drawing's options in the drawer, on the reasoning v.627 settled for
+   the TOOL panels. A tool's options belong with the tool, which lives in the drawer; a DRAWING's
+   options belong with the drawing, which is on the map. So the editor floats at the press. */
+function decoSelSet(idx, x, y){
   var w = (idx != null && state.prompt) ? state.prompt.words[idx] : null;
   state.decoSel = (w && w.deco) ? idx : null;
-  if (state.decoSel != null){
-    try{ if (window.__dystLDrawer) (window.__dystLDrawer.show || window.__dystLDrawer.set)('zones'); }catch(e){}   // put the options where the eye already is — SHOW, never toggle
-  }
-  try{ if (typeof renderZonesDrawer === 'function') renderZonesDrawer(); }catch(e){}
+  state.decoSelAt = (state.decoSel != null && isFinite(x) && isFinite(y)) ? { x:x, y:y } : null;
+  try{ if (typeof renderDecoEditor === 'function') renderDecoEditor(); }catch(e){}
+  try{ if (typeof renderZonesDrawer === 'function') renderZonesDrawer(); }catch(e){}   // the drawer's rows still say which one is held
   try{ if (typeof renderConstellation === 'function') renderConstellation(); }catch(e){}
 }
 /* v.629 [Jeremy] — "you should be able to grab and move the shape on the map as well."
@@ -20891,7 +20894,8 @@ function decoMoveBy(idx, dx, dy){
   return true;
 }
 try{ window.__dystDecoMove = decoMoveBy; }catch(e){}
-function decoSelClear(){ if (state.decoSel == null) return; state.decoSel = null;
+function decoSelClear(){ if (state.decoSel == null) return; state.decoSel = null; state.decoSelAt = null;
+  try{ if (typeof renderDecoEditor === 'function') renderDecoEditor(); }catch(e){}
   try{ if (typeof renderZonesDrawer === 'function') renderZonesDrawer(); }catch(e){}
   try{ if (typeof renderConstellation === 'function') renderConstellation(); }catch(e){} }
 try{ window.__dystDeco = { sel:function(){ return state.decoSel; }, set:decoSelSet, clear:decoSelClear, kind:decoKindOf }; }catch(e){}
@@ -30572,7 +30576,28 @@ function renderStoryLibrary(){
   if (typeof renderZonesDrawer === 'function') renderZonesDrawer();
   if (typeof renderImagesDrawer === 'function') renderImagesDrawer();
 }
-/* ---- The selected drawing's options, built fresh on each drawer render ---- */
+/* ---- The selected drawing's options: a small floating panel, standing on the drawing ---- */
+function renderDecoEditor(){
+  var old = document.getElementById('decoEditWin'); if (old && old.parentNode) old.parentNode.removeChild(old);
+  var el = decoEditorEl(); if (!el || !el.id) return;
+  document.body.appendChild(el);
+  /* placed where the press was; failing that, on the drawing's own label anchor — measured at
+     paint time and clamped to the viewport, like every other floating surface here. */
+  var px = null, py = null;
+  try{
+    if (state.decoSelAt){ px = state.decoSelAt.x + 14; py = state.decoSelAt.y + 12; }
+    else {
+      var w2 = state.prompt.words[state.decoSel];
+      var at = (typeof drawLabelAt === 'function') ? drawLabelAt(w2) : null;
+      var cp = at && (typeof mapPtToClient === 'function') ? mapPtToClient(at.x, at.y) : null;
+      if (cp){ px = cp.x + 14; py = cp.y + 12; }
+    }
+  }catch(e){}
+  var r = el.getBoundingClientRect(), pw = r.width || 216, ph = r.height || 190;
+  el.style.left = Math.round(Math.max(8, Math.min(px == null ? 240 : px, window.innerWidth - pw - 8))) + 'px';
+  el.style.top  = Math.round(Math.max(8, Math.min(py == null ? 160 : py, window.innerHeight - ph - 8))) + 'px';
+}
+try{ window.renderDecoEditor = renderDecoEditor; }catch(e){}
 function decoEditorEl(){
   var wrap = document.createElement('div');
   var i = (typeof state !== 'undefined' && state) ? state.decoSel : null;
@@ -30607,7 +30632,7 @@ function decoEditorEl(){
       if (w.terrain) w.color = hex; else { w.lstyle = w.lstyle || {}; w.lstyle.stroke = hex; }
       if (state.session){ state.session.words = state.prompt.words; if (typeof scheduleAutosave === 'function') scheduleAutosave(); }
       if (typeof renderConstellation === 'function') renderConstellation();
-      if (typeof renderZonesDrawer === 'function') renderZonesDrawer();
+      if (typeof renderDecoEditor === 'function') renderDecoEditor();
     });
   });
   row.appendChild(cb);
@@ -30619,7 +30644,7 @@ function decoEditorEl(){
       w.lstyle.width = Math.max(1, Math.min(10, (w.lstyle.width || 3.2) + d));
       if (state.session){ state.session.words = state.prompt.words; if (typeof scheduleAutosave === 'function') scheduleAutosave(); }
       if (typeof renderConstellation === 'function') renderConstellation();
-      if (typeof renderZonesDrawer === 'function') renderZonesDrawer();
+      if (typeof renderDecoEditor === 'function') renderDecoEditor();
     };
     var tw = document.createElement('span'); tw.className = 'de-thick';
     var minus = document.createElement('button'); minus.type = 'button'; minus.className = 'de-btn de-step'; minus.textContent = '\u2212';
@@ -30635,8 +30660,9 @@ function decoEditorEl(){
   var del = document.createElement('button'); del.type = 'button'; del.className = 'de-btn de-del';
   del.textContent = 'Delete this ' + decoKindOf(w).toLowerCase();
   del.addEventListener('click', function(ev){ ev.stopPropagation();
-    var keep = i; state.decoSel = null;
+    var keep = i; state.decoSel = null; state.decoSelAt = null;
     if (typeof removeNode === 'function') removeNode(keep);
+    if (typeof renderDecoEditor === 'function') renderDecoEditor();
     if (typeof renderZonesDrawer === 'function') renderZonesDrawer(); });
   wrap.appendChild(del);
   return wrap;
@@ -30663,9 +30689,7 @@ function renderZonesDrawer(){
   body.innerHTML = '';
   /* the tools, moved not copied, and re-attached rather than rebuilt (v.623) */
   try{ body.appendChild(zoneToolsEl()); }catch(e){}
-  /* v.628 [Jeremy] — the selected drawing's own options: its name, its colour, its thickness, and
-     the way out. Every route the retired popup had, in the place v.627 settled options belong. */
-  try{ body.appendChild(decoEditorEl()); }catch(e){}
+  /* v.631 — the drawing's options left the drawer for the map, where the drawing is [Jeremy]. */
   if (!zs.length){
     var e2 = document.createElement('div'); e2.className = 'rl-zone-empty';
     e2.textContent = 'Draw a boundary and name it \u2014 a shape with a name is a zone.';
@@ -30688,7 +30712,7 @@ function renderZonesDrawer(){
     /* v.628 — this row SELECTS the drawing. It used to set `state.selNode`, which a decoration is
        never read for (the render loop returns before it), so pressing a zone did nothing at all.
        v.630 — and brings it to the middle of the map, the same as a Legend row does. */
-    row.addEventListener('click', function(){ try{ decoSelSet(o.i); mapCentreOnWord(o.i); }catch(e){} });
+    row.addEventListener('click', function(){ try{ mapCentreOnWord(o.i); decoSelSet(o.i); }catch(e){} });   // centre first, so the panel lands on where it ends up
     var del = document.createElement('button'); del.className = 'rl-x'; del.textContent = '\u00d7';
     del.title = 'Delete the zone \u201c' + zoneLabelOf(o.w) + '\u201d and its boundary';
     del.addEventListener('click', function(ev){
@@ -30714,7 +30738,7 @@ function renderZonesDrawer(){
       var c3 = document.createElement('span'); c3.className = 'rl-zone-n'; c3.textContent = 'line'; row.appendChild(c3);
       row.title = 'Press to find it on the map';
       if (state.decoSel === o.i) row.classList.add('on');
-      row.addEventListener('click', function(){ try{ decoSelSet(o.i); mapCentreOnWord(o.i); }catch(e){} });
+      row.addEventListener('click', function(){ try{ mapCentreOnWord(o.i); decoSelSet(o.i); }catch(e){} });
       var d3 = document.createElement('button'); d3.className = 'rl-x'; d3.textContent = '\u00d7';
       d3.title = 'Delete the line \u201c' + zoneLabelOf(o.w) + '\u201d';
       d3.addEventListener('click', function(ev){
@@ -42189,7 +42213,7 @@ function init(){
       const di = +decoHit.dataset.deco;
       if (state.eraseDraw){ if (typeof removeNode === 'function') removeNode(di); flashStatus('Erased'); }   // erase mode → delete it, stay armed
       else {
-        decoSelSet(di);                                                                                       // v.628 — select it; its options open in the Zones drawer
+        decoSelSet(di, e.clientX, e.clientY);                                                                 // v.631 — select it; its options open right here
         const _dw = state.prompt && state.prompt.words[di];
         if (_dw && _dw.deco){                                                                                 // v.629 — and hold it, so it can be moved
           const _p0 = skyPt(e);
@@ -56449,7 +56473,8 @@ body.eink .zone-tool-panels .draw-panel{ background:#fff; border:1px solid #000;
 /* v.629 [Jeremy] — "make the label for zones charcoal and change the font to garamond cormorant,
    slightly smaller". Cormorant Garamond rather than the small-caps cut, so it reads as the story's
    own hand; the app's charcoal; 8.5px. */
-.zone-label .zl-t{ font-family:'Cormorant Garamond','Cormorant SC',serif; font-size:8.5px; letter-spacing:.09em; text-transform:uppercase; fill:var(--charcoal, #2b2926); opacity:1; }
+.zone-label .zl-t{ font-family:'Cormorant Garamond',Cormorant,Garamond,serif; font-size:10.5px; font-weight:600;
+  letter-spacing:.02em; text-transform:none; fill:#2b2926; opacity:1; }
 .zone-label .zl-n{ font-family:var(--sans); font-size:7px; letter-spacing:.1em; text-transform:uppercase; fill:#9a9182; opacity:.7; }
 /* v.626 [Jeremy] — "a small label pill with the name on it". A plate under the words, so a name
    reads the same over a terrain wash, over a stroke, or over bare parchment. */
@@ -56461,11 +56486,10 @@ body.eink .zone-tool-panels .draw-panel{ background:#fff; border:1px solid #000;
 /* a BOUNDARY's name sits in the middle of its own area and is "blended in a bit more": the area
    is already saying where it is, so the plate only has to lift the words off the wash. */
 .zone-label.zl-area .zl-pill{ fill:rgba(251,247,236,.46); stroke:rgba(120,92,40,.10); }
-.zone-label.zl-area .zl-t{ fill:var(--charcoal, #2b2926); opacity:.72; }
+.zone-label.zl-area .zl-t{ fill:#2b2926; opacity:1; }   /* charcoal is charcoal; the PLATE is what makes a boundary quieter */
 body.ember:not(.eink) .zone-label .zl-pill{ fill:rgba(247,241,226,.88); stroke:rgba(138,99,32,.22); }
 body.ember:not(.eink) .zone-label.zl-area .zl-pill{ fill:rgba(247,241,226,.46); stroke:rgba(138,99,32,.10); }
-body.ember:not(.eink) .zone-label .zl-t{ fill:#2b2926; }
-body.ember:not(.eink) .zone-label.zl-area .zl-t{ fill:#2b2926; }
+/* the map canvas is parchment in every theme (v.623) — one ink */
 body.ember:not(.eink) .zone-label .zl-n{ fill:#8a8272; }
 body.eink .zone-label .zl-t{ fill:#000; opacity:1; }
 body.eink .zone-label .zl-pill{ fill:#fff; stroke:#000; }
@@ -68860,10 +68884,13 @@ body.ai-signedout .pt-rh-hint, body.ai-capped .pt-rh-hint, body.ai-off .pt-rh-hi
 body.eink .deco-shape.sel{ stroke:#000 !important; }
 
 /* its options, in the drawer, under the tools */
-.deco-edit{ margin:2px 2px 10px; padding:8px 9px 9px; border:1px solid var(--line); border-radius:10px;
-  background:rgba(196,158,74,.10); }
-body.ember:not(.eink) .deco-edit{ background:rgba(196,158,74,.10); border-color:rgba(138,99,32,.26); }
-body.eink .deco-edit{ background:#fff; border:1px solid #000; }
+/* v.631 [Jeremy] — the drawing's options stand on the map, at the press. Same surface language as
+   the naming picker it sits beside: paper, a hairline border, a soft drop. */
+.deco-edit{ position:fixed; z-index:318; width:216px; box-sizing:border-box;
+  padding:9px 10px 10px; border:1px solid var(--line); border-radius:13px;
+  background:var(--paper); box-shadow:0 16px 44px rgba(0,0,0,.26); }
+body.ember:not(.eink) .deco-edit{ background:var(--linen); border-color:rgba(138,99,32,.30); }
+body.eink .deco-edit{ background:#fff; border:2px solid #000; box-shadow:none; }
 .deco-edit .de-head{ display:flex; align-items:center; gap:8px; margin-bottom:7px; }
 .deco-edit .de-kind{ font-family:var(--sans); font-size:9.5px; font-weight:700; letter-spacing:.16em;
   text-transform:uppercase; color:#8d8a84; }
