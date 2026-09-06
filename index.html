@@ -42868,6 +42868,58 @@ document.addEventListener('DOMContentLoaded', init);
         } else fams.style.display='none';
       }
     }
+    /* v.616 — every element the STORY has: this section first, then the other sections, then the
+       ones that live in the Story Legend and on no map at all (which is where groups go as of
+       v.615). Deduped by element key, so a character carried through forty sections is one row.
+       Filtered on the display name OR the category name, so "group" finds the groups — Jeremy asked
+       to *filter* everything in Story, and a filter that only reads names cannot answer that. */
+    /* The cast of the story, then the layers the story is written IN. Anything unlisted sorts with
+       the cast rather than after it — an unknown category is far more likely to be a thing than a
+       layer, and burying a writer's own category would be the worse mistake. */
+    var _TP_CAT_RANK={ being:0, setting:1, object:2, org:3, event:4, stakes:5, obstacle:6, concept:7,
+                       genre:90, theme:91, context:92, tone:93, style:94, pov:95, plot:96 };
+    function _tpRank(cat){ var r=_TP_CAT_RANK[cat]; return (r==null)?8:r; }
+    function tpStoryEls(q, skipKey){
+      var out=[], seen={};
+      var add=function(w, idx){
+        if(!w) return;
+        if(w.deco || w.poly || w.line) return;                       /* drawn scenery is not an element */
+        if(typeof npIsElement==='function' && !npIsElement(w)) return;
+        var k=null; try{ k=wordKey(w); }catch(e){}
+        if(!k || seen[k]) return; if(skipKey && k===skipKey) return;
+        var nm=''; try{ nm=(typeof elDisplayName==='function')?elDisplayName(w):(w.word||''); }catch(e){}
+        if(!nm) return;
+        var cn=''; try{ cn=((typeof getCat==='function'&&getCat(w.cat))||{}).name||w.cat||''; }catch(e){}
+        if(q && String(nm).toLowerCase().indexOf(q)<0 && String(cn).toLowerCase().indexOf(q)<0) return;
+        seen[k]=1; out.push({ key:k, w:w, nm:nm, cn:cn, idx:(idx==null?-1:idx), here:(idx!=null && idx>=0), rank:_tpRank(w.cat) });
+      };
+      try{ ((state.prompt&&state.prompt.words)||[]).forEach(function(w,i){ add(w,i); }); }catch(e){}
+      try{ (state.frames||[]).forEach(function(fr){ ((fr.prompt&&fr.prompt.words)||[]).forEach(function(w){ add(w,-1); }); }); }catch(e){}
+      try{ ((state.session&&state.session.elemLibrary)||[]).forEach(function(r){ if(r&&r.item) add(r.item,-1); }); }catch(e){}
+      /* stable — `sort` is stable in every engine this runs on, so within a rank the reading order
+         (this section, then the other sections, then the Legend) is preserved. */
+      out.sort(function(a,b){ return a.rank-b.rank; });
+      return out;
+    }
+    /* One row, drawn the same way in all four modes, so an element reads as an element wherever the
+       writer meets it. `onPick` is handed the whole row — the branch decides what a pick means. */
+    function tpElRow(o, onPick){
+      var b=document.createElement('button'); b.className='ec-opt';
+      var col=''; try{ col=catColor(o.w.cat)||''; }catch(e){}
+      b.innerHTML='<span class="ec-w">'+String(o.nm).replace(/</g,'&lt;')+'</span><span class="ec-sub"'+(col?' style="color:'+col+'"':'')+'>'+String(o.cn).replace(/</g,'&lt;')+'</span>';
+      b.addEventListener('click', function(){ onPick(o); });
+      return b;
+    }
+    /* Two headers rather than one, because the difference is real and the writer can see the
+       consequence: an element standing HERE keeps a link; one from elsewhere is recorded by name. */
+    function tpElGroups(res, els, onPick){
+      var here=els.filter(function(o){ return o.here; }), away=els.filter(function(o){ return !o.here; });
+      if(here.length){ var h=document.createElement('div'); h.className='tp-grouphd'; h.textContent='Story elements'; res.appendChild(h);
+        here.slice(0,30).forEach(function(o){ res.appendChild(tpElRow(o, onPick)); }); }
+      if(away.length){ var h2=document.createElement('div'); h2.className='tp-grouphd'; h2.textContent='Elsewhere in the story'; res.appendChild(h2);
+        away.slice(0,30).forEach(function(o){ res.appendChild(tpElRow(o, onPick)); }); }
+      return here.length + away.length;
+    }
     function tpRender(){
       const p=tpEl(), res=p.querySelector('.tp-results'); res.innerHTML='';
       const raw=p.querySelector('.tp-search').value.trim(), q=raw.toLowerCase();
@@ -42876,21 +42928,20 @@ document.addEventListener('DOMContentLoaded', init);
         const already=motObstacles(wb);
         const haveKey=new Set(already.filter(p=>p.key).map(p=>p.key));
         const haveWord=new Set(already.filter(p=>p.word).map(p=>p.word.toLowerCase()));
-        // (1) every current story element
-        const ws=(state.prompt&&state.prompt.words)||[]; const els=[];
-        ws.forEach((w,idx)=>{ if(idx===TP.i) return; if(typeof npIsElement==='function' && !npIsElement(w)) return;
-          const k=wordKey(w); if(haveKey.has(k)) return;
-          const nm=(typeof elDisplayName==='function')?elDisplayName(w):(w.word||''); if(q && nm.toLowerCase().indexOf(q)<0) return; els.push({idx,w,nm}); });
-        els.sort((a,b)=>(a.w.cat==='obstacle'?0:1)-(b.w.cat==='obstacle'?0:1));
+        // (1) every element in the STORY — v.616; was every element in this section
+        let _selfK=null; try{ _selfK=wb?wordKey(wb):null; }catch(e){}
+        const els=tpStoryEls(q, _selfK).filter(o=>!haveKey.has(o.key));
+        els.sort((a,b)=>((a.w.cat==='obstacle'?0:1)-(b.w.cat==='obstacle'?0:1)) || ((a.here?0:1)-(b.here?0:1)));
         // (2) the Obstacle category's own pool words (Opposition / Barrier / Inner Struggle / Circumstance)
         const oc=getCat('obstacle'); const pool=[]; const seenW=new Set();
         (oc?oc.subcategories:[]).forEach(sb=> (sb.words||[]).forEach(x=>{ const word=typeof x==='string'?x:x.w; const kk=word.toLowerCase();
           if(seenW.has(kk)) return; seenW.add(kk); if(haveWord.has(kk)) return; if(q && kk.indexOf(q)<0) return; pool.push({word, sub:sb.name}); }));
-        if(els.length){ const h=document.createElement('div'); h.className='tp-grouphd'; h.textContent='Story elements'; res.appendChild(h);
-          els.slice(0,30).forEach(o=>{ const b=document.createElement('button'); b.className='ec-opt';
-            const cn=(getCat(o.w.cat)||{}).name||o.w.cat;
-            b.innerHTML='<span class="ec-w">'+o.nm.replace(/</g,'&lt;')+'</span><span class="ec-sub" style="color:'+catColor(o.w.cat)+'">'+cn+'</span>';
-            b.addEventListener('click', ()=>{ addObstacleElement(TP.i, o.idx); closeTraitPicker(); }); res.appendChild(b); }); }
+        tpElGroups(res, els, o=>{
+          /* here → the key link the store understands; elsewhere → its name, because the link IS a
+             pair of indices into this frame and there is no index to give. */
+          if(o.here && typeof o.idx==='number' && o.idx>=0) addObstacleElement(TP.i, o.idx);
+          else addObstacleWord(TP.i, o.nm, '', false);
+          closeTraitPicker(); });
         if(pool.length){ const h=document.createElement('div'); h.className='tp-grouphd'; h.textContent='Obstacle concepts'; res.appendChild(h);
           pool.slice(0,30).forEach(o=>{ const b=document.createElement('button'); b.className='ec-opt';
             const d=(typeof descFor==='function')?descFor({word:o.word, cat:'obstacle', sub:o.sub}):'';
@@ -42900,11 +42951,17 @@ document.addEventListener('DOMContentLoaded', init);
         if(raw && !exact){ const b=document.createElement('button'); b.className='ec-opt tp-new';
           b.innerHTML='<span class="ec-w">+ Create “'+raw.replace(/</g,'&lt;')+'”</span><span class="ec-sub">obstacle</span>';
           b.addEventListener('click', ()=>{ addObstacleWord(TP.i, raw, 'Circumstance', true); closeTraitPicker(); }); res.appendChild(b); }
-        if(!els.length && !pool.length && !raw){ const e=document.createElement('div'); e.className='tp-empty'; e.textContent='Search a story element or an obstacle concept…'; res.appendChild(e); }
+        if(!els.length && !pool.length && !raw){ const e=document.createElement('div'); e.className='tp-empty'; e.textContent='Search anything in the story, or an obstacle concept…'; res.appendChild(e); }
         return;
       }
       if(TP.mode==='stake'){
         const _commitStake=(word,isNew)=>{ if(TP.story){ if(window.__dystPlan && window.__dystPlan.setStoryStake) window.__dystPlan.setStoryStake(word); else if(state.session) state.session.storyStake=word; closeTraitPicker(); if(typeof renderNpCard==='function') renderNpCard(); if(typeof window.__planRefreshPlot==='function') window.__planRefreshPlot(); } else if(TP.thread){ if(typeof setThreadStake==='function') setThreadStake(TP.thread, word); closeTraitPicker(); if(typeof renderNpCard==='function') renderNpCard(); if(typeof window.__planRefreshPlot==='function') window.__planRefreshPlot(); } else { setMotivationStake(TP.i, word, isNew); closeTraitPicker(); } };
+        /* v.616 — what is at risk is usually a THING the story already has: a person, a place, a
+           holding, a group. The pool of stake words stays underneath it, because "Innocence" is
+           also an answer — but it was the only one on offer, which is why this picker felt closed. */
+        let _sSelf=null; try{ const _sw=_motWord(TP.i); _sSelf=_sw?wordKey(_sw):null; }catch(e){}
+        const _sEls=(TP.story||TP.thread)?tpStoryEls(q, null):tpStoryEls(q, _sSelf);
+        tpElGroups(res, _sEls, o=>{ _commitStake(o.nm, false); });
         const sc=getCat('stakes'); const pool=[]; const seenW=new Set();
         (sc?sc.subcategories:[]).forEach(sb=> (sb.words||[]).forEach(x=>{ const word=typeof x==='string'?x:x.w; const kk=word.toLowerCase(); if(seenW.has(kk)) return; seenW.add(kk); if(q && kk.indexOf(q)<0) return; pool.push({word, sub:sb.name}); }));
         if(pool.length){ const h=document.createElement('div'); h.className='tp-grouphd'; h.textContent='Stakes'; res.appendChild(h);
@@ -42912,29 +42969,36 @@ document.addEventListener('DOMContentLoaded', init);
             const d=(typeof descFor==='function')?descFor({word:o.word, cat:'stakes', sub:o.sub}):'';
             b.innerHTML='<span class="ec-w">'+o.word.replace(/</g,'&lt;')+'</span><span class="ec-sub" style="color:'+catColor('stakes')+'">'+o.sub+'</span>'+(d?'<span class="ec-d">'+d.replace(/</g,'&lt;')+'</span>':'');
             b.addEventListener('click', ()=>{ _commitStake(o.word, false); }); res.appendChild(b); }); }
-        const exact=pool.some(p=>p.word.toLowerCase()===q);
+        const exact=pool.some(p=>p.word.toLowerCase()===q) || _sEls.some(o=>String(o.nm).toLowerCase()===q);
         if(raw && !exact){ const b=document.createElement('button'); b.className='ec-opt tp-new';
           b.innerHTML='<span class="ec-w">+ Create \u201C'+raw.replace(/</g,'&lt;')+'\u201D</span><span class="ec-sub">stake</span>';
           b.addEventListener('click', ()=>{ _commitStake(raw, true); }); res.appendChild(b); }
-        if(!pool.length && !raw){ const e=document.createElement('div'); e.className='tp-empty'; e.textContent='Search a stake or name what\u2019s at risk\u2026'; res.appendChild(e); }
+        if(!pool.length && !_sEls.length && !raw){ const e=document.createElement('div'); e.className='tp-empty'; e.textContent='Search anything in the story, or name what\u2019s at risk\u2026'; res.appendChild(e); }
         return;
       }
       if(TP.mode==='motivator'){
-        // any current story element (or sub-element via the ▾ trait menu), or create-your-own
-        const ws=(state.prompt&&state.prompt.words)||[]; const els=[];
-        ws.forEach((w,idx)=>{ if(idx===TP.i) return; if(typeof npIsElement==='function' && !npIsElement(w)) return;
-          const nm=(typeof elDisplayName==='function')?elDisplayName(w):(w.word||''); if(q && nm.toLowerCase().indexOf(q)<0) return; els.push({idx,w,nm}); });
-        if(els.length){ const h=document.createElement('div'); h.className='tp-grouphd'; h.textContent='Story elements'; res.appendChild(h);
-          els.slice(0,30).forEach(o=>{ const b=document.createElement('button'); b.className='ec-opt';
-            const cn=(getCat(o.w.cat)||{}).name||o.w.cat;
-            b.innerHTML='<span class="ec-w">'+o.nm.replace(/</g,'&lt;')+'</span><span class="ec-sub" style="color:'+catColor(o.w.cat)+'">'+cn+'</span>';
-            b.addEventListener('click', ()=>{ setMotivatorElement(TP.i, o.idx); closeTraitPicker(); }); res.appendChild(b); }); }
+        // anything in the STORY (or a sub-element via the ▾ trait menu), or create-your-own — v.616
+        let _mSelf=null; try{ const _mw=state.prompt&&state.prompt.words[TP.i]; _mSelf=_mw?wordKey(_mw):null; }catch(e){}
+        const els=tpStoryEls(q, _mSelf);
+        tpElGroups(res, els, o=>{
+          if(o.here && typeof o.idx==='number' && o.idx>=0) setMotivatorElement(TP.i, o.idx);
+          else setMotivatorWord(TP.i, o.nm);
+          closeTraitPicker(); });
         if(raw){ const exact=els.some(e=>e.nm.toLowerCase()===q);
           if(!exact){ const b=document.createElement('button'); b.className='ec-opt tp-new';
             b.innerHTML='<span class="ec-w">+ Create “'+raw.replace(/</g,'&lt;')+'”</span><span class="ec-sub">motivator</span>';
             b.addEventListener('click', ()=>{ setMotivatorWord(TP.i, raw); closeTraitPicker(); }); res.appendChild(b); } }
-        if(!els.length && !raw){ const e=document.createElement('div'); e.className='tp-empty'; e.textContent='Search a story element or name something…'; res.appendChild(e); }
+        if(!els.length && !raw){ const e=document.createElement('div'); e.className='tp-empty'; e.textContent='Search anything in the story, or name something…'; res.appendChild(e); }
         return;
+      }
+      /* v.616 — a want can be a PERSON, a place, a thing. "Wants Delphia" is the commonest shape a
+         motivation takes and the picker had no way to say it. Elements are offered for `motivation`
+         only: in `trait` mode this same branch fills a dimension with a word ABOUT the element, and
+         the cast has no business in that list. */
+      if(TP.mode==='motivation'){
+        let _wSelf=null; try{ const _ww=_motWord(TP.i); _wSelf=_ww?wordKey(_ww):null; }catch(e){}
+        const _wEls=tpStoryEls(q, _wSelf);
+        tpElGroups(res, _wEls, o=>{ setMotivationWant(TP.i, o.nm, false, true); closeTraitPicker(); if(window.syncElementViews) window.syncElementViews(); });
       }
       // trait + motivation: search a word pool, allow create-your-own
       const sub = TP.mode==='motivation' ? 'Motivation' : TP.sub;
@@ -43072,7 +43136,7 @@ document.addEventListener('DOMContentLoaded', init);
       const w=_motWord(i); if(!w) return;
       TP={ i, cat:'being', sub:'Motivation', mode:'motivation' };
       tpEl().querySelector('.tp-title').textContent='Motivation — '+((typeof elDisplayName==='function')?elDisplayName(w):(w.word||''));
-      tpEl().querySelector('.tp-search').placeholder='search or name what they want…';
+      tpEl().querySelector('.tp-search').placeholder='search the story, or name what they want…';
       tpOpen(i, x, y);
     }
     // Generic "add system" word picker for the builders — filtered to one dimension, scroll or type to filter, create-your-own by typing. onPick(word,isNew).
@@ -44373,7 +44437,7 @@ document.addEventListener('DOMContentLoaded', init);
       const w=_motWord(i); if(!w) return;
       TP={ i, cat:w.cat, sub:'', mode:'obstacle' };
       tpEl().querySelector('.tp-title').textContent='Obstacle — what stands in the way';
-      tpEl().querySelector('.tp-search').placeholder='search elements or obstacle concepts…';
+      tpEl().querySelector('.tp-search').placeholder='search the story, or an obstacle concept…';
       tpOpen(i, x, y);
     }
     // ---- Motivation (elevated) + Obstacle link ----
@@ -44493,7 +44557,7 @@ document.addEventListener('DOMContentLoaded', init);
       if(which==null){ delete w.motivation.stake; delete w.motivation.stakes; }
       else { const _a=motStakes(w).slice(); const _j=(typeof which==='number')?which:_a.indexOf(which); if(_j>=0) _a.splice(_j,1); _mirrorStakes(w.motivation,_a); }
       _motFanOut(w); if(state.cardTrait==='@stake') state.cardTrait=null; _persistMotivation(i); if(window.syncElementViews) window.syncElementViews(); }
-    function openStakePicker(i, x, y){ const w=_motWord(i); if(!w) return; TP={ i, cat:'stakes', sub:'', mode:'stake' }; tpEl().querySelector('.tp-title').textContent='Stake \u2014 what\u2019s at risk'; tpEl().querySelector('.tp-search').placeholder='search stakes or name what\u2019s at risk\u2026'; tpOpen(i, x, y); }
+    function openStakePicker(i, x, y){ const w=_motWord(i); if(!w) return; TP={ i, cat:'stakes', sub:'', mode:'stake' }; tpEl().querySelector('.tp-title').textContent='Stake \u2014 what\u2019s at risk'; tpEl().querySelector('.tp-search').placeholder='search the story, or name what\u2019s at risk\u2026'; tpOpen(i, x, y); }
     function openThreadStakePicker(tid, x, y){ TP={ i:-1, thread:tid, cat:'stakes', sub:'', mode:'stake' }; tpEl().querySelector('.tp-title').textContent='Thread stake \u2014 what\u2019s at risk'; tpEl().querySelector('.tp-search').placeholder='search stakes or name what\u2019s at risk\u2026'; tpOpen(-1, x, y); }
     function openStoryStakePicker(x, y){ TP={ i:-1, story:true, cat:'stakes', sub:'', mode:'stake' }; tpEl().querySelector('.tp-title').textContent='Story stake \u2014 what\u2019s ultimately at risk'; tpEl().querySelector('.tp-search').placeholder='search stakes or name what\u2019s at risk\u2026'; tpOpen(-1, x, y); }
     function openThreadConceptPicker(tid, x, y){ TP={ i:-1, thread:tid, cat:'concept', sub:traitSubs('concept')[0], mode:'trait' }; tpEl().querySelector('.tp-title').textContent='Thread concept'; tpEl().querySelector('.tp-search').placeholder='search or name a concept\u2026'; tpOpen(-1, x, y); }
@@ -53173,7 +53237,7 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.615';
+  var APP_VERSION = '2026.07.20.616';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
     { v:'2026.07.20.602', date:'September 5, 2026', notes:[
