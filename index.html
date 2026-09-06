@@ -7158,10 +7158,15 @@ function zoneToolsEl(){
          Boundary — a closed region drawn by hand      Path  — one open line, wandering
          Shapes   — a square and a circle, overlapping  Grid  — a true 3×3 frame */
     var GLYPH = {
-      drawTerrainBtn: '<path d="M6.6 5.1c3.1-1.8 8-2.1 10.8-.1 3 2.1 3.7 6.4 2 9.6-1.7 3.2-5.8 5-9.4 4.3C6.2 18.1 3.2 14.8 3.3 11.4c.1-2.7 1.5-5 3.3-6.3z" stroke-dasharray="3.4 2.6"/>',
-      drawShapeBtn:   '<rect x="3" y="3" width="11" height="11" rx="1.6"/><circle cx="16.4" cy="16.4" r="4.9"/>',
-      drawPathBtn:    '<path d="M3 18.6c2.9 0 3.7-2.5 5.6-5.5C10.5 10 12.6 8.6 15.4 8.6H21"/>',
-      drawGridBtn:    '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/><path d="M15 3v18"/><path d="M3 9h18"/><path d="M3 15h18"/>'
+      /* v.633 [Jeremy] — "you didn't fix the icons for the shapes, boundary line and grid to make it
+         smaller." The SVG box shrank in v.632, but three of the four glyphs were still drawn
+         corner-to-corner INSIDE it (3\u219221 of 24), so they kept their weight while the boundary,
+         which was already inset, looked right. All four are now drawn on ONE inset — 5\u219219 — so
+         they are the same optical size as each other and smaller than they were. */
+      drawTerrainBtn: '<path d="M7.4 6.4c2.6-1.5 6.6-1.7 8.9-.1 2.5 1.7 3 5.3 1.7 7.9-1.4 2.6-4.8 4.1-7.8 3.5-2.7-.5-5.2-3.2-5.1-6 0-2.2 1.2-4.1 2.3-5.3z" stroke-dasharray="3 2.4"/>',
+      drawShapeBtn:   '<rect x="5" y="5" width="8.6" height="8.6" rx="1.4"/><circle cx="15.4" cy="15.4" r="3.8"/>',
+      drawPathBtn:    '<path d="M5 18c2.4 0 3-2.1 4.6-4.6C11.2 11 13 9.8 15.3 9.8H19"/>',
+      drawGridBtn:    '<rect x="5" y="5" width="14" height="14" rx="1.8"/><path d="M9.7 5v14"/><path d="M14.3 5v14"/><path d="M5 9.7h14"/><path d="M5 14.3h14"/>'
     };
     var row = document.createElement('div'); row.className = 'zone-tool-icons';
     var panes = document.createElement('div'); panes.className = 'zone-tool-panels';
@@ -7180,7 +7185,7 @@ function zoneToolsEl(){
       /* the header bar's own weight and geometry — 24 grid, stroke 2, round joins */
       /* v.632 [Jeremy] — "the icons for the zone types are a bit big ... shrink them so they fit more
          elegantly in the circle." 18 in a 36 circle leaves a ring of air; 22 filled it to the edge. */
-      ic.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' + g + '</svg>';
+      ic.innerHTML = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">' + g + '</svg>';
       btn.insertBefore(ic, btn.firstChild);
       /* v.627 [Jeremy] — "It would be nice if they opened their options in the drawer, just below
          the button." v.624's free-floating window was `position:fixed`, which put it under the tab
@@ -14443,6 +14448,20 @@ function forgetMapView(id){ try { const all = loadMapViews(); const pre = id + '
 /* ---- snapping grid (per story): a light dot grid the elements + drawn shapes snap to ---- */
 function gridState(){ if (!state.session) return null; if (!state.session.grid) state.session.grid = { on: false, size: 44 }; return state.session.grid; }
 function gridOn(){ const g = gridState(); return !!(g && g.on); }
+/* v.633 [Jeremy] — "the grid space slider is still lagging."
+   v.632 cut the repaints to one per FRAME, which was the wrong unit: a full `renderConstellation`
+   on a busy map takes longer than a frame, so the queue still ran behind the thumb. The grid is not
+   drawn — it is ONE SVG `<pattern>` tiled over the canvas, so changing its spacing is three
+   attributes on a node that is already there. No render at all. */
+function gridPatternUpdate(gs){
+  var pat = document.getElementById('gridDots'); if (!pat) return false;
+  pat.setAttribute('width', gs); pat.setAttribute('height', gs);
+  var c = pat.querySelector('circle');
+  if (c){ c.setAttribute('cx', (gs / 2).toFixed(2)); c.setAttribute('cy', (gs / 2).toFixed(2));
+          c.setAttribute('r', Math.max(0.7, gs * 0.035).toFixed(2)); }
+  return true;
+}
+try{ window.__dystGridPattern = gridPatternUpdate; }catch(e){}
 function gridSize(){ const g = gridState(); return Math.max(8, Math.min(160, (g && g.size) || 44)); }
 function snapToGrid(x, y){ if (!gridOn()) return { x: x, y: y }; const s = gridSize(), h = s / 2; return { x: Math.round((x - h) / s) * s + h, y: Math.round((y - h) / s) * s + h }; }
 function snapToBeing(){
@@ -21117,16 +21136,15 @@ function buildDrawSection(root){
   const gLab = document.createElement('div'); gLab.className = 'draw-sublabel'; gLab.textContent = 'Spacing'; gPanel.appendChild(gLab);
   const gSpace = document.createElement('input'); gSpace.type = 'range'; gSpace.className = 'draw-thick'; gSpace.min = '16'; gSpace.max = '120'; gSpace.step = '4';
   gSpace.value = String((gridState() && gridState().size) || 44);
-  /* v.632 [Jeremy] — "the grid spacing slider is very laggy." It re-rendered the WHOLE map on every
-     `input` event, and a slider fires those faster than the map can be drawn, so the queue ran
-     behind the thumb. One repaint per animation frame instead: the model still moves with every
-     event, the drawing catches up once per frame. */
-  var _gridPaint = 0;
+  /* v.633 [Jeremy] — the spacing moves the PATTERN, not the map. A full render happens only when
+     there is no pattern to move yet (the grid was off, and this press is what turns it on). */
   gSpace.addEventListener('input', ev => { ev.stopPropagation(); const gst = gridState(); if (!gst) return;
+    const wasOn = gst.on;
     gst.size = +gSpace.value; if (!gst.on){ gst.on = true; gBtn.classList.add('on'); }
     if (state.session){ state.session.grid = gst; scheduleAutosave(); }
-    if (_gridPaint) return;
-    _gridPaint = requestAnimationFrame(function(){ _gridPaint = 0; if (typeof renderConstellation === 'function') renderConstellation(); });
+    if (!wasOn || !(typeof gridPatternUpdate === 'function' && gridPatternUpdate(gst.size))){
+      if (typeof renderConstellation === 'function') renderConstellation();
+    }
   });
   gSpace.addEventListener('click', ev => ev.stopPropagation());
   gPanel.appendChild(gSpace);
@@ -56538,6 +56556,15 @@ body.ember:not(.eink) .img-addrow #mapImgBtn{ background:rgba(255,255,255,.06) !
 .zone-tool-icons .draw-cat.zt-ic.on{ color:#5f4a1e; }
 .zone-tool-icons .draw-cat.zt-ic.on .zt-glyph{ border-color:var(--gold); background:rgba(196,158,74,.14); }
 .zone-tool-icons .draw-cat.zt-ic.on:hover .zt-glyph{ background:rgba(196,158,74,.22); }
+/* v.633 [Jeremy] — "the toggled on state for the grid should not resemble the active state of the
+   drawing mode, it looks like two modes are active ... make the circle under the icon shaded
+   slightly differently." The gold RING means a tool is armed and the next press on the map draws.
+   The grid is a setting that is simply on, so it wears a deeper version of the hover shade and no
+   ring at all: one of these is a mode, the other is a state, and they no longer look alike. */
+#drawGridBtn.zt-ic.on{ color:var(--charcoal, #2b2926); }
+#drawGridBtn.zt-ic.on .zt-glyph{ border-color:transparent; background:rgba(43,41,38,.20); }
+#drawGridBtn.zt-ic.on:hover .zt-glyph{ background:rgba(43,41,38,.27); }
+body.eink #drawGridBtn.zt-ic.on .zt-glyph{ border-color:transparent; background:rgba(0,0,0,.22); }
 body.eink .zone-tool-icons .draw-cat.zt-ic.on .zt-glyph{ border-color:#000; background:none; }
 body.eink .zone-tool-icons .draw-cat.zt-ic:hover .zt-glyph{ background:rgba(0,0,0,.10); }
 .zone-tool-icons .draw-cat.zt-ic .dc-name, .zone-tool-icons .draw-cat.zt-ic .dc-toggle{ display:none !important; }
@@ -65203,7 +65230,11 @@ body:not(.eink) #groupCreator .el-descgo:hover, body:not(.eink) #eventCreator .e
   #zonesWin .zw-title{ --dhd-ic:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'><path d='M4 8.5 10.5 3.5 20 6.5 18 19 8.5 21 4 15.5z'/><path d='M10.5 3.5 12 12l6 7'/></svg>"); }
   #imagesWin .zw-title{ --dhd-ic:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'><rect x='3' y='3' width='18' height='18' rx='2'/><circle cx='8.5' cy='8.5' r='1.6'/><path d='M21 15.5 16 10.5 5 21'/></svg>"); }
   /* and the same placement as the Legend's own head: the title flush left on its own line */
-  #zonesWin .zw-head, #imagesWin .zw-head{ padding:2px 8px 10px 10px !important; margin-bottom:6px; }
+  /* v.633 [Jeremy] — "the zone and images titles are also a little offset to the right, they should
+     start the same distance from the left as the Story Legend title." The Legend's window carries no
+     padding of its own (the docked rule zeroes it), so its head's 10px is the whole inset; these
+     panels DO have their own 10px, and the head's added a second one. The head keeps none. */
+  #zonesWin .zw-head, #imagesWin .zw-head{ padding:2px 8px 10px 0 !important; margin-bottom:6px; }
   /* matched to what the Legend's title actually COMPUTES to, not to what its rule says: the docked
      rule declares 700 and something later resolves it to 600, and the eye compares the result. */
   #zonesWin .zw-title, #imagesWin .zw-title{ font-family:var(--sans) !important; font-size:11px !important;
