@@ -1777,7 +1777,20 @@ body.eink .pt-rh-dev{color:#000}
   #skySvg .bub-x{ font-size:13px; fill:#a2957c; cursor:pointer; opacity:0; transition:opacity .12s; }
   #skySvg .bub:hover .bub-x{ opacity:.85; }
   #skySvg .bub-x:hover{ fill:#b0402f; opacity:1; }
-  #skySvg .bub-more{ font-family:var(--sans); font-size:9.5px; letter-spacing:.06em; fill:#a2957c; }
+  /* v.611 · phase 2 — the stepper. Dots per side, because speech and thought are two voices rather
+     than one sequence [Jeremy]. The dots are always visible when there is more than one line — they
+     are the only thing that says a line is hidden — while the arrows are a hover convenience. */
+  #skySvg .bub-pip{ fill:#faf7ef; stroke:#8c8272; stroke-width:1.1; cursor:pointer; }
+  #skySvg .bub-pip:hover{ stroke:#3a3126; }
+  #skySvg .bub-pip.on{ fill:#3a3126; stroke:#3a3126; }
+  #skySvg .bub-think .bub-pip{ stroke:#8c8272; }
+  #skySvg .bub-think .bub-pip.on{ fill:#6b6152; stroke:#6b6152; }
+  #skySvg .bub-arw{ font-family:var(--serif); font-size:15px; fill:#a2957c; cursor:pointer;
+    opacity:0; transition:opacity .12s; }
+  #skySvg .bub:hover .bub-arw{ opacity:.85; }
+  #skySvg .bub-arw:hover{ fill:#3a3126; opacity:1; }
+  body.eink #skySvg .bub-pip{ fill:#fff; stroke:#000; }
+  body.eink #skySvg .bub-pip.on{ fill:#000; }
   body.eink #skySvg .bub-sk, body.eink #skySvg .bub-dot{ fill:#fff; stroke:#000; stroke-width:1.5; }
   body.eink #skySvg .bub-ghost{ stroke:#000; }
   body.eink #skySvg .bub-tx{ color:#000; }
@@ -11978,6 +11991,8 @@ function openBubbleMenu(elKey, sec, x, y){
     b.addEventListener('click', function(ev){ ev.stopPropagation();
       if (m.parentNode) m.parentNode.removeChild(m);
       var nn = bubAdd(elKey, sec, kind);
+      /* stand on the line that was just made, not on the one that happened to be showing */
+      try { bubGoto(elKey, sec, kind, bubList(elKey, sec, kind).length - 1); } catch(e){}
       /* the plate opens READY: the render below redraws the node, and the caret-restore pass at the
          end of `renderConstellation` puts the cursor in the plate this key names. [Jeremy] "the
          bubble should be ready with the cursor in it so you can start typing." */
@@ -12098,7 +12113,19 @@ function bubFit(wrap){
        diverge from it at the tip and draw a second tail beside the real one (v.608's own lesson) */
     Array.prototype.forEach.call(wrap.querySelectorAll('.bub-ghost'), function(s2){ s2.setAttribute('d', plain); });
     var xb = wrap.querySelector('.bub-x'); if (xb) xb.setAttribute('y', 14);
-    var mo = wrap.querySelector('.bub-more'); if (mo) mo.setAttribute('y', 15);
+    /* the dot row sits under the plate on its OUTER half — the inner half is where the tail leaves
+       and where a thought's marks trail away, and a row of dots through either would read as part of
+       it rather than as a control */
+    var pips = wrap.querySelector('.bub-dots');
+    if (pips){
+      var dots = pips.querySelectorAll('.bub-pip');
+      var span = Math.max(0, (dots.length - 1) * 11);
+      var prev = pips.querySelector('.bub-arw-prev'), next = pips.querySelector('.bub-arw-next');
+      if (prev) prev.setAttribute('x', -15);
+      if (next) next.setAttribute('x', span + 15);
+      var mid = (side === 'r') ? (BUB_W * 0.64) : (-BUB_W * 0.64);
+      pips.setAttribute('transform', 'translate(' + (mid - span / 2).toFixed(1) + ',' + (h + 12) + ')');
+    }
   } catch(e){}
 }
 /* v.610 — ONE WAY TO PUT THE CARET IN A PLATE, used by the repaint pass and by the ＋ menu. Two
@@ -12119,9 +12146,10 @@ function bubDraw(g, i, nd, elKey, sec){
   ['say', 'think'].forEach(function(kind){
     var side = (kind === 'say') ? 'r' : 'l';
     var list = bubList(elKey, sec, kind); if (!list.length) return;
-    /* PHASE 1 DRAWS THE FIRST LINE ONLY. The store is already a list, so phase 2 is a stepper and
-       nothing else — v.572's want/stake lists are both the precedent and the warning. */
-    var it = list[0];
+    /* v.611 — the plate draws the line the writer is ON. Phase 1 drew `list[0]` and left the store a
+       list precisely so this would be a stepper and nothing else; it was. */
+    var at = bubAt(elKey, sec, kind, list.length);
+    var it = list[at];
     var wrap = document.createElementNS(NS, 'g');
     wrap.setAttribute('class', 'bub bub-' + kind + (list.length > 1 ? ' bub-stack' : ''));
     wrap.setAttribute('data-side', side); wrap.setAttribute('data-kind', kind);
@@ -12183,20 +12211,57 @@ function bubDraw(g, i, nd, elKey, sec){
       }catch(e){} }, 0);
     });
     fo.appendChild(ed); wrap.appendChild(fo);
+    /* the × sits on the OUTER top corner, the arrows on the inner one — so neither is ever under the
+       tail, and neither moves when the plate grows */
     var xb = document.createElementNS(NS, 'text');
     xb.setAttribute('class', 'bub-x'); xb.setAttribute('text-anchor', 'middle');
     xb.setAttribute('x', (side === 'r' ? BUB_W - 10 : -10)); xb.setAttribute('y', 14);
     xb.textContent = '×';
+    xb.title = 'Remove this line';
     xb.addEventListener('pointerdown', function(ev){ ev.stopPropagation(); });
-    xb.addEventListener('click', function(ev){ ev.stopPropagation(); bubDel(elKey, sec, kind, it.n); renderConstellation(); });
+    xb.addEventListener('click', function(ev){ ev.stopPropagation();
+      bubDel(elKey, sec, kind, it.n);
+      bubGoto(elKey, sec, kind, Math.max(0, at - 1));   /* stand on the neighbour, not on nothing */
+      renderConstellation(); });
     wrap.appendChild(xb);
-    var more = list.length - 1;
-    if (more > 0){
-      var c2 = document.createElementNS(NS, 'text');
-      c2.setAttribute('class', 'bub-more'); c2.setAttribute('text-anchor', side === 'r' ? 'end' : 'start');
-      c2.setAttribute('x', (side === 'r' ? BUB_W - 24 : -BUB_W + 24)); c2.setAttribute('y', 15);
-      c2.textContent = '+' + more;
-      wrap.appendChild(c2);
+
+    if (list.length > 1){
+      /* **The dots are the stepper, and clicking the plate still means EDIT.** The design doc's own
+         gesture was "click the bubble to advance" — written before the plate was a `contenteditable`,
+         and now it would make one gesture mean two things. A dot row says how many there are, which
+         one you are on, and takes you to any of them in one press: the same vocabulary as the reader
+         chip (#33) and the writing-session card. */
+      var step = function(d){
+        bubGoto(elKey, sec, kind, (at + d + list.length) % list.length);
+        renderConstellation();
+      };
+      var pips = document.createElementNS(NS, 'g'); pips.setAttribute('class', 'bub-dots');
+      /* **The arrows FLANK the dots; they do not sit on the plate.** The first cut put them on the
+         inner top corner, which is over the first line of the sentence — a control laid across the
+         words it is there to help you read. `‹ • • • ›` is one object with one meaning, outside the
+         text entirely. */
+      [['\u2039', -1, 'prev'], ['\u203A', 1, 'next']].forEach(function(a2){
+        var t2 = document.createElementNS(NS, 'text');
+        t2.setAttribute('class', 'bub-arw bub-arw-' + a2[2]); t2.setAttribute('text-anchor', 'middle');
+        t2.setAttribute('x', 0); t2.setAttribute('y', 5);
+        t2.textContent = a2[0];
+        t2.title = (a2[1] < 0 ? 'The line before' : 'The line after') + ' \u2014 ' + (at + 1) + ' of ' + list.length;
+        t2.addEventListener('pointerdown', function(ev){ ev.stopPropagation(); });
+        t2.addEventListener('click', function(ev){ ev.stopPropagation(); step(a2[1]); });
+        pips.appendChild(t2);
+      });
+      list.forEach(function(ln, k){
+        var c3 = document.createElementNS(NS, 'circle');
+        c3.setAttribute('class', 'bub-pip' + (k === at ? ' on' : ''));
+        c3.setAttribute('r', 3.1);
+        c3.setAttribute('cx', k * 11); c3.setAttribute('cy', 0);
+        var lbl = (ln.text || '').slice(0, 44);
+        c3.title = (k + 1) + ' of ' + list.length + (lbl ? (' \u2014 \u201C' + lbl + '\u201D') : ' \u2014 empty');
+        c3.addEventListener('pointerdown', function(ev){ ev.stopPropagation(); });
+        c3.addEventListener('click', function(ev){ ev.stopPropagation(); bubGoto(elKey, sec, kind, k); renderConstellation(); });
+        pips.appendChild(c3);
+      });
+      wrap.appendChild(pips);
     }
     g.appendChild(wrap);
   });
@@ -12281,6 +12346,22 @@ function bubDel(elKey, sec, kind, n){
   var nn = bubNotes(); delete nn[bubKey(sec, kind, n, elKey)];
   try { if (typeof scheduleAutosave === 'function') scheduleAutosave(400); } catch(e){}
 }
+/* v.611 · #54 phase 2 — WHICH LINE IS SHOWING, per side. [Jeremy] "dots per side": speech and
+   thought are two voices, not one sequence, so each plate walks its own list and neither knows
+   where the other stands.
+
+   **This is view state, not story state.** It lives on `state` and never on `state.session`: which
+   of a character's four lines you were last looking at is not a fact about the story, and writing it
+   into the document would put a per-viewer cursor into a file that syncs, forks and exports. */
+var BUB_AT = {};
+function bubAtKey(elKey, sec, kind){ return sec + '|' + kind + '|' + elKey; }
+function bubAt(elKey, sec, kind, len){
+  var n = BUB_AT[bubAtKey(elKey, sec, kind)] || 0;
+  if (!len) return 0;
+  return Math.max(0, Math.min(n, len - 1));   /* clamped on READ, so a deleted line cannot strand it */
+}
+function bubGoto(elKey, sec, kind, n){ BUB_AT[bubAtKey(elKey, sec, kind)] = Math.max(0, n); }
+try { window.__dystBubAt = { at:bubAt, goto:bubGoto }; } catch(e){}
 function bubCount(elKey, sec){ return bubList(elKey, sec, 'say').length + bubList(elKey, sec, 'think').length; }
 try { window.__dystBub = { key:bubKey, list:bubList, all:bubAll, set:bubSet, add:bubAdd, del:bubDel, count:bubCount }; } catch(e){}
 /* ---- v.602 · #48 phase 0 · RENAME IN PLACE ----------------------------------------------------
@@ -52922,7 +53003,7 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.610';
+  var APP_VERSION = '2026.07.20.611';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
     { v:'2026.07.20.602', date:'September 5, 2026', notes:[
