@@ -20263,6 +20263,7 @@ function renderTerrainRegion(w, layer, idx){
   wash.appendChild(tEl('path', { d, fill: fillC, 'fill-opacity': (st.op * 0.5).toFixed(2), filter: 'url(#tWc2)' }));
   if (w.deco && idx != null){   // a decoration has no label/handle → the region itself is the click target (recolour/delete)
     const hit = tEl('path', { d, fill: '#000', 'fill-opacity': '0', 'class': 'deco-shape' }); hit.dataset.deco = idx; hit.style.cursor = 'pointer';
+    if (state.decoSel === idx) hit.classList.add('sel');
     wash.appendChild(hit);
   }
   layer.appendChild(wash);
@@ -20301,6 +20302,7 @@ function renderLineFeature(w, layer, idx){
   layer.appendChild(tEl('path', { d, fill: 'none', stroke: strokeC, 'stroke-width': st.width.toFixed(1), 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }));
   if (w.deco && idx != null){   // wide invisible hit-line ON TOP so the whole decoration (incl. dead-centre) is clickable
     const hit = tEl('path', { d, fill: 'none', stroke: '#000', 'stroke-opacity': '0', 'stroke-width': Math.max(14, st.width + 10).toFixed(1), 'stroke-linecap': 'round', 'class': 'deco-shape' }); hit.dataset.deco = idx; hit.style.cursor = 'pointer';
+    if (state.decoSel === idx) hit.classList.add('sel');
     layer.appendChild(hit);
   }
 }
@@ -20549,7 +20551,7 @@ function renderShapeFeature(w, layer, idx){
     layer.appendChild(main);
     if (w.deco && idx != null){ hit = tEl('rect', { x: x, y: y, width: Math.max(0.5, ww), height: Math.max(0.5, hh), fill: '#000', 'fill-opacity': '0', stroke: '#000', 'stroke-opacity': '0', 'stroke-width': Math.max(14, wd + 10).toFixed(1), 'class': 'deco-shape' }); }
   }
-  if (hit){ hit.dataset.deco = idx; hit.style.cursor = 'pointer'; layer.appendChild(hit); }
+  if (hit){ hit.dataset.deco = idx; hit.style.cursor = 'pointer'; if (state.decoSel === idx) hit.classList.add('sel'); layer.appendChild(hit); }
 }
 function shapePreviewPath(kind, a, b){
   const x0 = a[0], y0 = a[1], x1 = b[0], y1 = b[1];
@@ -20779,7 +20781,36 @@ function openZoneNamer(idx, x, y){
   if(typeof window.__dystOpenZonePicker === 'function') window.__dystOpenZonePicker(idx, px, py);
 }
 try{ window.openZoneNamer = openZoneNamer; }catch(e){}
-function openDecoMenu(idx, x, y){
+/* v.628 [Jeremy] — "you should be able to still select a shape or boundary or path on the map and
+   edit the line thickness, color, and change the label/pill."
+
+   A drawing is SELECTED now, the way an element is, and its options open in the Zones drawer under
+   the tools — the same ruling v.627 made for the tool panels: the place you edit a drawing is the
+   drawer, not a popup that has to be told where to stand. `state.decoSel` is the whole model. */
+function decoKindOf(w){
+  if(!w) return '';
+  if(w.line) return 'Line';
+  if(w.shape) return (w.shape.kind === 'circle') ? 'Ellipse' : ((w.shape.kind === 'line') ? 'Line' : 'Shape');
+  return 'Boundary';
+}
+function decoSelSet(idx){
+  var w = (idx != null && state.prompt) ? state.prompt.words[idx] : null;
+  state.decoSel = (w && w.deco) ? idx : null;
+  if (state.decoSel != null){
+    try{ if (window.__dystLDrawer) (window.__dystLDrawer.show || window.__dystLDrawer.set)('zones'); }catch(e){}   // put the options where the eye already is — SHOW, never toggle
+  }
+  try{ if (typeof renderZonesDrawer === 'function') renderZonesDrawer(); }catch(e){}
+  try{ if (typeof renderConstellation === 'function') renderConstellation(); }catch(e){}
+}
+function decoSelClear(){ if (state.decoSel == null) return; state.decoSel = null;
+  try{ if (typeof renderZonesDrawer === 'function') renderZonesDrawer(); }catch(e){}
+  try{ if (typeof renderConstellation === 'function') renderConstellation(); }catch(e){} }
+try{ window.__dystDeco = { sel:function(){ return state.decoSel; }, set:decoSelSet, clear:decoSelClear, kind:decoKindOf }; }catch(e){}
+/* The old popup is retired: every one of its four routes — recolour, thicker, thinner, name — is in
+   the drawer panel now, and two places to change one thing is two places to disagree. The function
+   stays as the DOOR (its one caller is the map's pointerdown) and now opens the drawer instead. */
+function openDecoMenu(idx, x, y){ decoSelSet(idx); }
+function openDecoMenu_retired_v628(idx, x, y){
   const w = state.prompt && state.prompt.words[idx]; if (!w) return;
   const menu = $('aspectMenu'); if (!menu) return; menu.innerHTML = '';
   const add = (label, fn) => { const b = document.createElement('button'); b.textContent = label; b.addEventListener('click', ev => { ev.stopPropagation(); fn(); }); menu.appendChild(b); };
@@ -20821,6 +20852,38 @@ function syncDrawCursor(){
   const sky = document.getElementById('skySvg');
   if (sky) sky.style.cursor = state.eraseDraw ? 'pointer' : ((state.terrainDraw || state.pathDraw || state.shapeDraw) ? 'crosshair' : '');
   document.body.classList.toggle('erasing', !!state.eraseDraw);
+  document.body.classList.toggle('drawing-armed', !!(state.terrainDraw || state.pathDraw || state.shapeDraw));
+  try{ syncDrawArmed(); }catch(e){}
+}
+/* v.628 [Jeremy] — "selection on the map seems to be broken for everything."
+   It was not broken: a drawing tool was ARMED, and an armed tool takes every press on the canvas
+   before selection ever sees it (that branch is first in the map's pointerdown, and rightly so —
+   while you are drawing, a press means draw). What was wrong is that NOTHING SAID SO. The tools
+   moved into a drawer you leave open (v.623–v.627), so a tool can stay armed for as long as you
+   like, and the only sign was a crosshair on a canvas you were not looking at.
+   So: while a tool is armed, the map says which one, and offers one press out of it. `syncDrawCursor`
+   is called by every setter, so this is one function hung off the one place that already knows. */
+function syncDrawArmed(){
+  var sky = document.getElementById('sky'); if (!sky) return;
+  var el = document.getElementById('drawArmed');
+  var what = state.terrainDraw ? 'a boundary' : (state.shapeDraw ? 'a shape' : (state.pathDraw ? 'a line' : (state.eraseDraw ? 'erase' : null)));
+  if (!what){ if (el && el.parentNode) el.parentNode.removeChild(el); return; }
+  if (!el){
+    el = document.createElement('div'); el.id = 'drawArmed';
+    el.innerHTML = '<span class="da-t"></span><button type="button" class="da-x" title="Stop drawing (Esc)">Done</button>';
+    el.querySelector('.da-x').addEventListener('click', function(ev){ ev.stopPropagation(); ev.preventDefault();
+      setTerrainDraw(null); setPathDraw(false); setShapeDraw(null); setEraseDraw(false); });
+    sky.appendChild(el);
+  }
+  el.querySelector('.da-t').textContent = (what === 'erase')
+    ? 'Erasing \u2014 press a drawing to remove it'
+    : ('Drawing ' + what + ' \u2014 drag on the map');
+  /* measured, not assumed: it tucks under whatever the places toggle currently is */
+  try{
+    var seg = document.getElementById('placesSeg'), sk = sky.getBoundingClientRect();
+    var top = seg ? (seg.getBoundingClientRect().bottom - sk.top + 8) : 44;
+    el.style.top = Math.round(Math.max(8, top)) + 'px';
+  }catch(e){}
 }
 function setTerrainDraw(style, color){
   state.terrainDraw = style ? { style: style, color: (color || (TERRAIN_STYLES[style] && TERRAIN_STYLES[style].fill) || null) } : null;
@@ -20884,7 +20947,8 @@ function openBrandedColorPicker(initialHex, x, y, onApply){
 let _drawWired = false;
 function wireDrawGlobals(){
   if (_drawWired) return; _drawWired = true;
-  document.addEventListener('keydown', e => { if (e.key === 'Escape' && (state.terrainDraw || state.pathDraw || state.eraseDraw || state.shapeDraw)){ setTerrainDraw(null); setPathDraw(false); setEraseDraw(false); setShapeDraw(null); } });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && (state.terrainDraw || state.pathDraw || state.eraseDraw || state.shapeDraw)){ setTerrainDraw(null); setPathDraw(false); setEraseDraw(false); setShapeDraw(null); return; }
+    if (e.key === 'Escape' && state.decoSel != null && typeof decoSelClear === 'function') decoSelClear(); });   // v.628 — Escape means "let go", of a tool or of a drawing
   document.addEventListener('click', e => {
     if (e.target.closest && (e.target.closest('.draw-group') || e.target.closest('#edColorPanel'))) return;
     if (state.terrainDraw || state.pathDraw || state.shapeDraw || state.eraseDraw) return;   // a draw tool is armed → keep its panel open (with colour & options) until the user toggles it off
@@ -30403,6 +30467,75 @@ function renderStoryLibrary(){
   if (typeof renderZonesDrawer === 'function') renderZonesDrawer();
   if (typeof renderImagesDrawer === 'function') renderImagesDrawer();
 }
+/* ---- The selected drawing's options, built fresh on each drawer render ---- */
+function decoEditorEl(){
+  var wrap = document.createElement('div');
+  var i = (typeof state !== 'undefined' && state) ? state.decoSel : null;
+  var w = (i != null && state.prompt) ? state.prompt.words[i] : null;
+  if (!w || !w.deco) return wrap;
+  wrap.id = 'decoEditWin'; wrap.className = 'deco-edit';
+  var hd = document.createElement('div'); hd.className = 'de-head';
+  var ttl = document.createElement('span'); ttl.className = 'de-kind'; ttl.textContent = decoKindOf(w); hd.appendChild(ttl);
+  var x = document.createElement('button'); x.className = 'de-x'; x.type = 'button'; x.textContent = '\u00d7';
+  x.title = 'Let go of this drawing'; x.addEventListener('click', function(ev){ ev.stopPropagation(); decoSelClear(); });
+  hd.appendChild(x); wrap.appendChild(hd);
+  /* NAME — the same add picker every other naming door opens, so there is one namer, not two */
+  var lab = (typeof zoneLabelOf === 'function') ? zoneLabelOf(w) : '';
+  var nb = document.createElement('button'); nb.type = 'button'; nb.className = 'de-name' + (lab ? '' : ' de-unnamed');
+  nb.textContent = lab || (w.line ? 'Name this line\u2026' : 'Name this zone\u2026');
+  nb.title = lab ? ('Rename \u201c' + lab + '\u201d') : 'Give it a name';
+  nb.addEventListener('click', function(ev){ ev.stopPropagation();
+    var r = nb.getBoundingClientRect();
+    if (typeof openZoneNamer === 'function') openZoneNamer(i, Math.round(r.right + 10), Math.round(r.top - 30)); });
+  wrap.appendChild(nb);
+  var row = document.createElement('div'); row.className = 'de-row';
+  /* COLOUR — the app's own branded picker, the same call the popup made */
+  var cb = document.createElement('button'); cb.type = 'button'; cb.className = 'de-btn de-col';
+  var cur = w.terrain ? (w.color || ((typeof terrainStyleFor === 'function' ? terrainStyleFor(w) : {}) || {}).fill || '#a6c98c')
+                      : ((w.lstyle && w.lstyle.stroke) || '#9a7747');
+  var chip = document.createElement('span'); chip.className = 'de-chip'; chip.style.background = cur; cb.appendChild(chip);
+  cb.appendChild(document.createTextNode('Colour'));
+  cb.title = 'Change this drawing\u2019s colour';
+  cb.addEventListener('click', function(ev){ ev.stopPropagation();
+    var r = cb.getBoundingClientRect();
+    openBrandedColorPicker(cur, Math.round(r.right + 10), Math.round(r.top), function(hex){
+      if (w.terrain) w.color = hex; else { w.lstyle = w.lstyle || {}; w.lstyle.stroke = hex; }
+      if (state.session){ state.session.words = state.prompt.words; if (typeof scheduleAutosave === 'function') scheduleAutosave(); }
+      if (typeof renderConstellation === 'function') renderConstellation();
+      if (typeof renderZonesDrawer === 'function') renderZonesDrawer();
+    });
+  });
+  row.appendChild(cb);
+  /* THICKNESS — a line and a shape have a stroke; a boundary is a wash and has none, which is why
+     the popup only ever offered it to those two. Same rule, same place. */
+  if (w.line || w.shape){
+    var widen = function(d){
+      w.lstyle = w.lstyle || { stroke:'#9a7747', width:3.2 };
+      w.lstyle.width = Math.max(1, Math.min(10, (w.lstyle.width || 3.2) + d));
+      if (state.session){ state.session.words = state.prompt.words; if (typeof scheduleAutosave === 'function') scheduleAutosave(); }
+      if (typeof renderConstellation === 'function') renderConstellation();
+      if (typeof renderZonesDrawer === 'function') renderZonesDrawer();
+    };
+    var tw = document.createElement('span'); tw.className = 'de-thick';
+    var minus = document.createElement('button'); minus.type = 'button'; minus.className = 'de-btn de-step'; minus.textContent = '\u2212';
+    minus.title = 'Thinner'; minus.addEventListener('click', function(ev){ ev.stopPropagation(); widen(-1); });
+    var val = document.createElement('span'); val.className = 'de-val';
+    val.textContent = String(Math.round(((w.lstyle && w.lstyle.width) || 3.2) * 10) / 10);
+    var plus = document.createElement('button'); plus.type = 'button'; plus.className = 'de-btn de-step'; plus.textContent = '+';
+    plus.title = 'Thicker'; plus.addEventListener('click', function(ev){ ev.stopPropagation(); widen(1); });
+    tw.appendChild(minus); tw.appendChild(val); tw.appendChild(plus);
+    row.appendChild(tw);
+  }
+  wrap.appendChild(row);
+  var del = document.createElement('button'); del.type = 'button'; del.className = 'de-btn de-del';
+  del.textContent = 'Delete this ' + decoKindOf(w).toLowerCase();
+  del.addEventListener('click', function(ev){ ev.stopPropagation();
+    var keep = i; state.decoSel = null;
+    if (typeof removeNode === 'function') removeNode(keep);
+    if (typeof renderZonesDrawer === 'function') renderZonesDrawer(); });
+  wrap.appendChild(del);
+  return wrap;
+}
 /* ---- The Zones drawer: its own panel under the Story Legend ---- */
 function renderZonesDrawer(){
   var host = document.getElementById('expLeft'); if (!host) return;
@@ -30425,6 +30558,9 @@ function renderZonesDrawer(){
   body.innerHTML = '';
   /* the tools, moved not copied, and re-attached rather than rebuilt (v.623) */
   try{ body.appendChild(zoneToolsEl()); }catch(e){}
+  /* v.628 [Jeremy] — the selected drawing's own options: its name, its colour, its thickness, and
+     the way out. Every route the retired popup had, in the place v.627 settled options belong. */
+  try{ body.appendChild(decoEditorEl()); }catch(e){}
   if (!zs.length){
     var e2 = document.createElement('div'); e2.className = 'rl-zone-empty';
     e2.textContent = 'Draw a boundary and name it \u2014 a shape with a name is a zone.';
@@ -30442,8 +30578,11 @@ function renderZonesDrawer(){
     var n2 = document.createElement('span'); n2.className = 'rl-name'; n2.textContent = zoneLabelOf(o.w); row.appendChild(n2);
     var cnt = 0; try{ cnt = zoneMembers(o.w).length; }catch(e){}
     var c2 = document.createElement('span'); c2.className = 'rl-zone-n'; c2.textContent = cnt ? (cnt + ' inside') : 'empty'; row.appendChild(c2);
-    row.title = 'Press to find it on the map';
-    row.addEventListener('click', function(){ try{ state.selNode = o.i; if (typeof renderConstellation === 'function') renderConstellation(); }catch(e){} });
+    row.title = 'Press to select it on the map';
+    if (state.decoSel === o.i) row.classList.add('on');
+    /* v.628 — this row SELECTS the drawing. It used to set `state.selNode`, which a decoration is
+       never read for (the render loop returns before it), so pressing a zone did nothing at all. */
+    row.addEventListener('click', function(){ try{ decoSelSet(o.i); }catch(e){} });
     var del = document.createElement('button'); del.className = 'rl-x'; del.textContent = '\u00d7';
     del.title = 'Delete the zone \u201c' + zoneLabelOf(o.w) + '\u201d and its boundary';
     del.addEventListener('click', function(ev){
@@ -30467,8 +30606,9 @@ function renderZonesDrawer(){
       var row = document.createElement('div'); row.className = 'rl-row rl-zone-row';
       var n3 = document.createElement('span'); n3.className = 'rl-name'; n3.textContent = zoneLabelOf(o.w); row.appendChild(n3);
       var c3 = document.createElement('span'); c3.className = 'rl-zone-n'; c3.textContent = 'line'; row.appendChild(c3);
-      row.title = 'Press to find it on the map';
-      row.addEventListener('click', function(){ try{ state.selNode = o.i; if (typeof renderConstellation === 'function') renderConstellation(); }catch(e){} });
+      row.title = 'Press to select it on the map';
+      if (state.decoSel === o.i) row.classList.add('on');
+      row.addEventListener('click', function(){ try{ decoSelSet(o.i); }catch(e){} });
       var d3 = document.createElement('button'); d3.className = 'rl-x'; d3.textContent = '\u00d7';
       d3.title = 'Delete the line \u201c' + zoneLabelOf(o.w) + '\u201d';
       d3.addEventListener('click', function(ev){
@@ -41940,7 +42080,7 @@ function init(){
     if (decoHit){
       const di = +decoHit.dataset.deco;
       if (state.eraseDraw){ if (typeof removeNode === 'function') removeNode(di); flashStatus('Erased'); }   // erase mode → delete it, stay armed
-      else openDecoMenu(di, e.clientX, e.clientY);                                                            // normal → recolour/delete menu
+      else decoSelSet(di);                                                                                    // v.628 — select it; its options open in the Zones drawer
       state.lastDrag = Date.now();   // suppress the trailing click
       e.preventDefault(); return;
     }
@@ -41948,6 +42088,7 @@ function init(){
     if (e.target.closest && e.target.closest('.map-text-fo')) return;   // a map text box handles its own clicks (edit / drag) — never pan or lasso
     const g = e.target.closest ? e.target.closest('g.node') : null;
     if (!g){
+      if (typeof decoSelClear === 'function') decoSelClear();   // v.628 — pressing the empty map lets go of a selected drawing
       if (state.eraseDraw){ e.preventDefault(); return; }   // erase stays armed on empty-map taps (only another interactive element exits it)
       if (!(state.prompt && e.isPrimary !== false)) return;
       // Empty map: Shift+drag (or middle button) = lasso-select; plain drag = pan the view.
@@ -51921,7 +52062,22 @@ body.eink #expMenu{background:#fff; border-color:#000}
       try{ if (which === 'images' && window.renderImagesDrawer) window.renderImagesDrawer(); }catch(e){}
       lTabsSync();
     }
-    window.__dystLDrawer = { set:lDrawerSet, now:lDrawerNow, sync:lTabsSync };
+    /* v.628 — `set` is what a TAB PRESS means, and pressing the open tab closes the drawer. Anything
+       asking programmatically for a panel means "make sure this is showing", which is a different
+       verb: `show` never toggles. Selecting a drawing while the Zones drawer was already open would
+       otherwise have closed the drawer it was about to fill. */
+    function lDrawerShow(which){
+      var open = !document.body.classList.contains('expb-lhide');
+      if (open && lDrawerNow() === which){ lTabsSync(); return; }
+      var cur = lDrawerNow();
+      if (cur !== which){ document.body.setAttribute('data-ldrawer', which);
+        try{ localStorage.setItem('dystoria.ldrawer', which); }catch(e){} }
+      if (!open) setStrip('L', false);
+      try{ if (which === 'zones' && window.renderZonesDrawer) window.renderZonesDrawer(); }catch(e){}
+      try{ if (which === 'images' && window.renderImagesDrawer) window.renderImagesDrawer(); }catch(e){}
+      lTabsSync();
+    }
+    window.__dystLDrawer = { set:lDrawerSet, show:lDrawerShow, now:lDrawerNow, sync:lTabsSync };
     try{ document.body.setAttribute('data-ldrawer', localStorage.getItem('dystoria.ldrawer') || 'legend'); }
     catch(e){ document.body.setAttribute('data-ldrawer', 'legend'); }
     (function(){
@@ -68532,6 +68688,67 @@ body.ai-signedout .pt-rh-hint, body.ai-capped .pt-rh-hint, body.ai-off .pt-rh-hi
     max-height:66vh; border-radius:14px 14px 0 0; border-bottom:none}
   .wb-scroll{padding-bottom:calc(16px + env(safe-area-inset-bottom))}
 }
+</style>
+<style id="dyst-deco-edit-css">
+/* ============================================================================
+   v.628 [Jeremy] — a selected drawing, and a visible armed tool.
+   ============================================================================ */
+/* the drawing you have hold of, lit on its own outline — the invisible hit shape IS the outline,
+   so there is nothing new to draw and nothing that can drift out of register with it. */
+/* an invisible hit shape has to SAY it is hit-testable: these are painted at zero opacity, and
+   `visiblePainted` (the default) is read differently by different engines for a zero-opacity
+   stroke — a press on a line's edge landed sometimes and not others. */
+.deco-shape{ pointer-events:all; }
+.deco-shape.sel{ stroke:#c49e4a !important; stroke-opacity:.85 !important; stroke-width:2 !important;
+  stroke-dasharray:7 5; fill-opacity:0 !important; }
+body.eink .deco-shape.sel{ stroke:#000 !important; }
+
+/* its options, in the drawer, under the tools */
+.deco-edit{ margin:2px 2px 10px; padding:8px 9px 9px; border:1px solid var(--line); border-radius:10px;
+  background:rgba(196,158,74,.10); }
+body.ember:not(.eink) .deco-edit{ background:rgba(196,158,74,.10); border-color:rgba(138,99,32,.26); }
+body.eink .deco-edit{ background:#fff; border:1px solid #000; }
+.deco-edit .de-head{ display:flex; align-items:center; gap:8px; margin-bottom:7px; }
+.deco-edit .de-kind{ font-family:var(--sans); font-size:9.5px; font-weight:700; letter-spacing:.16em;
+  text-transform:uppercase; color:#8d8a84; }
+.deco-edit .de-x{ margin-left:auto; border:none; background:none; color:#8d8a84; font-size:15px; line-height:1;
+  padding:0 2px; cursor:pointer; border-radius:5px; }
+.deco-edit .de-x:hover{ color:#a8462f; }
+.deco-edit .de-name{ display:block; width:100%; box-sizing:border-box; text-align:left; cursor:pointer;
+  font-family:'Cormorant SC','Cormorant Garamond',serif; font-size:12.5px; letter-spacing:.1em; text-transform:uppercase;
+  color:#2b2926; background:rgba(255,255,255,.6); border:1px solid var(--line); border-radius:7px;
+  padding:6px 9px; margin-bottom:7px; }
+.deco-edit .de-name:hover{ border-color:var(--gold); }
+.deco-edit .de-name.de-unnamed{ font-family:var(--serif); font-style:italic; font-size:12px; letter-spacing:0;
+  text-transform:none; color:#8d8a84; }
+.deco-edit .de-row{ display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+.deco-edit .de-btn{ font-family:var(--sans); font-size:10px; letter-spacing:.08em; text-transform:uppercase;
+  color:#6b675f; background:rgba(255,255,255,.55); border:1px solid var(--line); border-radius:999px;
+  padding:5px 10px; cursor:pointer; display:inline-flex; align-items:center; gap:6px; }
+.deco-edit .de-btn:hover{ border-color:var(--gold); color:#2b2926; }
+.deco-edit .de-chip{ width:11px; height:11px; border-radius:50%; border:1px solid rgba(0,0,0,.18); flex:none; }
+.deco-edit .de-thick{ display:inline-flex; align-items:center; gap:4px; }
+.deco-edit .de-step{ padding:4px 8px; font-size:11px; letter-spacing:0; }
+.deco-edit .de-val{ font-family:var(--sans); font-size:10px; color:#8d8a84; min-width:20px; text-align:center; }
+.deco-edit .de-del{ margin-top:8px; width:100%; justify-content:center; color:#a8462f; }
+.deco-edit .de-del:hover{ border-color:#a8462f; color:#8f3826; }
+/* NOT an ember override: the docked drawer is parchment in every theme (measured in v.625), so a
+   dark-theme ink here prints cream on cream. The one set of values is the right set. */
+/* the drawer row for the drawing you have hold of */
+#zonesWin .rl-zone-row.on{ background:rgba(196,158,74,.16); box-shadow:inset 2px 0 0 var(--gold); }
+
+/* an ARMED tool says so, on the map, with one press out of it */
+#drawArmed{ position:absolute; left:50%; transform:translateX(-50%); z-index:33; pointer-events:none;
+  display:flex; align-items:center; gap:9px; padding:5px 6px 5px 12px; border-radius:999px;
+  background:rgba(43,41,38,.90); box-shadow:0 6px 20px -8px rgba(0,0,0,.5); white-space:nowrap; }
+#drawArmed .da-t{ font-family:var(--sans); font-size:10.5px; letter-spacing:.09em; text-transform:uppercase; color:#efe8d6; }
+#drawArmed .da-x{ pointer-events:auto; font-family:var(--sans); font-size:10px; font-weight:700; letter-spacing:.1em;
+  text-transform:uppercase; color:#1a1206; background:var(--gold); border:none; border-radius:999px;
+  padding:4px 11px; cursor:pointer; }
+#drawArmed .da-x:hover{ background:#ffad4d; }
+body.eink #drawArmed{ background:#fff; border:2px solid #000; }
+body.eink #drawArmed .da-t{ color:#000; }
+body.eink #drawArmed .da-x{ background:#000; color:#fff; }
 </style>
 <style id="dyst-ldrawers-css">
 /* ============================================================================
