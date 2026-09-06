@@ -14482,6 +14482,58 @@ function fitViewToNodes(opts){
   const zs = $('zoomSlider'); if (zs) zs.value = Math.round(z * 100);
   applyView();
 }
+/* v.630 [Jeremy] — "whenever you click on an element in the Story Legend that is already on the
+   map, or a created zone in the zone drawer, or an image thumbnail in the image drawer, can we move
+   the map area to centre that element on the screen and have it selected?"
+
+   ONE function answers "bring that point into view", so the three drawers cannot disagree about
+   where the middle of the map is. And the middle is NOT the middle of the canvas: the side drawers
+   float OVER it (`--lw`/`--rw`), and the narrative bar covers the top — the same insets
+   `fitViewToNodes` already reasons with. The zoom is left alone: the writer chose it. */
+function mapCentreOn(mx, my){
+  if (!isFinite(mx) || !isFinite(my)) return false;
+  try{
+    var svg = $('skySvg'); if (!svg) return false;
+    var W = svg.clientWidth || 1100, H = svg.clientHeight || 640;
+    var cs = getComputedStyle(document.body);
+    var lw = parseFloat(cs.getPropertyValue('--lw')) || 0, rw = parseFloat(cs.getPropertyValue('--rw')) || 0;
+    var topInset = document.body.classList.contains('expb') ? 46 : 0;
+    if (!state.view) state.view = { zoom:1.5, panX:0, panY:0 };
+    var z = state.view.zoom || 1;
+    state.view.panX = mx - W / 2 - (lw - rw) / (2 * z);
+    state.view.panY = my - H / 2 - topInset / (2 * z);
+    applyView();
+    try{ if (typeof saveMapView === 'function') saveMapView(); }catch(e){}
+    return true;
+  }catch(e){ return false; }
+}
+/* an element, a drawing, an image — each says where its own middle is, and then it is the same job */
+function mapCentreOnWord(idx){
+  var w = state.prompt && state.prompt.words[idx]; if (!w) return false;
+  if (w.deco){
+    var at = (typeof drawLabelAt === 'function') ? drawLabelAt(w) : null;
+    return at ? mapCentreOn(at.x, at.y) : false;
+  }
+  var nd = state.nodes && state.nodes[idx];
+  if (nd && isFinite(nd.x) && isFinite(nd.y)) return mapCentreOn(nd.x, nd.y);
+  if (isFinite(w.fx) && isFinite(w.fy)) return mapCentreOn(w.fx, w.fy);
+  return false;
+}
+function mapCentreOnImage(rec){
+  if (!rec || !isFinite(rec.x) || !isFinite(rec.y)) return false;
+  return mapCentreOn(rec.x + (rec.w || 0) / 2, rec.y + (rec.h || 0) / 2);
+}
+/* the row in the Story Legend knows the element; the map knows it by index on THIS surface */
+function libIndexOnSurface(rec){
+  try{
+    var k = (rec && rec.item && typeof wordKey === 'function') ? wordKey(rec.item) : null; if (!k) return -1;
+    var ws = (state.prompt && state.prompt.words) || [];
+    for (var i = 0; i < ws.length; i++){ if (!ws[i] || ws[i].deco) continue;
+      try{ if (wordKey(ws[i]) === k) return i; }catch(e){} }
+  }catch(e){}
+  return -1;
+}
+try{ window.__dystCentre = { on:mapCentreOn, word:mapCentreOnWord, image:mapCentreOnImage, index:libIndexOnSurface }; }catch(e){}
 function skyPt(e){
   const svg = $('skySvg');
   const r = svg.getBoundingClientRect();
@@ -30446,6 +30498,22 @@ function renderStoryLibrary(){
       row.appendChild(nm);
       // Phase 1b — on the phone the whole row taps to the element's card (its dossier: notes, "Write about this", Explore).
       if (_mm){ row.classList.add('rl-row-tap'); row.addEventListener('click', function(e){ if (e.target && e.target.closest && e.target.closest('.rl-x, .rl-add, .rl-ico')) return; try { if (typeof openElementDossier === 'function' && r.item) openElementDossier(wordKey(r.item)); } catch(_){} }); }
+      /* v.630 [Jeremy] — a row for something ALREADY on this surface brings it to the middle of the
+         map and selects it. A row for something waiting still says "+ map" and does nothing else:
+         there is nothing to centre on yet, and the ＋ is the row's whole job until there is. */
+      else if (inCur){
+        row.classList.add('rl-row-tap');
+        row.title = 'Press to find ' + (r.name || r.word) + ' on the map';
+        row.addEventListener('click', function(e){
+          if (e.target && e.target.closest && e.target.closest('.rl-x, .rl-add, .rl-ico')) return;
+          var i = (typeof libIndexOnSurface === 'function') ? libIndexOnSurface(r) : -1;
+          if (i < 0) return;
+          try{ if (typeof decoSelClear === 'function') decoSelClear(); }catch(_){}
+          state.selNode = i; state.linkFrom = null;
+          if (typeof renderConstellation === 'function') renderConstellation();
+          try{ if (typeof mapCentreOnWord === 'function') mapCentreOnWord(i); }catch(_){}
+        });
+      }
       // section numbers removed from the Story Legend — the list got messy as elements spanned many sections (kept as the row's tooltip only)
       if (multiSec && (r.frames || []).length) nm.title = (r.name || r.word) + ' — sections ' + libFmtSections(r.frames);
       // feather / focus / wiki shortcuts removed \u2014 that space goes to the element name (was getting cut off). Row = name \u00b7 +map/\u2713on map \u00b7 \u00d7
@@ -30615,11 +30683,12 @@ function renderZonesDrawer(){
     var n2 = document.createElement('span'); n2.className = 'rl-name'; n2.textContent = zoneLabelOf(o.w); row.appendChild(n2);
     var cnt = 0; try{ cnt = zoneMembers(o.w).length; }catch(e){}
     var c2 = document.createElement('span'); c2.className = 'rl-zone-n'; c2.textContent = cnt ? (cnt + ' inside') : 'empty'; row.appendChild(c2);
-    row.title = 'Press to select it on the map';
+    row.title = 'Press to find it on the map';
     if (state.decoSel === o.i) row.classList.add('on');
     /* v.628 — this row SELECTS the drawing. It used to set `state.selNode`, which a decoration is
-       never read for (the render loop returns before it), so pressing a zone did nothing at all. */
-    row.addEventListener('click', function(){ try{ decoSelSet(o.i); }catch(e){} });
+       never read for (the render loop returns before it), so pressing a zone did nothing at all.
+       v.630 — and brings it to the middle of the map, the same as a Legend row does. */
+    row.addEventListener('click', function(){ try{ decoSelSet(o.i); mapCentreOnWord(o.i); }catch(e){} });
     var del = document.createElement('button'); del.className = 'rl-x'; del.textContent = '\u00d7';
     del.title = 'Delete the zone \u201c' + zoneLabelOf(o.w) + '\u201d and its boundary';
     del.addEventListener('click', function(ev){
@@ -30643,9 +30712,9 @@ function renderZonesDrawer(){
       var row = document.createElement('div'); row.className = 'rl-row rl-zone-row';
       var n3 = document.createElement('span'); n3.className = 'rl-name'; n3.textContent = zoneLabelOf(o.w); row.appendChild(n3);
       var c3 = document.createElement('span'); c3.className = 'rl-zone-n'; c3.textContent = 'line'; row.appendChild(c3);
-      row.title = 'Press to select it on the map';
+      row.title = 'Press to find it on the map';
       if (state.decoSel === o.i) row.classList.add('on');
-      row.addEventListener('click', function(){ try{ decoSelSet(o.i); }catch(e){} });
+      row.addEventListener('click', function(){ try{ decoSelSet(o.i); mapCentreOnWord(o.i); }catch(e){} });
       var d3 = document.createElement('button'); d3.className = 'rl-x'; d3.textContent = '\u00d7';
       d3.title = 'Delete the line \u201c' + zoneLabelOf(o.w) + '\u201d';
       d3.addEventListener('click', function(ev){
@@ -30705,6 +30774,7 @@ function renderImagesDrawer(){
     var im = document.createElement('img'); im.src = r.src; im.alt = ''; cell.appendChild(im);
     cell.addEventListener('click', function(){
       try{ if (typeof window.__dystMapImgSelect === 'function') window.__dystMapImgSelect(r.id); }catch(e){}
+      try{ if (typeof mapCentreOnImage === 'function') mapCentreOnImage(r); }catch(e){}   // v.630 — and bring it into view
     });
     var x = document.createElement('button'); x.className = 'img-x'; x.textContent = '\u00d7'; x.title = 'Remove this image from the map';
     x.addEventListener('click', function(ev){
@@ -56340,11 +56410,23 @@ body.ember:not(.eink) .img-addrow #mapImgBtn{ background:rgba(255,255,255,.06) !
    Four buttons, one row, sharing the drawer's width with the panel that opens under them: the row
    carries the panel's own margins, and each button takes an equal share of what is left. */
 .zone-tool-icons{ display:flex; align-items:stretch; gap:6px; flex-wrap:nowrap; padding:0; margin:2px 2px 6px; }
-.zone-tool-icons .draw-cat.zt-ic{ flex:1 1 0; min-width:0; width:auto; height:44px; min-height:44px; padding:0; display:flex; align-items:center; justify-content:center; border:1px solid var(--line); border-radius:10px; background:rgba(255,255,255,.45); color:#6b675f; transition:background .13s, border-color .13s, color .13s; }
-.zone-tool-icons .draw-cat.zt-ic:hover{ border-color:var(--gold); color:var(--charcoal); background:rgba(196,158,74,.12); }
-.zone-tool-icons .draw-cat.zt-ic.on{ border-color:var(--gold); color:#5f4a1e; background:rgba(196,158,74,.22); }
+/* v.630 [Jeremy] — "don't show the outline around the icons, and when you hover over to select make
+   it a dark shaded circle and when selected and active have the gold brand outline circle."
+   The button becomes nothing but a hit area; the STATE is a circle behind the glyph — a shaded one
+   under the pointer, the brand's gold ring when the tool is on. The Grid is a toggle rather than an
+   armed tool and wears the same ring, because "this is on" is the same fact either way. */
+.zone-tool-icons .draw-cat.zt-ic{ flex:1 1 0; min-width:0; width:auto; height:44px; min-height:44px; padding:0; display:flex; align-items:center; justify-content:center; border:none; border-radius:0; background:none; color:#6b675f; transition:color .13s; }
+.zone-tool-icons .draw-cat.zt-ic .zt-glyph{ width:36px; height:36px; border-radius:50%; display:inline-flex; align-items:center; justify-content:center;
+  border:1.5px solid transparent; box-sizing:border-box; transition:background .13s, border-color .13s; }
+.zone-tool-icons .draw-cat.zt-ic:hover{ color:var(--charcoal); }
+.zone-tool-icons .draw-cat.zt-ic:hover .zt-glyph{ background:rgba(43,41,38,.11); }
+.zone-tool-icons .draw-cat.zt-ic.on{ color:#5f4a1e; }
+.zone-tool-icons .draw-cat.zt-ic.on .zt-glyph{ border-color:var(--gold); background:rgba(196,158,74,.14); }
+.zone-tool-icons .draw-cat.zt-ic.on:hover .zt-glyph{ background:rgba(196,158,74,.22); }
+body.eink .zone-tool-icons .draw-cat.zt-ic.on .zt-glyph{ border-color:#000; background:none; }
+body.eink .zone-tool-icons .draw-cat.zt-ic:hover .zt-glyph{ background:rgba(0,0,0,.10); }
 .zone-tool-icons .draw-cat.zt-ic .dc-name, .zone-tool-icons .draw-cat.zt-ic .dc-toggle{ display:none !important; }
-.zone-tool-icons .zt-glyph{ display:inline-flex; }
+
 /* v.627 [Jeremy] — the tool's options open IN the drawer, under the icon row. Nothing is fixed, so
    nothing can sit under the tab column or wander off the drawer, and nothing needs a × : the button
    that opened it closes it. `hidden` is left to do its own work — no display is set here. */
@@ -56357,7 +56439,7 @@ body.eink .zone-tool-panels .draw-panel{ background:#fff; border:1px solid #000;
 /* the palettes inside wrap to the drawer's width instead of running off it */
 .zone-tool-panels .draw-swatches, .zone-tool-panels .draw-kinds{ flex-wrap:wrap; }
 .zone-tool-panels input[type="range"]{ width:100%; }
-body.ember:not(.eink) .zone-tool-icons .draw-cat.zt-ic{ background:rgba(255,255,255,.06); color:#bdb3a0; }
+/* the docked drawer is parchment in every theme (measured, v.625) — one set of values is right */
 .zone-tools-host .group{ border:none; padding:0; margin:0; }
 .zone-tools-host .group-body{ display:flex; flex-direction:column; gap:4px; }
 .rl-zone-empty{ font-family:var(--serif); font-style:italic; font-size:11.5px; line-height:1.45; color:var(--ink-faint); padding:4px 8px 6px; }
