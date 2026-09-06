@@ -12790,11 +12790,118 @@ function refreshSky(){
     if (typeof updateUndoUI === 'function') updateUndoUI();   // empty map still needs the undo/redo buttons kept in sync
   }
 }
+/* ---------------- Places phase 2: a board per scene ---------------- */
+/* `state.sceneSid` is null on scene 1 — the section's own board — and a `~` mark's id otherwise.
+   It is view state and lives on `state`, not in the document. */
+function scbStore(){ if(!state.session) return null; if(!state.session.sceneBoards) state.session.sceneBoards={}; return state.session.sceneBoards; }
+function scbHas(sid){ var st=(state.session&&state.session.sceneBoards)||null; return !!(sid && st && st[sid]); }
+function scbGet(sid){ var st=(state.session&&state.session.sceneBoards)||null; return (sid && st && st[sid]) ? st[sid] : null; }
+function scbEnsure(sid){
+  if(!sid) return null;
+  var st=scbStore(); if(!st) return null;
+  if(!st[sid]) st[sid]={ words:[], sets:1, links:[], removedLinks:[] };
+  return st[sid];
+}
+/* The scenes of one section, scene 1 first. Scene 1 carries a null sid because it has no `~` mark
+   to carry one — that is the fact the whole design rests on, so it is stated here rather than
+   discovered in a caller. */
+function sceneListFor(frameIdx){
+  var out=[{ sid:null, label:'' }];
+  try{
+    if(!(state.frames||[])[frameIdx]) return out;
+    /* `orgSectionScenes` names its parameter `frame`, but `nodeFrameMap` maps a node to its frame
+       INDEX — `removeSectionProse` compares `fm.get(c) === k` and the Plot grid's `_plotScenes(i)`
+       passes an index too. Passing the frame OBJECT matches nothing and silently reports one scene. */
+    var sc=(typeof orgSectionScenes==='function')?(orgSectionScenes(frameIdx)||[]):[];
+    sc.forEach(function(x){ if(x && x.sid) out.push({ sid:x.sid, label:x.label||'' }); });
+  }catch(e){}
+  return out;
+}
+function sceneIndexNow(){
+  var list=sceneListFor(state.frameIdx||0), sid=state.sceneSid||null;
+  for(var i=0;i<list.length;i++){ if((list[i].sid||null)===sid) return i; }
+  return 0;
+}
+/* The board `state.prompt` should be pointing at, given the section and the scene. */
+function scenePromptFor(frameIdx, sid){
+  var fr=(state.frames||[])[frameIdx]; if(!fr) return null;
+  if(!sid) return fr.prompt;
+  return scbEnsure(sid) || fr.prompt;
+}
+/* Modelled line for line on `switchFrame`, because it is the same job one level down. */
+function switchScene(sid, opts){
+  opts=opts||{};
+  var fr=(state.frames||[])[state.frameIdx||0]; if(!fr) return;
+  sid=sid||null;
+  if(sid && !sceneListFor(state.frameIdx||0).some(function(x){ return x.sid===sid; })) return;   // a mark that is no longer in this section
+  var moved=(state.sceneSid||null)!==sid;
+  state.sceneSid=sid;
+  var p=scenePromptFor(state.frameIdx||0, sid); if(!p) return;
+  state.prompt=p;
+  state.selNode=null; state.linkFrom=null; state.activeSet=0;
+  if(typeof refreshSky==='function') refreshSky();
+  if(typeof buildRail==='function') buildRail();
+  if(typeof renderTimeline==='function') renderTimeline();
+  if(typeof syncFramesToSession==='function') syncFramesToSession();
+  try{ if(typeof window.__dystSceneChanged==='function') window.__dystSceneChanged(sid, moved, opts); }catch(e){}
+}
+/* The board the writer was on immediately before this one, in reading order — the previous scene
+   of this section, or the LAST scene of the section before. What "a previous section/scene" means
+   when you are standing somewhere, rather than a list to choose from. */
+function scenePrevBoard(){
+  try{
+    var fi=state.frameIdx||0, list=sceneListFor(fi), at=sceneIndexNow();
+    if(at>0) return { p:scenePromptFor(fi, list[at-1].sid), label:(at-1===0)?('section '+(fi+1)):('scene '+at) };
+    if(fi<=0) return null;
+    var prev=sceneListFor(fi-1), lastSid=prev.length>1?prev[prev.length-1].sid:null;
+    return { p:scenePromptFor(fi-1, lastSid), label:'section '+fi+(prev.length>1?(' \u00b7 scene '+prev.length):'') };
+  }catch(e){}
+  return null;
+}
+/* Copy a board's cast onto this one. `pruneEventsFromCopy` is the same guard `addFrame` uses — an
+   event belongs to the section it happened in and must never ride along. */
+function sceneCarryOver(){
+  var src=scenePrevBoard(); if(!src||!src.p) return false;
+  var dst=state.prompt; if(!dst) return false;
+  if(typeof pushUndo==='function') pushUndo();
+  var copy=JSON.parse(JSON.stringify({ words:src.p.words||[], sets:src.p.sets||1, links:src.p.links||[], removedLinks:src.p.removedLinks||[] }));
+  try{ if(typeof pruneEventsFromCopy==='function') copy=pruneEventsFromCopy(copy, true); }catch(e){}
+  dst.words=copy.words||[]; dst.sets=copy.sets||1; dst.links=copy.links||[]; dst.removedLinks=copy.removedLinks||[];
+  sceneMarkAnswered();
+  if(typeof layoutConstellation==='function') layoutConstellation();
+  if(typeof refreshSky==='function') refreshSky();
+  if(typeof syncFramesToSession==='function') syncFramesToSession();
+  return true;
+}
+/* Anything that answers the question says so once, here, and every surface that asked it re-reads
+   the answer — rather than each of them remembering to put itself away. */
+function sceneOfferChanged(){ try{ if(typeof window.__dystSceneChanged==='function') window.__dystSceneChanged(); }catch(e){} }
+function sceneAnswered(sid){ try{ return !!(sid && state.session && state.session.sceneSeeded && state.session.sceneSeeded[sid]); }catch(e){ return false; } }
+function sceneMarkAnswered(sid){
+  sid=sid||state.sceneSid; if(!sid||!state.session) return;
+  if(!state.session.sceneSeeded) state.session.sceneSeeded={};
+  state.session.sceneSeeded[sid]=true;
+  if(typeof scheduleAutosave==='function') scheduleAutosave();
+  sceneOfferChanged();
+}
+/* Asked only of a scene that is BOTH empty and unanswered — a scene you emptied on purpose is not
+   a scene that needs the question again. */
+function sceneNeedsOffer(){
+  var sid=state.sceneSid||null; if(!sid) return false;
+  if(sceneAnswered(sid)) return false;
+  var p=state.prompt; if(!p || (p.words||[]).length) return false;
+  var src=scenePrevBoard();
+  return !!(src && src.p && (src.p.words||[]).length);
+}
+try{ window.__dystScenes={ list:sceneListFor, at:sceneIndexNow, go:switchScene, board:scbGet, has:scbHas,
+                           prev:scenePrevBoard, carry:sceneCarryOver, answered:sceneAnswered,
+                           mark:sceneMarkAnswered, needsOffer:sceneNeedsOffer }; }catch(e){}
 function switchFrame(k){
   if (!state.frames || k < 0 || k >= state.frames.length) return;
   const moved = k !== state.frameIdx;
   if (moved) saveMapView();        // remember THIS section's scale + position before leaving it
   state.frameIdx = k;
+  state.sceneSid = null;                 /* v.618 — a new section opens on its own scene 1 */
   state.prompt = state.frames[k].prompt;
   state.selNode = null; state.linkFrom = null; state.activeSet = 0;
   if (moved) restoreMapView();     // load the NEW section's scale + position (before refreshSky renders it)
@@ -27654,6 +27761,9 @@ function openSession(id){
   saveSession();
   clearTimeout(autosaveHandle); if (typeof _edCommitT !== 'undefined') clearTimeout(_edCommitT);   // drop any queued save/Refine-flush aimed at the OUTGOING story
   state.session = JSON.parse(JSON.stringify(s));
+  state.sceneSid = null;     /* v.618 — a scene id belongs to ONE story's `~` marks. Carrying one
+                                across an open would leave the pointer naming a scene this story has
+                                never had, while `state.prompt` correctly held the section's board. */
   rememberOpenStory(s.id);   // this is now the active story — survive refresh / cloud-sync / mode-switch
   rebuildPools();
   state.plotGaps = s.plotGaps || {};
@@ -50251,6 +50361,11 @@ body.eink .ctp-conflict .ctp-word, body.eink .ctp-conf-mark{color:#000}
 body.eink #expMapBar{background:#fff; border-bottom-color:#000}
 #expMapTitle{font-family:'Cinzel','Cormorant SC',serif; font-size:11px; font-weight:700; letter-spacing:.16em; text-transform:uppercase; color:#3b3a36; line-height:1}
 #expMapBar .xm-sep{color:#b9b3a6; font-size:11px; line-height:1}
+/* v.618 — the title clipped mid-word with no ellipsis: `text-overflow` was on `#expMapSec`, which
+   is an inline-FLEX box, so it never reached the name span that actually overflows. */
+#expMapSec .xm-nm{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
+#expMapScene{margin-left:8px; font-family:var(--sans); font-size:10px; font-weight:700; letter-spacing:.08em; color:#a08a56; flex:none; padding:2px 6px; border-radius:8px; background:rgba(196,158,74,.13); cursor:default}   /* v.618 — which scene, when there is more than one; a sibling of the title so its ellipsis cannot eat it */
+#expMapScene[hidden]{display:none !important}
 #expMapSec{display:inline-flex; align-items:baseline; gap:7px; font-family:'Cinzel','Cormorant SC',serif; font-size:12px; font-weight:700; letter-spacing:.13em; text-transform:uppercase; color:var(--charcoal); white-space:nowrap; max-width:340px; overflow:hidden; text-overflow:ellipsis}
 #expMapSec .xm-num{flex:none; font-family:'Cinzel','Cormorant SC',serif; font-size:12px; font-weight:700}
 #expMapSec .xm-dia{flex:none; font-size:7px; color:var(--charcoal); align-self:center; line-height:1}   /* small dark diamond between number and title */
@@ -51036,10 +51151,26 @@ body.eink #expMenu{background:#fff; border-color:#000}
     var secWrap = document.createElement('div'); secWrap.id = 'expMapSecWrap';
     var arrPrev = document.createElement('button'); arrPrev.type = 'button'; arrPrev.className = 'xm-arr'; arrPrev.textContent = '\u2039'; arrPrev.title = 'Previous section';
     var msec = document.createElement('span'); msec.id = 'expMapSec'; msec.title = 'Jump to a section\u2026';
+    var mscn = document.createElement('span'); mscn.id = 'expMapScene';   /* v.618 — outside the title, so the title's ellipsis cannot eat it */
     var arrNext = document.createElement('button'); arrNext.type = 'button'; arrNext.className = 'xm-arr'; arrNext.textContent = '\u203a'; arrNext.title = 'Next section';
-    secWrap.appendChild(arrPrev); secWrap.appendChild(msec); secWrap.appendChild(arrNext);
+    secWrap.appendChild(arrPrev); secWrap.appendChild(msec); secWrap.appendChild(mscn); secWrap.appendChild(arrNext);
     mc.appendChild(secWrap);
-    var stepSec = function(d){ if (typeof switchFrame === 'function') switchFrame((state.frameIdx || 0) + d); };
+    /* v.618 — one sequence: every scene of every section, in reading order. `›` from the last
+       scene of a section lands on the first scene of the next; `‹` from scene 1 lands on the LAST
+       scene of the one before, which is where the prose actually continues from. */
+    var stepSec = function(d){
+      if (typeof switchScene !== 'function' || typeof sceneListFor !== 'function'){
+        if (typeof switchFrame === 'function') switchFrame((state.frameIdx || 0) + d); return;
+      }
+      var fi = state.frameIdx || 0, list = sceneListFor(fi), at = sceneIndexNow(), n = (state.frames || []).length;
+      var to = at + d;
+      if (to >= 0 && to < list.length){ switchScene(list[to].sid); return; }
+      if (d > 0){ if (fi + 1 >= n) return; switchFrame(fi + 1); return; }          /* switchFrame lands on scene 1 */
+      if (fi - 1 < 0) return;
+      switchFrame(fi - 1);
+      var prev = sceneListFor(fi - 1);
+      if (prev.length > 1) switchScene(prev[prev.length - 1].sid);                 /* …and back up means the LAST scene of it */
+    };
     arrPrev.addEventListener('click', function(e){ e.stopPropagation(); stepSec(-1); });
     arrNext.addEventListener('click', function(e){ e.stopPropagation(); stepSec(1); });
     msec.addEventListener('click', function(e){
@@ -51055,8 +51186,22 @@ body.eink #expMenu{background:#fff; border-color:#000}
         if (!nm2){ var h32 = document.querySelector('#editor h3[data-frame="' + fi + '"]'); if (h32) nm2 = (h32.textContent || '').trim(); }
         if (!nm2 && fi === 0){ var st2 = document.getElementById('sectionTitle'); nm2 = (st2 && st2.value || '').trim(); }
         items.push([String(fi), (fi + 1) + (nm2 ? ' \u2014 ' + nm2 : '')]);
+        /* v.618 — a section's scenes hang under it. Scene 1 IS the section row (its board is the
+           section's board), so only the marked scenes get rows of their own. */
+        try{
+          if (typeof sceneListFor === 'function'){
+            var _sl = sceneListFor(fi);
+            for (var si = 1; si < _sl.length; si++){
+              items.push([fi + ':' + _sl[si].sid, '\u2002\u2002scene ' + (si + 1) + (_sl[si].label ? ' \u2014 ' + _sl[si].label : '')]);
+            }
+          }
+        }catch(e){}
       }
-      expPickMenu(msec, items, function(id){ if (typeof switchFrame === 'function') switchFrame(+id); }, { center:true });
+      expPickMenu(msec, items, function(id){
+        var bits = String(id).split(':');
+        if (typeof switchFrame === 'function') switchFrame(+bits[0]);
+        if (bits.length > 1 && typeof switchScene === 'function') switchScene(bits[1]);
+      }, { center:true });
     });
     var lrow = document.createElement('div'); lrow.id = 'expMapLeft';
     var prow = lrow;
@@ -51081,8 +51226,36 @@ body.eink #expMenu{background:#fff; border-color:#000}
       back.addEventListener('click', function(e){ e.stopPropagation(); if(typeof window.__dystPlacesSetView==='function') window.__dystPlacesSetView('scenes'); });
       inner.appendChild(h); inner.appendChild(p1); inner.appendChild(p2); inner.appendChild(back);
       pe.appendChild(inner); sky.appendChild(pe);
+      /* v.618 — the carry-over offer. A banner rather than a modal: it asks the question without
+         standing in front of the board, and either answer is remembered so it asks once. */
+      var cb=document.createElement('div'); cb.id='sceneCarryBar'; cb.hidden=true;
+      var ct=document.createElement('span'); ct.className='scb-t'; cb.appendChild(ct);
+      var cy=document.createElement('button'); cy.type='button'; cy.className='scb-yes'; cb.appendChild(cy);
+      var cn=document.createElement('button'); cn.type='button'; cn.className='scb-no'; cn.textContent='Start empty'; cb.appendChild(cn);
+      /* neither handler hides the bar itself — both answer the question, and the bar re-reads it */
+      cy.addEventListener('click', function(e){ e.stopPropagation();
+        if(typeof window.__dystScenes==='object' && window.__dystScenes.carry) window.__dystScenes.carry(); });
+      cn.addEventListener('click', function(e){ e.stopPropagation();
+        if(typeof window.__dystScenes==='object' && window.__dystScenes.mark) window.__dystScenes.mark(); });
+      sky.appendChild(cb);
+      window.__dystSceneChanged=function(){
+        try{
+          var S=window.__dystScenes; if(!S){ cb.hidden=true; return; }
+          if(!S.needsOffer()){ cb.hidden=true; return; }
+          var src=S.prev();
+          ct.textContent='This scene is empty.';
+          cy.textContent='Carry the cast over from '+((src&&src.label)||'the one before');
+          cb.hidden=false;
+        }catch(e){ cb.hidden=true; }
+      };
     })();
-    setInterval(function(){ var fi3 = state.frameIdx || 0, n3 = (state.frames || []).length || 1; arrPrev.disabled = fi3 <= 0; arrNext.disabled = fi3 >= n3 - 1; }, 500);
+    setInterval(function(){
+      var fi3 = state.frameIdx || 0, n3 = (state.frames || []).length || 1;
+      var at3 = 0, ln3 = 1;
+      try{ if (typeof sceneListFor === 'function'){ ln3 = sceneListFor(fi3).length; at3 = sceneIndexNow(); } }catch(e){}
+      arrPrev.disabled = (fi3 <= 0 && at3 <= 0);                 /* v.618 — the ends of the SEQUENCE, not of the section list */
+      arrNext.disabled = (fi3 >= n3 - 1 && at3 >= ln3 - 1);
+    }, 500);
     // (rail popover retired — the + Element dropdown opens each category's Add window directly)
     // hamburger: relocate the original controls so all their behavior comes along
     var mt = document.getElementById('expMapRight') || document.getElementById('mapTools');
@@ -52662,9 +52835,18 @@ body.eink #expMenu{background:#fff; border-color:#000}
     if (fr && fr.stageName) name = String(fr.stageName).trim();
     if (!name){ var h3 = document.querySelector('#editor h3[data-frame="' + fi + '"]'); if (h3) name = (h3.textContent || '').trim(); }
     if (!name && fi === 0){ var st = document.getElementById('sectionTitle'); name = (st && st.value || '').trim(); }
+    /* v.618 — the scene, when there is more than one. A section with a single scene reads exactly
+       as it always did, which is most sections in most stories. */
+    var scN = 1, scAt = 0;
+    try{ if (typeof sceneListFor === 'function'){ scN = sceneListFor(fi).length; scAt = sceneIndexNow(); } }catch(e){}
+    var scTxt = (scN > 1) ? ((scAt + 1) + '/' + scN) : '';
+    var scEl = document.getElementById('expMapScene');
+    if (scEl){ scEl.textContent = scTxt; scEl.hidden = !scTxt;
+      scEl.title = scTxt ? ('Scene ' + (scAt + 1) + ' of ' + scN + ' in this section \u2014 \u2039 \u203a step through them') : ''; }
     var html = '<span class="xm-num">' + (fi + 1) + '</span>' + (name ? '<span class="xm-dia">\u25c6</span><span class="xm-nm"></span>' : '');
-    if (el.dataset.sig === (fi + '|' + name)) return;
-    el.dataset.sig = fi + '|' + name;
+    var sig = fi + '|' + name;
+    if (el.dataset.sig === sig) return;
+    el.dataset.sig = sig;
     el.innerHTML = html;
     var nmEl = el.querySelector('.xm-nm'); if (nmEl) nmEl.textContent = name;
   }
@@ -53255,7 +53437,7 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.617';
+  var APP_VERSION = '2026.07.20.618';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
     { v:'2026.07.20.602', date:'September 5, 2026', notes:[
@@ -55020,7 +55202,10 @@ body.plan-ready #expMapTitle{ display:none !important; }
 /* v.617 — Places: the Scenes / Maps toggle, and what Maps view stands down. */
 #placesSeg{ display:flex; align-items:center; margin-right:14px; flex:none; }
 #placesSeg .pl-segbtn{ font-size:9.5px !important; padding:3px 11px !important; letter-spacing:.12em !important; }
-body.plan-view-map #expMapSec{ max-width:240px; }   /* the toggle shares the centred cluster now; the title keeps the ellipsis it already had */
+/* The cluster is CENTRED, so every pixel it gains spreads both ways — measured at -11px into
+   "How to plan" with the title at 196. The title is the part with an ellipsis and a tooltip, so it
+   is the part that gives: 150 buys 46px of cluster width, 23 to each side. */
+body.plan-view-map #expMapSec{ max-width:138px; }
 body:not(.plan-view-map) #placesSeg{ display:none !important; }         /* it belongs to Places, not to Plot or Elements */
 body.places-maps #expMapSecWrap .xm-arr, body.places-maps #expMapSec{ display:none !important; }   /* §13 — a map is in no section, so the section navigator stands down; the toggle stays put */
 body.places-maps #expAcc .xb-sec[data-sec="thread"]{ display:none !important; }   /* §9 — a world map has no storylines running through it */
@@ -55029,6 +55214,23 @@ body.places-maps #mapNavHint, body.places-maps #mapHead, body.places-maps #mapTo
   visibility:hidden !important; pointer-events:none !important;   /* laid out, so nothing it measures moves; simply not the view you are in */
 }
 #placesEmpty{ position:absolute; inset:0; z-index:20; display:none; align-items:center; justify-content:center; padding:64px 24px 24px; background:var(--paper); }
+/* v.618 — the carry-over offer, in the idiom of #placeBanner: it sits over the board, says one
+   thing, and goes away for good once answered either way. */
+/* Photographed sitting UNDER the map bar: `#expMapBar` is at top:64px on the desktop canvas and
+   paints at z 28, so a banner at top:14 was behind it. It sits below the bar now. */
+#sceneCarryBar{ position:absolute; left:50%; top:14px; transform:translateX(-50%); z-index:19;
+  display:flex; align-items:center; gap:9px; padding:7px 12px; border-radius:999px;
+  background:rgba(255,253,246,.96); border:1px solid var(--line); box-shadow:0 8px 24px rgba(60,50,30,.16);
+  font-family:var(--sans); font-size:12px; color:#5c5648; max-width:min(92%,620px); }
+#sceneCarryBar[hidden]{ display:none !important; }
+body.expb #sceneCarryBar{ top:118px; }
+body.places-maps #sceneCarryBar{ display:none !important; }
+#sceneCarryBar .scb-t{ font-style:italic; color:#8a8272; flex:none; }
+#sceneCarryBar .scb-yes{ font:inherit; font-size:12px; font-weight:600; color:#8a6a2a; background:rgba(196,158,74,.16); border:1px solid rgba(196,158,74,.36); border-radius:999px; padding:5px 13px; cursor:pointer; }
+#sceneCarryBar .scb-yes:hover{ background:rgba(196,158,74,.26); border-color:var(--gold); color:#5f4a1e; }
+#sceneCarryBar .scb-no{ font:inherit; font-size:12px; color:#6b675f; background:transparent; border:1px solid var(--line); border-radius:999px; padding:5px 12px; cursor:pointer; }
+#sceneCarryBar .scb-no:hover{ border-color:var(--gold); color:var(--charcoal); }
+body.ember:not(.eink) #sceneCarryBar{ background:var(--em-menu, #241d15); border-color:var(--em-bronze-a30, rgba(196,158,74,.3)); color:#bdb3a0; }
 body.places-maps.plan-view-map #placesEmpty{ display:flex; }
 #placesEmpty .pe-inner{ max-width:430px; text-align:center; }
 #placesEmpty .pe-h{ font-family:'Cinzel','Cormorant SC',serif; font-size:20px; letter-spacing:.06em; color:#4a4336 !important; margin:0 0 12px; }   /* photographed too pale against parchment — the token this inherited resolves light here */
