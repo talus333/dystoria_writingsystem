@@ -12807,6 +12807,44 @@ function mapCreate(name){
   if(typeof scheduleAutosave==='function') scheduleAutosave();
   return m;
 }
+/* The maps pinned ON this one. Derived on read from `parentMapId`, so a pin cannot outlive its
+   map and a map cannot be pinned twice. */
+function mapChildren(id){ return mapsList().filter(function(m){ return m && m.parentMapId===id && m.parentPin; }); }
+/* A map may not be pinned inside its own descendant — walking up from the proposed parent must
+   never reach the child. Cheap, and the alternative is a map you can enter and never leave. */
+function mapWouldLoop(childId, parentId){
+  var seen={}, at=parentId, n=0;
+  while(at && n++<64){
+    if(at===childId) return true;
+    if(seen[at]) return true;
+    seen[at]=1;
+    var m=mapById(at); at=m?m.parentMapId:null;
+  }
+  return false;
+}
+function mapPinTo(childId, parentId, x, y){
+  var c=mapById(childId), p=mapById(parentId);
+  if(!c||!p||childId===parentId) return false;
+  if(mapWouldLoop(childId, parentId)) return false;
+  if(typeof pushUndo==='function') pushUndo();
+  c.parentMapId=parentId; c.parentPin={ x:Math.round(x), y:Math.round(y) };
+  if(typeof scheduleAutosave==='function') scheduleAutosave();
+  return true;
+}
+function mapUnpin(childId){
+  var c=mapById(childId); if(!c||!c.parentMapId) return false;
+  if(typeof pushUndo==='function') pushUndo();
+  c.parentMapId=null; c.parentPin=null;
+  if(typeof scheduleAutosave==='function') scheduleAutosave();
+  return true;
+}
+/* The chain from the top down to a map — what a breadcrumb would read, and what the picker indents by. */
+function mapPath(id){
+  var out=[], at=id, n=0, seen={};
+  while(at && n++<64 && !seen[at]){ seen[at]=1; var m=mapById(at); if(!m) break; out.unshift(m); at=m.parentMapId; }
+  return out;
+}
+function mapDepth(id){ return Math.max(0, mapPath(id).length-1); }
 function mapRename(id, name){ var m=mapById(id); if(!m) return false; m.name=String(name||'').trim()||m.name; if(typeof scheduleAutosave==='function') scheduleAutosave(); return true; }
 function mapDelete(id){
   var L=mapsStore(); if(!L) return false;
@@ -12866,8 +12904,34 @@ function placesSetView(v){
   placesRepoint();
   try{ if(typeof window.__dystMapChanged==='function') window.__dystMapChanged(state.mapId||null); }catch(e){}
 }
+/* Arm the pin gesture: the next click on THIS map drops the child there. Same shape as
+   `startPlacement` — a mode plus a crosshair plus a banner that says what the click will do. */
+function mapStartPin(childId){
+  if(!state.mapId || !mapById(childId) || childId===state.mapId) return false;
+  if(mapWouldLoop(childId, state.mapId)){
+    if(typeof flashStatus==='function') flashStatus('That map already contains this one \u2014 a map cannot sit inside itself');
+    return false;
+  }
+  state.pinning={ childId:childId, parentId:state.mapId };
+  var sv=document.getElementById('skySvg'); if(sv) sv.style.cursor='crosshair';
+  try{
+    var b=document.getElementById('placeBanner'), t=document.getElementById('placeBannerText');
+    if(b&&t){ t.textContent='Click where \u201c'+((mapById(childId)||{}).name||'that map')+'\u201d sits on this one'; b.hidden=false;
+      var sk=document.getElementById('placeBannerSkip'); if(sk) sk.hidden=true; }
+  }catch(e){}
+  return true;
+}
+try{ document.addEventListener('keydown', function(e){ if(e.key==='Escape' && state && state.pinning){ mapCancelPin(); } }, true); }catch(e){}
+function mapCancelPin(){
+  state.pinning=null;
+  var sv=document.getElementById('skySvg'); if(sv) sv.style.cursor='';
+  try{ var b=document.getElementById('placeBanner'); if(b) b.hidden=true;
+       var sk=document.getElementById('placeBannerSkip'); if(sk) sk.hidden=false; }catch(e){}
+}
 try{ window.__dystMaps={ list:mapsList, byId:mapById, create:mapCreate, rename:mapRename,
                          del:mapDelete, go:switchMap, setView:placesSetView, sync:placesSyncBody,
+                         children:mapChildren, pin:mapPinTo, unpin:mapUnpin, path:mapPath,
+                         depth:mapDepth, wouldLoop:mapWouldLoop, startPin:mapStartPin, cancelPin:mapCancelPin,
                          current:function(){ return mapById(state.mapId||'')||null; } }; }catch(e){}
 
 /* ---------------- Places phase 2: a board per scene ---------------- */
@@ -21621,6 +21685,45 @@ function renderConstellation(){
   if (typeof window.renderTraitsBar === 'function') window.renderTraitsBar();   // selected-element traits/characteristics bar
   if (typeof renderStoryLibrary === 'function') renderStoryLibrary();   // keep the rail's Story Library roster in sync with the map
   if (typeof renderGroupBuildBanner === 'function') renderGroupBuildBanner();
+  if (typeof renderMapPins === 'function') renderMapPins();   /* v.621 — the child maps pinned on this one */
+}
+/* A marker per child map, drawn from `parentMapId` + `parentPin` and nothing else. Only ever on a
+   MAP: a scene board is a moment, and a moment does not contain a continent. */
+function renderMapPins(){
+  var svg = document.getElementById('skySvg'); if (!svg) return;
+  var old = svg.querySelector('#mapPinLayer'); if (old && old.parentNode) old.parentNode.removeChild(old);
+  if (!(state.placesView === 'maps' && state.mapId)) return;
+  var kids = (typeof mapChildren === 'function') ? mapChildren(state.mapId) : [];
+  if (!kids.length) return;
+  var NS = 'http://www.w3.org/2000/svg';
+  var g = document.createElementNS(NS, 'g'); g.setAttribute('id', 'mapPinLayer'); g.setAttribute('class', 'map-pin-layer');
+  kids.forEach(function(m){
+    var x = (m.parentPin && m.parentPin.x) || 0, y = (m.parentPin && m.parentPin.y) || 0;
+    var pg = document.createElementNS(NS, 'g'); pg.setAttribute('class', 'map-pin');
+    pg.setAttribute('transform', 'translate(' + x + ',' + y + ')');
+    pg.setAttribute('data-map', m.id);
+    /* the same teardrop a map pin has always been, drawn in the app's engraved line rather than
+       filled — every other object on this canvas is drawn, so this one is too (v.609) */
+    var p = document.createElementNS(NS, 'path');
+    p.setAttribute('d', 'M0,0 C-7,-9 -10,-13 -10,-18 a10,10 0 1,1 20,0 c0,5 -3,9 -10,18 z');
+    p.setAttribute('class', 'mp-body');
+    pg.appendChild(p);
+    var dot = document.createElementNS(NS, 'circle');
+    dot.setAttribute('cx', '0'); dot.setAttribute('cy', '-18'); dot.setAttribute('r', '3.4'); dot.setAttribute('class', 'mp-dot');
+    pg.appendChild(dot);
+    var t = document.createElementNS(NS, 'text');
+    t.setAttribute('x', '0'); t.setAttribute('y', '13'); t.setAttribute('text-anchor', 'middle'); t.setAttribute('class', 'mp-nm');
+    t.textContent = m.name || 'Map';
+    pg.appendChild(t);
+    var ttl = document.createElementNS(NS, 'title'); ttl.textContent = 'Open \u201c' + (m.name || 'Map') + '\u201d'; pg.appendChild(ttl);
+    pg.addEventListener('click', function(ev){
+      ev.stopPropagation();
+      if (typeof switchMap === 'function') switchMap(m.id);
+      if (typeof window.__dystMapChanged === 'function') window.__dystMapChanged(m.id);
+    });
+    g.appendChild(pg);
+  });
+  svg.appendChild(g);
 }
 function renderEvOverlay(){
   const ov = $('evOverlay');
@@ -41347,6 +41450,20 @@ function init(){
       }
       e.preventDefault(); return;
     }
+    /* v.621 — pinning a child map: the same click-to-place gesture, one line above the element one
+       so a pin in flight is never mistaken for a drawing. */
+    if (state.pinning){
+      const pp = skyPt(e);
+      const _cid = state.pinning.childId, _pid = state.pinning.parentId;
+      state.pinning = null;
+      const _sv = document.getElementById('skySvg'); if (_sv) _sv.style.cursor = '';
+      try{ const _pb = document.getElementById('placeBanner'); if (_pb) _pb.hidden = true; }catch(err){}
+      if (typeof mapPinTo === 'function' && mapPinTo(_cid, _pid, pp.x, pp.y)){
+        if (typeof renderConstellation === 'function') renderConstellation();
+        if (typeof flashStatus === 'function') flashStatus('Pinned \u2014 press it to go inside');
+      }
+      e.preventDefault(); return;
+    }
     if (state.terrainDraw || state.pathDraw){
       const p = skyPt(e);
       terrainDrawing = { pts: [[p.x, p.y]], pid: e.pointerId, freePath: !!state.pathDraw };
@@ -53552,7 +53669,7 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.620';
+  var APP_VERSION = '2026.07.20.621';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
     { v:'2026.07.20.602', date:'September 5, 2026', notes:[
@@ -55354,6 +55471,14 @@ body.places-maps.places-hasmap #mapNavHint, body.places-maps.places-hasmap #mapT
 #placesEmpty .pe-h{ font-family:'Cinzel','Cormorant SC',serif; font-size:20px; letter-spacing:.06em; color:#4a4336 !important; margin:0 0 12px; }   /* photographed too pale against parchment — the token this inherited resolves light here */
 #placesEmpty .pe-p{ font-family:var(--serif); font-size:14.5px; line-height:1.55; color:#5c5648; margin:0 0 10px; }
 #placesEmpty .pe-quiet{ font-size:13px; color:#8a8272; font-style:italic; }
+/* v.621 — a pinned child map, drawn rather than filled, like everything else on this canvas. */
+.map-pin-layer .map-pin{ cursor:pointer; }
+.map-pin-layer .mp-body{ fill:rgba(255,253,246,.86); stroke:#8a7a55; stroke-width:1.4; }
+.map-pin-layer .mp-dot{ fill:none; stroke:#8a7a55; stroke-width:1.4; }
+.map-pin-layer .mp-nm{ font-family:'Cormorant SC','Cormorant Garamond',serif; font-size:11px; fill:#5c5648; letter-spacing:.04em; }
+.map-pin-layer .map-pin:hover .mp-body{ stroke:var(--gold); fill:rgba(196,158,74,.18); }
+.map-pin-layer .map-pin:hover .mp-nm{ fill:var(--charcoal); }
+body.ember:not(.eink) .map-pin-layer .mp-nm{ fill:#bdb3a0; }
 #placesMapPick{ display:none; align-items:center; gap:6px; font-family:'Cinzel','Cormorant SC',serif; font-size:12px; font-weight:700; letter-spacing:.1em; text-transform:uppercase; color:var(--charcoal); cursor:pointer; padding:3px 9px; border-radius:9px; max-width:260px; white-space:nowrap; }
 body.places-maps #placesMapPick{ display:inline-flex; }
 #placesMapPick:hover{ background:rgba(196,158,74,.14); }
@@ -62205,12 +62330,60 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
           var M=window.__dystMaps; if(!M) return;
           var items=[], cur=M.current();
           var all=M.list();
-          if(all.length){ items.push(['--part--','Maps']); all.forEach(function(m){ items.push([m.id, (m.name||'Untitled map')+(m.scale?('  \u00b7  '+m.scale):'')]); }); }
+          if(all.length){
+            items.push(['--part--','Maps']);
+            /* v.621 — the list is the TREE: roots first, each map followed by what is pinned inside
+               it, indented by depth. A flat list of maps that contain each other tells you nothing. */
+            var seen={};
+            var walk=function(parentId, depth){
+              all.forEach(function(m){
+                if(seen[m.id]) return;
+                var pid=(m.parentMapId && M.byId(m.parentMapId)) ? m.parentMapId : null;
+                if(pid!==parentId) return;
+                seen[m.id]=1;
+                items.push([m.id, new Array(depth+1).join('\u2002\u2002') + (m.name||'Untitled map')+(m.scale?('  \u00b7  '+m.scale):'')]);
+                walk(m.id, depth+1);
+              });
+            };
+            walk(null, 0);
+            all.forEach(function(m){ if(!seen[m.id]){ seen[m.id]=1; items.push([m.id, (m.name||'Untitled map')]); } });   /* an orphan still gets a row */
+          }
           items.push(['--part--','\u2009']);
+          if(cur){
+            var _par=cur.parentMapId?M.byId(cur.parentMapId):null;
+            if(_par){
+              items.push(['+up','\u2191  Up to \u201c'+(_par.name||'Untitled map')+'\u201d']);
+              items.push(['+unpin','\u2715  Unpin from \u201c'+(_par.name||'Untitled map')+'\u201d']);
+            }
+            var _kids=M.children(cur.id);
+            items.push(['+pin','\u25c8  Put a map on this one\u2026'+(_kids.length?('  ('+_kids.length+' inside)'):'')]);
+          }
           items.push(['+new','\uff0b  New map\u2026']);
           if(cur){ items.push(['+rename','\u270e  Rename \u201c'+(cur.name||'Untitled map')+'\u201d\u2026']);
                    items.push(['+delete','\ud83d\uddd1  Delete \u201c'+(cur.name||'Untitled map')+'\u201d\u2026']); }
           expPickMenu(mp, items, function(id){
+            if(id==='+up'){ var c0=M.current(); if(c0&&c0.parentMapId){ M.go(c0.parentMapId); paint(); } return; }
+            if(id==='+unpin'){ var c1=M.current(); if(c1){ M.unpin(c1.id); if(typeof renderConstellation==='function') renderConstellation(); paint(); } return; }
+            if(id==='+pin'){
+              var here=M.current(); if(!here) return;
+              /* only maps that COULD go here — a map already inside this one, or one that contains
+                 it, is not on offer, so the cycle guard never has to refuse you after the fact */
+              var opts=M.list().filter(function(m){ return m.id!==here.id && !M.wouldLoop(m.id, here.id) && m.parentMapId!==here.id; })
+                              .map(function(m){ return [m.id, (m.name||'Untitled map')]; });
+              var rows=[];
+              if(opts.length){ rows.push(['--part--','Put on \u201c'+(here.name||'this map')+'\u201d']); rows=rows.concat(opts); rows.push(['--part--','\u2009']); }
+              rows.push(['++newpin','\uff0b  A new map\u2026']);
+              expPickMenu(mp, rows, function(pid){
+                if(pid==='++newpin'){
+                  sitePrompt('What is this a map of? \u2014 it will sit inside \u201c'+(here.name||'this map')+'\u201d', '', 'Make the map').then(function(v){
+                    if(v==null) return; var nm=M.create(v); if(nm) M.startPin(nm.id);
+                  });
+                  return;
+                }
+                M.startPin(pid);
+              }, { center:true });
+              return;
+            }
             if(id==='+new'){
               sitePrompt('What is this a map of? \u2014 a continent, a city, a house, a ship\u2019s deck\u2026', '', 'Make the map').then(function(v){
                 if(v==null) return; var m=M.create(v); if(m){ M.go(m.id); paint(); }
