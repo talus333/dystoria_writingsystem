@@ -7137,6 +7137,7 @@ function zoneToolsEl(){
       drawGridBtn:    '<g fill="currentColor" stroke="none"><circle cx="5" cy="5" r="1.3"/><circle cx="12" cy="5" r="1.3"/><circle cx="19" cy="5" r="1.3"/><circle cx="5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="19" cy="12" r="1.3"/><circle cx="5" cy="19" r="1.3"/><circle cx="12" cy="19" r="1.3"/><circle cx="19" cy="19" r="1.3"/></g>'
     };
     var row = document.createElement('div'); row.className = 'zone-tool-icons';
+    var panes = document.createElement('div'); panes.className = 'zone-tool-panels';
     /* the BUTTONS only. Selecting `.draw-tool, .draw-cat` visited each button twice — once through
        its wrapper and once directly — and inserted the glyph both times (photographed doubled). */
     Array.prototype.slice.call(host.querySelectorAll('.draw-cat')).forEach(function(btn){
@@ -7151,26 +7152,20 @@ function zoneToolsEl(){
       /* drawn, not filled — the glyphs are open paths and a fill turns each of them into a blob */
       ic.innerHTML = '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">' + g + '</svg>';
       btn.insertBefore(ic, btn.firstChild);
-      /* v.624 [Jeremy] — the panel is a free-floating window again. It is `position:fixed`, so it
-         has to be told where: beside the icon that opened it, measured at press time rather than
-         guessed, and clamped to the viewport like every other floating surface here. */
-      btn.addEventListener('click', function(){
-        setTimeout(function(){
-          try{
-            var p = el.querySelector('.draw-panel'); if(!p || p.hidden) return;
-            var r = btn.getBoundingClientRect();
-            var pw = p.offsetWidth || 180, ph = p.offsetHeight || 200;
-            p.style.left = Math.max(8, Math.min(r.right + 8, window.innerWidth - pw - 8)) + 'px';
-            p.style.top  = Math.max(8, Math.min(r.top, window.innerHeight - ph - 8)) + 'px';
-          }catch(e){}
-        }, 0);
-      });
-      /* the wrapper carries the tool's PANEL, so the wrapper moves — not just the button */
+      /* v.627 [Jeremy] — "It would be nice if they opened their options in the drawer, just below
+         the button." v.624's free-floating window was `position:fixed`, which put it under the tab
+         column, off the drawer, and with nothing to close it. A panel that lives IN the drawer
+         needs no placement, no z-index and no ×: it is already where you are looking, and the tool
+         button that opened it closes it. The panels move out of their wrappers into ONE host below
+         the icon row, so they cannot stack sideways and cannot leave the drawer. */
+      var pane = el.querySelector('.draw-panel');
+      if (pane) panes.appendChild(pane);
       row.appendChild(el.classList.contains('draw-tool') ? el : btn);
     });
     if (row.children.length){
       var bodyEl = host.querySelector('.draw-body') || host.firstChild;
-      if (bodyEl) bodyEl.insertBefore(row, bodyEl.firstChild); else host.insertBefore(row, host.firstChild);
+      if (bodyEl){ bodyEl.insertBefore(panes, bodyEl.firstChild); bodyEl.insertBefore(row, bodyEl.firstChild); }
+      else { host.insertBefore(panes, host.firstChild); host.insertBefore(row, host.firstChild); }
     }
   } catch(e){}
   _zoneToolsEl = host; return host;
@@ -20860,6 +20855,12 @@ function updateDrawUI(){
   if (tP) tP.hidden = !state.terrainDraw;   // a tool's panel is open only while that tool is on
   if (pP) pP.hidden = !state.pathDraw;
   if (sP) sP.hidden = !state.shapeDraw;
+  /* v.627 [Jeremy] — "and disappeared when you selected another draw option." Terrain, Path and
+     Shape already exclude each other through the model, so their panels do too. Grid is the odd
+     one: it is a map SETTING, not an armed tool, so arming a tool closes the grid's OPTIONS while
+     leaving the grid itself on — the setting is not the panel. */
+  const gP = document.getElementById('drawGridPanel');
+  if (gP && (state.terrainDraw || state.pathDraw || state.shapeDraw)) gP.hidden = true;
   document.querySelectorAll('#drawShapePanel .seg-pill').forEach(k => k.classList.toggle('on', !!state.shapeDraw && state.shapeDraw.kind === k.dataset.kind));
 }
 // Reuse the app's branded colour picker (#edColorPanel): float it near (x,y), apply via onApply(hex).
@@ -20918,6 +20919,9 @@ function buildDrawSection(root){
   const gPanel = document.createElement('div'); gPanel.id = 'drawGridPanel'; gPanel.className = 'draw-panel'; gPanel.hidden = true;
   gBtn.addEventListener('click', e => { e.stopPropagation();
     const gst = gridState(); if (!gst){ flashStatus('Roll or add an element first to open the map'); return; }
+    /* opening the grid's options puts the armed tool away, so only one panel is ever open. The
+       tools are disarmed through their own setters, so their panels close with them. */
+    if (!gst.on){ try{ setTerrainDraw(null); setPathDraw(false); setShapeDraw(null); }catch(_){} }
     gst.on = !gst.on; gPanel.hidden = !gst.on;
     if (state.session){ state.session.grid = gst; scheduleAutosave(); }
     gBtn.classList.toggle('on', gst.on);
@@ -21421,13 +21425,15 @@ function renderConstellation(){
         try{
           var _bb = _zt.getBBox();
           /* EVEN, both ways: an odd height has no exact half, and Math.round(-9.5) is -9 in JS —
-             the plate sat half a pixel off its own anchor and its rx overshot its height. */
-          var _pw = Math.round(_bb.width) + 15;  if (_pw % 2) _pw++;
-          var _ph = Math.round(_bb.height) + 6;  if (_ph % 2) _ph++;
+             the plate sat half a pixel off its own anchor. */
+          var _pw = Math.round(_bb.width) + 9;  if (_pw % 2) _pw++;
+          var _ph = Math.round(_bb.height) + 4; if (_ph % 2) _ph++;
           _zp.setAttribute('x', -_pw / 2); _zp.setAttribute('y', -_ph / 2);
           _zp.setAttribute('width', _pw); _zp.setAttribute('height', _ph);
-          _zp.setAttribute('rx', _ph / 2);
-          if (_zn) _zc.setAttribute('y', _ph / 2 + 11);
+          /* v.627 [Jeremy] — SQUARE edge, not a stadium: a hairline corner only, so it reads as a
+             small plate rather than a button. */
+          _zp.setAttribute('rx', 2);
+          if (_zn) _zc.setAttribute('y', _ph / 2 + 9);
         }catch(e){ _zp.setAttribute('opacity','0'); if(_zn) _zc.setAttribute('y','16'); }
       }
       return;
@@ -30426,7 +30432,10 @@ function renderZonesDrawer(){
     return;
   }
   var depthOf = {}; try{ (zoneTree()||[]).forEach(function(n){ try{ depthOf[n.i] = zoneDepth(n.i); }catch(e){} }); }catch(e){}
-  var _zhd = document.createElement('div'); _zhd.className = 'zw-grouphd'; _zhd.textContent = 'Zones'; body.appendChild(_zhd);
+  /* v.627 — the drawer is already titled ZONES; a "Zones" head under it says the same thing twice.
+     It earns its place only when there is a "Named lines" group to tell it apart from. */
+  var _lnsN = 0; try{ _lnsN = namedLineWords().length; }catch(e){}
+  if (_lnsN){ var _zhd = document.createElement('div'); _zhd.className = 'zw-grouphd'; _zhd.textContent = 'Zones'; body.appendChild(_zhd); }
   zs.forEach(function(o){
     var row = document.createElement('div'); row.className = 'rl-row rl-zone-row';
     var d = depthOf[o.i] || 0; if (d) row.style.paddingLeft = (10 + d * 12) + 'px';
@@ -56109,9 +56118,18 @@ body.ember:not(.eink) .img-addrow #mapImgBtn{ background:rgba(255,255,255,.06) !
 .zone-tool-icons .draw-cat.zt-ic.on{ border-color:var(--gold); color:#5f4a1e; background:rgba(196,158,74,.22); }
 .zone-tool-icons .draw-cat.zt-ic .dc-name, .zone-tool-icons .draw-cat.zt-ic .dc-toggle{ display:none !important; }
 .zone-tool-icons .zt-glyph{ display:inline-flex; }
-.zone-tool-icons .draw-panel{ position:fixed; z-index:340; min-width:168px; max-width:260px; background:var(--paper);
-  border:1px solid var(--line); border-radius:12px; box-shadow:0 12px 34px rgba(60,50,30,.24); padding:10px; }
-body.ember:not(.eink) .zone-tool-icons .draw-panel{ background:var(--em-menu, #241d15); border-color:var(--em-bronze-a30, rgba(196,158,74,.3)); }
+/* v.627 [Jeremy] — the tool's options open IN the drawer, under the icon row. Nothing is fixed, so
+   nothing can sit under the tab column or wander off the drawer, and nothing needs a × : the button
+   that opened it closes it. `hidden` is left to do its own work — no display is set here. */
+.zone-tool-panels{ margin:0 0 4px; }
+.zone-tool-panels .draw-panel{ position:static; z-index:auto; min-width:0; max-width:none; width:auto;
+  background:rgba(255,255,255,.55); border:1px solid var(--line); border-radius:10px; box-shadow:none;
+  padding:8px 9px 9px; margin:2px 2px 6px; box-sizing:border-box; }
+body.ember:not(.eink) .zone-tool-panels .draw-panel{ background:rgba(255,255,255,.06); border-color:rgba(138,99,32,.24); }
+body.eink .zone-tool-panels .draw-panel{ background:#fff; border:1px solid #000; }
+/* the palettes inside wrap to the drawer's width instead of running off it */
+.zone-tool-panels .draw-swatches, .zone-tool-panels .draw-kinds{ flex-wrap:wrap; }
+.zone-tool-panels input[type="range"]{ width:100%; }
 body.ember:not(.eink) .zone-tool-icons .draw-cat.zt-ic{ background:rgba(255,255,255,.06); color:#bdb3a0; }
 .zone-tools-host .group{ border:none; padding:0; margin:0; }
 .zone-tools-host .group-body{ display:flex; flex-direction:column; gap:4px; }
@@ -56119,17 +56137,21 @@ body.ember:not(.eink) .zone-tool-icons .draw-cat.zt-ic{ background:rgba(255,255,
 .rl-zone-row{ cursor:pointer; }
 .rl-zone-n{ font-family:var(--sans); font-size:9.5px; letter-spacing:.09em; text-transform:uppercase; color:var(--ink-faint); margin-left:auto; padding-right:6px; flex:none; }
 .zone-label{ pointer-events:none; }
-.zone-label .zl-t{ font-family:'Cormorant SC','Cormorant Garamond',serif; font-size:12px; letter-spacing:.13em; text-transform:uppercase; fill:#5f5849; opacity:1; }
-.zone-label .zl-n{ font-family:var(--sans); font-size:8.5px; letter-spacing:.1em; text-transform:uppercase; fill:#8a8272; opacity:.75; }
+.zone-label .zl-t{ font-family:'Cormorant SC','Cormorant Garamond',serif; font-size:9px; letter-spacing:.11em; text-transform:uppercase; fill:#6b6456; opacity:1; }
+.zone-label .zl-n{ font-family:var(--sans); font-size:7px; letter-spacing:.1em; text-transform:uppercase; fill:#9a9182; opacity:.7; }
 /* v.626 [Jeremy] — "a small label pill with the name on it". A plate under the words, so a name
    reads the same over a terrain wash, over a stroke, or over bare parchment. */
-.zone-label .zl-pill{ fill:#fbf7ec; stroke:rgba(120,92,40,.30); stroke-width:1; }
+/* v.627 [Jeremy] — "square edge and much smaller, kind of like the bond connection pills, but more
+   subtle." The bond connection pill (.gtree-elabel) is a paper plate with a hairline border and
+   quiet ink; this takes that and squares the ends off. Subtler than the bond pill because a zone
+   name is scenery, not a thing to press. */
+.zone-label .zl-pill{ fill:rgba(251,247,236,.86); stroke:rgba(120,92,40,.20); stroke-width:.8; }
 /* a BOUNDARY's name sits in the middle of its own area and is "blended in a bit more": the area
    is already saying where it is, so the plate only has to lift the words off the wash. */
-.zone-label.zl-area .zl-pill{ fill:rgba(251,247,236,.52); stroke:rgba(120,92,40,.14); }
-.zone-label.zl-area .zl-t{ fill:#6a6253; opacity:.80; }
-body.ember:not(.eink) .zone-label .zl-pill{ fill:#f7f1e2; stroke:rgba(138,99,32,.30); }
-body.ember:not(.eink) .zone-label.zl-area .zl-pill{ fill:rgba(247,241,226,.50); stroke:rgba(138,99,32,.14); }
+.zone-label.zl-area .zl-pill{ fill:rgba(251,247,236,.46); stroke:rgba(120,92,40,.10); }
+.zone-label.zl-area .zl-t{ fill:#77705f; opacity:.85; }
+body.ember:not(.eink) .zone-label .zl-pill{ fill:rgba(247,241,226,.88); stroke:rgba(138,99,32,.22); }
+body.ember:not(.eink) .zone-label.zl-area .zl-pill{ fill:rgba(247,241,226,.46); stroke:rgba(138,99,32,.10); }
 body.ember:not(.eink) .zone-label .zl-t{ fill:#5f5849; }
 body.ember:not(.eink) .zone-label.zl-area .zl-t{ fill:#6a6253; }
 body.ember:not(.eink) .zone-label .zl-n{ fill:#8a8272; }
@@ -63673,7 +63695,13 @@ body.ember:not(.eink) .ai-menu button:hover, body.ember:not(.eink) #aiSupportMen
   function uid(){ return 'mi'+Math.random().toString(36).slice(2,8); }
   function zoom(){ return (typeof state!=='undefined' && state && state.view && state.view.zoom) || 1; }
   function vbVals(){ try { return viewBoxVals(); } catch(e){ var s=svgEl(); return [0,0,(s?s.clientWidth:1000),(s?s.clientHeight:640)]; } }
-  function persist(){ try { if (state.session) state.session.frames = state.frames; if (typeof scheduleAutosave==='function') scheduleAutosave(); } catch(e){} }
+  function persist(){ try { if (state.session) state.session.frames = state.frames; if (typeof scheduleAutosave==='function') scheduleAutosave(); } catch(e){}
+    /* v.627 [Jeremy] — "when you add an image, can the thumbnail show up in the drawer immediately
+       instead of needing to leave the drawer and come back?" The list just changed, so the drawer
+       that lists it redraws with it. `persist` is the ONE point every mutation goes through — add,
+       text box, tile, delete, drag-end — and a plain repaint never reaches it, so this can never
+       become a rebuild on every frame. */
+    try { if (typeof window.renderImagesDrawer === 'function') window.renderImagesDrawer(); } catch(e){} }
 
   // ---------- downscale on import (tiny tiles + stops big photos re-rasterising the map) ----------
   function downscale(src, maxDim, cb){
