@@ -4772,6 +4772,13 @@ body.eink .pt-rh-dev{color:#000}
 .gb-card .gb-create:disabled{ opacity:.4; cursor:default; }
 .gb-card .gb-cancel{ border:1px solid var(--line); border-radius:7px; padding:6px 10px; font-size:12px; background:transparent; color:var(--ink-soft); cursor:pointer; }
 .gb-card .gb-row2{ margin-top:6px; }   /* v.655 — the existing group's second row: focus · disband */
+/* v.656 · #50 — the Event Builder's What-changes row: two fields and the arrow between them. The
+   creators are flex columns laid out by `order` (name 0 · depth 2 · characteristics 4 · description 7),
+   so the block declares its own place — straight after the name — or the fields float to the top. */
+#eventCreator .gc-seclbl.ev-shift-lbl{ order:1; margin-top:2px; }
+#eventCreator .ev-shift{ order:1; display:flex; align-items:center; gap:8px; margin:0 0 10px; }
+#eventCreator .ev-shift .ev-shift-in{ flex:1 1 0; min-width:0; margin:0; }
+#eventCreator .ev-shift-arrow{ flex:none; font-family:var(--serif); font-size:16px; color:var(--gold); }
 .gb-card .gb-row2 .gb-focus{ flex:1; }
 .gb-ring{ fill:none; stroke:var(--affirm); stroke-width:2.4; pointer-events:none; }
 .gb-ring.leader{ stroke:var(--gold); stroke-width:3; }
@@ -23720,6 +23727,10 @@ function openElementDossier(key, opts){
           if(isBeing){ if(w.word) put('Type', (typeof capWord==='function'?capWord(w.word):w.word)); }
           else { put('Kind', (typeof capWord==='function'?capWord(w.word):w.word)); if(subcat) put('Kind', subcat); }
           if(w.storyRole) put('Story Role', w.storyRole);
+          /* v.656 · #50 phase 1 — an event's card says what it changed: the same before → after the
+             builder asked for, read from the record the builder wrote. */
+          if(w.cat==='event'){ try{ var _es=(window.__eventShift&&window.__eventShift.rec)?window.__eventShift.rec(key):null;
+            if(_es){ if(_es.from && _es.to) put('What changes', _es.from+' \u2192 '+_es.to); else if(_es.from) put('Before', _es.from); else if(_es.to) put('After', _es.to); } }catch(e){} }
           (attrs||[]).forEach(function(a){ if(a && a.word) put(a.sub||'Trait', a.word); });
           /* [Jeremy] Physical Trait sits with the body facts, under Age — the rest keep their own
              order. A preference list rather than a full ordering, so a dimension nobody thought of
@@ -24219,6 +24230,7 @@ function migrateElementKey(oldKey, newKey){
       remapExact(s.npImagePos);      /* sat ONE LINE from npImages in the delete path, and was missed here */
       remapExact(s.elAliases);       /* v.458's one canonical alias map — a rename dropped every alias */
       remapExact(s.stakeData);       /* v.562 — the stake's own record: bearer, threat and axis, all lost */
+      remapExact(s.eventShift);      /* v.656 · #50 — what an event changed, keyed by the event's own key */
       /* stakeData's VALUES are element keys too: a renamed character stops being anyone's bearer. */
       if (s.stakeData) Object.keys(s.stakeData).forEach(k => {
         const r = s.stakeData[k]; if (!r) return;
@@ -45881,6 +45893,11 @@ document.addEventListener('DOMContentLoaded', init);
           +  '<input class="gc-name" id="evName" autocomplete="off" placeholder="Name (optional)">'
           +  '<div class="gc-seclbl" data-ai="Describe it (optional)" data-note="A line about it (optional)">Describe it (optional)</div>'
           +  '<div class="el-descrow"><textarea class="gc-desc" id="evDesc" rows="2" placeholder="a sentence or two — kept as its note"></textarea><button type="button" class="el-descgo" id="evDescGo">✦ Break it down</button></div>'
+          /* v.656 · #50 phase 1 — WHAT CHANGES. An arc is a change in a person; an event is a change in
+             the world: the same two fields. Kept on the editor that already exists rather than a
+             form of its own, because nobody fills in a six-field event form. */
+          +  '<div class="gc-seclbl ev-shift-lbl" title="What was true before this happened, and what is true after — the change the event makes in the world">What changes</div>'
+          +  '<div class="ev-shift"><input class="gc-name ev-shift-in" id="evFrom" autocomplete="off" placeholder="Before — what was true…"><span class="ev-shift-arrow">\u2192</span><input class="gc-name ev-shift-in" id="evTo" autocomplete="off" placeholder="After — what is true now"></div>'
           +  '<div class="gc-seg" id="evSeg"></div>'
           +  '<div class="gc-seghint" id="evSegHint"></div>'
           +  '<div class="gc-seclbl">Characteristics</div>'
@@ -45893,6 +45910,8 @@ document.addEventListener('DOMContentLoaded', init);
         el.addEventListener('click', e=>e.stopPropagation());
         document.getElementById('evName').addEventListener('input', e=>{ EV.name=e.target.value; });
         document.getElementById('evDesc').addEventListener('input', e=>{ EV.desc=e.target.value; });
+        document.getElementById('evFrom').addEventListener('input', e=>{ EV.from=e.target.value; });   /* v.656 */
+        document.getElementById('evTo').addEventListener('input', e=>{ EV.to=e.target.value; });
         document.getElementById('evDescGo').addEventListener('click', ev=>{ ev.stopPropagation(); runInlineDesc('evDesc','evDescGo', evApplyDescription); });
         document.getElementById('evAdd').addEventListener('click', ev=>{ ev.stopPropagation(); evAddMenu(ev.clientX, ev.clientY); });
         document.getElementById('evGen').addEventListener('click', ev=>{ ev.stopPropagation(); evGenerate(); });
@@ -45905,12 +45924,15 @@ document.addEventListener('DOMContentLoaded', init);
     function openEventCreator(opts){
       opts=opts||{};
       if(typeof addsLocked==='function' && addsLocked()){ if(typeof flashStatus==='function') flashStatus('End the session to add elements'); return; }
-      if(!opts.keep){ EV.name=''; EV.desc=''; EV.complexity=0; }
+      if(!opts.keep){ EV.name=''; EV.desc=''; EV.complexity=0; EV.from=''; EV.to=''; }
       EV.editKey=null; EV.editIdx=null;
-      if(opts.edit){ var _ew=(typeof npFindEl==='function')?npFindEl(opts.edit):null; if(_ew){ EV.editKey=opts.edit; EV.editIdx=(opts.editIdx!=null?opts.editIdx:-1); EV.name=_ew.name||''; EV.desc=''; EV.slots=(typeof window.dystElementToSlots==='function')?window.dystElementToSlots(_ew):[]; } }
+      if(opts.edit){ var _ew=(typeof npFindEl==='function')?npFindEl(opts.edit):null; if(_ew){ EV.editKey=opts.edit; EV.editIdx=(opts.editIdx!=null?opts.editIdx:-1); EV.name=_ew.name||''; EV.desc=''; EV.slots=(typeof window.dystElementToSlots==='function')?window.dystElementToSlots(_ew):[];
+        /* v.656 — editing an event fills its change from the record, so Save cannot wipe what was there */
+        try{ var _sh=(window.__eventShift&&window.__eventShift.rec)?window.__eventShift.rec(opts.edit):null; EV.from=(_sh&&_sh.from)||''; EV.to=(_sh&&_sh.to)||''; }catch(e){ EV.from=''; EV.to=''; } } }
       evEl();
       const nm=document.getElementById('evName'); if(nm) nm.value=EV.name||'';
       const ds=document.getElementById('evDesc'); if(ds) ds.value=EV.desc||'';
+      { const f=document.getElementById('evFrom'); if(f) f.value=EV.from||''; const t=document.getElementById('evTo'); if(t) t.value=EV.to||''; }   /* v.656 */
       evSyncSeg();
       if(opts.keep||opts.edit) evRenderSlots(); else { EV.slots=window.dystLevelSlots([], EV_LEVELS[EV.complexity].extra, ['Kind'], EV_DIMS); evRenderSlots(); }
       try{ var _cb=document.getElementById('evCreate'); if(_cb) _cb.textContent=EV.editKey?'Save changes':'Create event'; var _ct=document.querySelector('#eventCreator .gc-title'); if(_ct) _ct.textContent=EV.editKey?('Edit '+((EV.name||'').trim()||'event')):'Build an event'; }catch(e){}
@@ -45924,7 +45946,8 @@ document.addEventListener('DOMContentLoaded', init);
     function evCommit(){
       if(typeof addsLocked==='function' && addsLocked()){ if(typeof flashStatus==='function') flashStatus('End the session to add elements'); return; }
       const kindSlot=EV.slots.find(s=>s.sub==='Kind'); const kind=(kindSlot&&kindSlot.word)||'Event'; const kindSub=(kindSlot&&kindSlot.kindSub)||'';
-      if(EV.editKey){ const eAttrs=[]; EV.slots.forEach(sl=>{ if(sl.sub==='Kind') return; if(!sl.word) return; eAttrs.push({ word:sl.word, sub:sl.sub }); }); try{ if(typeof window.dystSetElementAttrs==='function') window.dystSetElementAttrs(EV.editKey, eAttrs); }catch(e){} try{ if(typeof applyElemEdit==='function') applyElemEdit(EV.editKey, (EV.editIdx!=null?EV.editIdx:-1), { cat:'event', word:kind, sub:kindSub, name:(EV.name||'').trim() }); }catch(e){} const _nm=(EV.name||'').trim(); EV.editKey=null; EV.editIdx=null; closeEventCreator(); if(typeof flashStatus==='function') flashStatus((_nm||kind)+' — updated'); return; }
+      if(EV.editKey){ try{ if(window.__eventShift){ window.__eventShift.set(EV.editKey,'from',EV.from); window.__eventShift.set(EV.editKey,'to',EV.to); } }catch(e){}   /* v.656 · #50 — what changes, on the record */
+        const eAttrs=[]; EV.slots.forEach(sl=>{ if(sl.sub==='Kind') return; if(!sl.word) return; eAttrs.push({ word:sl.word, sub:sl.sub }); }); try{ if(typeof window.dystSetElementAttrs==='function') window.dystSetElementAttrs(EV.editKey, eAttrs); }catch(e){} try{ if(typeof applyElemEdit==='function') applyElemEdit(EV.editKey, (EV.editIdx!=null?EV.editIdx:-1), { cat:'event', word:kind, sub:kindSub, name:(EV.name||'').trim() }); }catch(e){} const _nm=(EV.name||'').trim(); EV.editKey=null; EV.editIdx=null; closeEventCreator(); if(typeof flashStatus==='function') flashStatus((_nm||kind)+' — updated'); return; }
       if(typeof pushUndo==='function') pushUndo();
       if(!state.prompt){ state.prompt={words:[],sets:1,links:[],removedLinks:[]}; state.activeSet=0; state.frames=[{gap:null,prompt:state.prompt}]; state.frameIdx=0; }
       const s=Math.min(state.activeSet||0,(state.prompt.sets||1)-1);
@@ -45934,6 +45957,7 @@ document.addEventListener('DOMContentLoaded', init);
       const nm=(EV.name||'').trim(); if(nm) built.name=nm;
       const idx=state.prompt.words.length;
       state.prompt.words.push(built);
+      try{ if(typeof ensureSession==='function') ensureSession(); if(window.__eventShift && ((EV.from||'').trim() || (EV.to||'').trim())){ var _k=wordKey(built); window.__eventShift.set(_k,'from',EV.from); window.__eventShift.set(_k,'to',EV.to); } }catch(e){}   /* v.656 · #50 */
       const desc=(EV.desc||'').trim();
       if(desc){ try{ if(typeof ensureSession==='function') ensureSession(); state.session.npNotes=state.session.npNotes||{}; const k=wordKey(built); if(!state.session.npNotes[k]) state.session.npNotes[k]='<p>'+desc.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/\n/g,'<br>')+'</p>'; }catch(e){} }
       if(window.__qaOnElementAdd){ try{ window.__qaOnElementAdd(built); }catch(e){} }
@@ -54885,6 +54909,7 @@ body.eink #expMenu{background:#fff; border-color:#000}
         row.innerHTML = '<span class="xb-nm"></span>';
         row.querySelector('.xb-nm').textContent = ev.w.name || ev.w.word;
         row.title = ev.w.name || ev.w.word;
+        try{ var _evs = (window.__eventShift && window.__eventShift.sentence) ? window.__eventShift.sentence(wordKey(ev.w)) : ''; if (_evs) row.title += ' \u2014 ' + _evs; }catch(e){}   /* v.656 · #50 — the change, where the event is listed */
         row.addEventListener('click', function(){ if (window.__expSwallowRowClick && window.__expSwallowRowClick()) return; xbSelect('E', String(ev.i)); });
         row.addEventListener('pointerdown', function(e){ if (window.__expRowDragDown) window.__expRowDragDown('E', String(ev.i), e); });
         er.appendChild(row);
@@ -84710,6 +84735,34 @@ body.eink .stk-slot,body.eink .stk-menu{background:#fff; border-color:#000; box-
 body.eink .stk-slot-cap,body.eink .stk-menu-sub,body.eink .stk-slot-val.stk-slot-empty{color:#000}
 .stk-slot-axis .stk-slot-val.stk-slot-empty{font-style:italic}
 </style>
+<script id="dyst-event-shift-js">
+/* Dystoria — Events: what changed (#50 phase 1, v.656)
+   `state.session.eventShift[<elementKey>] = { from, to }`. The `stakeData` shape (#46 1a): keyed by
+   element key, section-free, pruned when empty, autosaved. "An arc is a change in a person; an event
+   is a change in the world" — the same two fields, said about the world. */
+(function(){
+  'use strict';
+  function sess(){ try { return (typeof state !== 'undefined' && state && state.session) ? state.session : null; } catch(e){ return null; } }
+  function bag(make){
+    var s = sess(); if(!s) return null;
+    if(!s.eventShift || typeof s.eventShift !== 'object'){ if(!make) return null; s.eventShift = {}; }
+    return s.eventShift;
+  }
+  function rec(key){ var b = bag(false); return (b && key && b[key]) || null; }
+  function setField(key, field, val){
+    var b = bag(true); if(!b || !key) return;
+    if(field !== 'from' && field !== 'to') return;
+    var r = b[key] || (b[key] = {});
+    val = (val == null ? '' : String(val).trim());
+    if(val) r[field] = val; else delete r[field];
+    if(!r.from && !r.to) delete b[key];   /* prune: an empty record is no record */
+    try { if(typeof scheduleAutosave === 'function') scheduleAutosave(400); } catch(e){}
+  }
+  /* the sentence, for anywhere that wants to SAY it: "before → after", or the half that exists */
+  function sentence(key){ var r = rec(key); if(!r) return ''; if(r.from && r.to) return r.from + ' \u2192 ' + r.to; return r.from ? ('Before: ' + r.from) : (r.to ? ('After: ' + r.to) : ''); }
+  window.__eventShift = { rec: rec, set: setField, sentence: sentence, all: function(){ return bag(false) || {}; } };
+})();
+</script>
 <script id="dyst-stake-bearer-js">
 /* Dystoria — Stakes: bearer & threat (#46 phase 1a)
    Additive by construction: with no bearer filled anywhere, resolveCardStake returns exactly what it

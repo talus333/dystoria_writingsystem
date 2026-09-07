@@ -2,7 +2,7 @@
 
 _The forward plan: only open work. What's already shipped lives in **`Dystoria_Shipped.md`**. Old roadmap IDs are kept in brackets [R#]. Status: ☐ planned · ◐ in progress · ✓ done (moving to Shipped)._
 
-**App version:** v.655 (internal `APP_VERSION` still `2026.07.20.624`) · **Updated:** 2026-09-07 · _md5 `41b833b50b4f8fff3e94e0d408ffb64c`, **written to the repo folder and verified on device**. `worker.js` md5 `c2161c9674113095942e7a27a81645d8`, unchanged._
+**App version:** v.656 (internal `APP_VERSION` still `2026.07.20.624`) · **Updated:** 2026-09-07 · _md5 `fcc03ab4dd849b86d976fc4bb1f7f932`, **written to the repo folder and verified on device**. `worker.js` md5 `c2161c9674113095942e7a27a81645d8`, unchanged._
 
 > **⚑ THIS FILE WENT FORTY-SIX VERSIONS STALE, AND THE STALENESS COST REAL WORK (caught 2026-09-07).**
 > Its header still said *App version `2026.07.20.601`* and *"delivered to the conversation, NOT yet written to the repo folder"* — both untrue for a month. It carried **no entries for v.602 onward**. **#55 was not on the Board at all**, despite being seven versions of work. And it listed **#54 phase 2 as unbuilt when it had shipped in v.609–v.611** — which sent a session off to build something that already existed, caught only because the app was measured instead of the file being believed.
@@ -90,7 +90,7 @@ The project was restricted for `exceed_egress_quota` on Free's 5 GB: **10.14 GB 
 | 47 | **Conflict axes** — derived rather than typed. **Blocked on #46 adoption**, and cheaper than its doc assumes | ☐ |
 | 48 | **Places** — Map ⇄ Scene under one tab, section-free maps, labelled zones. **Supersedes #27**; phase 0 is independent and has the best ratio | ☐ |
 | 49 | **Drama** — situations built from parts. Phase 0 ✓ (v.565–566, v.572); the rest depends on #46 1b | ◐ |
-| 50 | **Events that move** — `from`→`to`, a causal chain the Gap check can validate, a who-knows ledger. **Depends on nothing** | ☐ |
+| 50 | **Events that move** — **phase 1 ✓ v.656** (`eventShift[key]={from,to}`: Before → After on the Event Builder, the card and the Scene Context row; section-free, rename-safe). **Left:** phase 2 `eventLinks` + the Gap & Chekhov cause-after-effect finding · phase 3 the who-knows ledger · phase 4 the sweep UI and the domino walk. Three open questions in the design doc are Jeremy's (MICE open/close, `rel` vocabulary, whether the ledger wants a when) | ◐ |
 | 53 | **Shape, colour and line on the Bonds map** — phases 1, 2 and 4 ✓ (v.583, v.587–v.590, v.592–v.593). **Left: phase 3, the per-element style picker**, and the dash/colour overrides that depend on it | ◐ |
 | 68 | **The writing session's start** — Continue brings the prose in cleanly and editable ✓ v.648; the Continue/Begin prompt indented with the paragraphs so the words land where it stood ✓ v.649; the prose on the page while the card asks, Start a new section clears it, and the `keepPrior` hold no longer leaks across sessions ✓ v.652. **Left:** the Living Page still DIMS earlier prose (its own effect, not the retired lock) — Jeremy has not asked for that to go, so ask before touching it | ◐ |
 | 54 | **Speech and thought bubbles** — **phase 1 ✓ v.607–v.610, phase 2 ✓ v.609–v.611** (the stepper, dots per side), **scene-scoping enforced ✓ v.646**. **Left: phase 3** — the double-game finding, and whether the pair reaches the manuscript export | ◐ |
