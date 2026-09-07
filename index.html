@@ -52401,6 +52401,7 @@ body.eink #expMenu{background:#fff; border-color:#000}
     });
     function portForRow(row){
       if (!row) return null;
+      if (row.dataset.gid != null) return document.querySelector('#expRight .xb-portlayer .xb-port[data-gid="' + row.dataset.gid + '"]');   /* v.641 — a group present through its members */
       // all four categories now share the right accordion's single portlayer; data-ci is a globally-unique
       // word index (concepts/groups/events never collide), and threads use data-th — so no strip disambiguation needed
       if (row.dataset.ci != null) return document.querySelector('#expRight .xb-portlayer .xb-port[data-ci="' + row.dataset.ci + '"]');
@@ -54076,8 +54077,22 @@ body.eink #expMenu{background:#fff; border-color:#000}
     if (!xbSel || typeof state === 'undefined' || !state || !state.prompt) return;
     var MAP = { being: 1, setting: 1, object: 1, event: 1 };
     var set = {};
+    /* v.641 · #55 — a group's connections ARE its members, and only the ones standing here */
+    if (xbSel.side === 'G'){
+      var _g = (typeof beingGroupById === 'function') ? beingGroupById(xbSel.id) : null;
+      groupMembersHere(_g).forEach(function(j){ set[j] = 1; });
+      expDimSet = set; return;
+    }
     if (xbSel.side === 'R'){
       state.prompt.words.forEach(function(w, j){ if (MAP[w.cat] && (w.role === 'being' || w.role === 'word') && typeof wordThreadIds === 'function' && wordThreadIds(w).indexOf(xbSel.id) >= 0) set[j] = 1; });
+    } else if (xbSel.side === 'L' && (function(){ var _w = state.prompt.words[+xbSel.id]; return !!(_w && _w.cat === 'org' && groupForWord(_w)); })()){
+      /* v.641 · #55 — a group element on the board answers with its MEMBERS here, plus whatever it is
+         explicitly linked to; the same reading as the derived row, so the two can never disagree. */
+      var _gw = groupForWord(state.prompt.words[+xbSel.id]);
+      groupMembersHere(_gw).forEach(function(j){ set[j] = 1; });
+      var _lk = orgLinks(+xbSel.id);
+      Object.keys(_lk).forEach(function(j){ var ow = state.prompt.words[+j]; if (ow && MAP[ow.cat]) set[+j] = 1; });
+      expDimSet = set; return;
     } else {
       var ci = +xbSel.id;
       var selW = state.prompt.words[ci];
@@ -54110,6 +54125,8 @@ body.eink #expMenu{background:#fff; border-color:#000}
     if (!xbSel) return;
     var row = xbSel.side === 'E'
       ? document.querySelector('#expERows .xb-row[data-ci="' + xbSel.id + '"]')   // events
+      : xbSel.side === 'G'
+      ? document.querySelector('#expLORows .xb-row[data-gid="' + xbSel.id + '"]')   // v.641 — a group here through its members
       : xbSel.side === 'L'
       ? (document.querySelector('#expLRows .xb-row[data-ci="' + xbSel.id + '"]') || document.querySelector('#expLORows .xb-row[data-ci="' + xbSel.id + '"]'))   // concepts or groups
       : document.querySelector('#expRRows .xb-row[data-th="' + xbSel.id + '"]');
@@ -54117,7 +54134,26 @@ body.eink #expMenu{background:#fff; border-color:#000}
     row.classList.add('sel');
     var acts = document.createElement('div'); acts.className = 'xb-acts';
     var mk = function(html, title, fn, on){ var b = document.createElement('button'); b.type = 'button'; b.innerHTML = html; b.title = title; if (on) b.classList.add('on'); b.addEventListener('click', function(e){ e.stopPropagation(); fn(e); }); acts.appendChild(b); return b; };
-    if (xbSel.side === 'L' || xbSel.side === 'E'){
+    if (xbSel.side === 'G'){
+      /* v.641 · #55 phase 1 — a group standing here through its members. Its acts are the ones that
+         belong to a GROUP: its notes, its builder, and a way to put its element on this board. There
+         is no × because there is nothing here to remove — the row is a reading, not a placement. */
+      var gG = (typeof beingGroupById === 'function') ? beingGroupById(xbSel.id) : null;
+      if (gG){
+        mk(QUILL_SVG, 'Open this group in the notepad', function(){ if (typeof openGroupNotes === 'function') openGroupNotes(gG.id); });
+        mk(PENCIL_SVG, 'Edit this group in the Group Builder', function(){
+          if (gG.el && typeof window.dystEditElementInBuilder === 'function'){ window.dystEditElementInBuilder(gG.el); return; }
+          if (typeof startGroupBuild === 'function') startGroupBuild(gG.leader);
+        });
+        mk('\uff0b', 'Put this group on the board as an element', function(){
+          try{
+            if (typeof window.dystEnsureGroupElement === 'function'){ window.dystEnsureGroupElement(gG.name || 'Group'); }
+            lastSig = ''; refreshStrips();
+            if (typeof renderConstellation === 'function') renderConstellation();
+          }catch(e){}
+        });
+      }
+    } else if (xbSel.side === 'L' || xbSel.side === 'E'){
       var ci = +xbSel.id; var w = state.prompt && state.prompt.words[ci];
       if (w){
         var _ptyA = (window.dystPartyOfWord && window.dystPartyOfWord(w)) || null;
@@ -54182,7 +54218,9 @@ body.eink #expMenu{background:#fff; border-color:#000}
         }, 120);
       });
     }
-    if (xbSel.side === 'L' || xbSel.side === 'E'){
+    if (xbSel.side === 'G'){
+      /* nothing to remove: this row is a reading of the board, not a thing placed on it */
+    } else if (xbSel.side === 'L' || xbSel.side === 'E'){
       var ci2 = +xbSel.id;
       var xb = mk('\u00d7', 'Remove\u2026', function(e){ xbRemoveMenu(e.target.closest('button'), ci2); });
       xb.classList.add('xa-x');
@@ -54323,6 +54361,54 @@ body.eink #expMenu{background:#fff; border-color:#000}
     words.forEach(function(w, i){ if (w.cat === 'concept') out.push({ w: w, i: i }); });   // broad concepts (terms/tech/factions/ideas); core themes live in the bar
     return out;
   }
+  /* v.641 · #55 phase 1 [Jeremy] — PRESENCE IS DERIVED AND STORED NOWHERE. It asks the board in
+     front of you which of a group's members are standing on it; the answer is never written down,
+     so there is nothing to keep in sync and nothing to go stale. One function, because the row, the
+     dimming and the web must never disagree about who is here. */
+  function groupsPresentNow(){
+    var out = [];
+    try{
+      if (typeof beingGroupsList !== 'function' || typeof wordKey !== 'function') return out;
+      var words = (typeof state !== 'undefined' && state.prompt && state.prompt.words) || [];
+      var at = {};
+      words.forEach(function(w, i){ if (!w || w.poly || w.line) return; var k = wordKey(w); if (at[k] == null) at[k] = i; });
+      beingGroupsList().forEach(function(g){
+        if (!g || !g.id) return;
+        var keys = (typeof beingGroupMemberKeys === 'function') ? beingGroupMemberKeys(g.id) : [];
+        var here = [];
+        keys.forEach(function(k){ if (k && at[k] != null && here.indexOf(at[k]) < 0) here.push(at[k]); });
+        if (!here.length) return;
+        /* [Jeremy] a group announces itself only once TWO of it are standing here — one member is
+           just that member. `here` is still the true reading for the dimming and the web below;
+           this flag only governs whether a row appears out of nowhere. */
+        var announces = here.length >= 2;
+        /* the group's own element, when it is standing on this board: then THAT row is the group's
+           row and the derived one must not appear beside it — one group, one row. */
+        var eli = -1;
+        words.forEach(function(w, i){ if (eli < 0 && w && w.cat === 'org' && (w.partyOf === g.id || (g.el && wordKey(w) === g.el))) eli = i; });
+        var named = keys.length;
+        out.push({ g: g, id: g.id, here: here, eli: eli, named: named, announces: announces,
+                   size: (g.count != null && g.count > named) ? g.count : named });
+      });
+    }catch(e){}
+    return out;
+  }
+  /* the group an element stands for — `partyOf` (v.560) or the group's own `el` (v.584): two seams
+     into the same question, asked in ONE place so no reader has to know about both */
+  function groupForWord(w){
+    try{
+      if (!w || w.cat !== 'org' || typeof beingGroupsList !== 'function') return null;
+      var k = wordKey(w);
+      return beingGroupsList().filter(function(g){ return g && (w.partyOf === g.id || (g.el && g.el === k)); })[0] || null;
+    }catch(e){ return null; }
+  }
+  /* which members of THIS group are on the board in front of you — the one answer the row's count,
+     the dimming and the web all read */
+  function groupMembersHere(g){
+    if (!g || !g.id) return [];
+    var p = groupsPresentNow().filter(function(x){ return x.id === g.id; })[0];
+    return p ? p.here : [];
+  }
   function orgsNow(){
     var out = [];
     var words = (typeof state !== 'undefined' && state.prompt && state.prompt.words) || [];
@@ -54359,14 +54445,19 @@ body.eink #expMenu{background:#fff; border-color:#000}
         if (b.textContent !== t) b.textContent = t;
       }catch(e){}
     };
-    _secN('concept', cs.length); _secN('org', os.length); _secN('event', es.length); _secN('thread', ths.length);
+    /* v.641 — a group present through its members is IN the section, so it counts in the header and
+       it belongs in the signature: without it the strip would not rebuild when a member walks in. */
+    var _pres = (typeof groupsPresentNow === 'function') ? groupsPresentNow() : [];
+    var _presDerived = _pres.filter(function(pz){ return pz.eli < 0 && pz.announces; });
+    _secN('concept', cs.length); _secN('org', os.length + _presDerived.length); _secN('event', es.length); _secN('thread', ths.length);
     var sig = cs.map(function(c){ return c.i + ':' + (c.w.name || c.w.word); }).join(',')
       + '|O|' + os.map(function(o){ var _p = window.dystPartyOfWord && window.dystPartyOfWord(o.w);
           return o.i + ':' + (o.w.name || o.w.word) + ':' + (o.w.color || '')
                + (_p ? ':P' + (_p.exploded ? 1 : 0) + '.' + (_p.count != null ? _p.count : ((_p.members || []).length + 1)) : ''); }).join(',')   /* v.560: a party's size and its exploded state are drawn on its row, so the row has to rebuild when they change */
       + '|E' + ((typeof state !== 'undefined' && state && state.frameIdx) || 0) + '|' + es.map(function(e){ return e.i + ':' + (e.w.name || e.w.word); }).join(',')
       + '|' + ths.map(function(t){ return t.id + ':' + t.name + t.color; }).join(',')
-      + '|S' + ((typeof libSurfaceWord === 'function') ? libSurfaceWord() : '');   /* v.635 — the empty states name the board, so the board is part of what they are made of */
+      + '|S' + ((typeof libSurfaceWord === 'function') ? libSurfaceWord() : '')   /* v.635 — the empty states name the board, so the board is part of what they are made of */
+      + '|P' + _pres.map(function(pz){ return pz.id + ':' + pz.here.join('.') + ':' + pz.eli + ':' + pz.size; }).join(',');   /* v.641 — presence is content */
     if (sig === lastSig) return;
     lastSig = sig;
     lr.innerHTML = ''; rr.innerHTML = ''; if (lor) lor.innerHTML = ''; if (er) er.innerHTML = '';
@@ -54388,7 +54479,7 @@ body.eink #expMenu{background:#fff; border-color:#000}
       document.querySelector('#expRight .xb-portlayer').appendChild(lport);
     });
     if (lor){
-      if (!os.length){
+      if (!os.length && !_presDerived.length){
         var _onMapG = (typeof libSurfaceWord === 'function') && libSurfaceWord() === 'map';   /* v.635 — a map is in no section */
         lor.innerHTML = '<div class="xb-empty">No groups ' + (_onMapG ? 'on this map' : 'in this section') + ' — build one with “+ group”, or add one you already have from the ' + (_onMapG ? 'Map Legend' : 'Story Legend') + '.</div>';
       }
@@ -54406,11 +54497,23 @@ body.eink #expMenu{background:#fff; border-color:#000}
         /* v.560: a party is a group row with two things an organization has not
            got — a headcount, and a state you can change from here. */
         var _pty = (window.dystPartyOfWord && window.dystPartyOfWord(o.w)) || null;
+        /* v.641 · #55 phase 1 — the group this element stands for, asked in the one place that knows
+           about both seams (`partyOf` and `el`) rather than a second copy of the same test here */
+        var _grpOf = groupForWord(o.w);
+        if (_grpOf){
+          var _hereN = groupMembersHere(_grpOf).length;
+          var _namedN = ((typeof beingGroupMemberKeys === 'function') ? beingGroupMemberKeys(_grpOf.id) : []).length;
+          var _sizeN = (_grpOf.count != null && _grpOf.count > _namedN) ? _grpOf.count : _namedN;
+          /* the pill says what is TRUE HERE: how many of it are on this board, against how big it is */
+          _nm.appendChild(document.createTextNode(_hereN
+            ? (' \u00b7 ' + _hereN + (_sizeN > _hereN ? (' of ' + _sizeN) : '') + ' here')
+            : (' \u00b7 ' + _sizeN)));
+        }
         if (_pty){
           row.classList.add('xb-party');
           if (_pty.exploded) row.classList.add('xb-party-on');
-          var _psz = (_pty.count != null ? _pty.count : ((_pty.members || []).length + 1));
-          _nm.appendChild(document.createTextNode(' \u00B7 ' + _psz));
+          if (!_grpOf){ var _psz = (_pty.count != null ? _pty.count : ((_pty.members || []).length + 1));
+          _nm.appendChild(document.createTextNode(' \u00B7 ' + _psz)); }
           /* v.639 [Jeremy] — the four buttons this row used to carry inline (explode/combine,
              notepad, edit, disband) moved to `.xb-acts`: the centred second line every other pill
              opens when you select it. A row that shouts its controls at rest is the odd one out. */
@@ -54423,6 +54526,28 @@ body.eink #expMenu{background:#fff; border-color:#000}
         oport.style.setProperty('--xb-c', col); oport.title = _disp;
         oport.addEventListener('pointerdown', function(e){ if (window.__expPortDragStart) window.__expPortDragStart('L', String(o.i), oport, e); });
         document.querySelector('#expRight .xb-portlayer').appendChild(oport);
+      });
+      /* v.641 · #55 phase 1 — and the groups that are here through their MEMBERS. The pill says how
+         many of them are standing on this board, because "some of them are here" is the fact, and a
+         group that declares a size beyond its named members says that too. */
+      _presDerived.forEach(function(pz){
+        var row = document.createElement('div'); row.className = 'xb-row xb-derived'; row.dataset.gid = pz.id;
+        var col = (typeof catColor === 'function') ? catColor('org') : '#6b9aa6';
+        row.style.setProperty('--xb-c', col);
+        row.innerHTML = '<span class="xb-nm"></span>';
+        var _gd = document.createElement('span');
+        _gd.style.cssText = 'display:inline-block;width:9px;height:9px;min-width:9px;border-radius:50%;margin-right:5px;vertical-align:middle;border:1px solid rgba(0,0,0,.3);background:' + ((pz.g && pz.g.color) || col);
+        var _nm = row.querySelector('.xb-nm');
+        var _gname = (pz.g && pz.g.name && pz.g.name.trim()) ? pz.g.name.trim() : 'Group';
+        _nm.textContent = _gname;
+        _nm.insertBefore(_gd, _nm.firstChild);
+        _nm.appendChild(document.createTextNode(' \u00b7 ' + pz.here.length + (pz.size > pz.here.length ? (' of ' + pz.size) : '') + ' here'));
+        row.title = _gname + ' \u2014 ' + pz.here.length + ' of its ' + pz.size + ' here in this scene';
+        row.addEventListener('click', function(){ if (window.__expSwallowRowClick && window.__expSwallowRowClick()) return; xbSelect('G', pz.id); });
+        lor.appendChild(row);
+        var gport = document.createElement('span'); gport.className = 'xb-port'; gport.dataset.gid = pz.id;
+        gport.style.setProperty('--xb-c', col); gport.title = _gname;
+        document.querySelector('#expRight .xb-portlayer').appendChild(gport);
       });
     }
     if (er){
@@ -54552,6 +54677,7 @@ body.eink #expMenu{background:#fff; border-color:#000}
       var nodeScreen = function(j){ var nd = state.nodes && state.nodes[j]; if (!nd) return null;
         return { x: rr.left - sr.left + (nd.x - vv[0]) / vv[2] * rr.width, y: rr.top - sr.top + (nd.y - vv[1]) / vv[3] * rr.height }; };
       var row = xbSel.side === 'E' ? document.querySelector('#expERows .xb-row[data-ci="' + xbSel.id + '"]')
+        : xbSel.side === 'G' ? document.querySelector('#expLORows .xb-row[data-gid="' + xbSel.id + '"]')   /* v.641 */
         : xbSel.side === 'L' ? (document.querySelector('#expLRows .xb-row[data-ci="' + xbSel.id + '"]') || document.querySelector('#expLORows .xb-row[data-ci="' + xbSel.id + '"]'))
         : document.querySelector('#expRRows .xb-row[data-th="' + xbSel.id + '"]');
       var port = window.__expPortForRow ? window.__expPortForRow(row) : null; if (!port || !port.offsetParent){ _sweepPills(); return; }
@@ -54562,7 +54688,12 @@ body.eink #expMenu{background:#fff; border-color:#000}
       web.setAttribute('width', Math.round(sr.width)); web.setAttribute('height', Math.round(sr.height));
       if (webTop){ webTop.setAttribute('viewBox', '0 0 ' + Math.round(sr.width) + ' ' + Math.round(sr.height)); webTop.setAttribute('width', Math.round(sr.width)); webTop.setAttribute('height', Math.round(sr.height)); }
       var members = [];
-      if (xbSel.side === 'R'){
+      if (xbSel.side === 'G'){
+        /* v.641 · #55 — "you see the connection lines to all the members from that scene that are
+           part of the group" [Jeremy]. Membership, not the generic link web. */
+        var _gW = (typeof beingGroupById === 'function') ? beingGroupById(xbSel.id) : null;
+        members = groupMembersHere(_gW).slice();
+      } else if (xbSel.side === 'R'){
         state.prompt.words.forEach(function(w2, j){ if (MAP[w2.cat] && (w2.role === 'being' || w2.role === 'word') && !w2.needsPlace && typeof wordThreadIds === 'function' && wordThreadIds(w2).indexOf(xbSel.id) >= 0) members.push(j); });
       } else {
         var ci3 = +xbSel.id;
@@ -54572,6 +54703,10 @@ body.eink #expMenu{background:#fff; border-color:#000}
           if (!MAP[w2.cat] || (w2.role !== 'being' && w2.role !== 'word') || w2.needsPlace) return;
           if (links3 ? links3[j] : conceptLinks(j)[ci3]) members.push(j);
         });
+        /* v.641 · #55 — and if this element stands for a group, its members standing here are its
+           connections, whether or not anybody drew a link */
+        var _gw3 = (selW3 && selW3.cat === 'org') ? groupForWord(selW3) : null;
+        if (_gw3) groupMembersHere(_gw3).forEach(function(j){ if (members.indexOf(j) < 0) members.push(j); });
       }
       members = members.filter(function(j){ return !!document.querySelector('#skySvg g.node[data-node="' + j + '"]'); });   // same rule as above: only elements actually drawn on this map get a map line; sidebar-dwelling ones (events, mental spaces) are drawn as sidebar arcs below
       members.forEach(function(j){
