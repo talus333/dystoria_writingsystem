@@ -22709,6 +22709,32 @@ try{ window.dystKindCaps = dystKindCaps; }catch(e){}
 function ensureBeingGroups(){ if (!state.session) return; if (!Array.isArray(state.session.beingGroups)) state.session.beingGroups = []; }
 function beingGroupsList(){ return (state.session && Array.isArray(state.session.beingGroups)) ? state.session.beingGroups : []; }
 function beingGroupById(id){ return beingGroupsList().find(g => g.id === id) || null; }
+/* v.653 · #55 phase 4 — ONE ANSWER TO "WHICH GROUPS ARE THERE". Two stores hold groups: the Map's
+   `beingGroups` (the party record — leader, members, count) and the Bonds store (the Group Builder's
+   record — an `org` element with a membership). Presence, the row's count, the dimming, the web,
+   the Writing Focus, the thread menu and the wiki all used to ask `beingGroupById` and get `null`
+   for every group the Group Builder made. They ask THIS now. It is a normalised READ: a Bonds group
+   arrives in the party record's shape (no leader, no declared size, timeless) and is never written
+   through — writes stay with the store the record came from. A Bonds group whose element is
+   already a party's element is the same group, and is read once. */
+function bondsGroupRecords(){
+  var out = [];
+  try{
+    var V = window.BONDSVIEW; if (!V || typeof V.groupsByEl !== 'function') return out;
+    var have = {};
+    beingGroupsList().forEach(function(g){ if (g && g.el) have[g.el] = 1; });
+    try{ ((state.prompt && state.prompt.words) || []).forEach(function(w){ if (w && w.cat === 'org' && w.partyOf && beingGroupById(w.partyOf)) have[wordKey(w)] = 1; }); }catch(e){}
+    V.groupsByEl().forEach(function(b){
+      if (!b || !b.el || have[b.el]) return;
+      out.push({ id:b.id, name:b.name || '', leader:null, members:(b.members || []).slice(), el:b.el, count:null, kind:b.type || 'social', from:0, until:null, bonds:true });
+    });
+  }catch(e){}
+  return out;
+}
+function groupRecordsAll(){ return beingGroupsList().concat(bondsGroupRecords()); }
+function groupRecordById(id){ if (!id) return null; return beingGroupById(id) || bondsGroupRecords().filter(function(g){ return g && g.id === id; })[0] || null; }
+function groupRecordKeys(g){ if (!g) return []; return (g.leader ? [g.leader] : []).concat(g.members || []); }
+try{ window.groupRecordsAll = groupRecordsAll; window.groupRecordById = groupRecordById; window.groupRecordKeys = groupRecordKeys; }catch(e){}
 /* v.598 — **A GROUP OF EQUALS IS A LEGAL RECORD.** [Jeremy] "a group does not need a leader… the
    openness of adding any member allows you to make these kinds of changes without it being
    over-determined from the start." That was carried as owed work for two months because it is not
@@ -23220,7 +23246,7 @@ function openStoryStakeNote(){
     if (typeof renderNotepad === 'function') renderNotepad();
   } catch(e){}
 }
-function groupKeys(id){ const g = beingGroupById(id); return g ? [g.leader].concat(g.members || []) : []; }
+function groupKeys(id){ const g = (typeof groupRecordById === 'function') ? groupRecordById(id) : beingGroupById(id); return g ? groupRecordKeys(g) : []; }   /* v.653 — both stores; and no `null` leader in the list any more */
 function groupThreadIds(id){ const out = []; groupKeys(id).forEach(k => { const w = (typeof npFindEl === 'function') ? npFindEl(k) : null; ((typeof wordThreadIds === 'function') ? wordThreadIds(w) : []).forEach(tid => { if (out.indexOf(tid) < 0) out.push(tid); }); }); return out; }
 function toggleGroupFocus(id){ const keys = groupKeys(id); if (!keys.length) return; state.focusKeys = state.focusKeys || []; const allIn = keys.every(k => state.focusKeys.indexOf(k) >= 0); if (allIn){ state.focusKeys = state.focusKeys.filter(k => keys.indexOf(k) < 0); } else { keys.forEach(k => { if (state.focusKeys.indexOf(k) < 0) state.focusKeys.push(k); }); } if (typeof renderFocus === 'function') renderFocus(); if (typeof syncFocusToSession === 'function') syncFocusToSession(); renderConstellation(); if (typeof flashStatus === 'function') flashStatus(allIn ? 'Removed the group from the Writing Focus' : 'Added the group to the Writing Focus'); }
 function openGroupThreadMenu(id, x, y){
@@ -23271,7 +23297,7 @@ async function aiGroupRollup(id){
   return aiCall(sys, parts.join('\n') + '\n\nWrite the group entry:', { feature:'wiki_group' });
 }
 function openGroupWiki(id){
-  const g = beingGroupById(id); if (!g) return;
+  const g = (typeof groupRecordById === 'function') ? groupRecordById(id) : beingGroupById(id); if (!g) return;   /* v.653 — a Group Builder group has a wiki too */
   if (typeof aiAuthed === 'function' && !aiAuthed()){ if (typeof promptAiSignup === 'function') promptAiSignup(); return; }
   let m = document.getElementById('threadWiki');
   if (!m){ m = document.createElement('div'); m.id = 'threadWiki'; m.className = 'plotchoice-bd'; document.body.appendChild(m); m.addEventListener('click', e => { if (e.target === m) m.classList.remove('show'); }); }
@@ -23329,6 +23355,8 @@ const QUILL_SVG = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" s
 const WIKIBOOK_INNER = '<path d="M6.5 4H17a1 1 0 0 1 1 1v15a1 1 0 0 1-1 1H6.5A1.5 1.5 0 0 1 5 19.5v-14A1.5 1.5 0 0 1 6.5 4z"/><path d="M11.5 8.5Q11.9 11.6 15 12Q11.9 12.4 11.5 15.5Q11.1 12.4 8 12Q11.1 11.6 11.5 8.5Z"/>';
 try { if (typeof LUCIDE !== 'undefined') LUCIDE['wiki-book'] = WIKIBOOK_INNER; } catch(e){}
 const BOOKOPEN_SVG = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px">' + WIKIBOOK_INNER + '</svg>';
+/* v.653 — the thread glyph for the Context drawer's acts row: the same wave the leader's ring draws for "add the group to a thread". */
+const THREAD_SVG = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px"><path d="M2 12q2.5-4 5 0t5 0 5 0 5 0"/></svg>';
 // open a story element in the notes sheet: pin + select it in the notepad, then slide the sheet up
 function openElementNotes(key){
   if (!key) return;
@@ -54317,7 +54345,7 @@ body.eink #expMenu{background:#fff; border-color:#000}
     var set = {};
     /* v.641 · #55 — a group's connections ARE its members, and only the ones standing here */
     if (xbSel.side === 'G'){
-      var _g = (typeof beingGroupById === 'function') ? beingGroupById(xbSel.id) : null;
+      var _g = (typeof groupRecordById === 'function') ? groupRecordById(xbSel.id) : ((typeof beingGroupById === 'function') ? beingGroupById(xbSel.id) : null);   /* v.653 */
       groupMembersHere(_g).forEach(function(j){ set[j] = 1; });
       expDimSet = set; return;
     }
@@ -54356,6 +54384,22 @@ body.eink #expMenu{background:#fff; border-color:#000}
   window.__expClearSidebarSel = function(){ if (!xbSel) return false; xbSel = null; applyXbSel(); return true; };
   window.__expSnapSel = function(){ return xbSel ? { side: xbSel.side, id: xbSel.id } : null; };   // snapshot the sidebar selection
   window.__expRestoreSel = function(s){ if (s && s.side){ xbSel = { side: s.side, id: s.id }; applyXbSel(); } };   // restore it (survives a type-pick re-render)
+  /* v.653 · #55 phase 4 — WHAT A GROUP OFFERS, IN ONE PLACE. The leader's ring, the derived row, the
+     placed row and the mobile chip each carried their own list of group controls, and three of them
+     disagreed. This is the list; every home appends it through `mk`. After this the ring is the last
+     door only to the whole-group Writing Focus, which v.640 keeps off every row; phase 4b decides
+     where that one lives before the ring comes off the leader. */
+  function groupActsInto(mk, g, opt){
+    opt = opt || {};
+    if (!g || !g.id) return;
+    /* NOT the Writing Focus: v.640 [Jeremy] "remove the add to writing focus buttons for all the
+       selected context elements" — that ruling covers this row, so the whole-group ◎ does not come
+       back here. It stays on the leader's ring until phase 4b finds it a home that is not a row. */
+    mk(THREAD_SVG, 'Add the group to a thread\u2026', function(e){
+      if (typeof openGroupThreadMenu === 'function') openGroupThreadMenu(g.id, e.clientX || 200, e.clientY || 200); });
+    if (opt.wiki !== false && (typeof aiAvailable !== 'function' || aiAvailable()))
+      mk(BOOKOPEN_SVG, 'Open the group\u2019s wiki', function(){ if (typeof openGroupWiki === 'function') openGroupWiki(g.id); });
+  }
   function applyXbSel(){
     computeDimSet();
     document.querySelectorAll('.xb-acts').forEach(function(a){ a.remove(); });
@@ -54376,9 +54420,13 @@ body.eink #expMenu{background:#fff; border-color:#000}
       /* v.641 · #55 phase 1 — a group standing here through its members. Its acts are the ones that
          belong to a GROUP: its notes, its builder, and a way to put its element on this board. There
          is no × because there is nothing here to remove — the row is a reading, not a placement. */
-      var gG = (typeof beingGroupById === 'function') ? beingGroupById(xbSel.id) : null;
+      var gG = (typeof groupRecordById === 'function') ? groupRecordById(xbSel.id) : ((typeof beingGroupById === 'function') ? beingGroupById(xbSel.id) : null);   /* v.653 — both stores */
       if (gG){
-        mk(QUILL_SVG, 'Open this group in the notepad', function(){ if (typeof openGroupNotes === 'function') openGroupNotes(gG.id); });
+        /* v.653 — a Group Builder group IS its element, so its notes are the element's; a party's
+           notes are the party's own (they have always been keyed by the group id). */
+        mk(QUILL_SVG, 'Open this group in the notepad', function(){
+          if (gG.bonds && gG.el && typeof openElementNotes === 'function'){ openElementNotes(gG.el); return; }
+          if (typeof openGroupNotes === 'function') openGroupNotes(gG.id); });
         /* v.642 — the same pencil as every other pill: the card. A group that is here only through
            its members may have no element yet, and there is no card without one, so the button SAYS
            which door it is instead of promising a card and opening a builder. */
@@ -54391,6 +54439,7 @@ body.eink #expMenu{background:#fff; border-color:#000}
         });
         /* v.645 · #55 phase 3 — the ＋ that put a group on the board is gone with the rest: a group
            lives here, in the drawer, and its members are what stand on the board. */
+        groupActsInto(mk, gG);   /* v.653 — thread · wiki: what a group offers, said once */
       }
     } else if (xbSel.side === 'L' || xbSel.side === 'E'){
       var ci = +xbSel.id; var w = state.prompt && state.prompt.words[ci];
@@ -54422,6 +54471,10 @@ body.eink #expMenu{background:#fff; border-color:#000}
            elements." The Writing Focus keeps its own band, and the map element's controls keep the
            ◎, so nothing lost its last way in; this row is shorter by one. */
         mk(BOOKOPEN_SVG, 'Open its wiki', function(){ if (typeof openElementWiki === 'function') openElementWiki(ci); });
+        /* v.653 · #55 phase 4 — a PLACED group's row offers what the derived row offers: the group
+           acts come from the one list, so the two rows cannot disagree about what a group is. */
+        var _gRow = (w.cat === 'org') ? (groupForWord(w) || _ptyA) : null;
+        if (_gRow) groupActsInto(mk, _gRow, { wiki:false });   /* its wiki is the element's, one line up */
       }
     } else {
       var tid = xbSel.id;
@@ -54604,9 +54657,11 @@ body.eink #expMenu{background:#fff; border-color:#000}
       var words = (typeof state !== 'undefined' && state.prompt && state.prompt.words) || [];
       var at = {};
       words.forEach(function(w, i){ if (!w || w.poly || w.line) return; var k = wordKey(w); if (at[k] == null) at[k] = i; });
-      beingGroupsList().forEach(function(g){
+      /* v.653 · #55 phase 4 — BOTH stores. A group built in the Group Builder lives in the Bonds
+         store and was never present here; measured on v.652, two members on the board and no row. */
+      ((typeof groupRecordsAll === 'function') ? groupRecordsAll() : beingGroupsList()).forEach(function(g){
         if (!g || !g.id) return;
-        var keys = (typeof beingGroupMemberKeys === 'function') ? beingGroupMemberKeys(g.id) : [];
+        var keys = (typeof groupRecordKeys === 'function') ? groupRecordKeys(g) : ((typeof beingGroupMemberKeys === 'function') ? beingGroupMemberKeys(g.id) : []);
         var here = [];
         keys.forEach(function(k){ if (k && at[k] != null && here.indexOf(at[k]) < 0) here.push(at[k]); });
         if (!here.length) return;
@@ -54631,7 +54686,7 @@ body.eink #expMenu{background:#fff; border-color:#000}
     try{
       if (!w || w.cat !== 'org' || typeof beingGroupsList !== 'function') return null;
       var k = wordKey(w);
-      return beingGroupsList().filter(function(g){ return g && (w.partyOf === g.id || (g.el && g.el === k)); })[0] || null;
+      return ((typeof groupRecordsAll === 'function') ? groupRecordsAll() : beingGroupsList()).filter(function(g){ return g && (w.partyOf === g.id || (g.el && g.el === k)); })[0] || null;   /* v.653 — a placed Group Builder group counts its members here too */
     }catch(e){ return null; }
   }
   /* which members of THIS group are on the board in front of you — the one answer the row's count,
@@ -54735,7 +54790,7 @@ body.eink #expMenu{background:#fff; border-color:#000}
         var _grpOf = groupForWord(o.w);
         if (_grpOf){
           var _hereN = groupMembersHere(_grpOf).length;
-          var _namedN = ((typeof beingGroupMemberKeys === 'function') ? beingGroupMemberKeys(_grpOf.id) : []).length;
+          var _namedN = ((typeof groupRecordKeys === 'function') ? groupRecordKeys(_grpOf) : ((typeof beingGroupMemberKeys === 'function') ? beingGroupMemberKeys(_grpOf.id) : [])).length;   /* v.653 */
           var _sizeN = (_grpOf.count != null && _grpOf.count > _namedN) ? _grpOf.count : _namedN;
           /* the pill says what is TRUE HERE: how many of it are on this board, against how big it is */
           _nm.appendChild(document.createTextNode(_hereN
@@ -54923,7 +54978,7 @@ body.eink #expMenu{background:#fff; border-color:#000}
       if (xbSel.side === 'G'){
         /* v.641 · #55 — "you see the connection lines to all the members from that scene that are
            part of the group" [Jeremy]. Membership, not the generic link web. */
-        var _gW = (typeof beingGroupById === 'function') ? beingGroupById(xbSel.id) : null;
+        var _gW = (typeof groupRecordById === 'function') ? groupRecordById(xbSel.id) : ((typeof beingGroupById === 'function') ? beingGroupById(xbSel.id) : null);   /* v.653 */
         members = groupMembersHere(_gW).slice();
       } else if (xbSel.side === 'R'){
         state.prompt.words.forEach(function(w2, j){ if (MAP[w2.cat] && (w2.role === 'being' || w2.role === 'word') && !w2.needsPlace && typeof wordThreadIds === 'function' && wordThreadIds(w2).indexOf(xbSel.id) >= 0) members.push(j); });
@@ -78323,6 +78378,24 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
   function memberFace(gp, elKey){
     return membersOf(gp).filter(function(k){ return k !== elKey; });
   }
+  /* v.653 · #55 phase 4 — the groups this store knows BY THEIR ELEMENT, for the Context drawer's
+     presence reading. A group the writer built in the Group Builder is `{el, members}` here and
+     nowhere else, so without this door it could never be "present when its members are". Members
+     come through `memberFace`, which drops the org itself from the head of a chart reading's list;
+     a reading of a member chart counts too (its element is `source.key`). Party imports do not:
+     they have no element and are the Map's own records, read directly by the caller. */
+  V.groupsByEl = function(){
+    var out = [];
+    try{
+      groups().forEach(function(g){
+        if (!g) return;
+        var el = g.el || ((g.source && g.source.kind === 'chart') ? g.source.key : null);
+        if (!el) return;
+        out.push({ id:g.id, el:el, name:g.name || '', type:typeOf(g), members:memberFace(g, el).slice() });
+      });
+    }catch(e){}
+    return out;
+  };
   V.groupForEl = function(elKey){
     if (!elKey) return null;
     var g = (store().groups || []).find(function(x){ return x && x.el === elKey; }) || readingForEl(elKey);
@@ -81707,6 +81780,80 @@ html body #expRight .xb-row.xb-party-on .xb-ex{ opacity:.9; }
    so the pill keeps the shrink and the button never gets it */
 html body #expRight .xb-row.xb-party .xb-nm{ flex:0 1 auto; min-width:0; }
 html body.eink #expRight .xb-row .xb-ex{ opacity:1; }
+</style>
+<style id="dyst-explore-skin">/* ============================================================================
+   v.654 [Jeremy] — "do a design pass on this to make the buttons and styling fit the rest of the
+   ember theme and for it to look beautiful." Explore's stylesheet named not one token — a hand-mixed
+   linen gradient for its drawers, Classic's bronze #b9822e for the chosen lever in BOTH themes, a
+   12px sentence-case Re-ask, Choose and Roll as two equal outlined pills twelve rows deep. This is
+   the style system (dyst-style: four sizes, three silhouettes, one face) applied to the one screen
+   that never had it. Every colour below is a token, so it follows the skin.
+   ========================================================================================== */
+/* the two drawers are drawers: one parchment (v.538), the theme's own line */
+html body:not(.eink) #qaWin.qa-full #qaGutter, html body:not(.eink) #qaWin.qa-full #qaCtx{
+  background:var(--paper-card) !important; background-image:none !important;
+  border-color:var(--btn-line) !important; gap:16px !important; padding:22px 20px 22px !important;
+}
+html body:not(.eink) #qaWin.qa-full #qaGutter{ box-shadow:10px 0 34px rgba(0,0,0,.30) !important; }
+html body:not(.eink) #qaWin.qa-full #qaCtx{ box-shadow:-10px 0 34px rgba(0,0,0,.30) !important; }
+/* the tabs that open them */
+html body:not(.eink) #qaWin.qa-full #qaGutterTab, html body:not(.eink) #qaWin.qa-full #qaCtxTab{
+  background:var(--paper-card) !important; background-image:none !important; border-color:var(--btn-line) !important;
+  color:var(--btn-ink) !important; font:var(--t-label) !important; letter-spacing:.15em !important; text-transform:uppercase !important;
+}
+html body:not(.eink) #qaGutterTab .qgt-star, html body:not(.eink) #qaCtxTab .qgt-star{ color:var(--gold) !important; }
+/* eyebrows: the Label rung in the theme's soft ink; the mark keeps the gold */
+html body:not(.eink) #qaGutter .qg-h, html body:not(.eink) #qaCtx .qc-h, html body:not(.eink) #qaCtx .qc-addh{
+  font:var(--t-label) !important; letter-spacing:.15em !important; text-transform:uppercase !important; color:var(--btn-ink-soft) !important; margin-bottom:2px !important;
+}
+html body:not(.eink) #qaCtx .qc-addh2{ margin-top:12px !important; padding-top:14px !important; }
+html body:not(.eink) .qa-drawx{ color:var(--btn-ink-soft) !important; opacity:.65; }
+html body:not(.eink) .qa-drawx:hover{ color:var(--gold) !important; opacity:1; }
+/* the lever and category labels, and the drawer's own words */
+html body:not(.eink) #qaGutter .qg-lab, html body:not(.eink) #qaCtx .qc-catname{ font:600 12px/1.3 var(--sans) !important; color:var(--btn-ink) !important; letter-spacing:.02em !important; }
+html body:not(.eink) #qaGutter .qg-row{ gap:7px !important; }
+html body:not(.eink) #qaCtx .qc-scope{ color:var(--btn-ink) !important; }
+html body:not(.eink) #qaCtx .qc-empty, html body:not(.eink) #qaCtx .qc-hint, html body:not(.eink) #qaGutter .qg-note{ color:var(--btn-ink-soft) !important; opacity:.85; }
+/* the segments: outlined chips (28); the CHOSEN one is filled — the system's own selected segment */
+html body:not(.eink) #qaGutter .qg-b, html body:not(.eink) #qaGutter .qg-pk,
+html body:not(.eink) #qaCtx .qc-choose, html body:not(.eink) #qaCtx .qc-roll{
+  font:var(--t-label) !important; letter-spacing:var(--t-label-ls) !important; text-transform:uppercase !important;
+  height:var(--btn-h-sm) !important; min-height:var(--btn-h-sm) !important; padding:0 var(--btn-px-sm) !important; box-sizing:border-box !important;
+  display:inline-flex !important; align-items:center !important; justify-content:center !important; white-space:nowrap !important;
+  border:1px solid var(--btn-line) !important; border-radius:999px !important;
+  background:var(--btn-outlined-bg) !important; color:var(--btn-ink-soft) !important;
+  transition:background .12s, border-color .12s, color .12s, box-shadow .12s !important;
+}
+html body:not(.eink) #qaGutter .qg-b:hover, html body:not(.eink) #qaGutter .qg-pk:hover,
+html body:not(.eink) #qaCtx .qc-choose:hover{
+  background:var(--btn-outlined-bg-hover) !important; border-color:var(--btn-line-hover) !important; color:var(--btn-ink) !important;
+}
+html body:not(.eink) #qaGutter .qg-b.on, html body:not(.eink) #qaGutter .qg-pk.on{
+  background:var(--btn-fill) !important; color:var(--btn-fill-ink) !important; border-color:transparent !important; font-weight:600 !important;
+  box-shadow:0 3px 10px -4px rgba(0,0,0,.45) !important;
+}
+html body:not(.eink) #qaGutter .qg-seg, html body:not(.eink) #qaGutter .qg-pick{ gap:6px !important; }
+/* Roll is the quiet sibling: text only, a die before it, so a row is one choice with a shortcut */
+html body:not(.eink) #qaCtx .qc-roll{ border-color:transparent !important; background:transparent !important; padding:0 8px !important; }
+html body:not(.eink) #qaCtx .qc-roll:hover{ background:var(--btn-quiet-hover) !important; border-color:transparent !important; color:var(--btn-ink) !important; }
+html body:not(.eink) #qaCtx .qc-roll::before{ content:'\2684'; font-size:14px; line-height:1; margin-right:5px; color:var(--gold); }
+html body:not(.eink) #qaCtx .qc-catrow{ padding:1px 0 !important; }
+html body:not(.eink) #qaCtx .qc-catbtns{ gap:2px !important; }
+/* the drawer's one primary: the dark chip with gold ink (v.530), the primary the app uses on every light surface */
+html body:not(.eink) #qaGutter .qg-reask{
+  font:var(--t-label) !important; letter-spacing:var(--t-label-ls) !important; text-transform:uppercase !important;
+  height:var(--btn-h) !important; padding:0 var(--btn-px) !important; border-radius:999px !important; margin-top:10px !important;
+  background:var(--charcoal) !important; color:#e6b45c !important; border:1px solid rgba(255,205,116,.38) !important; box-shadow:none !important;
+  transition:background .12s, border-color .12s, color .12s !important;
+}
+html body:not(.eink) #qaGutter .qg-reask:hover{ background:#3a372f !important; border-color:rgba(255,205,116,.7) !important; color:#f0c374 !important; }
+/* the rules between blocks, and the pills a conversation weaves in */
+html body:not(.eink) #qaCtx .qc-add, html body:not(.eink) #qaCtx .qc-addh2{ border-top-color:var(--btn-line) !important; }
+html body:not(.eink) #qaCtx .qc-pill{ border-color:var(--btn-line) !important; background:var(--btn-outlined-bg) !important; color:var(--btn-ink) !important; }
+html body:not(.eink) #qaCtx .qc-trait{ border-color:var(--btn-line) !important; color:var(--btn-ink-soft) !important; }
+/* the centre pane is the dark family and already speaks flame gold; its three buttons take the face exactly */
+html body:not(.eink) #qaWin.qa-full #qaBar button{ font:var(--t-label) !important; letter-spacing:.14em !important; text-transform:uppercase !important; }
+html body:not(.eink) #qaWin.qa-full #qaSend{ background:linear-gradient(180deg,var(--em-grad-hi,#fbb04e),var(--em-grad-lo,#f08a1d)) !important; color:var(--em-ink-on-gold,#241405) !important; border-color:transparent !important; }
 </style>
 <script id="dyst-style-js">/* Dystoria — the style ladder, the JS half (v.509). Two small, idempotent passes over the bars:
    1. one "add" glyph: a leading "+ " on an add-control becomes "＋ " (the glyph the newest surfaces use);
