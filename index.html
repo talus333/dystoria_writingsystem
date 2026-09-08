@@ -4779,6 +4779,15 @@ body.eink .pt-rh-dev{color:#000}
 #eventCreator .ev-shift{ order:1; display:flex; align-items:center; gap:8px; margin:0 0 10px; }
 #eventCreator .ev-shift .ev-shift-in{ flex:1 1 0; min-width:0; margin:0; }
 #eventCreator .ev-shift-arrow{ flex:none; font-family:var(--serif); font-size:16px; color:var(--gold); }
+/* v.657 · #50 phase 2 — the Because-of block sits with What-changes (order 1), ahead of the depth
+   segment (2). Its add-link would otherwise be swept to order 6 with the characteristics' add. */
+#eventCreator .gc-seclbl.ev-cause-lbl{ order:1; margin-top:0; }
+#eventCreator .ev-causes{ order:1; }
+#eventCreator .ev-causes:empty{ display:none; }
+#eventCreator .gc-add.ev-cause-add{ order:1; margin:6px 0 12px; }
+#eventCreator .ev-cause .gc-dim{ flex:0 0 118px; }
+#eventCreator .ev-cause .ev-rel{ cursor:pointer; }
+#eventCreator .ev-cause .ev-rel:hover{ color:var(--gold); }
 .gb-card .gb-row2 .gb-focus{ flex:1; }
 .gb-ring{ fill:none; stroke:var(--affirm); stroke-width:2.4; pointer-events:none; }
 .gb-ring.leader{ stroke:var(--gold); stroke-width:3; }
@@ -23730,7 +23739,13 @@ function openElementDossier(key, opts){
           /* v.656 · #50 phase 1 — an event's card says what it changed: the same before → after the
              builder asked for, read from the record the builder wrote. */
           if(w.cat==='event'){ try{ var _es=(window.__eventShift&&window.__eventShift.rec)?window.__eventShift.rec(key):null;
-            if(_es){ if(_es.from && _es.to) put('What changes', _es.from+' \u2192 '+_es.to); else if(_es.from) put('Before', _es.from); else if(_es.to) put('After', _es.to); } }catch(e){} }
+            if(_es){ if(_es.from && _es.to) put('What changes', _es.from+' \u2192 '+_es.to); else if(_es.from) put('Before', _es.from); else if(_es.to) put('After', _es.to); } }catch(e){}
+            /* v.657 · #50 phase 2 — the chain, both ways: what this grew out of, what grew out of it */
+            try{ var _L=window.__eventLinks; if(_L){
+              var _ph=function(r,k){ return _L.name(k)+(r.rel==='enables'?' (made possible)':''); };
+              var _in=_L.causesOf(key).filter(function(r){ return typeof npFindEl!=='function'||npFindEl(r.a); }).map(function(r){ return _ph(r,r.a); });
+              var _out=_L.effectsOf(key).filter(function(r){ return typeof npFindEl!=='function'||npFindEl(r.b); }).map(function(r){ return _ph(r,r.b); });
+              if(_in.length) put('Because of', _in.join(', ')); if(_out.length) put('Leads to', _out.join(', ')); } }catch(e){} }
           (attrs||[]).forEach(function(a){ if(a && a.word) put(a.sub||'Trait', a.word); });
           /* [Jeremy] Physical Trait sits with the body facts, under Age — the rest keep their own
              order. A preference list rather than a full ordering, so a dimension nobody thought of
@@ -24202,7 +24217,7 @@ try{ window.openElementEdit = openElementEdit; }catch(e){}
 // When an element's identity word (and thus its wordKey) changes, move every piece of data indexed by the old key
 // to the new key so nothing is orphaned: notepad notes (incl. per-section / connection / part composites), images,
 // dossier text, image positions, aliases, stake records (and the bearer/threat INSIDE them), standing bonds,
-// Explore links, and (via the plan bridge) arcs, goal links, group-chart membership and a thread's linked elements.
+// an event's what-changed record and both ends of its causal links (#50), Explore links, and (via the plan bridge) arcs, goal links, group-chart membership and a thread's linked elements.
 function migrateElementKey(oldKey, newKey){
   try{
     if (!oldKey || !newKey || oldKey === newKey) return;
@@ -24231,6 +24246,8 @@ function migrateElementKey(oldKey, newKey){
       remapExact(s.elAliases);       /* v.458's one canonical alias map — a rename dropped every alias */
       remapExact(s.stakeData);       /* v.562 — the stake's own record: bearer, threat and axis, all lost */
       remapExact(s.eventShift);      /* v.656 · #50 — what an event changed, keyed by the event's own key */
+      /* v.657 · #50 phase 2 — the causal chain's rows hold element keys at BOTH ends (like bonds' a/b) */
+      if (Array.isArray(s.eventLinks)) s.eventLinks.forEach(l => { if (!l) return; if (l.a === oldKey) l.a = newKey; if (l.b === oldKey) l.b = newKey; });
       /* stakeData's VALUES are element keys too: a renamed character stops being anyone's bearer. */
       if (s.stakeData) Object.keys(s.stakeData).forEach(k => {
         const r = s.stakeData[k]; if (!r) return;
@@ -45869,6 +45886,42 @@ document.addEventListener('DOMContentLoaded', init);
       menu.style.top=Math.max(8, Math.min(y||200, window.innerHeight-360))+'px';
       menu.style.display='block';
     }
+    /* v.657 · #50 phase 2 — the Because-of rows. EV.causes = [{ a:<key>, rel }] is the builder's draft;
+       evCommit reconciles it against the store on create or save. */
+    function evCauseName(k){ try{ return (window.__eventLinks&&window.__eventLinks.name)?window.__eventLinks.name(k):k; }catch(e){ return k; } }
+    function evRenderCauses(){
+      const host=document.getElementById('evCauses'); if(!host) return; host.innerHTML='';
+      (EV.causes||[]).forEach((c, idx)=>{
+        const row=document.createElement('div'); row.className='gc-slot ev-cause'; row.dataset.key=c.a;
+        const rel=document.createElement('span'); rel.className='gc-dim ev-rel'; rel.textContent=(c.rel==='enables')?'made possible by':'caused by'; rel.title='Click to switch: caused by ↔ made possible by';
+        rel.addEventListener('click', ev=>{ ev.stopPropagation(); c.rel=(c.rel==='enables')?'causes':'enables'; evRenderCauses(); }); row.appendChild(rel);
+        const wd=document.createElement('span'); wd.className='gc-word'; wd.textContent=evCauseName(c.a); wd.style.cursor='default'; row.appendChild(wd);
+        const rm=document.createElement('span'); rm.className='gc-ctl'; rm.textContent='×'; rm.title='Remove'; rm.addEventListener('click', ev=>{ ev.stopPropagation(); EV.causes.splice(idx,1); evRenderCauses(); }); row.appendChild(rm);
+        host.appendChild(row);
+      });
+    }
+    function evCauseMenu(x, y){
+      const menu=document.getElementById('aspectMenu'); if(!menu) return; menu.innerHTML='';
+      if(menu.parentElement!==document.body) document.body.appendChild(menu);
+      const have={}; (EV.causes||[]).forEach(c=>{ have[c.a]=1; });
+      let evs=[]; try{ evs=(typeof npStoryElements==='function'?npStoryElements():[]).filter(r=>r&&r.w&&r.w.cat==='event'&&r.key!==EV.editKey&&!have[r.key]); }catch(e){}
+      const h=document.createElement('div'); h.textContent='Because of…'; h.style.cssText='font-family:var(--sans);font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-faint);padding:6px 11px 2px'; menu.appendChild(h);
+      if(!evs.length){ const e=document.createElement('div'); e.className='ev-cause-none'; e.textContent=EV.editKey?'No other events in the story yet.':'No other events in the story yet.'; e.style.cssText='font-family:var(--serif);font-style:italic;font-size:14px;color:var(--ink-faint);padding:6px 11px 8px'; menu.appendChild(e); }
+      evs.forEach(r=>{ const b=document.createElement('button'); b.textContent=evCauseName(r.key); b.dataset.key=r.key; b.addEventListener('click', ev=>{ ev.stopPropagation(); menu.style.display='none'; EV.causes=EV.causes||[]; EV.causes.push({ a:r.key, rel:'causes' }); evRenderCauses(); }); menu.appendChild(b); });
+      menu.style.left=Math.max(8, Math.min(x||220, window.innerWidth-206))+'px';
+      menu.style.top=Math.max(8, Math.min(y||200, window.innerHeight-360))+'px';
+      menu.style.display='block';
+    }
+    /* store → draft (on edit), draft → store (on create / save). The store is the one copy; the draft
+       is what the builder edits and is thrown away on close. */
+    function evLoadCauses(key){ EV.causes=[]; try{ if(window.__eventLinks&&key) EV.causes=window.__eventLinks.causesOf(key).map(r=>({ a:r.a, rel:r.rel })); }catch(e){} }
+    function evWriteCauses(key){
+      try{ if(!window.__eventLinks||!key) return; if(typeof ensureSession==='function') ensureSession();
+        const want={}; (EV.causes||[]).forEach(c=>{ if(c&&c.a&&c.a!==key) want[c.a]=c.rel||'causes'; });
+        window.__eventLinks.causesOf(key).slice().forEach(r=>{ if(!want[r.a]) window.__eventLinks.remove(r.a, key); });
+        Object.keys(want).forEach(a=>{ window.__eventLinks.add(a, key, want[a]); });
+      }catch(e){}
+    }
     function evRenderSlots(){
       const host=document.getElementById('evSlots'); if(!host) return; host.innerHTML='';
       EV.slots.forEach((s, idx)=>{
@@ -45898,6 +45951,12 @@ document.addEventListener('DOMContentLoaded', init);
              form of its own, because nobody fills in a six-field event form. */
           +  '<div class="gc-seclbl ev-shift-lbl" title="What was true before this happened, and what is true after — the change the event makes in the world">What changes</div>'
           +  '<div class="ev-shift"><input class="gc-name ev-shift-in" id="evFrom" autocomplete="off" placeholder="Before — what was true…"><span class="ev-shift-arrow">\u2192</span><input class="gc-name ev-shift-in" id="evTo" autocomplete="off" placeholder="After — what is true now"></div>'
+          /* v.657 · #50 phase 2 — BECAUSE OF. The earlier events this one grew out of: each a row in
+             the builder's own characteristic style (verb · name · ×), the verb a click to switch
+             between caused-by and made-possible-by. What the domino walk (phase 4) will fill. */
+          +  '<div class="gc-seclbl ev-cause-lbl" title="The earlier events this one grew out of — what caused it, or made it possible. Gap &amp; Chekhov checks that every cause lands before its effect.">Because of</div>'
+          +  '<div id="evCauses" class="ev-causes"></div>'
+          +  '<span class="gc-add ev-cause-add" id="evCauseAdd">＋ an earlier event</span>'
           +  '<div class="gc-seg" id="evSeg"></div>'
           +  '<div class="gc-seghint" id="evSegHint"></div>'
           +  '<div class="gc-seclbl">Characteristics</div>'
@@ -45914,6 +45973,7 @@ document.addEventListener('DOMContentLoaded', init);
         document.getElementById('evTo').addEventListener('input', e=>{ EV.to=e.target.value; });
         document.getElementById('evDescGo').addEventListener('click', ev=>{ ev.stopPropagation(); runInlineDesc('evDesc','evDescGo', evApplyDescription); });
         document.getElementById('evAdd').addEventListener('click', ev=>{ ev.stopPropagation(); evAddMenu(ev.clientX, ev.clientY); });
+        document.getElementById('evCauseAdd').addEventListener('click', ev=>{ ev.stopPropagation(); evCauseMenu(ev.clientX, ev.clientY); });   /* v.657 */
         document.getElementById('evGen').addEventListener('click', ev=>{ ev.stopPropagation(); evGenerate(); });
         document.getElementById('evCreate').addEventListener('click', ev=>{ ev.stopPropagation(); evCommit(); });
         const seg=document.getElementById('evSeg');
@@ -45924,12 +45984,14 @@ document.addEventListener('DOMContentLoaded', init);
     function openEventCreator(opts){
       opts=opts||{};
       if(typeof addsLocked==='function' && addsLocked()){ if(typeof flashStatus==='function') flashStatus('End the session to add elements'); return; }
-      if(!opts.keep){ EV.name=''; EV.desc=''; EV.complexity=0; EV.from=''; EV.to=''; }
+      if(!opts.keep){ EV.name=''; EV.desc=''; EV.complexity=0; EV.from=''; EV.to=''; EV.causes=[]; }
       EV.editKey=null; EV.editIdx=null;
       if(opts.edit){ var _ew=(typeof npFindEl==='function')?npFindEl(opts.edit):null; if(_ew){ EV.editKey=opts.edit; EV.editIdx=(opts.editIdx!=null?opts.editIdx:-1); EV.name=_ew.name||''; EV.desc=''; EV.slots=(typeof window.dystElementToSlots==='function')?window.dystElementToSlots(_ew):[];
         /* v.656 — editing an event fills its change from the record, so Save cannot wipe what was there */
-        try{ var _sh=(window.__eventShift&&window.__eventShift.rec)?window.__eventShift.rec(opts.edit):null; EV.from=(_sh&&_sh.from)||''; EV.to=(_sh&&_sh.to)||''; }catch(e){ EV.from=''; EV.to=''; } } }
+        try{ var _sh=(window.__eventShift&&window.__eventShift.rec)?window.__eventShift.rec(opts.edit):null; EV.from=(_sh&&_sh.from)||''; EV.to=(_sh&&_sh.to)||''; }catch(e){ EV.from=''; EV.to=''; }
+        evLoadCauses(opts.edit); } }   /* v.657 — and its causes, from the store */
       evEl();
+      evRenderCauses();   /* v.657 */
       const nm=document.getElementById('evName'); if(nm) nm.value=EV.name||'';
       const ds=document.getElementById('evDesc'); if(ds) ds.value=EV.desc||'';
       { const f=document.getElementById('evFrom'); if(f) f.value=EV.from||''; const t=document.getElementById('evTo'); if(t) t.value=EV.to||''; }   /* v.656 */
@@ -45947,6 +46009,7 @@ document.addEventListener('DOMContentLoaded', init);
       if(typeof addsLocked==='function' && addsLocked()){ if(typeof flashStatus==='function') flashStatus('End the session to add elements'); return; }
       const kindSlot=EV.slots.find(s=>s.sub==='Kind'); const kind=(kindSlot&&kindSlot.word)||'Event'; const kindSub=(kindSlot&&kindSlot.kindSub)||'';
       if(EV.editKey){ try{ if(window.__eventShift){ window.__eventShift.set(EV.editKey,'from',EV.from); window.__eventShift.set(EV.editKey,'to',EV.to); } }catch(e){}   /* v.656 · #50 — what changes, on the record */
+        evWriteCauses(EV.editKey);   /* v.657 · #50 phase 2 — and its causes */
         const eAttrs=[]; EV.slots.forEach(sl=>{ if(sl.sub==='Kind') return; if(!sl.word) return; eAttrs.push({ word:sl.word, sub:sl.sub }); }); try{ if(typeof window.dystSetElementAttrs==='function') window.dystSetElementAttrs(EV.editKey, eAttrs); }catch(e){} try{ if(typeof applyElemEdit==='function') applyElemEdit(EV.editKey, (EV.editIdx!=null?EV.editIdx:-1), { cat:'event', word:kind, sub:kindSub, name:(EV.name||'').trim() }); }catch(e){} const _nm=(EV.name||'').trim(); EV.editKey=null; EV.editIdx=null; closeEventCreator(); if(typeof flashStatus==='function') flashStatus((_nm||kind)+' — updated'); return; }
       if(typeof pushUndo==='function') pushUndo();
       if(!state.prompt){ state.prompt={words:[],sets:1,links:[],removedLinks:[]}; state.activeSet=0; state.frames=[{gap:null,prompt:state.prompt}]; state.frameIdx=0; }
@@ -45958,6 +46021,7 @@ document.addEventListener('DOMContentLoaded', init);
       const idx=state.prompt.words.length;
       state.prompt.words.push(built);
       try{ if(typeof ensureSession==='function') ensureSession(); if(window.__eventShift && ((EV.from||'').trim() || (EV.to||'').trim())){ var _k=wordKey(built); window.__eventShift.set(_k,'from',EV.from); window.__eventShift.set(_k,'to',EV.to); } }catch(e){}   /* v.656 · #50 */
+      try{ if((EV.causes||[]).length) evWriteCauses(wordKey(built)); }catch(e){}   /* v.657 · #50 phase 2 */
       const desc=(EV.desc||'').trim();
       if(desc){ try{ if(typeof ensureSession==='function') ensureSession(); state.session.npNotes=state.session.npNotes||{}; const k=wordKey(built); if(!state.session.npNotes[k]) state.session.npNotes[k]='<p>'+desc.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/\n/g,'<br>')+'</p>'; }catch(e){} }
       if(window.__qaOnElementAdd){ try{ window.__qaOnElementAdd(built); }catch(e){} }
@@ -51635,6 +51699,9 @@ window.__dystSetupWriteMic = function(){
         ths.forEach(function(t){ var mem=0; for(var k in tags){ if(tags[k]&&tags[k].indexOf(t.id)>=0) mem++; }
           if(mem===0) out.push({ certain:true, element:null, section:null, text:'⚑ certain — the thread “'+t.name+'” has no elements woven into it yet.' }); });
       }catch(e){}
+      /* v.657 · #50 phase 2 — the causal chain, checked not drawn: a cause that first appears in a
+         later section than its effect, and a circle of causes. Ordering read live; no store touched. */
+      try{ if(window.__eventLinks && window.__eventLinks.findings) out=out.concat(window.__eventLinks.findings()); }catch(e){}
     }catch(e){}
     return out;
   }
@@ -51896,7 +51963,12 @@ window.__dystSetupWriteMic = function(){
         renderList(p, arr, kind === 'continuity' ? 'No contradictions surfaced — the continuity holds.' : 'Nothing under-developed stood out.', kind === 'continuity' ? '⚠ continuity' : '✦ gap');
       } else if (tool.kind === 'craft'){ renderCraft(p, parseArr(out), g); }
       else { var b = p.querySelector('.ex-body'); b.innerHTML = ''; var d = document.createElement('div'); d.className = 'ex-prose'; String(out || '').split(/\n{2,}/).forEach(function(par){ if (par.trim()){ var pp = document.createElement('p'); pp.textContent = par.trim(); d.appendChild(pp); } }); b.appendChild(d); }
-    } catch(e){ var bb = p.querySelector('.ex-body'); if (bb) bb.innerHTML = '<div class="ex-think">Couldn\'t reach the AI — try again.</div>'; }
+    } catch(e){
+      /* v.657 · #50 — the deterministic findings do not need the AI, so they do not vanish with it */
+      var _cg = (kind === 'gap' && g._certainGaps && g._certainGaps.length) ? g._certainGaps : null;
+      if (_cg){ try{ renderReviewNotes(kind, _cg, p); var bb2 = p.querySelector('.ex-body'); if (bb2){ var nt = document.createElement('div'); nt.className = 'ex-think ais-noai'; nt.style.marginTop = '10px'; nt.textContent = 'Couldn\'t reach the AI \u2014 these are the certain findings only. Try again for the subtler ones.'; bb2.appendChild(nt); } }catch(e2){ _cg = null; } }
+      if (!_cg){ var bb = p.querySelector('.ex-body'); if (bb) bb.innerHTML = '<div class="ex-think">Couldn\'t reach the AI — try again.</div>'; }
+    }
   }
   try { window.aisRun = aisRun; } catch(e){}   // exposed so the Checks drawer (gutter slide-out) can run the same passes
 })();
@@ -81916,6 +81988,22 @@ html body:not(.eink) #qaCtx .qc-trait{ border-color:var(--btn-line) !important; 
 html body:not(.eink) #qaWin.qa-full #qaBar button{ font:var(--t-label) !important; letter-spacing:.14em !important; text-transform:uppercase !important; }
 html body:not(.eink) #qaWin.qa-full #qaSend{ background:linear-gradient(180deg,var(--em-grad-hi,#fbb04e),var(--em-grad-lo,#f08a1d)) !important; color:var(--em-ink-on-gold,#241405) !important; border-color:transparent !important; }
 </style>
+<style id="dyst-secnav-flat">/* ============================================================================
+   v.657 [Jeremy] "make the background of the navigator that drops down flat and the color of the
+   sidebar drawers." The section-navigator scroll (dyst-scrollnav-beauty) painted its body with two
+   stacked gradients and two inset shadows; the drawers all take --paper-card (v.541). The three
+   navigators — Plan, Revise/Read, Write — now take that token, flat, in both themes. The drop
+   shadow stays; the inset shading goes; the rolled bottom end stays (an edge, not the background).
+   Specificity is matched to the scroll layer's own theme repeats ((1,2,1) → (1,2,2)), so this is
+   the one rule that decides the colour. E-ink is untouched.
+   ============================================================================ */
+html body:not(.eink) #expLayerMenu.explm-center,
+html body:not(.eink):not(.ember) #msSecMenu, html body:not(.eink):not(.ember) #prepSecMenu,
+html body.ember:not(.eink) #msSecMenu, html body.ember:not(.eink) #prepSecMenu{
+  background:var(--paper-card) !important;
+  box-shadow:0 18px 44px rgba(40,24,4,.3) !important;
+}
+</style>
 <script id="dyst-style-js">/* Dystoria — the style ladder, the JS half (v.509). Two small, idempotent passes over the bars:
    1. one "add" glyph: a leading "+ " on an add-control becomes "＋ " (the glyph the newest surfaces use);
    2. the ✦ on an AI control is wrapped in .dst-ai so it can be painted gold without touching the button's ink.
@@ -84761,6 +84849,73 @@ body.eink .stk-slot-cap,body.eink .stk-menu-sub,body.eink .stk-slot-val.stk-slot
   /* the sentence, for anywhere that wants to SAY it: "before → after", or the half that exists */
   function sentence(key){ var r = rec(key); if(!r) return ''; if(r.from && r.to) return r.from + ' \u2192 ' + r.to; return r.from ? ('Before: ' + r.from) : (r.to ? ('After: ' + r.to) : ''); }
   window.__eventShift = { rec: rec, set: setField, sentence: sentence, all: function(){ return bag(false) || {}; } };
+
+  /* ── #50 phase 2 (v.657) · eventLinks — the causal chain ──────────────────────────────────────
+     `state.session.eventLinks = [ { a, b, rel } ]`: a caused (`causes`) or made possible (`enables`) b.
+     One row per (a,b); adding the pair again re-says the verb. Element keys only — where an event
+     sits in the book is read live, never stored. */
+  var RELS = { causes:1, enables:1 };
+  function links(make){
+    var s = sess(); if(!s) return null;
+    if(!Array.isArray(s.eventLinks)){ if(!make) return null; s.eventLinks = []; }
+    return s.eventLinks;
+  }
+  function save(){ try { if(typeof scheduleAutosave === 'function') scheduleAutosave(400); } catch(e){} }
+  function list(){ return links(false) || []; }
+  function find(a, b){ var L = list(); for(var i = 0; i < L.length; i++){ var r = L[i]; if(r && r.a === a && r.b === b) return r; } return null; }
+  function add(a, b, rel){
+    if(!a || !b || a === b) return null;
+    rel = RELS[rel] ? rel : 'causes';
+    var L = links(true); if(!L) return null;
+    var r = find(a, b);
+    if(r){ if(r.rel !== rel){ r.rel = rel; save(); } return r; }
+    r = { a: a, b: b, rel: rel }; L.push(r); save(); return r;
+  }
+  function remove(a, b){ var L = links(false); if(!L) return false; var i = L.findIndex(function(r){ return r && r.a === a && r.b === b; }); if(i < 0) return false; L.splice(i, 1); save(); return true; }
+  function causesOf(b){ return list().filter(function(r){ return r && r.b === b; }); }
+  function effectsOf(a){ return list().filter(function(r){ return r && r.a === a; }); }
+  /* the earliest section (1-based) whose map carries the key; null when it is on no map yet */
+  function sectionOf(key){
+    try{
+      var frames = (typeof state !== 'undefined' && state && state.frames) || [];
+      for(var i = 0; i < frames.length; i++){
+        var ws = (frames[i] && frames[i].prompt && frames[i].prompt.words) || [];
+        for(var j = 0; j < ws.length; j++){ if(ws[j] && typeof wordKey === 'function' && wordKey(ws[j]) === key) return i + 1; }
+      }
+    }catch(e){}
+    return null;
+  }
+  function el(key){ try{ return (typeof npFindEl === 'function') ? npFindEl(key) : null; }catch(e){ return null; } }
+  function name(key){ var w = el(key); var nm = ''; try{ nm = w ? ((typeof elDisplayName === 'function') ? elDisplayName(w) : (w.name || w.word || '')) : ''; }catch(e){} return nm || String(key || '').split('|')[2] || ''; }
+  function secLabel(i){ var nm = ''; try{ var fr = state.frames && state.frames[i - 1]; nm = (fr && fr.stageName) || ''; }catch(e){} return 'section ' + i + (nm ? (' (' + nm + ')') : ''); }
+  /* THE CHECK. Two certain findings: a cause that first appears in a later section than its effect,
+     and a circle of causes. Rows whose ends no longer exist are skipped, not reported. */
+  function findings(){
+    var out = [], L = list().filter(function(r){ return r && r.a && r.b && el(r.a) && el(r.b); });
+    L.forEach(function(r){
+      var sa = sectionOf(r.a), sb = sectionOf(r.b);
+      if(sa == null || sb == null || sa <= sb) return;
+      var verb = r.rel === 'enables' ? 'makes possible' : 'causes';
+      out.push({ certain: true, element: name(r.a), section: null, kind: 'order', a: r.a, b: r.b,
+        text: '\u2691 certain \u2014 ' + name(r.a) + ' ' + verb + ' ' + name(r.b) + ', but ' + name(r.b) + ' is in ' + secLabel(sb) + ' and ' + name(r.a) + ' first appears in ' + secLabel(sa) + ' \u2014 the cause lands after its effect.' });
+    });
+    /* cycles: walk from every node; report each circle once, from its first key */
+    try{
+      var next = {}; L.forEach(function(r){ (next[r.a] = next[r.a] || []).push(r.b); });
+      var seen = {}, done = {};
+      Object.keys(next).forEach(function(start){
+        var stack = [], onPath = {};
+        (function walk(k){
+          if(done[k]) return; if(onPath[k]){ var cyc = stack.slice(stack.indexOf(k)); var sig = cyc.slice().sort().join('\u0001'); if(seen[sig]) return; seen[sig] = 1;
+            out.push({ certain: true, element: name(cyc[0]), section: null, kind: 'cycle', keys: cyc.slice(),
+              text: '\u2691 certain \u2014 ' + cyc.map(name).concat([name(cyc[0])]).join(' \u2192 ') + ': these events cause each other in a circle \u2014 one of them has to come first.' }); return; }
+          onPath[k] = 1; stack.push(k); (next[k] || []).forEach(walk); stack.pop(); onPath[k] = 0; done[k] = 1;
+        })(start);
+      });
+    }catch(e){}
+    return out;
+  }
+  window.__eventLinks = { list: list, add: add, remove: remove, find: find, causesOf: causesOf, effectsOf: effectsOf, sectionOf: sectionOf, name: name, findings: findings, RELS: Object.keys(RELS) };
 })();
 </script>
 <script id="dyst-stake-bearer-js">
