@@ -4788,6 +4788,17 @@ body.eink .pt-rh-dev{color:#000}
 #eventCreator .ev-cause .gc-dim{ flex:0 0 118px; }
 #eventCreator .ev-cause .ev-rel{ cursor:pointer; }
 #eventCreator .ev-cause .ev-rel:hover{ color:var(--gold); }
+/* v.658 · #50 phase 3 — the Who-knows rows: three typed, one derived. Chips are the row's serif
+   at a smaller size so a row holding four names still reads as one line. */
+#eventCreator .gc-seclbl.ev-known-lbl{ order:1; margin-top:0; }
+#eventCreator .ev-known{ order:1; margin-bottom:10px; }
+#eventCreator .gc-slot.ev-krow .gc-dim{ flex:0 0 118px; white-space:nowrap; }   /* out-specifies the slot rule (96px), which sits later in the file */
+#eventCreator .ev-krow .ev-kwho{ flex:1; display:flex; flex-wrap:wrap; align-items:baseline; gap:2px 10px; font-family:var(--serif); font-size:15px; color:var(--ink); line-height:1.3; }
+#eventCreator .ev-krow .ev-kchip{ white-space:nowrap; }
+#eventCreator .ev-krow .ev-kchip .gc-ctl{ margin-left:2px; }
+#eventCreator .ev-krow .ev-kadd{ flex:0 0 auto; font-size:15px; }
+#eventCreator .ev-krow.ev-kderived .ev-kun{ font-style:italic; color:var(--ink-soft); }
+#eventCreator .ev-krow.ev-kderived .gc-dim{ color:var(--gold); }
 .gb-card .gb-row2 .gb-focus{ flex:1; }
 .gb-ring{ fill:none; stroke:var(--affirm); stroke-width:2.4; pointer-events:none; }
 .gb-ring.leader{ stroke:var(--gold); stroke-width:3; }
@@ -23745,7 +23756,13 @@ function openElementDossier(key, opts){
               var _ph=function(r,k){ return _L.name(k)+(r.rel==='enables'?' (made possible)':''); };
               var _in=_L.causesOf(key).filter(function(r){ return typeof npFindEl!=='function'||npFindEl(r.a); }).map(function(r){ return _ph(r,r.a); });
               var _out=_L.effectsOf(key).filter(function(r){ return typeof npFindEl!=='function'||npFindEl(r.b); }).map(function(r){ return _ph(r,r.b); });
-              if(_in.length) put('Because of', _in.join(', ')); if(_out.length) put('Leads to', _out.join(', ')); } }catch(e){} }
+              if(_in.length) put('Because of', _in.join(', ')); if(_out.length) put('Leads to', _out.join(', ')); } }catch(e){}
+            /* v.658 · #50 phase 3 — who knows: the three as stored, the fourth worked out from the cast */
+            try{ var _K=window.__eventKnown; if(_K && _K.rec(key)){ var _ls=_K.lists(key); var _nm=function(k){ return _K.name(k); };
+              if(_ls.acted.length) put('Who acted', _ls.acted.map(_nm).join(', '));
+              if(_ls.present.length) put('Who was there', _ls.present.map(_nm).join(', '));
+              if(_ls.heard.length) put('Who heard later', _ls.heard.map(_nm).join(', '));
+              put('Still doesn’t know', _ls.unaware.length ? _ls.unaware.map(_nm).join(', ') : 'everyone knows'); } }catch(e){} }
           (attrs||[]).forEach(function(a){ if(a && a.word) put(a.sub||'Trait', a.word); });
           /* [Jeremy] Physical Trait sits with the body facts, under Age — the rest keep their own
              order. A preference list rather than a full ordering, so a dimension nobody thought of
@@ -24217,7 +24234,7 @@ try{ window.openElementEdit = openElementEdit; }catch(e){}
 // When an element's identity word (and thus its wordKey) changes, move every piece of data indexed by the old key
 // to the new key so nothing is orphaned: notepad notes (incl. per-section / connection / part composites), images,
 // dossier text, image positions, aliases, stake records (and the bearer/threat INSIDE them), standing bonds,
-// an event's what-changed record and both ends of its causal links (#50), Explore links, and (via the plan bridge) arcs, goal links, group-chart membership and a thread's linked elements.
+// an event's what-changed record, both ends of its causal links and its who-knows ledger (#50), Explore links, and (via the plan bridge) arcs, goal links, group-chart membership and a thread's linked elements.
 function migrateElementKey(oldKey, newKey){
   try{
     if (!oldKey || !newKey || oldKey === newKey) return;
@@ -24248,6 +24265,9 @@ function migrateElementKey(oldKey, newKey){
       remapExact(s.eventShift);      /* v.656 · #50 — what an event changed, keyed by the event's own key */
       /* v.657 · #50 phase 2 — the causal chain's rows hold element keys at BOTH ends (like bonds' a/b) */
       if (Array.isArray(s.eventLinks)) s.eventLinks.forEach(l => { if (!l) return; if (l.a === oldKey) l.a = newKey; if (l.b === oldKey) l.b = newKey; });
+      /* v.658 · #50 phase 3 — the who-knows ledger: keyed by the event, and its three lists hold BEING keys */
+      remapExact(s.eventKnown);
+      if (s.eventKnown) Object.keys(s.eventKnown).forEach(k => { const r = s.eventKnown[k]; if (!r) return; ['acted','present','heard'].forEach(l => { if (Array.isArray(r[l])) r[l] = r[l].map(x => x === oldKey ? newKey : x); }); });
       /* stakeData's VALUES are element keys too: a renamed character stops being anyone's bearer. */
       if (s.stakeData) Object.keys(s.stakeData).forEach(k => {
         const r = s.stakeData[k]; if (!r) return;
@@ -45912,6 +45932,48 @@ document.addEventListener('DOMContentLoaded', init);
       menu.style.top=Math.max(8, Math.min(y||200, window.innerHeight-360))+'px';
       menu.style.display='block';
     }
+    /* v.658 · #50 phase 3 — the Who-knows rows. EV.known = { acted:[], present:[], heard:[] } is the
+       draft; the fourth row is computed from it and the cast each render, never stored. */
+    const EV_KLISTS=[ ['acted','acted','Who did it'], ['present','was there','Who witnessed it'], ['heard','heard later','Who was told, or found out'] ];
+    function evKnownDraft(){ if(!EV.known) EV.known={ acted:[], present:[], heard:[] }; EV_KLISTS.forEach(k=>{ if(!Array.isArray(EV.known[k[0]])) EV.known[k[0]]=[]; }); return EV.known; }
+    function evKnownPlaced(){ const d=evKnownDraft(), p={}; EV_KLISTS.forEach(k=>{ d[k[0]].forEach(x=>{ p[x]=1; }); }); return p; }
+    function evKnownName(k){ try{ return (window.__eventKnown&&window.__eventKnown.name)?window.__eventKnown.name(k):k; }catch(e){ return k; } }
+    function evRenderKnown(){
+      const host=document.getElementById('evKnown'); if(!host) return; host.innerHTML='';
+      const d=evKnownDraft(); const placed=evKnownPlaced();
+      EV_KLISTS.forEach(k=>{
+        const row=document.createElement('div'); row.className='gc-slot ev-krow'; row.dataset.list=k[0];
+        const dim=document.createElement('span'); dim.className='gc-dim'; dim.textContent=k[1]; dim.title=k[2]; row.appendChild(dim);
+        const who=document.createElement('span'); who.className='ev-kwho'; row.appendChild(who);
+        d[k[0]].forEach((x, i)=>{ const ch=document.createElement('span'); ch.className='ev-kchip'; ch.dataset.key=x; ch.textContent=evKnownName(x);
+          const rm=document.createElement('span'); rm.className='gc-ctl'; rm.textContent='×'; rm.title='Remove'; rm.addEventListener('click', ev=>{ ev.stopPropagation(); d[k[0]].splice(i,1); evRenderKnown(); }); ch.appendChild(rm); who.appendChild(ch); });
+        const add=document.createElement('span'); add.className='gc-word empty ev-kadd'; add.textContent='＋'; add.title='Add a character who '+k[1]; add.addEventListener('click', ev=>{ ev.stopPropagation(); evKnownMenu(k[0], ev.clientX, ev.clientY); }); who.appendChild(add);
+        host.appendChild(row);
+      });
+      /* the fourth column — derived, read-only, the one the writer came for */
+      let cast=[]; try{ cast=(window.__eventKnown&&window.__eventKnown.cast)?window.__eventKnown.cast():[]; }catch(e){}
+      const un=cast.filter(x=>!placed[x]);
+      const row=document.createElement('div'); row.className='gc-slot ev-krow ev-kderived'; row.dataset.list='unaware';
+      const dim=document.createElement('span'); dim.className='gc-dim'; dim.textContent='doesn’t know'; dim.title='Worked out from the cast: everyone not in the three rows above'; row.appendChild(dim);
+      const who=document.createElement('span'); who.className='ev-kwho ev-kun'; who.textContent = !cast.length ? 'no characters in the story yet' : (un.length ? un.map(evKnownName).join(', ') : 'everyone knows'); row.appendChild(who);
+      host.appendChild(row);
+    }
+    function evKnownMenu(list, x, y){
+      const menu=document.getElementById('aspectMenu'); if(!menu) return; menu.innerHTML='';
+      if(menu.parentElement!==document.body) document.body.appendChild(menu);
+      const placed=evKnownPlaced(); let cast=[]; try{ cast=(window.__eventKnown&&window.__eventKnown.cast)?window.__eventKnown.cast():[]; }catch(e){}
+      const lbl=(EV_KLISTS.find(k=>k[0]===list)||[])[1]||list;
+      const h=document.createElement('div'); h.textContent='Who '+lbl+'…'; h.style.cssText='font-family:var(--sans);font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-faint);padding:6px 11px 2px'; menu.appendChild(h);
+      const free=cast.filter(x=>!placed[x]);
+      if(!free.length){ const e=document.createElement('div'); e.className='ev-known-none'; e.textContent=cast.length?'Everyone in the story is already placed.':'No characters in the story yet.'; e.style.cssText='font-family:var(--serif);font-style:italic;font-size:14px;color:var(--ink-faint);padding:6px 11px 8px'; menu.appendChild(e); }
+      free.forEach(k=>{ const b=document.createElement('button'); b.textContent=evKnownName(k); b.dataset.key=k; b.addEventListener('click', ev=>{ ev.stopPropagation(); menu.style.display='none'; evKnownDraft()[list].push(k); evRenderKnown(); }); menu.appendChild(b); });
+      menu.style.left=Math.max(8, Math.min(x||220, window.innerWidth-206))+'px';
+      menu.style.top=Math.max(8, Math.min(y||200, window.innerHeight-360))+'px';
+      menu.style.display='block';
+    }
+    function evLoadKnown(key){ EV.known={ acted:[], present:[], heard:[] }; try{ if(window.__eventKnown&&key){ const r=window.__eventKnown.rec(key); if(r) EV_KLISTS.forEach(k=>{ EV.known[k[0]]=(Array.isArray(r[k[0]])?r[k[0]]:[]).slice(); }); } }catch(e){} }
+    function evWriteKnown(key){ try{ if(!window.__eventKnown||!key) return; if(typeof ensureSession==='function') ensureSession(); window.__eventKnown.setAll(key, evKnownDraft()); }catch(e){} }
+    function evKnownAny(){ const d=evKnownDraft(); return EV_KLISTS.some(k=>d[k[0]].length>0); }
     /* store → draft (on edit), draft → store (on create / save). The store is the one copy; the draft
        is what the builder edits and is thrown away on close. */
     function evLoadCauses(key){ EV.causes=[]; try{ if(window.__eventLinks&&key) EV.causes=window.__eventLinks.causesOf(key).map(r=>({ a:r.a, rel:r.rel })); }catch(e){} }
@@ -45957,6 +46019,10 @@ document.addEventListener('DOMContentLoaded', init);
           +  '<div class="gc-seclbl ev-cause-lbl" title="The earlier events this one grew out of — what caused it, or made it possible. Gap &amp; Chekhov checks that every cause lands before its effect.">Because of</div>'
           +  '<div id="evCauses" class="ev-causes"></div>'
           +  '<span class="gc-add ev-cause-add" id="evCauseAdd">＋ an earlier event</span>'
+          /* v.658 · #50 phase 3 — WHO KNOWS. Three typed columns and a fourth that is derived: the
+             cast minus the three. "The engine of every secret and late reveal in fiction." */
+          +  '<div class="gc-seclbl ev-known-lbl" title="Who acted, who was there, who heard about it later — and, worked out from the cast, who still does not know">Who knows</div>'
+          +  '<div id="evKnown" class="ev-known"></div>'
           +  '<div class="gc-seg" id="evSeg"></div>'
           +  '<div class="gc-seghint" id="evSegHint"></div>'
           +  '<div class="gc-seclbl">Characteristics</div>'
@@ -45984,14 +46050,15 @@ document.addEventListener('DOMContentLoaded', init);
     function openEventCreator(opts){
       opts=opts||{};
       if(typeof addsLocked==='function' && addsLocked()){ if(typeof flashStatus==='function') flashStatus('End the session to add elements'); return; }
-      if(!opts.keep){ EV.name=''; EV.desc=''; EV.complexity=0; EV.from=''; EV.to=''; EV.causes=[]; }
+      if(!opts.keep){ EV.name=''; EV.desc=''; EV.complexity=0; EV.from=''; EV.to=''; EV.causes=[]; EV.known={ acted:[], present:[], heard:[] }; }
       EV.editKey=null; EV.editIdx=null;
       if(opts.edit){ var _ew=(typeof npFindEl==='function')?npFindEl(opts.edit):null; if(_ew){ EV.editKey=opts.edit; EV.editIdx=(opts.editIdx!=null?opts.editIdx:-1); EV.name=_ew.name||''; EV.desc=''; EV.slots=(typeof window.dystElementToSlots==='function')?window.dystElementToSlots(_ew):[];
         /* v.656 — editing an event fills its change from the record, so Save cannot wipe what was there */
         try{ var _sh=(window.__eventShift&&window.__eventShift.rec)?window.__eventShift.rec(opts.edit):null; EV.from=(_sh&&_sh.from)||''; EV.to=(_sh&&_sh.to)||''; }catch(e){ EV.from=''; EV.to=''; }
-        evLoadCauses(opts.edit); } }   /* v.657 — and its causes, from the store */
+        evLoadCauses(opts.edit); evLoadKnown(opts.edit); } }   /* v.657 — and its causes, from the store; v.658 — and who knows */
       evEl();
       evRenderCauses();   /* v.657 */
+      evRenderKnown();    /* v.658 */
       const nm=document.getElementById('evName'); if(nm) nm.value=EV.name||'';
       const ds=document.getElementById('evDesc'); if(ds) ds.value=EV.desc||'';
       { const f=document.getElementById('evFrom'); if(f) f.value=EV.from||''; const t=document.getElementById('evTo'); if(t) t.value=EV.to||''; }   /* v.656 */
@@ -46010,6 +46077,7 @@ document.addEventListener('DOMContentLoaded', init);
       const kindSlot=EV.slots.find(s=>s.sub==='Kind'); const kind=(kindSlot&&kindSlot.word)||'Event'; const kindSub=(kindSlot&&kindSlot.kindSub)||'';
       if(EV.editKey){ try{ if(window.__eventShift){ window.__eventShift.set(EV.editKey,'from',EV.from); window.__eventShift.set(EV.editKey,'to',EV.to); } }catch(e){}   /* v.656 · #50 — what changes, on the record */
         evWriteCauses(EV.editKey);   /* v.657 · #50 phase 2 — and its causes */
+        evWriteKnown(EV.editKey);    /* v.658 · #50 phase 3 — and who knows */
         const eAttrs=[]; EV.slots.forEach(sl=>{ if(sl.sub==='Kind') return; if(!sl.word) return; eAttrs.push({ word:sl.word, sub:sl.sub }); }); try{ if(typeof window.dystSetElementAttrs==='function') window.dystSetElementAttrs(EV.editKey, eAttrs); }catch(e){} try{ if(typeof applyElemEdit==='function') applyElemEdit(EV.editKey, (EV.editIdx!=null?EV.editIdx:-1), { cat:'event', word:kind, sub:kindSub, name:(EV.name||'').trim() }); }catch(e){} const _nm=(EV.name||'').trim(); EV.editKey=null; EV.editIdx=null; closeEventCreator(); if(typeof flashStatus==='function') flashStatus((_nm||kind)+' — updated'); return; }
       if(typeof pushUndo==='function') pushUndo();
       if(!state.prompt){ state.prompt={words:[],sets:1,links:[],removedLinks:[]}; state.activeSet=0; state.frames=[{gap:null,prompt:state.prompt}]; state.frameIdx=0; }
@@ -46022,6 +46090,7 @@ document.addEventListener('DOMContentLoaded', init);
       state.prompt.words.push(built);
       try{ if(typeof ensureSession==='function') ensureSession(); if(window.__eventShift && ((EV.from||'').trim() || (EV.to||'').trim())){ var _k=wordKey(built); window.__eventShift.set(_k,'from',EV.from); window.__eventShift.set(_k,'to',EV.to); } }catch(e){}   /* v.656 · #50 */
       try{ if((EV.causes||[]).length) evWriteCauses(wordKey(built)); }catch(e){}   /* v.657 · #50 phase 2 */
+      try{ if(evKnownAny()) evWriteKnown(wordKey(built)); }catch(e){}   /* v.658 · #50 phase 3 */
       const desc=(EV.desc||'').trim();
       if(desc){ try{ if(typeof ensureSession==='function') ensureSession(); state.session.npNotes=state.session.npNotes||{}; const k=wordKey(built); if(!state.session.npNotes[k]) state.session.npNotes[k]='<p>'+desc.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/\n/g,'<br>')+'</p>'; }catch(e){} }
       if(window.__qaOnElementAdd){ try{ window.__qaOnElementAdd(built); }catch(e){} }
@@ -84916,6 +84985,45 @@ body.eink .stk-slot-cap,body.eink .stk-menu-sub,body.eink .stk-slot-val.stk-slot
     return out;
   }
   window.__eventLinks = { list: list, add: add, remove: remove, find: find, causesOf: causesOf, effectsOf: effectsOf, sectionOf: sectionOf, name: name, findings: findings, RELS: Object.keys(RELS) };
+
+  /* ── #50 phase 3 (v.658) · eventKnown — the who-knows ledger ──────────────────────────────────
+     `state.session.eventKnown[<eventKey>] = { acted:[], present:[], heard:[] }` — being keys. One
+     column per character. 'unaware' is DERIVED — the cast minus the three — and never stored. */
+  var LISTS = ['acted', 'present', 'heard'];
+  function kbag(make){
+    var s = sess(); if(!s) return null;
+    if(!s.eventKnown || typeof s.eventKnown !== 'object'){ if(!make) return null; s.eventKnown = {}; }
+    return s.eventKnown;
+  }
+  function krec(key){ var b = kbag(false); return (b && key && b[key]) || null; }
+  function kprune(key){ var b = kbag(false); if(!b || !b[key]) return; var r = b[key], any = false; LISTS.forEach(function(l){ if(Array.isArray(r[l]) && r[l].length) any = true; else delete r[l]; }); if(!any) delete b[key]; }
+  /* put `who` in `list` (and out of the other two); list null/'' takes them out of all three */
+  function kset(key, who, list){
+    if(!key || !who) return;
+    var b = kbag(true); if(!b) return;
+    var r = b[key] || (b[key] = {});
+    LISTS.forEach(function(l){ if(Array.isArray(r[l])){ var i = r[l].indexOf(who); if(i >= 0) r[l].splice(i, 1); } });
+    if(list && LISTS.indexOf(list) >= 0){ (r[list] = r[list] || []).push(who); }
+    kprune(key); save();
+  }
+  /* replace the whole record from a draft {acted,present,heard} — dedupes across lists, first list wins */
+  function ksetAll(key, draft){
+    if(!key) return; var b = kbag(true); if(!b) return;
+    var r = {}, seen = {};
+    LISTS.forEach(function(l){ var src = (draft && Array.isArray(draft[l])) ? draft[l] : []; var out = []; src.forEach(function(k){ if(k && !seen[k]){ seen[k] = 1; out.push(k); } }); if(out.length) r[l] = out; });
+    if(Object.keys(r).length) b[key] = r; else delete b[key];
+    save();
+  }
+  /* the cast: every being in the story, by key (placed on a map or in the legend) */
+  function cast(){ try{ return (typeof npStoryElements === 'function' ? npStoryElements() : []).filter(function(x){ return x && x.w && x.w.cat === 'being'; }).map(function(x){ return x.key; }); }catch(e){ return []; } }
+  /* the four columns, computed: the three as stored (dangling keys dropped) and unaware = cast minus them */
+  function klists(key){
+    var r = krec(key) || {}, out = {}, placed = {};
+    LISTS.forEach(function(l){ out[l] = (Array.isArray(r[l]) ? r[l] : []).filter(function(k){ return !!el(k); }); out[l].forEach(function(k){ placed[k] = 1; }); });
+    out.unaware = cast().filter(function(k){ return !placed[k]; });
+    return out;
+  }
+  window.__eventKnown = { rec: krec, set: kset, setAll: ksetAll, lists: klists, cast: cast, name: name, LISTS: LISTS.slice(), all: function(){ return kbag(false) || {}; } };
 })();
 </script>
 <script id="dyst-stake-bearer-js">
