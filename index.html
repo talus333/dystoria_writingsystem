@@ -21040,6 +21040,70 @@ function zoneDepth(idx){
   while(at && at.parent!=null && !seen[at.i] && d<32){ seen[at.i]=1; at=by[at.parent]; d++; }
   return d;
 }
+/* ---------------- v.665 · #48 §5 — the At Stake hook into #46 ---------------- */
+function zoneIsAtStake(w){ return /^at[\s-]?(stake|risk)$/i.test(zoneLabelOf(w)); }
+/* the bearers the story already has — a member who bears a stake is not asked again */
+function stakeBearerKeys(){
+  var out = {}; try{ var all = (window.__stakeData && window.__stakeData.all) ? window.__stakeData.all() : {}; Object.keys(all).forEach(function(k){ var r = all[k]; if(r && r.bearer) out[r.bearer] = 1; }); }catch(e){}
+  return out;
+}
+function zoneStakeCandidates(w){
+  if(!zoneIsAtStake(w)) return [];
+  var bearers = stakeBearerKeys();
+  return zoneMembers(w).filter(function(o){ return o.w && (o.w.role === 'being' || o.w.cat === 'object' || o.w.cat === 'setting') && !bearers[wordKey(o.w)]; });
+}
+/* the THREAT is read off the drawing: the nearest zone this one nests in whose label names a Place */
+function zoneThreatFor(idx){
+  try{
+    var t = zoneTree(), by = {}; t.forEach(function(nd){ by[nd.i] = nd; });
+    var els = (typeof npStoryElements === 'function') ? npStoryElements() : [];
+    var at = by[idx], seen = {}, hops = 0;
+    while(at && at.parent != null && !seen[at.i] && hops < 32){
+      seen[at.i] = 1; at = by[at.parent]; hops++;
+      if(!at) break;
+      var lab = String(at.label || '').trim().toLowerCase(); if(!lab) continue;
+      for(var k = 0; k < els.length; k++){ var w = els[k].w; if(w && w.cat === 'setting' && !w.deco && String((typeof elDisplayName === 'function') ? elDisplayName(w) : (w.name || w.word)).trim().toLowerCase() === lab) return els[k].key; }
+    }
+  }catch(e){}
+  return null;
+}
+/* the one write, and only when pressed: a stake ELEMENT through the roster's own door, then its bearer (and threat) */
+function zoneStakeCreate(idx, memberKey, text){
+  text = String(text == null ? '' : text).trim(); if(!text || !memberKey) return null;
+  var p = window.__dystPlan; if(!p || typeof p.addLibraryElement !== 'function') return null;
+  var made = null; try{ made = p.addLibraryElement('stakes', text, 'At Stake', null); }catch(e){}
+  if(!made || !made.key) return null;
+  try{ if(window.__stakeData){ window.__stakeData.set(made.key, 'bearer', memberKey); var th = zoneThreatFor(idx); if(th) window.__stakeData.set(made.key, 'threat', th); } }catch(e){}
+  try{ if(typeof renderStoryLibrary === 'function') renderStoryLibrary(); }catch(e){}
+  try{ if(typeof renderConstellation === 'function') renderConstellation(); }catch(e){}
+  try{ var nm = ''; var mw = (typeof npFindEl === 'function') ? npFindEl(memberKey) : null; nm = mw ? ((typeof elDisplayName === 'function') ? elDisplayName(mw) : (mw.name || mw.word)) : ''; if(typeof flashStatus === 'function') flashStatus('Stake added \u2014 ' + (nm ? nm + ' stands to lose ' : '') + text); }catch(e){}
+  return made.key;
+}
+/* the popover: who is at stake here and not yet answered; press one, answer the one question */
+function openZoneStakeOffer(idx, x, y){
+  var w = state.prompt && state.prompt.words[idx]; if(!w) return;
+  var old = document.getElementById('zoneStakeOffer'); if(old) old.remove();
+  var cands = zoneStakeCandidates(w); if(!cands.length) return;
+  var m = document.createElement('div'); m.id = 'zoneStakeOffer';
+  var hd = document.createElement('div'); hd.className = 'zso-h'; hd.textContent = 'At stake here'; m.appendChild(hd);
+  var lede = document.createElement('div'); lede.className = 'zso-lede'; lede.textContent = 'Name what each stands to lose \u2014 nothing is written until you do.'; m.appendChild(lede);
+  cands.forEach(function(o){
+    var key = wordKey(o.w), nm = (typeof elDisplayName === 'function') ? elDisplayName(o.w) : (o.w.name || o.w.word);
+    var b = document.createElement('button'); b.type = 'button'; b.className = 'zso-row'; b.dataset.key = key;
+    b.innerHTML = '<span class="zso-nm"></span><span class="zso-q">\u2192 what they stand to lose\u2026</span>';
+    b.querySelector('.zso-nm').textContent = nm;
+    b.addEventListener('click', function(ev){ ev.stopPropagation(); m.remove();
+      if(typeof sitePrompt !== 'function') return;
+      sitePrompt('What does ' + nm + ' stand to lose here?', '', 'Add the stake').then(function(v){ if(v == null) return; if(!String(v).trim()) return; zoneStakeCreate(idx, key, v); });
+    });
+    m.appendChild(b);
+  });
+  document.body.appendChild(m);
+  m.style.left = Math.round(Math.max(8, Math.min(x || 200, window.innerWidth - 268))) + 'px';
+  m.style.top = Math.round(Math.max(8, Math.min(y || 160, window.innerHeight - 60 - 44 * cands.length))) + 'px';
+  setTimeout(function(){ document.addEventListener('pointerdown', function h(ev){ if(ev.target.closest && ev.target.closest('#zoneStakeOffer')) return; m.remove(); document.removeEventListener('pointerdown', h, true); }, true); }, 0);
+}
+try{ window.__zoneStake = { isAtStake: zoneIsAtStake, candidates: zoneStakeCandidates, threatFor: zoneThreatFor, create: zoneStakeCreate, offer: openZoneStakeOffer, bearers: stakeBearerKeys }; }catch(e){}
 try{ window.__dystZones={ words:zoneWords, isZone:isZoneWord, canBe:zoneCanBe, poly:zonePoly, label:zoneLabelOf, setLabel:zoneSetLabel,
                           members:zoneMembers, tree:zoneTree, crossings:zoneCrossings, depth:zoneDepth,
                           presets:ZONE_PRESETS, canName:drawCanName, labelAt:drawLabelAt, lines:namedLineWords }; }catch(e){}
@@ -21818,6 +21882,31 @@ function renderConstellation(){
              small plate rather than a button. */
           _zp.setAttribute('rx', 2);
           if (_zn) _zc.setAttribute('y', _ph / 2 + 9);
+          /* v.665 · #48 §5 — the At Stake hook: a member who bears no stake yet earns a quiet offer
+             under the count. The pill stays scenery (pointer-events:none); this one line takes the
+             pointer. Nothing is written until it is pressed. */
+          try{
+            var _zk = (typeof zoneStakeCandidates === 'function' && isZoneWord(_lw)) ? zoneStakeCandidates(_lw) : [];
+            if (_zk.length){
+              var _zo = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+              _zo.setAttribute('class', 'zl-offer'); _zo.dataset.zone = i;
+              var _zoy = _ph / 2 + 9 + (_zn ? 11 : 0);
+              _zo.setAttribute('transform', 'translate(0,' + _zoy + ')');
+              var _zop = document.createElementNS('http://www.w3.org/2000/svg', 'rect'); _zop.setAttribute('class', 'zl-op'); _zo.appendChild(_zop);
+              var _zot = document.createElementNS('http://www.w3.org/2000/svg', 'text'); _zot.setAttribute('class', 'zl-ot'); _zot.setAttribute('text-anchor', 'middle'); _zot.setAttribute('dy', '0.34em');
+              _zot.textContent = '\u2691 ' + (_zk.length === 1 ? 'name their stake' : _zk.length + ' stakes to name');
+              _zo.appendChild(_zot);
+              var _zott = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+              _zott.textContent = _zk.map(function(o){ return (typeof elDisplayName === 'function') ? elDisplayName(o.w) : (o.w.name || o.w.word); }).join(', ') + (_zk.length === 1 ? ' is' : ' are') + ' at stake here and bear no stake yet \u2014 press to name what they stand to lose';
+              _zo.appendChild(_zott);
+              _zo.addEventListener('click', function(ev){ ev.stopPropagation(); if (typeof hideTip === 'function') hideTip();   /* the offer's own tooltip would sit over the popover */
+                if (typeof openZoneStakeOffer === 'function') openZoneStakeOffer(i, ev.clientX, ev.clientY); });
+              _zo.addEventListener('pointerdown', function(ev){ ev.stopPropagation(); });
+              _zg.appendChild(_zo);
+              try{ var _ob = _zot.getBBox(); var _ow = Math.round(_ob.width) + 10; if (_ow % 2) _ow++; var _oh = Math.round(_ob.height) + 4; if (_oh % 2) _oh++;
+                   _zop.setAttribute('x', -_ow / 2); _zop.setAttribute('y', -_oh / 2); _zop.setAttribute('width', _ow); _zop.setAttribute('height', _oh); _zop.setAttribute('rx', 2); }catch(e2){ _zop.setAttribute('opacity','0'); }
+            }
+          }catch(e3){}
         }catch(e){ _zp.setAttribute('opacity','0'); if(_zn) _zc.setAttribute('y','16'); }
       }
       return;
@@ -57448,6 +57537,20 @@ body.eink .zone-tool-panels .draw-panel{ background:#fff; border:1px solid #000;
 .zone-label .zl-t{ font-family:'Cormorant Garamond',Cormorant,Garamond,serif; font-size:10.5px; font-weight:600;
   letter-spacing:.02em; text-transform:none; fill:#2b2926; opacity:1; }
 .zone-label .zl-n{ font-family:var(--sans); font-size:7px; letter-spacing:.1em; text-transform:uppercase; fill:#9a9182; opacity:.7; }
+/* v.665 · #48 §5 — the At Stake offer under the pill: the one line of a zone label that takes the
+   pointer, in the conflict crimson the connection pill already uses for what is at odds */
+.zone-label .zl-offer{ pointer-events:auto; cursor:pointer; }
+.zone-label .zl-op{ fill:rgba(176,64,47,.10); stroke:rgba(176,64,47,.42); stroke-width:.8; }
+.zone-label .zl-ot{ font-family:var(--sans); font-size:7px; font-weight:700; letter-spacing:.1em; text-transform:uppercase; fill:#a8452f; }
+.zone-label .zl-offer:hover .zl-op{ fill:rgba(176,64,47,.2); stroke:rgba(176,64,47,.7); }
+#zoneStakeOffer{ position:fixed; z-index:200; width:256px; background:var(--paper); border:1px solid var(--line); border-radius:10px; box-shadow:0 14px 40px rgba(0,0,0,.26); padding:8px; }
+#zoneStakeOffer .zso-h{ font-family:var(--sans); font-size:10.5px; font-weight:700; letter-spacing:.14em; text-transform:uppercase; color:#a8452f; padding:4px 8px 2px; }
+#zoneStakeOffer .zso-lede{ font-family:var(--serif); font-style:italic; font-size:12px; color:var(--ink-faint); padding:0 8px 7px; line-height:1.45; }
+#zoneStakeOffer .zso-row{ display:flex; align-items:baseline; gap:8px; width:100%; text-align:left; padding:7px 9px; border:none; background:none; border-radius:7px; cursor:pointer; font-family:var(--serif); }
+#zoneStakeOffer .zso-row:hover{ background:rgba(0,0,0,.05); }
+#zoneStakeOffer .zso-nm{ font-size:15px; color:var(--ink); }
+#zoneStakeOffer .zso-q{ font-size:11.5px; font-style:italic; color:var(--ink-faint); margin-left:auto; white-space:nowrap; }
+body.eink #zoneStakeOffer{ background:#fff; border-color:#000; }
 /* v.626 [Jeremy] — "a small label pill with the name on it". A plate under the words, so a name
    reads the same over a terrain wash, over a stroke, or over bare parchment. */
 /* v.627 [Jeremy] — "square edge and much smaller, kind of like the bond connection pills, but more
