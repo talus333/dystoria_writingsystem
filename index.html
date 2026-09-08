@@ -13243,9 +13243,54 @@ function sceneNeedsOffer(){
   var src=scenePrevBoard();
   return !!(src && src.p && (src.p.words||[]).length);
 }
+/* v.664 · #48 — the ZONE offer, for a section's own board (scene 1). Asked of a board that has no
+   zones when the board before it (the previous section's last scene) drew some, and this section
+   has not been asked. The answer lives on the frame — `fr.zonesOffered` — so it travels with the
+   section through save and reorder; a split builds a fresh frame and may ask again, which is a
+   question re-asked, not an answer lost. */
+function zoneOfferSrc(){
+  try{
+    var fi=state.frameIdx||0; if(fi<=0) return null;
+    var prev=sceneListFor(fi-1), lastSid=prev.length>1?prev[prev.length-1].sid:null;
+    var p=scenePromptFor(fi-1, lastSid); if(!p) return null;
+    var zs=(p.words||[]).filter(function(w){ return (typeof isZoneWord==='function') && isZoneWord(w); });
+    if(!zs.length) return null;
+    return { p:p, zones:zs, label:'Section '+fi };
+  }catch(e){}
+  return null;
+}
+function zoneOfferNeeds(){
+  try{
+    if(state.sceneSid) return false;                          /* a scene's board asks the scene question */
+    var fi=state.frameIdx||0, fr=(state.frames||[])[fi]; if(!fr || fi<=0) return false;
+    if(fr.zonesOffered) return false;
+    if(state.placesView==='maps') return false;
+    var p=state.prompt; if(!p) return false;
+    if((p.words||[]).some(function(w){ return (typeof isZoneWord==='function') && isZoneWord(w); })) return false;
+    return !!zoneOfferSrc();
+  }catch(e){ return false; }
+}
+function zoneOfferMark(){
+  try{ var fr=(state.frames||[])[state.frameIdx||0]; if(fr) fr.zonesOffered=true;
+    if(typeof syncFramesToSession==='function') syncFramesToSession();
+    if(typeof scheduleAutosave==='function') scheduleAutosave(); }catch(e){}
+  sceneOfferChanged();
+}
+function zoneCarryOver(){
+  var src=zoneOfferSrc(); if(!src) return false;
+  var dst=state.prompt; if(!dst) return false;
+  if(typeof pushUndo==='function') pushUndo();
+  src.zones.forEach(function(z){ dst.words.push(JSON.parse(JSON.stringify(z))); });
+  zoneOfferMark();
+  if(typeof layoutConstellation==='function') layoutConstellation();
+  if(typeof refreshSky==='function') refreshSky();
+  if(typeof syncFramesToSession==='function') syncFramesToSession();
+  return true;
+}
 try{ window.__dystScenes={ list:sceneListFor, at:sceneIndexNow, go:switchScene, board:scbGet, has:scbHas,
                            prev:scenePrevBoard, carry:sceneCarryOver, answered:sceneAnswered,
-                           mark:sceneMarkAnswered, needsOffer:sceneNeedsOffer }; }catch(e){}
+                           mark:sceneMarkAnswered, needsOffer:sceneNeedsOffer,
+                           zones:{ needs:zoneOfferNeeds, src:zoneOfferSrc, carry:zoneCarryOver, mark:zoneOfferMark } }; }catch(e){}
 function switchFrame(k){
   if (!state.frames || k < 0 || k >= state.frames.length) return;
   const moved = k !== state.frameIdx;
@@ -13265,6 +13310,7 @@ function switchFrame(k){
   if (typeof live !== 'undefined' && live.on) liveScheduleTrack();
   if (moved && window.prepSummaryOnFrame) window.prepSummaryOnFrame();   // recap follows the section you're viewing
   if (state.placesView === 'maps' && typeof placesRepoint === 'function') placesRepoint();   /* v.619 — you are looking at a map; the section moved underneath it */
+  try{ if (typeof sceneOfferChanged === 'function') sceneOfferChanged(); }catch(e){}   /* v.664 — a section's own board can carry a question too */
 }
 function cleanPlaceholders(){
   const ed = $('editor'); if (!ed) return;
@@ -13322,7 +13368,7 @@ function addFrame(){
   reconcileSections();          // clear any orphan dividers so the new section can't "recall" a deleted one
   const src = state.frameIdx;
   const at = src + 1;
-  const copy = pruneEventsFromCopy(JSON.parse(JSON.stringify(state.frames[src].prompt)), true);
+  const copy = pruneZonesFromCopy(pruneEventsFromCopy(JSON.parse(JSON.stringify(state.frames[src].prompt)), true));   /* v.664 — zones are offered, not assumed */
   state.frames.splice(at, 0, { gap: 'later', prompt: copy, stage: frameStage(state.frames[src], src) });
   if (at === 1 && state.frames[0].gap == null) state.frames[0].gap = null;
   switchFrame(at);
@@ -13345,7 +13391,7 @@ function insertBlankSectionAt(at, opts){
   const prose = {};
   editorNodeFrames().forEach(nf => { const nd = nf.node; if (nd.nodeType === 1 && (nd.tagName === 'H3' || (nd.classList && nd.classList.contains('sec-mark')))) return; (prose[nf.frame] = prose[nf.frame] || []).push(nd); });
   const srcIdx = at > 0 ? at - 1 : 0;
-  const copy = opts.blankMap ? { words: [], sets: 1, links: [], removedLinks: [] } : pruneEventsFromCopy(JSON.parse(JSON.stringify(state.frames[srcIdx].prompt)), true);
+  const copy = opts.blankMap ? { words: [], sets: 1, links: [], removedLinks: [] } : pruneZonesFromCopy(pruneEventsFromCopy(JSON.parse(JSON.stringify(state.frames[srcIdx].prompt)), true));   /* v.664 — zones are offered, not assumed */
   const fr = { gap: 'later', prompt: copy, stage: frameStage(state.frames[srcIdx], srcIdx), stageName: '' };
   if (typeof opts.mut === 'function') opts.mut(fr);
   state.frames.splice(at, 0, fr);
@@ -13721,11 +13767,12 @@ function findPlotWord(){
 function frameStage(fr, k){ return (fr && fr.stage != null) ? fr.stage : k; }
 function framePlotName(fr){ return (fr && fr.plotWord) || (findPlotWord() ? findPlotWord().word : null); }   // which plot this section belongs to (multi-plot); legacy → the single plot
 function framePlotStages(fr){ const n = framePlotName(fr); return (n && typeof PLOT_STAGES !== 'undefined' && PLOT_STAGES[n]) || null; }
-function pruneEventsFromCopy(p, keep){
-  if (keep) return p;   // carry events into the next section (kept on the map)
+/* v.664 · #48 — one pruner: drop the words a predicate names, and the rels that hang off them,
+   remapping every index that survives. Events (below) and zones (`pruneZonesFromCopy`) both use it. */
+function pruneWordsFromCopy(p, pred){
   const words = p.words || [];
   const drop = new Set();
-  words.forEach((w, j) => { if (w.cat === 'event' && w.role === 'word') drop.add(j); });
+  words.forEach((w, j) => { if (pred(w)) drop.add(j); });
   if (!drop.size) return p;
   words.forEach((w, j) => { if (w.role === 'rel' && (drop.has(w.fromIdx) || drop.has(w.toIdx))) drop.add(j); });
   const map = {};
@@ -13737,6 +13784,15 @@ function pruneEventsFromCopy(p, keep){
     .map(l => Object.assign({}, l, { a: Math.min(map[l.a], map[l.b]), b: Math.max(map[l.a], map[l.b]) }));
   p.words = next;
   return p;
+}
+function pruneEventsFromCopy(p, keep){
+  if (keep) return p;   // carry events into the next section (kept on the map)
+  return pruneWordsFromCopy(p, w => w.cat === 'event' && w.role === 'word');
+}
+/* v.664 · #48 — a zone is a labelled drawing (`isZoneWord`); a new section's board does not inherit
+   them — it is OFFERED them (Jeremy, v.622). Plain drawings still come, as they always have. */
+function pruneZonesFromCopy(p){
+  return pruneWordsFromCopy(p, w => (typeof isZoneWord === 'function') && isZoneWord(w));
 }
 /* events are section-level instances; the same event across sections shares an `eid`.
    syncEventFrames keeps every event's .frame equal to the index of the section it sits in. */
@@ -53060,19 +53116,35 @@ body.eink #expMenu{background:#fff; border-color:#000}
       var cy=document.createElement('button'); cy.type='button'; cy.className='scb-yes'; cb.appendChild(cy);
       var cn=document.createElement('button'); cn.type='button'; cn.className='scb-no'; cn.textContent='Start empty'; cb.appendChild(cn);
       /* neither handler hides the bar itself — both answer the question, and the bar re-reads it */
+      /* v.664 — the bar asks one of two questions; `data-q` says which, and the buttons answer that one */
       cy.addEventListener('click', function(e){ e.stopPropagation();
-        if(typeof window.__dystScenes==='object' && window.__dystScenes.carry) window.__dystScenes.carry(); });
+        var S=(typeof window.__dystScenes==='object')?window.__dystScenes:null; if(!S) return;
+        if(cb.dataset.q==='zones'){ if(S.zones) S.zones.carry(); } else if(S.carry) S.carry(); });
       cn.addEventListener('click', function(e){ e.stopPropagation();
-        if(typeof window.__dystScenes==='object' && window.__dystScenes.mark) window.__dystScenes.mark(); });
+        var S=(typeof window.__dystScenes==='object')?window.__dystScenes:null; if(!S) return;
+        if(cb.dataset.q==='zones'){ if(S.zones) S.zones.mark(); } else if(S.mark) S.mark(); });
       sky.appendChild(cb);
       window.__dystSceneChanged=function(){
         try{
           var S=window.__dystScenes; if(!S){ cb.hidden=true; return; }
-          if(!S.needsOffer()){ cb.hidden=true; return; }
-          var src=S.prev();
-          ct.textContent='This scene is empty.';
-          cy.textContent='Carry the cast over from '+((src&&src.label)||'the one before');
-          cb.hidden=false;
+          if(S.needsOffer()){
+            var src=S.prev();
+            cb.dataset.q='scene';
+            ct.textContent='This scene is empty.';
+            cy.textContent='Carry the cast over from '+((src&&src.label)||'the one before');
+            cn.textContent='Start empty';
+            cb.hidden=false; return;
+          }
+          /* v.664 · #48 — zones are offered into a new section, not assumed (Jeremy, v.622) */
+          if(S.zones && S.zones.needs()){
+            var zsrc=S.zones.src(); var k=(zsrc&&zsrc.zones)?zsrc.zones.length:0;
+            cb.dataset.q='zones';
+            ct.textContent=((zsrc&&zsrc.label)||'The section before')+' drew '+k+(k===1?' zone.':' zones.');
+            cy.textContent=k===1?'Bring the zone here too':'Bring the zones here too';
+            cn.textContent='Not here';
+            cb.hidden=false; return;
+          }
+          cb.hidden=true;
         }catch(e){ cb.hidden=true; }
       };
     })();
