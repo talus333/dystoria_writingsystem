@@ -13139,6 +13139,135 @@ try{ window.__dystMaps={ list:mapsList, byId:mapById, create:mapCreate, rename:m
                          depth:mapDepth, wouldLoop:mapWouldLoop, startPin:mapStartPin, cancelPin:mapCancelPin,
                          current:function(){ return mapById(state.mapId||'')||null; } }; }catch(e){}
 
+/* ---------------- Places §6 (v.666): bring-from, both directions ---------------- */
+/* A COPY with provenance, never a live read (design doc §6, and the reason is there: a scene board is
+   edited constantly and carried forward by addFrame — a live read would fight the carry-forward and
+   silently restage finished sections). Map → Scene brings a zone's (or the whole map's) PLACES and
+   ARTIFACTS onto the board you stand on, `w.fromMap` set; Scene → Map puts this board's places and
+   artifacts on a chosen map at a chosen click, `w.fromScene` set. Layout is kept relative to itself
+   and fitted to where it lands. Nothing moves until a door is pressed and a destination chosen. */
+function bringIsCarriable(w){ return !!(w && !w.deco && !w.poly && !w.line && w.role==='word' && (w.cat==='setting' || w.cat==='object')); }
+function bringPos(w){ return (w && typeof w.fx==='number' && typeof w.fy==='number') ? { x:w.fx, y:w.fy } : null; }
+/* the zones drawn on a map's prompt — read off THAT prompt, not the board you stand on */
+function bringZonesOf(prompt){
+  var out=[]; ((prompt && prompt.words) || []).forEach(function(w, i){ if (typeof isZoneWord==='function' && isZoneWord(w)) out.push({ w:w, i:i }); }); return out;
+}
+/* the carriable words of a prompt, optionally only those inside one of its zones (geometry, the zone law) */
+function bringCandidates(prompt, zoneIdx){
+  var ws=(prompt && prompt.words) || [], pg=null;
+  if (zoneIdx!=null){ var z=ws[zoneIdx]; pg=(z && typeof zonePoly==='function') ? zonePoly(z) : null; if(!pg) return []; }
+  var out=[];
+  ws.forEach(function(w, i){
+    if (!bringIsCarriable(w)) return;
+    var p=bringPos(w);
+    if (pg){ if(!p) return; if(!(typeof terrainInPoly==='function' && terrainInPoly(p.x, p.y, pg))) return; }
+    out.push({ w:w, i:i, p:p });
+  });
+  return out;
+}
+/* what is NOT already on the destination — the same key the roster answers with */
+function bringNotOn(cands, dst){
+  var K=function(w){ return (typeof libKeyOf==='function') ? libKeyOf(w.cat, w.name||w.word) : wordKey(w); };
+  var have={}; ((dst && dst.words) || []).forEach(function(w){ if(w && !w.deco && !w.poly && !w.line) have[K(w)]=1; });
+  return cands.filter(function(o){ return !have[K(o.w)]; });
+}
+/* lay the copies out: keep their shape relative to one another, centre it on (cx,cy), scale it to
+   fit a box `fit` wide/high (never bigger than ×3, never smaller than ×¼); words with no position
+   are ringed around the centre */
+function bringLayout(cands, cx, cy, fit){
+  var placed=cands.filter(function(o){ return !!o.p; }), loose=cands.filter(function(o){ return !o.p; });
+  var out={};
+  if (placed.length){
+    var minX=Infinity, minY=Infinity, maxX=-Infinity, maxY=-Infinity;
+    placed.forEach(function(o){ minX=Math.min(minX,o.p.x); maxX=Math.max(maxX,o.p.x); minY=Math.min(minY,o.p.y); maxY=Math.max(maxY,o.p.y); });
+    var bw=Math.max(1, maxX-minX), bh=Math.max(1, maxY-minY), mx=(minX+maxX)/2, my=(minY+maxY)/2;
+    var sc=(placed.length>1) ? Math.min(fit/bw, fit/bh) : 1; sc=Math.max(0.25, Math.min(3, sc));
+    placed.forEach(function(o){ out[o.i]={ x:Math.round(cx+(o.p.x-mx)*sc), y:Math.round(cy+(o.p.y-my)*sc) }; });
+  }
+  loose.forEach(function(o, k){ var a=(k/Math.max(1,loose.length))*Math.PI*2; out[o.i]={ x:Math.round(cx+Math.cos(a)*fit*0.35), y:Math.round(cy+Math.sin(a)*fit*0.35) }; });
+  return out;
+}
+function bringCopy(o, pos, prov){
+  var c; try{ c=JSON.parse(JSON.stringify(o.w)); }catch(e){ c=Object.assign({}, o.w); }
+  delete c.needsPlace; delete c.x; delete c.y;
+  c.fx=pos.x; c.fy=pos.y;
+  if (prov.fromMap) c.set=state.activeSet||0;   /* onto the board's active set, as the Legend's door does */
+  if (prov.fromMap){ c.fromMap=prov.fromMap; delete c.fromScene; }
+  if (prov.fromScene){ c.fromScene=prov.fromScene; delete c.fromMap; }
+  return c;
+}
+function bringAfterWrite(){
+  try{ ensureSession(); if(state.prompt) state.session.words=state.prompt.words; }catch(e){}
+  try{ var se=document.getElementById('skyEmpty'); if(se && state.prompt && state.prompt.words.length) se.style.display='none'; }catch(e){}
+  if (typeof layoutConstellation==='function') layoutConstellation();
+  if (typeof renderConstellation==='function') renderConstellation();
+  if (typeof renderStoryLibrary==='function') renderStoryLibrary();
+  if (typeof syncFramesToSession==='function') syncFramesToSession();
+  if (typeof saveSession==='function') saveSession(); else if (typeof scheduleAutosave==='function') scheduleAutosave();
+}
+/* MAP → SCENE. `zoneIdx` null means the whole map. Lands on the board you stand on (Scenes view). */
+function bringFromMap(mapId, zoneIdx){
+  var m=mapById(mapId); if(!m || !m.prompt) return { n:0, why:'no map' };
+  if (state.placesView==='maps') return { n:0, why:'on a map' };
+  var dst=state.prompt; if(!dst) return { n:0, why:'no board' };
+  var cands=bringNotOn(bringCandidates(m.prompt, zoneIdx), dst);
+  if (!cands.length) return { n:0, why:'nothing new' };
+  var vv=(typeof viewBoxVals==='function') ? viewBoxVals() : null;
+  var cx=vv ? vv[0]+vv[2]/2 : 0, cy=vv ? vv[1]+vv[3]/2 : 0, fit=vv ? Math.min(vv[2], vv[3])*0.55 : 320;
+  var lay=bringLayout(cands, cx, cy, fit);
+  if (typeof pushUndo==='function') pushUndo();
+  var keys=[];
+  cands.forEach(function(o){ var c=bringCopy(o, lay[o.i], { fromMap:mapId }); dst.words.push(c); keys.push(wordKey(c)); });
+  bringAfterWrite();
+  return { n:keys.length, keys:keys };
+}
+/* SCENE → MAP, at a point. Reads the board you stand on; writes the map's prompt whether or not it is open. */
+function bringToMap(mapId, x, y, src){
+  var m=mapById(mapId); if(!m || !m.prompt) return { n:0, why:'no map' };
+  var from=src || state.prompt; if(!from) return { n:0, why:'no board' };
+  var cands=bringNotOn(bringCandidates(from, null), m.prompt);
+  if (!cands.length) return { n:0, why:'nothing new' };
+  var lay=bringLayout(cands, x, y, 240);
+  if (typeof pushUndo==='function') pushUndo();
+  var prov={ section:(state.frameIdx||0)+1, sid:state.sceneSid||null };
+  if (src && src.__bringProv) prov=src.__bringProv;
+  var keys=[];
+  cands.forEach(function(o){ var c=bringCopy(o, lay[o.i], { fromScene:prov }); m.prompt.words.push(c); keys.push(wordKey(c)); });
+  bringAfterWrite();
+  return { n:keys.length, keys:keys };
+}
+/* Arm the Scene → Map gesture: remember the board, go to the map, and let the next click say where.
+   The same shape as `mapStartPin` — a mode, a crosshair, a banner, Escape to cancel. */
+function bringArmToMap(mapId){
+  var m=mapById(mapId); if(!m) return false;
+  var from=state.prompt; if(!from) return false;
+  if (!bringNotOn(bringCandidates(from, null), m.prompt).length){
+    if (typeof flashStatus==='function') flashStatus('Everything here is already on \u201c'+(m.name||'that map')+'\u201d');
+    return false;
+  }
+  var secLabel='Section '+((state.frameIdx||0)+1);
+  var snap={ words:from.words.slice(), __bringProv:{ section:(state.frameIdx||0)+1, sid:state.sceneSid||null } };
+  state.bringing={ mapId:mapId, src:snap, label:secLabel };
+  try{ if(typeof window.__dystPlacesSetView==='function') window.__dystPlacesSetView('maps'); else placesSetView('maps'); }catch(e){}
+  switchMap(mapId);
+  var sv=document.getElementById('skySvg'); if(sv) sv.style.cursor='crosshair';
+  try{
+    var b=document.getElementById('placeBanner'), t=document.getElementById('placeBannerText');
+    if(b&&t){ t.textContent='Click where the places of '+secLabel+' sit on \u201c'+(m.name||'this map')+'\u201d'; b.hidden=false;
+      var sk=document.getElementById('placeBannerSkip'); if(sk) sk.hidden=true; }
+  }catch(e){}
+  return true;
+}
+function bringCancel(){
+  state.bringing=null;
+  var sv=document.getElementById('skySvg'); if(sv) sv.style.cursor='';
+  try{ var b=document.getElementById('placeBanner'); if(b) b.hidden=true;
+       var sk=document.getElementById('placeBannerSkip'); if(sk) sk.hidden=false; }catch(e){}
+}
+try{ document.addEventListener('keydown', function(e){ if(e.key==='Escape' && state && state.bringing){ bringCancel(); } }, true); }catch(e){}
+try{ window.__dystBring={ fromMap:bringFromMap, toMap:bringToMap, arm:bringArmToMap, cancel:bringCancel,
+                          zonesOf:bringZonesOf, candidates:bringCandidates, notOn:bringNotOn, carriable:bringIsCarriable }; }catch(e){}
+
 /* ---------------- Places phase 2: a board per scene ---------------- */
 /* `state.sceneSid` is null on scene 1 — the section's own board — and a `~` mark's id otherwise.
    It is view state and lives on `state`, not in the document. */
@@ -42966,6 +43095,17 @@ function init(){
     }
     /* v.621 — pinning a child map: the same click-to-place gesture, one line above the element one
        so a pin in flight is never mistaken for a drawing. */
+    /* v.666 · #48 §6 — Scene → Map lands on the click, the same gesture as the pin */
+    if (state.bringing){
+      const bp = skyPt(e);
+      const _br = state.bringing;
+      if (typeof bringCancel === 'function') bringCancel();
+      if (typeof bringToMap === 'function'){
+        const _res = bringToMap(_br.mapId, bp.x, bp.y, _br.src);
+        if (typeof flashStatus === 'function') flashStatus(_res && _res.n ? ('Brought ' + _res.n + (_res.n === 1 ? ' place' : ' places') + ' from ' + _br.label + ' \u2014 copies, with the section remembered on each') : 'Nothing new to bring');
+      }
+      e.preventDefault(); return;
+    }
     if (state.pinning){
       const pp = skyPt(e);
       const _cid = state.pinning.childId, _pid = state.pinning.parentId;
@@ -53254,6 +53394,55 @@ body.eink #expMenu{background:#fff; border-color:#000}
       // Mind Map + Autoplace retired from the ⋯ menu — autoplace is now always the default
       ['mapLevelWrap','autoPlaceWrap'].forEach(function(id){ var el = document.getElementById(id); if (el) el.style.display = 'none'; });
       try{ if (typeof state !== 'undefined' && state){ state.autoPlace = true; state.autoPlaceSeen = true; } }catch(e){}
+      /* v.666 · #48 §6 — bring-from, both directions, from the board you stand on. Scenes view only:
+         a map's own ⋯ keeps to the map. The choice of map, then zone, is the same pick menu the map
+         picker uses; the Scene → Map direction goes to the map and asks for a click (v.621's gesture). */
+      (function(){
+        var PMh=function(){ return window.__expPickMenu; };
+        var fitMenu=function(){ try{ var lm=document.getElementById('expLayerMenu'); if(!lm) return; lm.style.minWidth='250px'; var w=lm.offsetWidth||250; var l=parseFloat(lm.style.left)||0; if(l+w>window.innerWidth-8) lm.style.left=Math.max(8, window.innerWidth-w-8)+'px'; }catch(e){} };
+        var mapRows=function(M){ var rows=[]; M.list().forEach(function(m){ rows.push([m.id, new Array(M.depth(m.id)+1).join('\u2002\u2002')+(m.name||'Untitled map')]); }); return rows; };
+        var bf=document.createElement('button'); bf.id='bringFromMapBtn'; bf.type='button'; bf.className='exm-bring'; bf.textContent='\u21e3 Bring from a map\u2026';
+        bf.title='Copy the places and artifacts of a map \u2014 a zone of it, or all of it \u2014 onto this board. Copies, not links: the board keeps its own life.';
+        bf.addEventListener('click', function(e){
+          e.stopPropagation(); menu.classList.remove('show');
+          var M=window.__dystMaps, PM=PMh(); if(!M||typeof PM!=='function') return;
+          var maps=M.list();
+          if(!maps.length){ PM(mb, [['--part--','No maps yet'], ['+none','Make one in the Maps view']], function(){ try{ window.__dystPlacesSetView('maps'); }catch(err){} }); fitMenu(); return; }
+          PM(mb, [['--part--','Bring from\u2026']].concat(mapRows(M)), function(mid){
+            var m=M.byId(mid); if(!m) return;
+            var B=window.__dystBring; if(!B) return;
+            var zones=B.zonesOf(m.prompt), dst=state.prompt;
+            var rows=[['--part--', m.name||'Untitled map']];
+            var allN=B.notOn(B.candidates(m.prompt, null), dst).length;
+            rows.push(['+all', 'Everything on it'+(allN?('  \u00b7  '+allN+' new'):'  \u00b7  nothing new')]);
+            zones.forEach(function(z){ var k=B.notOn(B.candidates(m.prompt, z.i), dst).length; rows.push(['z'+z.i, (z.w.zoneLabel||'Zone')+(k?('  \u00b7  '+k+' new'):'  \u00b7  nothing new')]); });
+            PM(mb, rows, function(zid){
+              var zi=(zid==='+all')?null:parseInt(String(zid).slice(1),10);
+              var res=B.fromMap(mid, zi);
+              if(typeof flashStatus==='function') flashStatus(res&&res.n ? ('Brought '+res.n+(res.n===1?' place':' places')+' from \u201c'+(m.name||'the map')+'\u201d \u2014 copies, with the map remembered on each') : 'Nothing new to bring from there');
+            }); fitMenu();
+          }); fitMenu();
+        });
+        var bt=document.createElement('button'); bt.id='sendToMapBtn'; bt.type='button'; bt.className='exm-bring'; bt.textContent='\u21e1 Put this scene\u2019s places on a map\u2026';
+        bt.title='Copy this board\u2019s places and artifacts onto a map, where you click. Copies, not links.';
+        bt.addEventListener('click', function(e){
+          e.stopPropagation(); menu.classList.remove('show');
+          var M=window.__dystMaps, PM=PMh(), B=window.__dystBring; if(!M||!B||typeof PM!=='function') return;
+          var have=B.candidates(state.prompt, null).length;
+          if(!have){ if(typeof flashStatus==='function') flashStatus('No places or artifacts on this board yet'); return; }
+          var rows=[['--part--','Put on\u2026']].concat(mapRows(M)); rows.push(['++new','\uff0b  A new map\u2026']);
+          PM(mb, rows, function(mid){
+            if(mid==='++new'){
+              sitePrompt('What is this a map of? \u2014 a continent, a city, a house, a ship\u2019s deck\u2026', '', 'Make the map').then(function(v){
+                if(v==null) return; var nm=M.create(v); if(nm) B.arm(nm.id);
+              });
+              return;
+            }
+            B.arm(mid);
+          }); fitMenu();
+        });
+        menu.appendChild(bf); menu.appendChild(bt);
+      })();
       ['clearMapBtn'].forEach(function(id){ var el = document.getElementById(id); if (el) menu.appendChild(el); });
       var mg = document.createElement('div'); mg.id = 'expMenuGrid'; menu.appendChild(mg);   // Grid constraint rides below Clear map
       mb.addEventListener('click', function(e){ e.stopPropagation(); menu.classList.toggle('show'); });
@@ -59440,13 +59629,16 @@ body.ember:not(.eink) #expLayerMenu, body.ember:not(.eink) #expXbMenu, body.embe
   background:var(--em-menu) !important; border-color:var(--em-gold-a34) !important; }
 body.eink #expLayerMenu, body.eink #expXbMenu, body.eink #expMenu{ background:#fff !important; border-color:#000 !important; }
 #expLayerMenu button, #expXbMenu button,
-#expMenu #mapLevelBtn, #expMenu #mapContainerBtn, #expMenu #autoPlaceBtn, #expMenu #clearMapBtn,
+#expMenu #mapLevelBtn, #expMenu #mapContainerBtn, #expMenu #autoPlaceBtn, #expMenu #clearMapBtn, #expMenu .exm-bring,
 #expMenu .draw-cat, #expMenu .dc-name{
   font-family:var(--sans) !important; font-size:11px !important; font-weight:600 !important; letter-spacing:.06em !important; text-transform:uppercase !important;
   color:var(--charcoal) !important; background:transparent !important; border:none !important; border-radius:7px !important; }
 #expLayerMenu button, #expXbMenu button{ padding:8px 11px !important; }
 #expLayerMenu button:hover, #expXbMenu button:hover, #expMenu .draw-cat:hover,
-#expMenu #clearMapBtn:hover, #expMenu #mapLevelBtn:hover, #expMenu #mapContainerBtn:hover, #expMenu #autoPlaceBtn:hover{ background:rgba(0,0,0,.06) !important; color:var(--charcoal) !important; }
+#expMenu #clearMapBtn:hover, #expMenu #mapLevelBtn:hover, #expMenu #mapContainerBtn:hover, #expMenu #autoPlaceBtn:hover, #expMenu .exm-bring:hover{ background:rgba(0,0,0,.06) !important; color:var(--charcoal) !important; }
+/* v.666 · #48 §6 — the bring doors: whole-width like Clear map, wrapping, and Scenes view only */
+#expMenu .exm-bring{ width:100%; max-width:none; box-sizing:border-box; text-align:left; white-space:normal; line-height:1.3; padding:8px 11px !important; cursor:pointer; }
+body.places-maps #expMenu .exm-bring{ display:none !important; }
 /* Grid spacing panel in the ⋯ menu → text + slider sit on the dropdown parchment, no grey box (the Grid toggle row keeps its own hover/selected background) */
 #expMenu #drawGridPanel, #expMenu #expMenuGrid .draw-panel, #expMenuGrid .draw-panel{ background:transparent !important; border:none !important; box-shadow:none !important; padding:2px 7px 6px !important; }
 #expMenu #drawGridPanel .sub-row, #expMenu #drawGridPanel label, #expMenuGrid .draw-panel .sub-row, #expMenuGrid .draw-panel label{ background:transparent !important; color:var(--charcoal) !important; }
@@ -64425,10 +64617,21 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
           var rb=bb.getBoundingClientRect(), rs=sk.getBoundingClientRect();
           pv.style.top=Math.max(6, Math.round(rb.bottom-rs.top)+6)+'px';
           var cb=document.getElementById('sceneCarryBar');
-          if(cb) cb.style.top=Math.max(6, Math.round(rb.bottom-rs.top)+6+(pv.offsetHeight||22)+10)+'px';
+          var slot=Math.max(6, Math.round(rb.bottom-rs.top)+6+(pv.offsetHeight||22)+10);
+          if(cb) cb.style.top=slot+'px';
+          /* v.666 — the placement banner ("Click where…") kept its classic-map `top:12px`, which on
+             this canvas is BEHIND the header bar: every click-to-place, pin and bring gesture had its
+             one instruction hidden. It takes the toggle's slot, and steps under the carry bar when
+             that is showing. */
+          var pb=document.getElementById('placeBanner');
+          if(pb){ var below=(cb && !cb.hidden) ? (cb.offsetHeight||30)+8 : 0; pb.style.top=(slot+below)+'px'; }
         }catch(e){}
       };
       _placeSeg();
+      try{
+        var _mo=new MutationObserver(function(){ _placeSeg(); });
+        ['placeBanner','sceneCarryBar'].forEach(function(id){ var el=document.getElementById(id); if(el) _mo.observe(el, { attributes:true, attributeFilter:['hidden'] }); });
+      }catch(e){}
       try{ window.addEventListener('resize', _placeSeg); setTimeout(_placeSeg, 400); setTimeout(_placeSeg, 1200); }catch(e){}
       try{ window.__dystPlaceSeg=_placeSeg; }catch(e){}
       /* the centred cluster is still where the MAP PICKER goes — it is what the toggle switches
