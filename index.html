@@ -60966,7 +60966,7 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
      words, optional forever. Under it, collapsed, the strip: three lanes × sections, showing which axes
      are live where (a stake whose bearer and threat both stand on the section's board; ⚔ bonds as a
      lighter mark). It shows and does not rank. */
-  var cfStripOpen=false;
+  var cfStripOpen=false, cfAxesOpen=false, cfAxesExtra=[];   /* v.669 — the by-axis view, and the axes opened with “+ another axis” (view state, this page only) */
   function conflictRow(){
     var C=window.__conflict;
     var row=document.createElement('div'); row.className='pl-nrow pl-nrow-conflict';
@@ -60993,7 +60993,54 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     var sb=document.createElement('button'); sb.type='button'; sb.className='pl-cf-ctl pl-cf-stripbtn'+(cfStripOpen?' on':''); sb.textContent=(cfStripOpen?'\u25be':'\u25b8')+' strip'; sb.title='Which axes are live in which section \u2014 a picture, not a score';
     sb.addEventListener('click', function(e){ e.stopPropagation(); cfStripOpen=!cfStripOpen; renderNarrative(); });
     line.appendChild(sb);
+    /* v.669 · #47 phase 4 — CONFLICT-FIRST authoring (Stakes doc §2.4, the other direction of the one
+       field): the stakes grouped by the axis they run along, each group offering + stake with that axis
+       pre-filled. Only the axes in use are drawn, with one “+ another axis” for the rest — ten mostly
+       empty buckets would be a page nobody asked for. A read, plus a pre-filled creator; no new data. */
+    var ab=document.createElement('button'); ab.type='button'; ab.className='pl-cf-ctl pl-cf-axesbtn'+(cfAxesOpen?' on':''); ab.textContent=(cfAxesOpen?'\u25be':'\u25b8')+' by axis'; ab.title='The stakes grouped by the axis they run along \u2014 and a way to add one along an axis';
+    ab.addEventListener('click', function(e){ e.stopPropagation(); cfAxesOpen=!cfAxesOpen; renderNarrative(); });
+    line.appendChild(ab);
     pills.appendChild(line);
+    if(cfAxesOpen){
+      var axes=document.createElement('div'); axes.className='pl-cf-axes';
+      var byAxis={}, order=[];
+      var put=function(word, s){ if(!byAxis[word]){ byAxis[word]=[]; order.push(word); } if(s) byAxis[word].push(s); };
+      C.read().forEach(function(s){
+        if(s.axis) put(s.axis, s);
+        else if(s.bucket) put('\u00b7 '+C.laneLabel[s.bucket], s);   /* derived: read off the threat, under the bucket it lands in */
+      });
+      cfAxesExtra.forEach(function(w){ if(!byAxis[w]) put(w, null); });
+      var stakeName=function(s){ var bn=C.nameFor(s.bearer); return s.name+(bn?(' \u2014 '+bn):''); };
+      var mkStake=function(word){
+        sitePrompt('What is at stake, '+word.toLowerCase()+'?', '', 'Add the stake').then(function(v){
+          v=(v==null)?'':String(v).trim(); if(!v) return;
+          var a=api(); var made=(a&&a.addLibraryElement)?a.addLibraryElement('stakes', v, 'At Stake', null):null;
+          if(made && made.key && window.__stakeData && window.__stakeData.set) window.__stakeData.set(made.key, 'axis', word);
+          if(typeof flashStatus==='function') flashStatus('Stake added \u2014 \u201c'+v+'\u201d runs '+word);
+          renderNarrative();
+        });
+      };
+      if(!order.length){ var em=document.createElement('div'); em.className='pl-cf-axes-empty'; em.textContent='No stake runs along an axis yet \u2014 name a threat on a stake, or add one along an axis:'; axes.appendChild(em); }
+      order.forEach(function(word){
+        var grp=document.createElement('div'); grp.className='pl-cf-axis'; grp.dataset.axis=word;
+        var hd=document.createElement('span'); hd.className='pl-cf-axis-hd'; hd.textContent=word; hd.title=(word.charAt(0)==='\u00b7')?'Read off the threat \u2014 no axis declared yet. Set one on the stake\u2019s card to name it.':('Stakes that run '+word); grp.appendChild(hd);
+        var ln=document.createElement('div'); ln.className='pl-roleline';
+        byAxis[word].forEach(function(s){
+          var pill=elementPill({ key:s.key, label:stakeName(s), cat:'stakes' }, { onOpen:function(){ if(typeof window.openElementDossier==='function') window.openElementDossier(s.key); } });
+          ln.appendChild(pill);
+        });
+        if(word.charAt(0)!=='\u00b7'){ var add=document.createElement('button'); add.className='pl-add'; add.textContent='+ stake'; add.title='Add a stake that runs '+word; add.addEventListener('click', function(e){ e.stopPropagation(); mkStake(word); }); ln.appendChild(add); }
+        grp.appendChild(ln); axes.appendChild(grp);
+      });
+      var more=document.createElement('button'); more.type='button'; more.className='pl-add pl-cf-axis-more'; more.textContent='+ another axis\u2026'; more.title='Open one of the other Conflict words as a group to add stakes along';
+      more.addEventListener('click', function(e){ e.stopPropagation();
+        var a=api(); var words=[]; try{ ((a&&a.stakePool)?a.stakePool():[]).forEach(function(o){ if(String(o.sub||'').toLowerCase()==='conflict' && o.word && !byAxis[o.word]) words.push(o.word); }); }catch(err){}
+        if(!words.length){ if(typeof flashStatus==='function') flashStatus('Every axis is already in use'); return; }
+        layerPick(more, words, {}, function(v){ if(cfAxesExtra.indexOf(v)<0) cfAxesExtra.push(v); renderNarrative(); });
+      });
+      axes.appendChild(more);
+      pills.appendChild(axes);
+    }
     if(cfStripOpen){
       var L=C.lanes(); var strip=document.createElement('div'); strip.className='pl-cf-strip';
       var hdL=document.createElement('span'); hdL.className='pl-cf-lane'; hdL.textContent=''; strip.appendChild(hdL);
@@ -73057,6 +73104,14 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
       cats:['concept','org','setting'], families:null, layout:'web' },
     causal: { name:'Causal chain', lede:'What caused what.',
       cats:['event'], families:null, layout:'timeline' },
+    /* v.669 · #47 phase 4 — BATTLE LINES (the doc's "Opposition" — a name the app already gives a group
+       KIND, "ideas held in tension", and a word-family; a lens with the same name in the same dropdown
+       area would have been two things called one thing). Who is set against whom: the same web, admitting only the
+       bonds that carry conflict (⚔ — `relIsConflict`, the one predicate the Map and `moodOf` already
+       use). No cast is refused, no pair-family is coined: the filter is the bond's own temperature,
+       read by `admits` through `only:'conflict'`. It shows the hostility as a picture; it grades nothing. */
+    enmity: { name:'Battle lines', lede:'Who is set against whom \u2014 only the conflicted bonds.',
+      cats:null, families:null, only:'conflict', layout:'web' },
     free: { name:'Everything', lede:'The whole relational shape, unfiltered.',
       cats:null, families:null, layout:'web' }
   };
@@ -73360,6 +73415,7 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
      there, even if its latest type is `Parent of`. The lens you asked for decides
      which of a bond's faces you are shown. */
   function admits(kind, e, ca, cb, loose){
+    if (kind.only === 'conflict' && !conflictOf(e)) return null;   /* v.669 — the Opposition lens keeps only the ⚔ bonds */
     if (kind.cats){
       if (kind.cats.indexOf(ca) < 0 || kind.cats.indexOf(cb) < 0) return null;
     }
@@ -75576,12 +75632,14 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
      what it is worth looking at it through. `free` (Everything) is always allowed:
      it is the escape hatch, and it makes no claim about what the group is. */
   var TYPE_LENSES = {
-    kinship:['family','social'],
+    /* v.669 — `enmity` (Opposition) joins the groups of people, last in each list so no group OPENS on
+       it; the cast gate (v.417/v.600) widens the offer to every being-cast kind by itself. */
+    kinship:['family','social','enmity'],
     species:['family'],
-    social:['social','faction'],
-    political:['social','faction'],
-    martial:['faction','social'],
-    commercial:['faction','social'],
+    social:['social','faction','enmity'],
+    political:['social','faction','enmity'],
+    martial:['faction','social','enmity'],
+    commercial:['faction','social','enmity'],
     faith:['social','faction','concept'],
     knowledge:['social','faction','concept'],
     concept:['concept'], opposition:['concept'], motif:['concept'], lexicon:['concept'],
@@ -87431,6 +87489,13 @@ body:not(.eink) .pl-cf-cell.bond{ background:rgba(176,64,47,.28); border-color:r
 body:not(.eink) .pl-cf-cell.on.bond{ background:#b07a6e; border-color:#b07a6e; box-shadow:inset 0 0 0 2px rgba(120,30,20,.55); }   /* a stake AND a bond: filled, with the bond's ring — the later rule must not fade it */
 body:not(.eink) .pl-cf-num{ font-family:var(--sans); font-size:9.5px; color:var(--ink-faint); width:18px; text-align:center; }
 body:not(.eink) .pl-cf-key{ font-family:var(--serif); font-style:italic; font-size:11.5px; color:var(--ink-faint); grid-column:1 / -1; padding-top:2px; }
+/* v.669 — the by-axis view */
+body:not(.eink) .pl-cf-axes{ display:flex; flex-direction:column; gap:6px; padding:4px 0 2px 2px; }
+body:not(.eink) .pl-cf-axis{ display:flex; align-items:flex-start; gap:10px; flex-wrap:wrap; }
+body:not(.eink) .pl-cf-axis-hd{ font-family:var(--sans); font-size:10px; letter-spacing:.08em; text-transform:uppercase; color:var(--ink-faint); min-width:150px; padding-top:6px; }
+body:not(.eink) .pl-cf-axis .pl-roleline{ flex:1 1 auto; }
+body:not(.eink) .pl-cf-axes-empty{ font-family:var(--serif); font-style:italic; font-size:12px; color:var(--ink-faint); }
+body:not(.eink) .pl-cf-axis-more{ align-self:flex-start; }
 </style>
 
 <style id="dyst-stakes-row">
