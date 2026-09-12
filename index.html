@@ -4886,7 +4886,7 @@ body.eink #consentBar #cbAccept{background:#000; color:#fff; border-color:#000}
   // A brand-new visitor on the landing page — or someone mid-tour — should see no pop-ups at all.
   function holding(){
     try {
-      if (document.getElementById('landingFrame')) return true;   // still on the landing / welcome page
+      if (document.getElementById('landingFrame') || document.getElementById('labFrame')) return true;   // still on the landing / welcome page, or the story labyrinth (v.677)
       if (window.__dystOnbPending) return true;                    // onboarding is pending or running
     } catch(e){}
     return false;
@@ -5063,6 +5063,7 @@ body.eink #consentBar #cbAccept{background:#000; color:#fff; border-color:#000}
 (function(){
   try{
     function hasSession(){ try{ for(var i=0;i<localStorage.length;i++){ var k=localStorage.key(i); if(k && /^sb-.*-auth-token$/.test(k) && localStorage.getItem(k)) return true; } }catch(e){} return false; }
+    window.__dystHasSession = hasSession;   /* v.677: the story labyrinth asks the same question */
     function entered(){ try{ return localStorage.getItem('dystoria_entered')==='1'; }catch(e){ return false; } }
     if (hasSession() || entered() || location.search || location.hash) return;   // signed-in / returning / shared-link / deep-link → straight to the app
     var f=document.createElement('iframe'); f.id='landingFrame'; f.title='Welcome to Dystoria'; f.src='/welcome_undaunted.html';
@@ -5072,6 +5073,128 @@ body.eink #consentBar #cbAccept{background:#000; color:#fff; border-color:#000}
     window.addEventListener('focus', function(){ if(hasSession() && f && f.parentNode){ f.parentNode.removeChild(f); } });
     if(document.body){ document.body.appendChild(f); } else { document.addEventListener('DOMContentLoaded', function(){ document.body.appendChild(f); }); }
   }catch(e){}
+})();
+</script>
+
+<script id="dyst-labyrinth-js">
+/* v.677 — THE STORY LABYRINTH. Jeremy: "a signed in user lands on a special page which is just the labyrinth of their
+   active story, full density unless they don't have enough elements or prose or notes to fill it out, then there is a note
+   at the bottom to write more and their labyrinth will expand. a single click pops up a choice to go back to your story or
+   to the dystoria welcome page." Rulings: every fresh load; an empty story skips it.
+   The page is the landing page itself in story mode (/welcome_undaunted.html?story=1) — one engine, one file. This module
+   only decides WHEN (signed in, own story, desktop, not a reader/about link) and WHAT (the bank: the story's elements, tiered
+   by significance, and the prose's and notes' distinctive words — the ones the lexicon's Zipf table calls rare). */
+(function(){
+  'use strict';
+  var TARGET_LETTERS = 6500;    // the landing bank's own weight — "the same word density as the landing page labyrinth"
+  var THIN_LETTERS   = 3200;    // under this the page pins its grid to the screen and shows the write-more note
+  var frame = null, shown = false;
+  function signedIn(){ try{ return typeof window.__dystHasSession === 'function' && window.__dystHasSession(); }catch(e){ return false; } }
+  function skip(){
+    try{
+      if (location.search) return true;
+      var h = location.hash || '';
+      if (/^#\/read\//.test(h) || /^#about-/.test(h) || /^#\/library/.test(h)) return true;
+      if (document.body.classList.contains('guest')) return true;
+      if (window.__dystOnbPending) return true;   // a first visit belongs to the guided tour; the labyrinth begins with the next load
+      if (window.matchMedia && window.matchMedia('(max-width: 768px)').matches) return true;   // the field is noise at a phone's cell size
+    }catch(e){}
+    return false;
+  }
+  var STUB = { didn:1, wasn:1, couldn:1, hadn:1, wouldn:1, hasn:1, doesn:1, shouldn:1, aren:1, weren:1, isn:1, haven:1, mustn:1, needn:1 };
+  function cleanWord(t){ return String(t || '').replace(/^\s*(the|a|an)\s+/i, '').toUpperCase().replace(/[’']/g, '').replace(/[^A-Z0-9-]/g, ''); }   // "The Witch" → WITCH; the labyrinth has no articles
+  function frames(){ try{ return (state.frames && state.frames.length ? state.frames : (state.session && state.session.frames)) || []; }catch(e){ return []; } }   // the sections live on state.frames (state.session.frames mirrors it once saved)
+  function elements(){
+    var fr = frames(), m = {};
+    fr.forEach(function(f){ ((f && f.prompt && f.prompt.words) || []).forEach(function(x){
+      if (!x || x.role === 'rel' || !x.cat) return;
+      var nm = String(x.name || x.text || '').trim(); if (!nm || nm === 'undefined') return;
+      var k = x.cat + '|' + nm.toLowerCase(); if (!m[k]) m[k] = { cat: x.cat, name: nm, n: 0 }; m[k].n++;
+    }); });
+    return Object.keys(m).map(function(k){ return m[k]; });
+  }
+  /* significance → size: the cast and the world by how much of the story they are in; the frame layers at 2; the texture at 1 */
+  function tierOf(e, total){
+    var share = total ? e.n / total : 0;
+    if (e.cat === 'being') return share >= 0.35 ? 3 : 2;
+    if (e.cat === 'setting' || e.cat === 'org' || e.cat === 'concept') return share >= 0.5 ? 3 : 2;
+    if (e.cat === 'theme' || e.cat === 'plot' || e.cat === 'stakes' || e.cat === 'period') return 2;
+    return e.n >= 6 ? 2 : 1;   // objects, events, genres
+  }
+  function proseTexts(){
+    var out = [];
+    try{ var t = (typeof sectionTextsLC === 'function') ? sectionTextsLC() : {}; Object.keys(t).forEach(function(k){ if (typeof t[k] === 'string') out.push(t[k]); }); }catch(e){}
+    try{ var np = state.session && state.session.npNotes; if (np && typeof np === 'object') Object.keys(np).forEach(function(k){ if (typeof np[k] === 'string') out.push(np[k].toLowerCase()); }); }catch(e){}
+    return out;
+  }
+  function distinctive(texts, nameParts){
+    var freq = {}, tokens = 0;
+    texts.forEach(function(t){ (t.match(/[a-z][a-z-]{3,}/g) || []).forEach(function(w){
+      if (STUB[w] || /^-|-$/.test(w) || /^(imported|words|session)?(refined|locked)$/.test(w)) return;   // the editor's chips (imported · refined · session locked) ride along in sectionTextsLC
+      if (nameParts[w]) return;
+      if (!/[aeiouy]/.test(w) || /[bcdfghjklmnpqrstvwxz]{5}/.test(w)) return;   // keyboard mash, not a word
+      tokens++; freq[w] = (freq[w] || 0) + 1;
+    }); });
+    var Z = (window.LEX && LEX.freq) || null;
+    var rare = [], next = [];
+    Object.keys(freq).forEach(function(w){
+      var z = Z ? Z[w] : undefined;
+      if (Z){ if (z === undefined || z <= 3.5) rare.push([w, freq[w]]); else if (z <= 4.5) next.push([w, freq[w]]); }
+      else if (w.length >= 7 && freq[w] <= 6) rare.push([w, freq[w]]);   // no table: long and uncommon in the story itself
+    });
+    var byCount = function(a, b){ return b[1] - a[1]; };
+    rare.sort(byCount); next.sort(byCount);
+    return { words: rare.concat(next).map(function(e){ return e[0]; }), tokens: tokens };
+  }
+  function bankFor(){
+    var el = elements(), total = frames().length, seen = {}, bank = [], letters = 0;
+    var nameParts = {}; el.forEach(function(e){ e.name.toLowerCase().split(/[^a-z-]+/).forEach(function(pt){ if (pt.length > 2) nameParts[pt] = 1; }); });
+    el.forEach(function(e){ var w = cleanWord(e.name); if (w.length < 3 || seen[w]) return; seen[w] = 1; bank.push({ w: w, t: tierOf(e, total) }); letters += w.length; });
+    var d = distinctive(proseTexts(), nameParts);
+    for (var i = 0; i < d.words.length && letters < TARGET_LETTERS; i++){ var w = cleanWord(d.words[i]); if (w.length < 4 || seen[w]) continue; seen[w] = 1; bank.push({ w: w, t: 1 }); letters += w.length; }
+    return { bank: bank, letters: letters, elements: el.length, tokens: d.tokens, empty: (el.length === 0 && d.tokens < 20) };
+  }
+  function where(){
+    try{ var i = (state.session && state.session.frameIdx) | 0; var nm = (typeof sectionName === 'function') ? sectionName(i) : ''; return nm ? ('Section ' + (i + 1) + ' · ' + nm) : ''; }catch(e){ return ''; }
+  }
+  function themes(el){ return el.filter(function(e){ return e.cat === 'theme'; }).sort(function(a, b){ return b.n - a.n; }).slice(0, 4).map(function(e){ return e.name; }); }
+  function payload(){
+    var b = bankFor(); if (b.empty) return null;
+    var title = (document.getElementById('storyName') || {}).value || 'Untitled story'; title = String(title).trim() || 'Untitled story';
+    var el = elements(), th = themes(el), words = b.tokens;
+    var line1 = frames().length + (frames().length === 1 ? ' section' : ' sections') + ' · ' + el.length + ' elements' + (words ? ' · ' + words.toLocaleString() + ' words' : '');
+    var line2 = th.length ? ('Themes — ' + th.join(', ') + '.') : '';
+    var thin = b.letters < THIN_LETTERS;
+    return { type: 'dystoria:story', title: title, bank: b.bank, thin: thin, longTitle: title.length > 12, where: where(),
+             card: { byline: 'your story', line1: line1, line2: line2, line3: thin ? 'Write more — elements, prose, notes — and this labyrinth will grow.' : 'Click anywhere to continue.' } };
+  }
+  function close(){ if (frame && frame.parentNode) frame.parentNode.removeChild(frame); frame = null; }
+  function mount(data){
+    frame = document.createElement('iframe'); frame.id = 'labFrame'; frame.title = 'The labyrinth of ' + data.title; frame.src = '/welcome_undaunted.html?story=1';
+    frame.setAttribute('style', 'position:fixed;inset:0;width:100%;height:100%;border:0;z-index:2147483000;background:#14110d');   // above everything: nothing the app pops (cookie bar, tour, toasts) belongs over the labyrinth
+    var sent = false, send = function(){ if (sent) return; sent = true; try{ frame.contentWindow.postMessage(data, '*'); }catch(e){} };
+    window.addEventListener('message', function(ev){
+      var d = ev && ev.data; if (!d || !frame || ev.source !== frame.contentWindow) return;
+      if (d.type === 'dystoria:story-ready') send();
+      else if (d.type === 'dystoria:story-back' || d.type === 'dystoria:start') close();
+      else if (d.type === 'dystoria:about'){ close(); if (window.openAbout) setTimeout(function(){ try{ openAbout(d.section); }catch(e){} }, 40); }
+    });
+    frame.addEventListener('load', function(){ setTimeout(send, 60); });
+    document.body.appendChild(frame);
+    try{ if (window.track) track('story_labyrinth_shown'); }catch(e){}
+  }
+  var tries = 0;
+  function ready(){ try{ return !!(signedIn() && typeof state !== 'undefined' && state && state.session && state.session.id && state.prompt && state.prompt.words && frames().length); }catch(e){ return false; } }   // `state` is a script-scope let, not a window property
+  function go(){
+    if (shown) return;
+    if (skip()) return;
+    if (!ready()){ if (tries++ < 80) setTimeout(go, 250); return; }   // the cloud story arrives async; give it 20s
+    shown = true;
+    var after = function(){ var data = payload(); if (data) mount(data); };
+    try{ if (window.LEX && typeof LEX.load === 'function') LEX.load().then(after, after); else after(); }catch(e){ after(); }
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function(){ setTimeout(go, 300); }); else setTimeout(go, 300);
+  window.__storyLabyrinth = { payload: payload, bank: bankFor, mount: mount, close: close, go: go, state: function(){ return { shown: shown, tries: tries, skip: skip(), ready: ready() }; } };
 })();
 </script>
 
@@ -50438,7 +50561,7 @@ function beingRenderOpts(nd){ if(!nd) return null;
         // Wait until the landing / welcome page is dismissed before starting the tour — otherwise the full-screen
         // landing iframe (z-index 9000) sits behind the spotlight and the mode-bar highlights reveal IT, not the app.
         var _tries=0;
-        var _WAIT_FOR = ['landingFrame','firstRunDoors','planningDoors','planWizard','apCard'];   // #10 — never start the tour over another first-run surface
+        var _WAIT_FOR = ['landingFrame','labFrame','firstRunDoors','planningDoors','planWizard','apCard'];   /* v.677: labFrame = the story labyrinth */   // #10 — never start the tour over another first-run surface
         var _tryStart=function(){ if(_WAIT_FOR.some(function(id){ var e=document.getElementById(id); return e && (id!=='apCard' || e.classList.contains('show')); })){ if(_tries++ < 600){ setTimeout(_tryStart, 500); } return; } startOverview(); };
         setTimeout(_tryStart, 1100);
       } else { onbDone(); }   // no tour for this visitor (guest / off / already seen) → release the held cookie/privacy notice
@@ -51352,7 +51475,7 @@ body.eink #mobileNotice .mn-card{border:2px solid #000}
   function show(){
     if(!isMobile()) return;
     try{ if(localStorage.getItem('dystoria.mobileNoticeSeen')==='1') return; }catch(e){}
-    if(document.getElementById('landingFrame')){ setTimeout(show, 1200); return; }   // wait until the marketing landing (its own welcome) is dismissed
+    if(document.getElementById('landingFrame') || document.getElementById('labFrame')){ setTimeout(show, 1200); return; }   // wait until the marketing landing (its own welcome) or the story labyrinth (v.677) is dismissed
     if(document.getElementById('mobileNotice')) return;
     var o=document.createElement('div'); o.id='mobileNotice';
     o.innerHTML='<div class="mn-card" role="dialog" aria-modal="true" aria-label="Welcome to Dystoria">'
