@@ -5102,7 +5102,8 @@ body.eink #consentBar #cbAccept{background:#000; color:#fff; border-color:#000}
     return false;
   }
   var STUB = { didn:1, wasn:1, couldn:1, hadn:1, wouldn:1, hasn:1, doesn:1, shouldn:1, aren:1, weren:1, isn:1, haven:1, mustn:1, needn:1 };
-  function cleanWord(t){ return String(t || '').replace(/^\s*(the|a|an)\s+/i, '').toUpperCase().replace(/[’']/g, '').replace(/[^A-Z0-9-]/g, ''); }   // "The Witch" → WITCH; the labyrinth has no articles
+  function cleanWord(t){ return String(t || '').replace(/^\s*(the|a|an)\s+/i, '').toUpperCase().replace(/[’']/g, '').replace(/[^A-Z0-9 -]/g, '').replace(/\s+/g, ' ').trim(); }   // "The Witch" → WITCH; a phrase keeps its spaces (the page draws a space as a gap cell)
+  var STOP = { the:1, and:1, of:1, for:1, with:1, from:1, into:1, onto:1, over:1, under:1, that:1, this:1, their:1, his:1, her:1, its:1, are:1, was:1, were:1, has:1, have:1, who:1, what:1, when:1, where:1, how:1, why:1, not:1, but:1, all:1, any:1, per:1, via:1, upon:1, between:1, through:1, about:1, after:1, before:1, against:1, toward:1, towards:1, within:1, without:1 };
   function frames(){ try{ return (state.frames && state.frames.length ? state.frames : (state.session && state.session.frames)) || []; }catch(e){ return []; } }   // the sections live on state.frames (state.session.frames mirrors it once saved)
   function elements(){
     var fr = frames(), m = {};
@@ -5113,14 +5114,13 @@ body.eink #consentBar #cbAccept{background:#000; color:#fff; border-color:#000}
     }); });
     return Object.keys(m).map(function(k){ return m[k]; });
   }
-  /* significance → size: the cast and the world by how much of the story they are in; the frame layers at 2; the texture at 1 */
-  function tierOf(e, total){
-    var share = total ? e.n / total : 0;
-    if (e.cat === 'being') return share >= 0.35 ? 3 : 2;
-    if (e.cat === 'setting' || e.cat === 'org' || e.cat === 'concept') return share >= 0.5 ? 3 : 2;
-    if (e.cat === 'theme' || e.cat === 'plot' || e.cat === 'stakes' || e.cat === 'period') return 2;
-    return e.n >= 6 ? 2 : 1;   // objects, events, genres
-  }
+  /* significance: how much of the story an element is in, weighted by what it is — the cast and the world first, the frame
+     layers (themes, plots, stakes, periods) next, objects and events last. The SIZES are then handed out on the landing
+     bank's own budget (measured: 5 words at 3× ≈ 32 letters, 119 at 2× ≈ 1,000 letters, the rest 1×), because a 3× word
+     costs nine cells a letter — a bank that is mostly big words is a sparse field however many words it holds. */
+  var CAT_W = { being:1, setting:.9, org:.9, concept:.9, theme:.6, plot:.6, stakes:.6, period:.6, genre:.4, object:.4, event:.4 };
+  function score(e, total){ return (total ? e.n / total : 0) * (CAT_W[e.cat] || .4); }
+  var T3_LETTERS = 34, T2_LETTERS = 1000;
   function proseTexts(){
     var out = [];
     try{ var t = (typeof sectionTextsLC === 'function') ? sectionTextsLC() : {}; Object.keys(t).forEach(function(k){ if (typeof t[k] === 'string') out.push(t[k]); }); }catch(e){}
@@ -5149,9 +5149,21 @@ body.eink #consentBar #cbAccept{background:#000; color:#fff; border-color:#000}
   function bankFor(){
     var el = elements(), total = frames().length, seen = {}, bank = [], letters = 0;
     var nameParts = {}; el.forEach(function(e){ e.name.toLowerCase().split(/[^a-z-]+/).forEach(function(pt){ if (pt.length > 2) nameParts[pt] = 1; }); });
-    el.forEach(function(e){ var w = cleanWord(e.name); if (w.length < 3 || seen[w]) return; seen[w] = 1; bank.push({ w: w, t: tierOf(e, total) }); letters += w.length; });
+    var add = function(w, t){ if (w.length < 3 || seen[w]) return false; seen[w] = 1; bank.push({ w: w, t: t }); letters += w.length; return true; };
+    /* an element's name: a phrase of up to three words is drawn whole, with its gaps; a longer one (an event's sentence,
+       a stake's clause) gives up its content words instead — the labyrinth is made of words, not of sentences */
+    var wordsOf = function(e){ var w = cleanWord(e.name); if (!w) return []; var parts = w.split(' '); if (parts.length <= 3) return [w]; return parts.filter(function(pt){ return pt.length >= 4 && !STOP[pt.toLowerCase()]; }); };
+    el.sort(function(a, b){ return score(b, total) - score(a, total); });
+    var t3 = 0, t2 = 0;
+    el.forEach(function(e){
+      var ws = wordsOf(e); if (!ws.length) return;
+      var t = 1;
+      if (ws.length === 1 && ws[0].length <= 11 && t3 + ws[0].length <= T3_LETTERS && (e.cat === 'being' || e.cat === 'setting' || e.cat === 'org' || e.cat === 'concept')) t = 3;
+      else if (t2 + ws.join('').length <= T2_LETTERS && score(e, total) >= .2) t = 2;
+      ws.forEach(function(w){ if (add(w, t)){ if (t === 3) t3 += w.length; else if (t === 2) t2 += w.length; } });
+    });
     var d = distinctive(proseTexts(), nameParts);
-    for (var i = 0; i < d.words.length && letters < TARGET_LETTERS; i++){ var w = cleanWord(d.words[i]); if (w.length < 4 || seen[w]) continue; seen[w] = 1; bank.push({ w: w, t: 1 }); letters += w.length; }
+    for (var i = 0; i < d.words.length && letters < TARGET_LETTERS; i++){ var w = cleanWord(d.words[i]); if (w.length < 4) continue; add(w, 1); }
     return { bank: bank, letters: letters, elements: el.length, tokens: d.tokens, empty: (el.length === 0 && d.tokens < 20) };
   }
   function where(){
