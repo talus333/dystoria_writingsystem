@@ -51594,6 +51594,11 @@ window.__dystSetupWriteMic = function(){
       btn.title = 'Dictate into the session \u2014 speech lands at your cursor';
       document.body.appendChild(btn);
       var recW = null, onW = false;
+      /* v.684 — which route this device uses. 'ok' once the engine has really produced words here; 'no' once it has
+         really failed (permission refused, no mic, or it never started). Anything else: try the engine. */
+      function _enginePref(v){ try{ if (v === undefined) return localStorage.getItem('dystoria.dictateEngine') || '';
+        localStorage.setItem('dystoria.dictateEngine', v); }catch(e){ return ''; } }
+      var _forceKbd = false, _lpTimer = null;
       // ---- AI auto-punctuation: buffer raw speech, punctuate on a pause via the AI worker ----
       var aiMode = false; try{ aiMode = localStorage.getItem('dystoria.dictateAI') !== '0'; }catch(e){}   // default ON
       var aiBuf = '', aiTimer = null, aiBusy = false;
@@ -51693,9 +51698,12 @@ window.__dystSetupWriteMic = function(){
       btn.addEventListener('click', function(){
         if (onW){ micStopW(); return; }
         if (state.inkMode){ if (typeof flashStatus === 'function') flashStatus('Dictation writes text \u2014 switch from Ink to Type first'); return; }
+        if (_forceKbd){ _forceKbd = false; return; }   // v.684: a long-press already handed off to the keyboard
         var _secure = (typeof window.isSecureContext === 'boolean') ? window.isSecureContext : (location.protocol === 'https:');
-        var _isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent||'') || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-        if (!SRw || !_secure || _isIOS){ _kbdDictate(); return; }   // iOS Web Speech is unreliable across browsers; no engine / not https -> use the phone keyboard's mic (always works, prompts via the OS)
+        /* v.684: the engine runs on the iPhone too. It is refused only when there is none, when the page is not secure
+           (the mic needs https), or when it has already failed for real on THIS device — in which case the tap goes
+           straight to the keyboard instead of spending a second and a half finding that out again. */
+        if (!SRw || !_secure || _enginePref() === 'no'){ _kbdDictate(); return; }
         var _started = false;
         recW = new SRw(); recW.continuous = true; recW.interimResults = true;
         try{ recW.lang = navigator.language || 'en-US'; }catch(e){}
@@ -51703,6 +51711,7 @@ window.__dystSetupWriteMic = function(){
           for (var r2 = ev.resultIndex; r2 < ev.results.length; r2++){
             if (!ev.results[r2].isFinal) continue;
             var tr = ev.results[r2][0].transcript;
+            _enginePref('ok');   // v.684: real words from the engine on this device — never spend the fallback wait again
             if (aiReady()){ aiBuf += (aiBuf && !/\s$/.test(aiBuf) ? ' ' : '') + tr; if (aiBuf.length > 240) aiFlush(); else aiSchedule(); }   // buffer → AI punctuates on a pause (or when it gets long)
             else insertDict(tr);
           }
@@ -51711,12 +51720,23 @@ window.__dystSetupWriteMic = function(){
         recW.onstart = function(){ _started = true; };
         recW.onaudiostart = function(){ _started = true; };
         recW.onerror = function(ev){ var er = ev && ev.error;
-          if (er === 'not-allowed' || er === 'service-not-allowed'){ micStopW(); _kbdDictate('Couldn\u2019t start in-app dictation \u2014 tap the mic on your keyboard instead.'); return; }
+          if (er === 'not-allowed' || er === 'service-not-allowed'){ micStopW(); _enginePref('no'); _kbdDictate('Couldn\u2019t start in-app dictation \u2014 tap the mic on your keyboard instead.'); return; }
           if (er === 'audio-capture' || er === 'network'){ micStopW(); _kbdDictate(); return; }
         };
         try{ recW.start(); onW = true; btn.classList.add('on'); btn.innerHTML = '\ud83c\udfa4'; }catch(e){ micStopW(); _kbdDictate(); return; }
-        setTimeout(function(){ if (onW && !_started){ micStopW(); _kbdDictate(); } }, 1800);   // engine never really started (silent failure on some mobile browsers) -> keyboard mic
+        setTimeout(function(){ if (onW && !_started){ micStopW(); _enginePref('no'); _kbdDictate(); } }, _enginePref() === 'ok' ? 1800 : 12000);   // engine never really started (silent failure on some mobile browsers) -> keyboard mic. The first run waits out the OS mic-permission card.
       });
+      /* v.684 — press and hold for the keyboard's mic. The engine is the tap; the hold is the way back to the keyboard
+         (its mic understands some things the engine does not, and it is the fallback if the engine misbehaves). */
+      function _lpStart(){ if (_lpTimer) clearTimeout(_lpTimer); _lpTimer = setTimeout(function(){
+        _lpTimer = null; _forceKbd = true; if (onW) micStopW();
+        try{ if (navigator.vibrate) navigator.vibrate(12); }catch(e){}
+        _kbdDictate('Keyboard mic \u2014 tap the \ud83c\udfa4 on your keyboard. (A short tap dictates in the page instead.)');
+      }, 550); }
+      function _lpEnd(){ if (_lpTimer){ clearTimeout(_lpTimer); _lpTimer = null; } }
+      btn.addEventListener('touchstart', _lpStart, { passive: true });
+      btn.addEventListener('touchend', _lpEnd); btn.addEventListener('touchcancel', _lpEnd);
+      btn.addEventListener('mousedown', _lpStart); btn.addEventListener('mouseup', _lpEnd); btn.addEventListener('mouseleave', _lpEnd);
       setInterval(function(){
         var avail = document.body.classList.contains('writing') && (document.body.classList.contains('insession') || (typeof addsLocked === 'function' && addsLocked()));
         btn.classList.toggle('avail', !!avail);
@@ -54834,126 +54854,10 @@ body.eink #expMenu{background:#fff; border-color:#000}
     /* Explore dissolved: its direct-solution proposals are gone; its angle taxonomy now lives in the element/plot Explore Q&A (window.openExplore). Button intentionally not appended. */
     // ---- Write-mode dictation: now defined in the standalone #writeMicJS script so it also exists on phones (this desktop copy is retired via if(false)). ----
     if (window.__dystSetupWriteMic) window.__dystSetupWriteMic();
-    if (false) (function(){
-      var SRw = window.SpeechRecognition || window.webkitSpeechRecognition;
-      var btn = document.createElement('button'); btn.id = 'writeMic'; btn.type = 'button'; btn.innerHTML = '\ud83c\udfa4';
-      btn.title = 'Dictate into the session \u2014 speech lands at your cursor';
-      document.body.appendChild(btn);
-      var recW = null, onW = false;
-      // ---- AI auto-punctuation: buffer raw speech, punctuate on a pause via the AI worker ----
-      var aiMode = false; try{ aiMode = localStorage.getItem('dystoria.dictateAI') !== '0'; }catch(e){}   // default ON
-      var aiBuf = '', aiTimer = null, aiBusy = false;
-      var aiBtn = document.createElement('button'); aiBtn.id = 'writeMicAI'; aiBtn.type = 'button';
-      function paintAi(){ aiBtn.innerHTML = '✨'; aiBtn.classList.toggle('on', aiMode); aiBtn.title = aiMode ? 'AI adds punctuation to your dictation — tap to switch to manual (say “period”, “comma”…)' : 'Tap to let AI punctuate your dictation automatically'; }
-      document.body.appendChild(aiBtn); paintAi();
-      aiBtn.addEventListener('click', function(e){ e.stopPropagation(); aiMode = !aiMode; try{ localStorage.setItem('dystoria.dictateAI', aiMode ? '1' : '0'); }catch(_){} paintAi(); if (typeof flashStatus === 'function') flashStatus(aiMode ? 'AI punctuation on — just speak naturally' : 'Manual mode — say “period”, “comma”, “new paragraph”…'); });
-      function aiReady(){ return aiMode && (typeof aiCall === 'function') && (typeof aiAuthed !== 'function' || aiAuthed()); }
-      async function aiPunctuate(text){
-        var sys = 'You punctuate dictated prose. Add correct punctuation, capitalization, and paragraph breaks. Keep every word exactly as given — do not add, remove, reorder, translate, or reword anything, and do not wrap the result in quotes or add commentary. Return only the corrected text.';
-        return await aiCall(sys, text, { feature:'punctuate', maxTokens: 500, temperature: 0 });
-      }
-      function insertPunct(text){
-        var ed = document.getElementById('editor'); if (!ed) return;
-        var t = String(text || '').replace(/\r/g, '').trim(); if (!t) return;
-        try{ ed.focus({ preventScroll: true }); }catch(e){ ed.focus(); }
-        var sel = window.getSelection();
-        if (!sel.rangeCount || !ed.contains(sel.anchorNode) || sel.anchorNode === ed){ var _k = (typeof state !== 'undefined' && state.frameIdx) || 0; var _fm = (typeof nodeFrameMap === 'function') ? nodeFrameMap() : null; var ph = Array.from(ed.children).find(function(c){ return c.classList && c.classList.contains('ph') && !(c.textContent||'').trim() && (!_fm || _fm.get(c) === _k); }) || Array.from(ed.children).reverse().find(function(c){ return c.classList && c.classList.contains('ph') && !(c.textContent||'').trim(); }); var r = document.createRange(); if (ph){ r.selectNodeContents(ph); r.collapse(true); } else { r.selectNodeContents(ed); r.collapse(false); } sel.removeAllRanges(); sel.addRange(r); }
-        var parts = t.split(/\n+/);
-        parts.forEach(function(p, i){
-          if (i > 0) document.execCommand('insertParagraph');
-          p = p.trim(); if (!p) return;
-          var s2 = window.getSelection();
-          var before = (s2.anchorNode && s2.anchorNode.textContent) ? s2.anchorNode.textContent.slice(0, s2.anchorOffset) : '';
-          var lead = (i === 0 && before && !/\s$/.test(before) && !/[“(]$/.test(before)) ? ' ' : '';
-          document.execCommand('insertText', false, lead + p);
-        });
-      }
-      function aiFlush(){
-        if (aiTimer){ clearTimeout(aiTimer); aiTimer = null; }
-        if (aiBusy){ aiSchedule(); return; }
-        var chunk = aiBuf.trim(); if (!chunk) return; aiBuf = '';
-        if (!aiReady()){ insertDict(chunk); return; }
-        aiBusy = true;
-        var prev = btn.innerHTML; if (onW) btn.innerHTML = '✨';
-        aiPunctuate(chunk).then(function(out){ insertPunct(out && out.trim() ? out : chunk); }).catch(function(){ insertDict(chunk); })
-          .then(function(){ aiBusy = false; if (onW && btn.innerHTML === '✨') btn.innerHTML = prev; if (aiBuf.trim()) aiSchedule(); });
-      }
-      function aiSchedule(){ if (aiTimer) clearTimeout(aiTimer); aiTimer = setTimeout(aiFlush, 850); }   // flush a beat after speech pauses
-      var _capNext = false;
-      // Turn spoken punctuation cues into real punctuation (the browser engine only transcribes words). \u0001 = new paragraph, \u0002 = new line.
-      function dictationFormat(raw){
-        var s = ' ' + String(raw || '') + ' ';
-        s = s.replace(/\b(?:new|next)\s+paragraph\b/gi, ' \u0001 ');
-        s = s.replace(/\b(?:new|next)\s+line\b/gi, ' \u0002 ');
-        s = s.replace(/\bnew\s+sentence\b/gi, '. ');
-        s = s.replace(/\b(?:full\s*stop|period)\b/gi, '. ');
-        s = s.replace(/\bcomma\b/gi, ', ');
-        s = s.replace(/\bquestion\s*mark\b/gi, '? ');
-        s = s.replace(/\bexclamation\s*(?:mark|point)\b/gi, '! ');
-        s = s.replace(/\bsemi[\s-]*colon\b/gi, '; ');
-        s = s.replace(/\bcolon\b/gi, ': ');
-        s = s.replace(/\b(?:ellipsis|dot\s+dot\s+dot)\b/gi, '… ');
-        s = s.replace(/\b(?:em[\s-]*dash|dash)\b/gi, ' — ');
-        s = s.replace(/\bhyphen\b/gi, '-');
-        s = s.replace(/\bopen\s*(?:paren|parenthesis|bracket)\b/gi, ' (');
-        s = s.replace(/\bclose\s*(?:paren|parenthesis|bracket)\b/gi, ') ');
-        s = s.replace(/\b(?:open\s*quotes?|begin\s*quote)\b/gi, ' “');
-        s = s.replace(/\b(?:close\s*quotes?|end\s*quote|unquote)\b/gi, '” ');
-        s = s.replace(/\bapostrophe\b/gi, '’');
-        s = s.replace(/\bampersand\b/gi, ' & ');
-        s = s.replace(/\s+([.,?!;:…”)])/g, '$1');   // no space before closing punctuation
-        s = s.replace(/([“(])\s+/g, '$1');               // no space after opening punctuation
-        s = s.replace(/[ \t]{2,}/g, ' ');
-        return s;
-      }
-      function insertDict(raw){
-        var ed = document.getElementById('editor'); if (!ed || !raw) return;
-        try{ ed.focus({ preventScroll: true }); }catch(e){ ed.focus(); }
-        var sel = window.getSelection();
-        if (!sel.rangeCount || !ed.contains(sel.anchorNode) || sel.anchorNode === ed){ var _k = (typeof state !== 'undefined' && state.frameIdx) || 0; var _fm = (typeof nodeFrameMap === 'function') ? nodeFrameMap() : null; var ph = Array.from(ed.children).find(function(c){ return c.classList && c.classList.contains('ph') && !(c.textContent||'').trim() && (!_fm || _fm.get(c) === _k); }) || Array.from(ed.children).reverse().find(function(c){ return c.classList && c.classList.contains('ph') && !(c.textContent||'').trim(); }); var r = document.createRange(); if (ph){ r.selectNodeContents(ph); r.collapse(true); } else { r.selectNodeContents(ed); r.collapse(false); } sel.removeAllRanges(); sel.addRange(r); }
-        var processed = dictationFormat(raw);
-        var tokens = processed.split(/([\u0001\u0002])/);
-        tokens.forEach(function(tok){
-          if (!tok) return;
-          if (tok === '\u0001'){ document.execCommand('insertParagraph'); _capNext = true; return; }
-          if (tok === '\u0002'){ try{ document.execCommand('insertLineBreak'); }catch(e){ document.execCommand('insertText', false, '\n'); } _capNext = true; return; }
-          var t = tok.trim(); if (!t) return;
-          var s2 = window.getSelection();
-          var before = (s2.anchorNode && s2.anchorNode.textContent) ? s2.anchorNode.textContent.slice(0, s2.anchorOffset) : '';
-          if (_capNext || !before.trim() || /[.!?…][”)\s]*$/.test(before)){
-            t = t.replace(/[a-z]/, function(c){ return c.toUpperCase(); });   // start of a sentence → capitalise the first letter
-            _capNext = false;
-          }
-          var lead = (before && !/\s$/.test(before) && !/[“(]$/.test(before) && !/^[.,?!;:…”)]/.test(t)) ? ' ' : '';
-          document.execCommand('insertText', false, lead + t);
-        });
-      }
-      function micStopW(){ onW = false; btn.classList.remove('on'); btn.innerHTML = '\ud83c\udfa4'; if (recW) try{ recW.stop(); }catch(e){} recW = null; if (aiBuf.trim()) aiFlush(); }   // punctuate whatever's left when the mic goes down
-      btn.addEventListener('click', function(){
-        if (!SRw){ if (typeof flashStatus === 'function') flashStatus('Voice input isn\u2019t supported in this browser \u2014 try Chrome, Edge or Safari'); return; }
-        if (onW){ micStopW(); return; }
-        if (state.inkMode){ if (typeof flashStatus === 'function') flashStatus('Dictation writes text \u2014 switch from Ink to Type first'); return; }
-        recW = new SRw(); recW.continuous = true; recW.interimResults = true;
-        try{ recW.lang = navigator.language || 'en-US'; }catch(e){}
-        recW.onresult = function(ev){
-          for (var r2 = ev.resultIndex; r2 < ev.results.length; r2++){
-            if (!ev.results[r2].isFinal) continue;
-            var tr = ev.results[r2][0].transcript;
-            if (aiReady()){ aiBuf += (aiBuf && !/\s$/.test(aiBuf) ? ' ' : '') + tr; if (aiBuf.length > 240) aiFlush(); else aiSchedule(); }   // buffer → AI punctuates on a pause (or when it gets long)
-            else insertDict(tr);
-          }
-        };
-        recW.onend = function(){ if (onW && recW){ try{ recW.start(); }catch(e){ micStopW(); } } };   // Chrome stops on silence — keep listening while toggled on
-        recW.onerror = function(ev){ if (ev && (ev.error === 'not-allowed' || ev.error === 'service-not-allowed')) micStopW(); };
-        try{ recW.start(); onW = true; btn.classList.add('on'); btn.innerHTML = '\ud83c\udfa4'; }catch(e){ micStopW(); }
-      });
-      setInterval(function(){
-        var avail = document.body.classList.contains('writing') && (document.body.classList.contains('insession') || (typeof addsLocked === 'function' && addsLocked()));
-        btn.classList.toggle('avail', !!avail);
-        aiBtn.classList.toggle('avail', !!avail);
-        if (!avail && onW) micStopW();   // session over → mic down
-      }, 600);
-    })();
+    /* v.684: the retired desktop copy of this module (an `if (false)` twin of #writeMicJS, dead since the
+       extraction) is deleted. #writeMicJS is the one source; the call on the line above is how this path
+       reaches it — a twin only waits to be patched by mistake. */
+
     // sidebar selection lets go when you click empty map or a faded element — but survives clicks on its CONNECTED elements (so they can be moved)
     sky.addEventListener('click', function(e){
       if (!xbSel) return;
@@ -87803,6 +87707,25 @@ html body:not(.eink) #wikiPanel .wk-head .mode-pills button:not([data-mode="writ
   html body.writing.insession:not(.eink) #writeMic{ top:10px !important; right:10px !important; height:32px !important; border-radius:16px !important; padding:0 12px 0 10px !important; gap:6px !important; font-size:14px !important; box-shadow:0 3px 10px rgba(0,0,0,.26) !important; }
   html body.writing.insession:not(.eink) #writeMic::after{ font-size:11px !important; letter-spacing:.06em !important; }
   html body.writing.insession:not(.eink) #writeMicAI{ top:12px !important; right:119px !important; width:28px !important; height:28px !important; font-size:12px !important; }
+}
+</style>
+<style id="dyst-mobile-nozoom">
+/* v.683 — NO ZOOM ON FOCUS. Under 769px, not e-ink.
+   `:not(#dyst-never)` twice is the file's id-doubling trick (`#padTools#padTools`) where there is no id to double: it
+   matches everything, changes nothing, and lifts the rule above the id-scoped `!important` sizes some fields carry
+   (`#rdFindPanel input[type="text"]{font-size:15px !important}`). Any future id rule under 16px is outranked too. */
+@media (max-width: 768px){
+  html body:not(.eink):not(#dyst-never):not(#dyst-never) input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not([type="file"]):not([type="hidden"]):not([type="button"]):not([type="submit"]),
+  html body:not(.eink):not(#dyst-never):not(#dyst-never) textarea,
+  html body:not(.eink):not(#dyst-never):not(#dyst-never) select{ font-size:16px !important; }
+  /* the two contenteditable surfaces under 16 — the Plot page's gap pills and the writing-mode title bar. The big
+     writing surfaces (#editor 20px, the section headings 26, the story name 46, the Notepad 17) are already over the
+     line and are left exactly as they are: a blanket rule here would SHRINK the prose. */
+  html body:not(.eink):not(#dyst-never):not(#dyst-never) .pl-gappill,
+  html body:not(.eink):not(#dyst-never):not(#dyst-never) #wmTitleBar{ font-size:16px !important; }
+  /* the two search pills: the bigger text needs the room the old 11px left behind */
+  html body:not(.eink) .pl-nfsearch, html body:not(.eink) .np-search{ height:auto !important; padding:6px 12px !important; }
+  html body:not(.eink) .pl-nfsearch input, html body:not(.eink) .np-search input{ line-height:1.25 !important; }
 }
 </style>
 <style id="dyst-topbars-one">
