@@ -2,7 +2,7 @@
 
 _The forward plan: only open work. What's already shipped lives in **`Dystoria_Shipped.md`**. Old roadmap IDs are kept in brackets [R#]. Status: ☐ planned · ◐ in progress · ✓ done (moving to Shipped)._
 
-**App version:** v.695 (internal `APP_VERSION` still `2026.07.20.624`) · **Updated:** 2026-09-13 · _md5 `bc1fff6580ee5ce960146fa71b4b6a31`, **written to the repo folder and verified on device**. `welcome_undaunted.html` md5 `714622923969ac23812a63f4f78420f0`. `worker.js` md5 `c2161c9674113095942e7a27a81645d8`, unchanged._
+**App version:** v.696 (internal `APP_VERSION` still `2026.07.20.624`) · **Updated:** 2026-09-13 · _md5 `a0a97a42bd6e3fd977ade21d00f76664`, **written to the repo folder and verified on device**. `welcome_undaunted.html` md5 `714622923969ac23812a63f4f78420f0`. `worker.js` md5 `c2161c9674113095942e7a27a81645d8`, unchanged._
 
 > **⚑ THIS FILE WENT FORTY-SIX VERSIONS STALE, AND THE STALENESS COST REAL WORK (caught 2026-09-07).**
 > Its header still said *App version `2026.07.20.601`* and *"delivered to the conversation, NOT yet written to the repo folder"* — both untrue for a month. It carried **no entries for v.602 onward**. **#55 was not on the Board at all**, despite being seven versions of work. And it listed **#54 phase 2 as unbuilt when it had shipped in v.609–v.611** — which sent a session off to build something that already existed, caught only because the app was measured instead of the file being believed.
