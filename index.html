@@ -50137,7 +50137,14 @@ function beingRenderOpts(nd){ if(!nd) return null;
     }catch(e){ console.warn('hansel lock refresh failed:', e); }
   }
   // Seed for new users, and open the Hansel example so they land in a finished story (and the onboarding has it as a backdrop).
-  function ensureStarterStory(){
+  /* v.701 [Jeremy] — "don't have the hansel and gretel story as default in mobile, just assume they are starting
+     a new story." `force` is how the example is asked for on purpose (see `window.__dystOpenExample` below); left
+     out, a phone gets a blank story of its own. */
+  function _starterPhone(){
+    try{ return window.matchMedia('(max-width: 768px)').matches && !document.body.classList.contains('eink'); }
+    catch(e){ return false; }
+  }
+  function ensureStarterStory(force){
     seedOnce();
     ensureHansel();
     refreshHanselLocks();
@@ -50145,10 +50152,10 @@ function beingRenderOpts(nd){ if(!nd) return null;
     patchAliceIcons();
     try{
       if(typeof state==='undefined' || typeof openSession!=='function') return;
-      if(state.session) return;   // never replace work in progress
+      if(!force && state.session) return;   // never replace work in progress
       const list=loadSessions();
       // If the writer had a story open, reopen THAT — never drop them onto the example.
-      let want=''; try{ want=(typeof intendedStoryId==='function')?intendedStoryId():''; }catch(e){}
+      let want=''; try{ want=(!force && typeof intendedStoryId==='function')?intendedStoryId():''; }catch(e){}
       if(want){
         const wl=list.find(x=>x.id===want);
         if(wl){ openSession(want); return; }   // their story is here locally → open it
@@ -50156,11 +50163,22 @@ function beingRenderOpts(nd){ if(!nd) return null;
         const cloudPending = (typeof cloudReady==='function' && cloudReady()) || (typeof cloud!=='undefined' && cloud && cloud.user);
         if(cloudPending && want!==HANSEL.id && want!==ALICE.id) return;
       }
+      /* v.701: a phone with no story of its own starts on a blank one, not on somebody else's book. The
+         example is still SEEDED (above) and sits in the library for anyone who wants to open it — and the `want`
+         branch has already run, so a phone writer with a story of their own still gets that story. */
+      if(!force && _starterPhone()){
+        try{ if(typeof newSession==='function') newSession(); else if(typeof ensureSession==='function') ensureSession(); }catch(e){}
+        return;
+      }
       const h=list.find(x=>x.id===HANSEL.id) || list.find(x=>x.id===ALICE.id);
       if(h) openSession(h.id);
     }catch(e){ console.warn('starter story open failed:', e); }
   }
   window.ensureStarterStory = ensureStarterStory;
+  /* The example, asked for on purpose. A phone no longer lands on it by default, and every phone harness that
+     needs a story with sections, characters and prose in it now says so through this rather than relying on a
+     welcome that has gone away. It replaces whatever is open, which is what "show me the example" means. */
+  window.__dystOpenExample = function(){ try{ return ensureStarterStory(true); }catch(e){} };
   window.buildAliceSession = buildAlice;     // exposed for re-seeding from a menu if ever needed
   window.buildHanselSession = buildHansel;   // exposed for re-seeding from a menu if ever needed
   function init(){ ensureStarterStory(); }
@@ -50506,7 +50524,11 @@ function beingRenderOpts(nd){ if(!nd) return null;
       setTimeout(render, switched?320:80); }
     function endSeq(){ running=false; onbClosePad();   /* v.551: never leave the notepad over the begin-here doors */
       ['onbDim','onbSpot','onbCard'].forEach(id=>{ const e=el(id); if(e) e.classList.remove('show'); }); }
-    function finishSeq(){ const a=afterSeq; const k=kind, m=curMode; endSeq(); if(typeof a==='function') a(); else if(k==='overview'){ markOverviewSeen(); closeOverlays(); onbToDoors(); } else if(m){ markOffered(m); } onbDone(); }
+    function finishSeq(){ const a=afterSeq; const k=kind, m=curMode; endSeq();
+      /* v.701: before anything else happens — and before the doors, so whichever door they choose acts on their
+         own story — a phone is put back on the story the tour borrowed the example from. */
+      onbGiveBackPhoneStory();
+      if(typeof a==='function') a(); else if(k==='overview'){ markOverviewSeen(); closeOverlays(); onbToDoors(); } else if(m){ markOffered(m); } onbDone(); }
 
     // ---- prompts (centered cards with custom choices) ----
     function showPrompt(o){
@@ -50539,6 +50561,26 @@ function beingRenderOpts(nd){ if(!nd) return null;
     }
     function startWalk(m){ markOffered(m); if(m==='map'){ try{ if(typeof window.ensureStarterStory==='function') window.ensureStarterStory(); }catch(e){} } startSeq(WALK[m], { mode:m }); }
     /* v.549: the tour ends on the begin-here doors rather than in Plan. */
+    /* v.701: the story the phone was on before the tour borrowed the example. Null on a desktop, and null once
+       it has been given back. */
+    var onbPhoneReturnId = null;
+    /* `_starterPhone` lives in the starter-story module's own closure, not this one — a call to it from here would
+       have thrown into the try/catch around it and quietly never set the id. This module gets its own. */
+    function onbIsPhone(){
+      try{ return window.matchMedia('(max-width: 768px)').matches && !document.body.classList.contains('eink'); }
+      catch(e){ return false; }
+    }
+    function onbGiveBackPhoneStory(){
+      try{
+        if(!onbPhoneReturnId) return;
+        var id = onbPhoneReturnId; onbPhoneReturnId = null;
+        if(typeof state==='undefined' || typeof openSession!=='function' || typeof loadSessions!=='function') return;
+        if(state.session && state.session.id===id) return;                  /* already back */
+        if(!loadSessions().some(function(x){ return x.id===id; })) return;  /* it went away; leave well alone */
+        openSession(id);
+      }catch(e){}
+    }
+    try{ window.__onbGiveBackPhoneStory = onbGiveBackPhoneStory; }catch(e){}
     function onbToDoors(){ try{ window.__dystOnbShowingDoors = true;
       if(typeof window.showFirstRunDoors==='function') setTimeout(window.showFirstRunDoors, 220); }catch(e){} }
 
@@ -50578,6 +50620,11 @@ function beingRenderOpts(nd){ if(!nd) return null;
           blank = !prose && !ink && !els;
         }catch(e){}
         if(!blank) return;
+        /* v.701 [Jeremy] — "don't have the hansel and gretel story as default in mobile."
+           The tour still demonstrates on the example, but a phone gets its own story back when the tour ends
+           (see finishSeq). Remembered by id, and only ever a story that was blank — the check above already
+           guarantees that, so nothing with writing in it is ever set aside. */
+        try{ if(onbIsPhone() && state.session && state.session.id!==HID) onbPhoneReturnId = state.session.id; }catch(e){}
         if(loadSessions().some(x=>x.id===HID)) openSession(HID);
       }catch(e){}
     }
