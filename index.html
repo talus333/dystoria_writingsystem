@@ -30343,15 +30343,17 @@ function seedRelBonds(rels){
   });
   return made;
 }
-function seedHeuristicBonds(){
-  if (!state.prompt) return;
-  const words = state.prompt.words;
-  const idxOf = cid => words.map((w, i) => (w.cat === cid && w.role !== 'frame') ? i : -1).filter(i => i >= 0);
-  const bs = idxOf('being'), ss = idxOf('setting'), os = idxOf('object');
-  bs.forEach((bi, k) => { if (ss.length) starterBond(bi, ss[k % ss.length]); if (os.length) starterBond(bi, os[k % os.length]); });
-  if (bs.length >= 2) starterBond(bs[0], bs[1]);
-}
-function seedImportBonds(rels){ const m = seedRelBonds(rels); if (!m) seedHeuristicBonds(); return m; }
+/* v.704 — `seedHeuristicBonds()` used to stand here, and it invented bonds. It walked the imported beings and
+   tied each one to a setting and an object by rotating index, then tied the first two beings together — none of it
+   read out of the manuscript, none of it shown to the writer, because the review screen does not list connections.
+   It fired whenever `seedRelBonds` matched nothing, which is the COMMON case rather than the rare one: endpoints
+   are matched by exact name against the section's own word list, so an import whose cast landed in the Story
+   Legend matched nothing and was handed a fabricated web.
+
+   Inventing is what `starterBond` is FOR when a writer asks the app to generate a story from nothing (10955-11050),
+   and it still does that there. It is not what an import is for. An import returns what your text said, and when
+   your text said nothing about who knows whom, the honest result is no bonds. */
+function seedImportBonds(rels){ return seedRelBonds(rels); }
 function importShow(view){
   $('importEntry').style.display = view === 'entry' ? 'block' : 'none';
   $('importReview').style.display = view === 'review' ? 'block' : 'none';
@@ -30482,7 +30484,12 @@ async function extractImport(){
   if (!prose){ $('importStatus').textContent = 'Paste some prose first.'; return; }
   IMP.mode = 'new'; IMP.prose = prose; IMP.title = $('importTitle').value.trim();
   $('importGo').disabled = true; $('importStatus').innerHTML = '<span class="spin"></span>Reading &amp; ingesting…';
-  const nonBeingSubInfo = 'setting ∈ [' + importSubNames('setting').join(', ') + ']; object ∈ [' + importSubNames('object').join(', ') + ']; event ∈ [' + importSubNames('event').join(', ') + ']';
+  /* v.704 — `organization` was the one extracted type with no subcategory guidance, so the model never named a
+     kind, `validImportSub` fell through to `names[0]`, and EVERY imported group arrived as **Kinship** — armies,
+     guilds and churches alike. The names are served from the same source the review dropdown reads, so the two can
+     never drift apart. (`validImportSub('org','Martial')` already resolved correctly: the machinery was right, the
+     model was simply never shown the menu.) */
+  const nonBeingSubInfo = 'setting ∈ [' + importSubNames('setting').join(', ') + ']; object ∈ [' + importSubNames('object').join(', ') + ']; event ∈ [' + importSubNames('event').join(', ') + ']; organization ∈ [' + importSubNames('org').join(', ') + ']';
   const narrSubInfo = ['genre', 'period', 'theme', 'stakes', 'plot', 'concept'].map(c => { const s = importSubNames(c); return s.length ? (c + ' ∈ [' + s.join(', ') + ']') : null; }).filter(Boolean).join('; ');
   const typeUnion = '"being"|"setting"|"object"|"event"|"organization"|"genre"|"context"|"concepts"|"stakes"|"plot"|"concept"';
   const typeGuide = 'being = a named character or creature; setting = a place; object = a notable physical thing; event = a key happening; organization = a collective with a life of its own (company, guild, order, faction, council, cult, church, army, party, clan, house, tribe, secret society) that beings belong to or contend with; genre = the story’s genre(s); context = the time period or setting era; concepts = the central themes / big ideas the work explores; stakes = what is at risk; plot = a plot archetype or through-line; concept = an in-world term, technology, or coined idea (worldbuilding vocabulary). ';
@@ -30628,7 +30635,12 @@ async function extractImport(){
   if (typeof renderImportProposals === 'function') renderImportProposals();
   setConfirmProgress(total);   // all parts in → enable Build
 }
-const IMP_CATS = [['being', 'Character'], ['setting', 'Place'], ['object', 'Artifact'], ['event', 'Event'], ['genre', 'Genre'], ['period', 'Context'], ['theme', 'Concepts'], ['stakes', 'Stakes'], ['plot', 'Plot'], ['concept', 'Concept']];
+/* v.704 — `org` was missing from this list, and this list is the ONLY thing the review card's type dropdown is
+   built from. With no matching <option> the browser shows the first, so every imported faction, guild, order and
+   church was labelled **Character** — next to a correct teal org dot and a dropdown full of org subcategories —
+   and there was no menu item to correct it. `IMP_TMAP` has mapped eighteen words to `org` all along and both
+   commit paths branch on it; only the writer's view of it was wrong. */
+const IMP_CATS = [['being', 'Character'], ['setting', 'Place'], ['object', 'Artifact'], ['event', 'Event'], ['org', 'Group'], ['genre', 'Genre'], ['period', 'Context'], ['theme', 'Concepts'], ['stakes', 'Stakes'], ['plot', 'Plot'], ['concept', 'Concept']];
 function buildTraitArea(d, el){
   const wrap = d.querySelector('.ir-traits-wrap'); if (!wrap) return;
   el.traits = el.traits || [];
@@ -30978,7 +30990,8 @@ async function confirmImport(){
   } catch (e){}
   let _bonds = 0;
   for (let si = 0; si < secs.length; si++){ state.frameIdx = firstIdx + si; state.prompt = state.frames[firstIdx + si].prompt; _bonds += seedRelBonds(IMP.relationships); }
-  if (!_bonds){ const li = firstIdx + secs.length - 1; state.frameIdx = li; state.prompt = state.frames[li].prompt; seedHeuristicBonds(); }
+  /* v.704: and no fabricated web when the text yielded none — see `seedImportBonds`. Zero bonds is a true
+     reading of a manuscript that never says who knows whom; a made-up one is not. */
   state.frameIdx = firstIdx; state.prompt = state.frames[firstIdx].prompt;
   if (typeof renumberSessionLabels === 'function') renumberSessionLabels();   // number the imported-prose sessions per section
   if (IMP.overview){ state.session.wikiOverview = asSection && state.session.wikiOverview ? (state.session.wikiOverview + ' ' + IMP.overview) : IMP.overview; }
@@ -56000,9 +56013,14 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.626';
+  var APP_VERSION = '2026.07.20.627';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.627', date:'September 15, 2026', notes:[
+      '**Importing a story no longer invents connections.** If the relationships read out of your text could not be matched to elements on a section’s map — which happened more often than it sounds, because most imported casts land in the Story Legend — the importer quietly made some up: every character tied to a place and an object, the first two characters tied to each other. None of it was in your manuscript and none of it was shown to you. **It is gone.** An import now gives you exactly the bonds your text supports, and when your text says nothing about who knows whom, it says nothing. [found in an audit]',
+      '**An imported group is called a Group.** Factions, guilds, orders, councils, clans, houses and churches were all being listed in the import review as **Characters**, with no way to correct them, because the type menu had no Group option in it. It does now — which also means a character the reader mistook for a faction can be moved the other way.',
+      '**…and it knows what kind of group it is.** Every imported organization used to arrive typed **Kinship**, whether it was an army, a trade guild or a church, because the one thing never described to the reader was the list of group kinds. It picks from the real list now — Political, Martial, Commercial, Faith & Belief, Knowledge, Social, Species, Household, Institution, Rite and the rest — so they arrive under the right heading in Bonds.',
+    ]},
     { v:'2026.07.20.626', date:'September 14, 2026', notes:[
       '**The group categories in Bonds fold up.** Political, Social, Kinship and the rest are headings you can press in the Groups drawer — a story with groups in eight categories was a drawer you had to scroll to read. Each heading says how many are inside it whether it is open or closed, and what you fold stays folded next time you open Bonds. **Searching opens everything** while you are typing, so a fold can never hide a match, and a new group always opens the category it lands in. [Jeremy]',
       '**The zone icons are drawn with the mode medallions’ own pen.** They were carrying a heavier stroke at a smaller size, which is what made them read thick. [Jeremy]',
