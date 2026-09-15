@@ -2380,6 +2380,18 @@ body.eink .pt-rh-dev{color:#000}
   #importTitle{width:100%; box-sizing:border-box; font-family:var(--serif); font-size:17px; color:var(--ink); border:none; border-bottom:1px solid var(--line); background:transparent; padding:7px 2px; margin-bottom:10px; outline:none; line-height:1.55}
   #importText{width:100%; box-sizing:border-box; font-family:var(--serif); font-size:15px; line-height:1.55; color:var(--ink); border:1px solid var(--line); border-radius:8px; background:var(--bg2); padding:10px; outline:none; resize:vertical}
   #importText.imp-drag{border-color:var(--gold); box-shadow:0 0 0 2px rgba(250,154,49,.2)}   /* R20 — drag-a-file highlight */
+  /* v.706 — the connections block. Deliberately the proposals block's twin: same rule above it, same small-caps
+     gold head, same include checkbox, same `.off` dimming — one review screen, one grammar. */
+  #importRels{margin-top:14px; border-top:1px solid var(--line); padding-top:12px}
+  #importRels .irr-head{font-family:var(--sans); font-size:11px; letter-spacing:.12em; text-transform:uppercase; color:var(--gold); margin-bottom:8px}
+  #importRels .irr-row{display:flex; align-items:center; gap:9px; padding:5px 0; flex-wrap:wrap}
+  #importRels .irr-row .irr-end:last-of-type{flex:0 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis}
+  #importRels .irr-row.off{opacity:.4}
+  #importRels .irr-end{font-family:var(--serif); font-size:15px; color:var(--ink); line-height:1.55}
+  #importRels .irr-arr{font-family:var(--sans); font-size:13px; color:var(--ink-faint)}
+  #importRels .irr-type{font-family:var(--sans); font-size:12px; color:var(--ink-soft); background:var(--bg2); border:1px solid var(--line); border-radius:11px; padding:3px 10px; outline:none; min-width:110px; flex:0 1 190px}
+  #importRels .irr-type:focus{border-color:var(--gold)}
+  #importRels .irr-no{font-family:var(--sans); font-size:10.5px; letter-spacing:.08em; text-transform:uppercase; color:var(--ash,#8a8271); border:1px solid var(--line); border-radius:10px; padding:2px 8px; cursor:help}
   #importProposals{margin-top:14px; border-top:1px solid var(--line); padding-top:12px}
   #importProposals .ipp-head{font-family:var(--sans); font-size:11px; letter-spacing:.12em; text-transform:uppercase; color:var(--gold); margin-bottom:8px}
   #importProposals .ipp-row{display:flex; align-items:center; gap:9px; padding:5px 0}
@@ -30635,6 +30647,7 @@ async function extractImport(){
   $('importGo').disabled = false;
   if (!IMP.elements.length){ $('importStatus').textContent = 'Couldn’t read the structure — try again, or shorten the text.'; return; }
   if (typeof renderImportProposals === 'function') renderImportProposals();
+  if (typeof renderImportRels === 'function') try{ renderImportRels(); }catch(e){}   /* v.706 — chunks arrive one at a time and each brings more connections */
   setConfirmProgress(total);   // all parts in → enable Build
 }
 /* v.704 — `org` was missing from this list, and this list is the ONLY thing the review card's type dropdown is
@@ -30676,6 +30689,7 @@ function buildTraitArea(d, el){
   taVal.addEventListener('keydown', e => { if (e.key === 'Enter'){ e.preventDefault(); addTrait(); } });
 }
 function renderImportReview(){
+  try{ renderImportRels(); }catch(e){}   /* v.706 — the connections, redrawn with the elements they depend on: a row's "no match" is read off the element list, so unchecking an element must re-read it */
   const wrap = $('importElements'); wrap.innerHTML = '';
   if (!IMP.elements.length){ wrap.innerHTML = '<div class="ir-lbl" style="color:var(--ink-faint)">No elements found — add some below, or build the story from the prose alone.</div>'; return; }
   IMP.elements.forEach(el => wrap.appendChild(irBuildCard(el)));
@@ -30729,6 +30743,61 @@ function irBuildCard(el){
     if (hasTraits) buildTraitArea(d, el);
     return d;
   }
+}
+/* v.706 — THE CONNECTIONS, WHERE A WRITER CAN SEE THEM. Until now the review listed elements and nothing else,
+   so every bond the reader proposed was committed unseen. One row each, between the elements and the pool
+   proposals: a connection is about the elements above it; a proposal is about your word pools.
+
+   `relWillLand` is the honest part. A bond is only drawn if BOTH ends match an element by name (`seedRelBonds`'
+   own rule, which is exact and case-insensitive), so a row naming something that is not in the list above can say
+   so instead of being quietly dropped at confirm. Measured through a real import before this was written: of five
+   relationships — character↔character, character↔place, character↔group, character↔idea, and one naming nothing —
+   four landed. Groups and ideas land fine; only the unmatched name does not. */
+function relIncluded(r){ return !!r && r.include !== false; }
+function relEndOk(nm){
+  var t = String(nm || '').trim().toLowerCase(); if (!t) return false;
+  return (IMP.elements || []).some(function(el){
+    return el && el.include && !el.poolOnly && String(el.name || '').trim().toLowerCase() === t; });
+}
+function relWillLand(r){ return !!r && relEndOk(r.from) && relEndOk(r.to); }
+function renderImportRels(){
+  var anchor = $('importElements'); if (!anchor) return;
+  var host = $('importRels');
+  if (!host){
+    host = document.createElement('div'); host.id = 'importRels';
+    var props = $('importProposals');
+    if (props) anchor.parentNode.insertBefore(host, props);              /* elements → connections → proposals */
+    else anchor.parentNode.insertBefore(host, anchor.nextSibling);
+  }
+  host.innerHTML = '';
+  var rels = IMP.relationships || [];
+  if (!rels.length){ host.style.display = 'none'; return; }
+  host.style.display = 'block';
+  /* the default is ON, except for a row that cannot land — a connection to nothing is not a connection, and
+     offering it checked would be offering the writer a bond the app will then silently decline to draw */
+  rels.forEach(function(r){ if (r && r.include === undefined) r.include = relWillLand(r); });
+  var n = rels.filter(relIncluded).length;
+  var head = document.createElement('div'); head.className = 'irr-head';
+  head.textContent = '\u25cb Connections \u2014 ' + n + ' of ' + rels.length + ' will be drawn';
+  host.appendChild(head);
+  rels.forEach(function(r){
+    var lands = relWillLand(r);
+    var row = document.createElement('div'); row.className = 'irr-row' + (relIncluded(r) ? '' : ' off') + (lands ? '' : ' nomatch');
+    row.innerHTML =
+      '<label class="irr-inc"><input type="checkbox" class="irr-i"' + (relIncluded(r) ? ' checked' : '') + '></label>' +
+      '<span class="irr-end">' + esc(r.from || '') + '</span>' +
+      '<input class="irr-type" value="' + esc(r.type || '') + '" placeholder="how they are bound" title="The relation, in your words \u2014 easier to change here than to find on a map later">' +
+      '<span class="irr-arr">\u2192</span>' +
+      '<span class="irr-end">' + esc(r.to || '') + '</span>' +
+      (lands ? '' : '<span class="irr-no" title="Both ends must match an element you are keeping above. Rename the element, or leave this one out.">no match</span>');
+    var cb = row.querySelector('.irr-i');
+    cb.addEventListener('change', function(){ r.include = cb.checked; row.classList.toggle('off', !r.include);
+      var h = host.querySelector('.irr-head');
+      if (h) h.textContent = '\u25cb Connections \u2014 ' + (IMP.relationships || []).filter(relIncluded).length + ' of ' + (IMP.relationships || []).length + ' will be drawn'; });
+    var ti = row.querySelector('.irr-type');
+    ti.addEventListener('input', function(){ r.type = ti.value; });
+    host.appendChild(row);
+  });
 }
 // Phase 2: render the "extend your pools" proposals below the element list
 function renderImportProposals(){
@@ -30991,7 +31060,10 @@ async function confirmImport(){
     }
   } catch (e){}
   let _bonds = 0;
-  for (let si = 0; si < secs.length; si++){ state.frameIdx = firstIdx + si; state.prompt = state.frames[firstIdx + si].prompt; _bonds += seedRelBonds(IMP.relationships); }
+  /* v.706 — only the connections the writer left checked. v.704 stopped the importer INVENTING bonds; this is
+     the other half of the same rule — nothing enters the story that was not offered and accepted. */
+  var _rels = (IMP.relationships || []).filter(relIncluded);
+  for (let si = 0; si < secs.length; si++){ state.frameIdx = firstIdx + si; state.prompt = state.frames[firstIdx + si].prompt; _bonds += seedRelBonds(_rels); }
   /* v.704: and no fabricated web when the text yielded none — see `seedImportBonds`. Zero bonds is a true
      reading of a manuscript that never says who knows whom; a made-up one is not. */
   state.frameIdx = firstIdx; state.prompt = state.frames[firstIdx].prompt;
@@ -31073,7 +31145,10 @@ function confirmNotesImport(){
       else { if (placeImportElement(el)) added++; }                                                            // anything else → placed
     });
     // keep the stated relationships so they can be drawn as their elements get added to the map
-    if (IMP.relationships && IMP.relationships.length) state.session.importRels = (state.session.importRels || []).concat(IMP.relationships.map(r => ({ from: r.from, to: r.to, type: r.type })));
+    /* v.706 — and the notes path, which parks its connections for later rather than drawing them now: an
+       unchecked row must not come back to life when both ends finally exist. */
+    var _nrels = (IMP.relationships || []).filter(relIncluded);
+    if (_nrels.length) state.session.importRels = (state.session.importRels || []).concat(_nrels.map(r => ({ from: r.from, to: r.to, type: r.type })));
     if (IMP.overview){ state.session.wikiOverview = (state.session.wikiOverview ? (state.session.wikiOverview + ' ') : '') + IMP.overview; }
     // Anything in the source that wasn't turned into an element goes into General Notes so nothing is lost.
     const leftover = importGeneralNotes(IMP.prose, IMP.elements);
@@ -50973,6 +51048,7 @@ body.ember:not(.eink) #importCard .ic-note{ color:#a89e86 !important; }
 /* proposals (net-new pool words) */
 body.ember:not(.eink) #importProposals{ border-top-color:var(--em-gold-a18) !important; }
 body.ember:not(.eink) #importProposals .ipp-head{ color:#e0a94e !important; }
+body.ember:not(.eink) #importRels .irr-head{ color:#e0a94e !important; }   /* v.706 — the ember head, as its twin has */
 body.ember:not(.eink) #importProposals .ipp-word{ color:var(--em-cream) !important; }
 body.ember:not(.eink) #importProposals .ipp-scope{ border-color:var(--em-gold-a28) !important; }
 body.ember:not(.eink) #importProposals .ipps-btn{ background:rgba(255,255,255,.05) !important; color:var(--em-soft) !important; }
@@ -56015,9 +56091,13 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.628';
+  var APP_VERSION = '2026.07.20.629';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.629', date:'September 15, 2026', notes:[
+      '**You can see the connections an import wants to make, and say no to them.** The review screen listed your characters, places and things and let you reject any of them one by one — but the **bonds** between them were never shown at all. They were read out of your text, committed, and drawn, and the first you knew of it was finding them on the map. They now sit in their own block under the elements: both ends, the relation in a box you can retype, and a tick you can clear. Nothing that is unticked is drawn. [completing v.704]',
+      '**And it tells you which ones cannot land.** A connection is only drawn when both of its ends match an element you are keeping, so a bond naming someone the reader did not pick up is marked **no match** and left unticked rather than quietly dropped at the last step. Rename the element or leave the connection out — either way you can see what is happening.',
+    ]},
     { v:'2026.07.20.628', date:'September 15, 2026', notes:[
       '**Your groups are the kind of group you said they were.** Every group in Bonds that you did not build through the **+ Group** door — anything imported, anything created as an ordinary element, anything an AI pass added — was being filed as **Political** and drawn as a faction chart, whatever kind you had actually given it. A martial watch, a church, a family and a trade office all sat under one heading. They now read the kind off the element itself, so they land under their own heading and open as the structure they are: a family as a tree, a household as a blueprint, a chain of events as a chain. **Nothing you arranged is lost** — a group whose opening view changes still has its old arrangement, one lens away in the dropdown. [Jeremy]',
       '**Correcting yesterday’s note.** v.704 said imported groups would arrive under the right heading in Bonds. The kind was being read correctly onto the element — you could see it on the element card and in the Story Legend — but Bonds threw it away at the last step, which is the line fixed above. The rest of v.704 stands: an import no longer invents connections, and a group is called a Group.',
