@@ -31298,6 +31298,7 @@ async function confirmImport(){
   rebuildPools();
   setMode('type'); updateWordCount();
   if (added || asSection || IMP.prose.trim()){ $('skyEmpty').style.display = 'none'; }
+  importStampWikiSigs();   /* v.714 — after the prose, the notes and the frames are all in place, so the signature is the true one */
   layoutConstellation(); renderConstellation(); renderTimeline(); saveSession();
   if (typeof renderStoryLibrary === 'function') renderStoryLibrary();
   if (typeof libSyncFromMap === 'function') libSyncFromMap();                                  // register placed elements into the roster
@@ -31377,6 +31378,7 @@ function confirmNotesImport(){
     const leftover = importGeneralNotes(IMP.prose, IMP.elements);
     if (leftover){ const cur = state.session.notepad || ''; const keep = npPlain(cur).trim() ? (cur + '<p><br></p>') : ''; state.session.notepad = keep + importNoteHtml(leftover); }
     state.session.frames = state.frames; state.session.words = state.prompt.words;
+    importStampWikiSigs();   /* v.714 — the notes path writes the same cache through the same `registerImportWord` */
     const _props = applyImportProposals();   // Phase 2: add approved net-new words to the pools
     const _goals = applyImportGoals();       // seed any stated goals
     rebuildPools();
@@ -32306,7 +32308,14 @@ function wikiProseText(){
   try {
     var ed = document.getElementById('editor'); if (!ed) return (typeof editorText === 'function') ? editorText() : '';
     var clone = ed.cloneNode(true);
-    Array.prototype.forEach.call(clone.querySelectorAll('.sec-mark, h3, .dia'), function(n){ n.remove(); });
+    /* v.714 — `.sess-foot, .sess-focus` joins the furniture list, which is where it always belonged: SIX other
+       readers in this file strip it before reading prose (11288, 25606, 25626, 25776, 25834, 26041), each with a
+       comment saying why. This one did not — and it is the reader whose whole job is reading the prose.
+       Measured: with 116 characters of manuscript in the editor, this function returned **"Session 1 ·
+       imported"**, 20 characters of gutter chrome, because the painter appends the footer INSIDE the last prose
+       block and the container rule below then took the footer instead of the paragraph. Every finished session,
+       imported or written, was invisible to the wiki: no appearances, and `aiRollup` summarising from nothing. */
+    Array.prototype.forEach.call(clone.querySelectorAll('.sec-mark, h3, .dia, .sess-foot, .sess-focus'), function(n){ n.remove(); });
     /* Join the BLOCKS, don't take `textContent` of the container. `textContent`
        concatenates block elements with no separator, so removing the headings between
        two paragraphs welds them into "…keep.Bex did not speak…" — and the sentence
@@ -32315,7 +32324,15 @@ function wikiProseText(){
     var blocks = clone.querySelectorAll('p, div, li, blockquote');
     var out = [];
     if (blocks.length) Array.prototype.forEach.call(blocks, function(n){
-      if (n.querySelector && n.querySelector('p, div, li, blockquote')) return;   // containers: take their children instead, never both
+      /* v.714 — a container's children are still preferred to the container, but its OWN direct text is no
+         longer thrown away with it. Stripping the footer above fixes the bug that exists today; this is what
+         stops the next thing injected into a paragraph from silently deleting that paragraph from the wiki. */
+      if (n.querySelector && n.querySelector('p, div, li, blockquote')){
+        var own = Array.prototype.filter.call(n.childNodes, function(c){ return c.nodeType === 3; })
+          .map(function(c){ return c.nodeValue || ''; }).join(' ').replace(/\s+/g, ' ').trim();
+        if (own) out.push(own);
+        return;   // its block children are visited in their own right
+      }
       var t = (n.textContent || '').replace(/\s+/g, ' ').trim(); if (t) out.push(t);
     });
     else { var t0 = (clone.textContent || '').replace(/\s+/g, ' ').trim(); if (t0) out.push(t0); }
@@ -41190,6 +41207,33 @@ async function aiRollup(el){
     + (notes ? ('\n\nThe writer’s notes about this element (rough — clean them up and fold their meaning into the entry; do not copy verbatim, do not invent beyond them):\n' + notes) : '')
     + '\n\nWrite the entry:';
   return aiCall(sys, prompt, { feature:'wiki_entry' });
+}
+/* v.714 [gap audit #14] — `registerImportWord` writes `{ text, sig: 0 }` while every other writer of this
+   cache writes `sig: aiSig(el)`. `0` is a NUMBER and `aiSig` returns a STRING, so `cache.sig !== sig` could
+   never be false: an imported entry read "prose changed — refresh" from the moment it existed, and
+   `autoSummarizeElements` re-summarised EVERY imported element at the first session end — measured at six AI
+   calls for six elements — silently replacing summaries read from the writer's own manuscript.
+
+   One pass at the end of the import, not a line inside `registerImportWord`: `aiSig` needs the element's notes
+   and the story's frames, and `registerImportWord` runs BEFORE `importNoteToNotes` writes them, so a signature
+   taken there would be wrong by exactly one note. `wikiGather()` supplies the elements — the same door
+   `renderWikiAI` and `autoSummarizeElements` read from, so the three can never disagree about what an element is.
+
+   Deliberately only stamps entries that have no real signature: a `0`, or anything that is not a string. An
+   entry a writer has actually refreshed is left alone. */
+function importStampWikiSigs(){
+  try{
+    if (!state.session || !state.session.wikiAI) return 0;
+    if (typeof wikiGather !== 'function' || typeof aiSig !== 'function') return 0;
+    var n = 0;
+    wikiGather().forEach(function(el){
+      var k = el.cat + '|' + el.word, c = state.session.wikiAI[k];
+      if (!c || !c.text) return;
+      if (typeof c.sig === 'string' && c.sig) return;   // already carries a real signature
+      c.sig = aiSig(el); n++;
+    });
+    return n;
+  }catch(e){ return 0; }
 }
 function renderWikiAI(wrap, el){
   wrap.innerHTML = '';
@@ -56314,9 +56358,14 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.636';
+  var APP_VERSION = '2026.07.20.637';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.637', date:'September 16, 2026', notes:[
+      '**The wiki can read your finished writing again.** Once a session is locked \u2014 whether you wrote it or imported it \u2014 the app draws a small footer inside its last paragraph (the session label and the word \u201cLocked\u201d). The wiki was reading that footer **instead of the paragraph**: with a whole chapter in the editor, what it actually saw was the twenty characters \u201cSession 1 \u00b7 imported\u201d. So an element\u2019s **\u201cappears in\u201d** list came back empty for all finished work, and asking the AI to summarise an element handed it nothing to summarise from.',
+      '**An imported element\u2019s entry is no longer marked out of date the moment it is written.** Every one of them read **\u201cprose changed \u2014 refresh\u201d** from the moment of import, with nothing changed \u2014 and at the end of your first session the app quietly re-summarised **every single imported element**, replacing the summaries read from your own manuscript. Measured: six elements, six AI calls, none of them asked for. Entries now carry a real signature and are refreshed only when your prose actually moves. [gap audit #14]',
+      '**And this could not have been fixed the other way round.** Stamping the entries as current while the wiki was still reading the footer would have made them look current for ever, including long after the writing really had changed. The reading is fixed first; the mark means what it says because of it.',
+    ]},
     { v:'2026.07.20.636', date:'September 16, 2026', notes:[
       '**A character who runs through five chapters arrives on five chapters.** An imported element was placed where its NAME appeared in the prose, or on the one chapter the reader named \u2014 and prose stops using a character\u2019s name after chapter one. \u201cThe warden returned to the water\u201d does not contain \u201cMirel\u201d, so that chapter imported without her on it. Measured on a three-chapter story: **chapter three came in completely empty**, even though its own prose was about the character and the place the reader had already attributed to it.',
       '**The list of chapters was being built and thrown away.** When the same person turned up in two parts of a long manuscript, the import recorded both \u2014 and then placed them on the first. It was never asked for the list either. Now it is asked, kept, and used.',
