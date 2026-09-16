@@ -30570,7 +30570,13 @@ async function extractImport(){
   const goalGuide = 'goals = any clearly-stated authorial GOALS / intentions the source expresses — what the work is about, aims to explore, or wants the reader to feel — ONLY if the source actually states them. Each: {word = a short label (2–6 words), note = the fuller statement in the author’s own words}. Empty [] if none are stated. Do not infer or invent goals. ';
   // Prose (a finished manuscript) never STATES authorial goals — reading them out of the story is inference, which we don't want. Only author notes define goals.
   const goalGuideProse = 'goals = [] ALWAYS. A manuscript’s prose does not state the author’s goals — never infer goals from the story itself. Return goals:[]. ';
-  const beingTraitInfo = 'traits=[{sub,value}] where sub∈[' + BEING_IMPORT_TRAIT_SUBS.join(',') + '] and value is a SHORT 1–2 word characteristic (an adjective or brief descriptor) — never a sentence or long phrase; collapse several overlapping descriptions into a SINGLE characteristic word and put any fuller explanation in the element’s note, not in a trait. Include ONLY characteristics explicitly stated, never invent';
+  /* v.708 — this described traits for BEINGS ONLY, so the reader was never told that a place has a climate and
+     an atmosphere or that a thing has a material and a condition — and the app has kept those vocabularies, and
+     offered them in the review card's own dropdown, the whole time. The lists come from `importTraitSubs`, the
+     same function the card is built from, so the reader can never be told about a field the card cannot show. */
+  const traitVocab = ['being', 'setting', 'object']
+    .map(function(c){ return c + ' ∈ [' + importTraitSubs(c).join(',') + ']'; }).join('; ');
+  const traitInfo = 'traits=[{sub,value}] — the characteristics the text states. Which subs are allowed depends on the type: ' + traitVocab + '. value is a SHORT 1–2 word characteristic (an adjective or brief descriptor) — never a sentence or long phrase; collapse several overlapping descriptions into a SINGLE characteristic word and put any fuller explanation in the element’s note, not in a trait. Include ONLY characteristics explicitly stated, never invent';
   const notesMode = IMP.kind === 'notes';
   // Narrative-FRAME extraction is deliberately conservative: genre/context/theme/stakes/plot are high-level and
   // easily over-read from a sentence or two. Story elements (beings/places/objects/events/terms) stay loose.
@@ -30590,7 +30596,7 @@ async function extractImport(){
     sys = 'You analyze an author\u2019s NOTES / worldbuilding / character sheets (NOT a finished manuscript) for a worldbuilding app and return ONLY valid minified JSON \u2014 no prose, no code fences. Schema: {"title":string,"overview":string,"sections":[{"title":string}],"elements":[{"type":' + typeUnion + ',"name":string,"note":string,"summary":string,"sub":string,"section":string,"traits":[{"sub":string,"value":string}]}],"relationships":[{"from":string,"to":string,"type":string}],"proposals":[{"cat":string,"word":string,"common":boolean}],"goals":[{"word":string,"note":string}]}.' +
       'Extract the distinct elements the notes establish — characters, places, objects, events, and in-world concepts/terms — and, only when clearly stated, the narrative frame (genre, context, concepts/themes, stakes, plot). ' + narrThreshold + typeGuide + sectionGuideNotes +
       (IMP.qa ? 'The text is a PLANNING CONVERSATION (interviewer questions + the author\u2019s answers). Treat ONLY the author\u2019s answers as source material. note = a faithful restatement of what the author said about that element, folded together across answers \u2014 keep their exact meaning and specifics, but clean up grammar and spelling and phrase it simply; NEVER quote the questions or copy the answers verbatim. summary = ONE short sentence. ' : 'note = that element\u2019s details taken from the notes, cleaned up and consolidated into 1\u20134 sentences, preserving the author\u2019s specifics. summary = ONE short sentence. ') + _scopeGuide +
-      'For beings: ' + beingTraitInfo + '. Do NOT fill sub for beings. ' +
+      'For beings, places and things: ' + traitInfo + '. Do NOT fill sub for beings. ' +
       'For any non-being type that has one: sub = single best subcategory from: ' + nonBeingSubInfo + (narrSubInfo ? ('; ' + narrSubInfo) : '') + '. ' +
       'relationships = up to 8 of the clearest bonds between the named elements; from/to are exact element names; type = a short phrase. ' + proposalGuide + goalGuide +
       'overview = 1\u20132 sentences. Use names exactly as written. Invent nothing \u2014 keep only what the notes say.';
@@ -30599,7 +30605,7 @@ async function extractImport(){
     sys = 'You analyze a story for a worldbuilding app and return ONLY valid minified JSON — no prose, no code fences. Schema: {"title":string,"overview":string,"sections":[{"title":string,"opening":string}],"elements":[{"type":' + typeUnion + ',"name":string,"summary":string,"sub":string,"section":string,"traits":[{"sub":string,"value":string}]}],"relationships":[{"from":string,"to":string,"type":string}],"proposals":[{"cat":string,"word":string,"common":boolean}],"goals":[{"word":string,"note":string}]}.' +
     'sections = split the story into its parts by chapter/section titles, headers, or clear scene breaks; title = a short section title; opening = the first ~8 words of that section copied EXACTLY/verbatim from the text. If the story is one continuous piece, return a single section. ' +
     'Extract the story elements — characters, places, objects, events, and in-world concepts/terms — and only the narrative frame (genre, context, concepts/themes, stakes, plot) that the text makes unmistakably clear. ' + narrThreshold + typeGuide + sectionGuideProse + 'summary = ONE short sentence grounded only in the text. ' +
-    'For beings: ' + beingTraitInfo + '. Do NOT fill sub for beings. ' +
+    'For beings, places and things: ' + traitInfo + '. Do NOT fill sub for beings. ' +
     'For any non-being type that has one: sub = single best subcategory from: ' + nonBeingSubInfo + (narrSubInfo ? ('; ' + narrSubInfo) : '') + '. ' +
     'relationships = up to 8 of the clearest bonds between the named elements; from/to are exact element names; type = a short relationship phrase such as "Guardian of","Rivalry","Keeper of","Born of","Betrayal". ' + proposalGuide + goalGuideProse +
     'overview = 2 short sentences. Use names exactly as written. Up to 6 elements of each type. Invent nothing.';
@@ -30640,8 +30646,13 @@ async function extractImport(){
       const name = String(el.name).trim().slice(0, 60); if (!name) return;
       const aiSum = String(el.summary || '').trim(), aiNote = String(el.note || '').trim();
       const summary = notesMode ? (aiSum || aiNote) : aiSum;
-      const elTraits = cat === 'being'
-        ? (Array.isArray(el.traits) ? el.traits : []).filter(t => t && BEING_IMPORT_TRAIT_SUBS.includes(t.sub) && String(t.value || '').trim()).map(t => ({ sub: t.sub, value: shortCharVal(t.value) })).filter(t => t.value)
+      /* v.708 — this was `cat === 'being' ? (…) : []`, so a place's climate and a thing's material were dropped
+         on the floor between the reader and the review card, even when the reader had supplied them. Validated
+         against `importTraitSubs(cat)` — the same table the card's dropdown offers — so a characteristic can
+         never arrive under a heading the writer has no way to see or change. */
+      const TRAITED = { being:1, setting:1, object:1 };
+      const elTraits = TRAITED[cat]
+        ? (Array.isArray(el.traits) ? el.traits : []).filter(t => t && importTraitSubs(cat).includes(t.sub) && String(t.value || '').trim()).map(t => ({ sub: t.sub, value: shortCharVal(t.value) })).filter(t => t.value)
         : [];
       const key = cat + '|' + importNorm(name);
       const ex = seenEl[key] || IMP.elements.find(r => r.cat === cat && importNameMatch(r.name, name));   // fuzzy: "The Woodcutter" == "Woodcutter", minor typos
@@ -56151,9 +56162,13 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.630';
+  var APP_VERSION = '2026.07.20.631';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.631', date:'September 16, 2026', notes:[
+      '**An imported place or artifact keeps its characteristics.** Describe a city’s climate and atmosphere, or a relic’s material and condition, and the import used to bring across the name and the description and leave the card reading **“No characteristics yet”** — under a dropdown listing the very fields your text had just answered. Two things were in the way: the reader was only ever told that CHARACTERS have characteristics, and anything that arrived for a place or a thing was discarded on the way to the review. Both are fixed, and the fields are the ones the card already offers — **Terrain, Climate, Size, Atmosphere, Feature, Condition, Population, Origin, Symbolism** for a place; **Material, Size, Appearance, Condition, Property, Power, Origin, Purpose, Symbolism** for a thing. [gap audit #3]',
+      '**They are still yours to approve.** Every characteristic appears on the element’s card in the import review, where you can change it, remove it, or add one the reader missed — exactly as a character’s always could.',
+    ]},
     { v:'2026.07.20.630', date:'September 15, 2026', notes:[
       '**An imported relationship is a fact about your story, not about one page.** A bond read out of your manuscript was written onto a single section — and if the two people it joined never appeared in the same chapter, it was written **nowhere at all** and quietly lost. Imported bonds now go through the same door the Bonds map itself uses: a link in every section the pair share, and a **standing bond** where they share none, so the relationship holds across the whole story instead of living on one page. [gap audit #8]',
       '**And they read correctly from both sides.** A bond with a known opposite — Parent of / Child of, Guardian of / Ward of — is written both ways, so it appears on both element cards. Every imported bond used to be one-sided, which is why a relationship you knew was there sometimes could not be found from the character you looked at first. A relation with no known opposite is still left one-sided rather than having one invented for it.',
