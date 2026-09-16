@@ -9804,7 +9804,11 @@ function hybridizeType(word){
   return word + ' (' + a + ' + ' + b + ')';
 }
 const IDENTITY_SUBS = ['Type', 'Archetype', 'Occupation'];
-const BEING_IMPORT_TRAIT_SUBS = ['Type','Archetype','Occupation','Motivation','Psychological Trait','Physical Trait','Social Trait','Moral Trait','Age','Physical State','Mental State','Mood','Altered State'];
+/* v.709 — `Sex` was the one characteristic every GENERATED being carries (`beingTriadAttrs` opens with it)
+   and no IMPORTED one could ever have: it was missing from this list, which is both the vocabulary the reader
+   is given and the dropdown the review card offers, so the manuscript was never asked. It sits after the three
+   identity subs so the card's add-trait dropdown still opens on Type. [gap audit #4] */
+const BEING_IMPORT_TRAIT_SUBS = ['Type','Archetype','Occupation','Sex','Motivation','Psychological Trait','Physical Trait','Social Trait','Moral Trait','Age','Physical State','Mental State','Mood','Altered State'];
 const OBJECT_IMPORT_TRAIT_SUBS = ['Type','Material','Size','Appearance','Condition','Property','Power','Origin','Purpose','Symbolism'];
 const SETTING_IMPORT_TRAIT_SUBS = ['Type','Terrain','Climate','Size','Atmosphere','Feature','Condition','Population','Origin','Symbolism'];
 // the characteristic-type dropdown for an import element, by category
@@ -9833,6 +9837,45 @@ function assignBeingSex(){ const r = Math.random();
   if (r < 0.485) return 'Male';
   if (r < 0.97)  return 'Female';
   return SEX_RARE[Math.floor(Math.random() * SEX_RARE.length)]; }
+/* v.709 — A MANUSCRIPT DOES NOT SAY "Sex: Female". It says "she", "her sister", "the old man" — so the reader
+   reports whatever the text used, and this puts it back into the app's own vocabulary, the same SEX_VALUES the
+   card's Sex dropdown offers. Anything unrecognised is DROPPED rather than guessed at: the point of asking the
+   text is to stop the app inventing this, so a value it cannot read falls back to the existing behaviour
+   instead of inventing a new one. `they`/`them` map to Unspecified, not to Nonbinary — a singular "they" is
+   very often a text declining to say, and reading an identity out of it would be exactly the invention this
+   is here to prevent. */
+var SEX_ALIASES = {
+  m:'Male', male:'Male', man:'Male', men:'Male', boy:'Male', boys:'Male', he:'Male', him:'Male', his:'Male', masculine:'Male',
+  f:'Female', female:'Female', woman:'Female', women:'Female', girl:'Female', girls:'Female', she:'Female', her:'Female', hers:'Female', lady:'Female', feminine:'Female',
+  intersex:'Intersex',
+  hermaphrodite:'Hermaphroditic', hermaphroditic:'Hermaphroditic',
+  parthenogenic:'Parthenogenic', parthenogenetic:'Parthenogenic',
+  sexless:'Sexless', neuter:'Sexless', genderless:'Sexless',
+  nonbinary:'Nonbinary', enby:'Nonbinary', nb:'Nonbinary',
+  genderfluid:'Genderfluid',
+  agender:'Agender',
+  trans:'Transgender', transgender:'Transgender', transsexual:'Transgender',
+  twospirit:'Two-Spirit',
+  they:'Unspecified', them:'Unspecified', unspecified:'Unspecified', unknown:'Unspecified', unclear:'Unspecified', unstated:'Unspecified', none:'Unspecified'
+};
+function normalizeSexValue(v){
+  var raw = String(v || '').trim().toLowerCase();
+  if (!raw) return '';
+  for (var i = 0; i < SEX_VALUES.length; i++){ if (SEX_VALUES[i].toLowerCase() === raw) return SEX_VALUES[i]; }
+  var t = raw.replace(/[^a-z ]+/g, ' ').replace(/\s+/g, ' ').trim()
+    .replace(/two spirit/g, 'twospirit').replace(/non binary/g, 'nonbinary').replace(/gender fluid/g, 'genderfluid')
+    .replace(/trans (?:man|woman|male|female|masc\w*|fem\w*)/g, 'transgender');
+  if (!t) return '';
+  var hits = [];
+  t.split(' ').forEach(function(tk){ var a = SEX_ALIASES[tk]; if (a && hits.indexOf(a) < 0) hits.push(a); });
+  if (!hits.length) return '';
+  /* an identity or rare-biology word anywhere in the phrase wins over a gendered noun, so "trans woman" reads
+     Transgender rather than Female — the more specific thing the text said is the thing it said. */
+  var PRIORITY = ['Transgender','Two-Spirit','Nonbinary','Genderfluid','Agender','Intersex','Hermaphroditic','Parthenogenic','Sexless'];
+  for (var p = 0; p < PRIORITY.length; p++){ if (hits.indexOf(PRIORITY[p]) >= 0) return PRIORITY[p]; }
+  var firm = hits.filter(function(h){ return h !== 'Unspecified'; });
+  return firm.length ? firm[0] : 'Unspecified';
+}
 Object.assign(WORD_DESC, {
   'Intersex': 'Born between the lines the world tried to draw.',
   'Hermaphroditic': 'Carries both natures whole within one body.',
@@ -30196,7 +30239,15 @@ function buildImportItem(el){
     word = useArch ? archWord : nm;
     const primarySub = useArch ? idTrait.sub : 'Archetype';
     const attrs = traits.filter(t => !(useArch && t === idTrait)).map(t => ({ word: t.value, sub: t.sub }));
-    item = { word, cat: 'being', sub: primarySub, set: 0, role: 'being', attrs, identity: useArch ? [{ word, sub: primarySub }] : [], sexSeed: seed, gender: (seed % 2) ? 'female' : 'male', name: nm };
+    /* v.709 — Sex leads the characteristics on a generated being (`beingTriadAttrs` puts it first) and
+       `ensureBeingSex` unshifts it, so an imported one reads the same way rather than burying it wherever the
+       reader happened to mention it. The name-hash `gender` is left exactly as it was for every other being —
+       it is simply no longer reached when the manuscript answered the question. */
+    const _sexIx = attrs.findIndex(a => a && a.sub === 'Sex');
+    if (_sexIx > 0) attrs.unshift(attrs.splice(_sexIx, 1)[0]);
+    const _sexW = _sexIx >= 0 ? String((attrs[0] || {}).word || '').toLowerCase() : '';
+    const _gender = _sexW.indexOf('female') >= 0 ? 'female' : (_sexW.indexOf('male') >= 0 ? 'male' : ((seed % 2) ? 'female' : 'male'));
+    item = { word, cat: 'being', sub: primarySub, set: 0, role: 'being', attrs, identity: useArch ? [{ word, sub: primarySub }] : [], sexSeed: seed, gender: _gender, name: nm };
   } else {
     word = nm;
     item = makeElementItem(el.cat, word, 0, sub);
@@ -30244,7 +30295,12 @@ function existsInStory(cat, name){
 function mergeImportDetail(item, el){
   if (!item || !el) return;
   const traits = (el.traits || []).filter(t => t && t.sub && String(t.value || '').trim());
-  if (traits.length){ item.attrs = item.attrs || []; const have = {}; item.attrs.forEach(a => { have[a.sub + '|' + importNameLc(a.word)] = 1; }); traits.forEach(t => { const k = t.sub + '|' + importNameLc(t.value); if (!have[k]){ item.attrs.push({ word: t.value, sub: t.sub }); have[k] = 1; } }); }
+  /* v.709 — the de-dup key is sub+VALUE, which is right for the many-valued characteristics (a character can
+     carry two Physical Traits) and wrong for the one single-valued one: a character already recorded as Male,
+     re-imported from a passage reading "she", would end up carrying BOTH. Sex is skipped when the element
+     already has one, which is this function's own standing rule — fold in what's new, never clobber what's
+     there — applied to the field where "new" would otherwise mean "a second answer". */
+  if (traits.length){ item.attrs = item.attrs || []; const have = {}; item.attrs.forEach(a => { have[a.sub + '|' + importNameLc(a.word)] = 1; }); const hasSex = item.attrs.some(a => a && a.sub === 'Sex'); traits.forEach(t => { if (t.sub === 'Sex' && hasSex) return; const k = t.sub + '|' + importNameLc(t.value); if (!have[k]){ item.attrs.push({ word: t.value, sub: t.sub }); have[k] = 1; } }); }
   if (el.note && el.note.trim() && !(typeof IMP !== 'undefined' && IMP._sessionImport)){   // skip note-writing for session→prose imports — the prose lives in the Session, not the element
     const k = wordKey(item); state.session.npNotes = state.session.npNotes || {};
     const cur = state.session.npNotes[k]; const curPlain = cur ? npPlain(cur).trim() : '';
@@ -30576,7 +30632,7 @@ async function extractImport(){
      same function the card is built from, so the reader can never be told about a field the card cannot show. */
   const traitVocab = ['being', 'setting', 'object']
     .map(function(c){ return c + ' ∈ [' + importTraitSubs(c).join(',') + ']'; }).join('; ');
-  const traitInfo = 'traits=[{sub,value}] — the characteristics the text states. Which subs are allowed depends on the type: ' + traitVocab + '. value is a SHORT 1–2 word characteristic (an adjective or brief descriptor) — never a sentence or long phrase; collapse several overlapping descriptions into a SINGLE characteristic word and put any fuller explanation in the element’s note, not in a trait. Include ONLY characteristics explicitly stated, never invent';
+  const traitInfo = 'traits=[{sub,value}] — the characteristics the text states. Which subs are allowed depends on the type: ' + traitVocab + '. value is a SHORT 1–2 word characteristic (an adjective or brief descriptor) — never a sentence or long phrase; collapse several overlapping descriptions into a SINGLE characteristic word and put any fuller explanation in the element’s note, not in a trait. Include ONLY characteristics explicitly stated, never invent. A character’s Sex COUNTS AS STATED when the text refers to them with gendered pronouns or nouns (“she”, “her sister”, “the old man”) — report it as one of [' + SEX_VALUES.join(',') + ']; leave Sex out entirely when the text genuinely never says, and never guess it from a name';
   const notesMode = IMP.kind === 'notes';
   // Narrative-FRAME extraction is deliberately conservative: genre/context/theme/stakes/plot are high-level and
   // easily over-read from a sentence or two. Story elements (beings/places/objects/events/terms) stay loose.
@@ -30652,7 +30708,10 @@ async function extractImport(){
          never arrive under a heading the writer has no way to see or change. */
       const TRAITED = { being:1, setting:1, object:1 };
       const elTraits = TRAITED[cat]
-        ? (Array.isArray(el.traits) ? el.traits : []).filter(t => t && importTraitSubs(cat).includes(t.sub) && String(t.value || '').trim()).map(t => ({ sub: t.sub, value: shortCharVal(t.value) })).filter(t => t.value)
+        /* v.709 — Sex is normalised rather than shortened: `shortCharVal` would keep "trans woman" verbatim and
+           the card's Sex row, `cascadeForward` and the figure all read the app's own vocabulary. An unreadable
+           value drops out here, so the writer is shown a Sex only when there is a real one to approve. */
+        ? (Array.isArray(el.traits) ? el.traits : []).filter(t => t && importTraitSubs(cat).includes(t.sub) && String(t.value || '').trim()).map(t => ({ sub: t.sub, value: (t.sub === 'Sex' ? normalizeSexValue(t.value) : shortCharVal(t.value)) })).filter(t => t.value)
         : [];
       const key = cat + '|' + importNorm(name);
       const ex = seenEl[key] || IMP.elements.find(r => r.cat === cat && importNameMatch(r.name, name));   // fuzzy: "The Woodcutter" == "Woodcutter", minor typos
@@ -56162,9 +56221,15 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.631';
+  var APP_VERSION = '2026.07.20.632';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.632', date:'September 16, 2026', notes:[
+      '**An imported character\u2019s sex comes from your manuscript now.** Sex was the one characteristic every character the app makes carries and no imported character could ever have \u2014 it was missing from the list the reader is given and from the dropdown the review card offers, so the text was simply never asked. Your pages say it in the ordinary way (\u201cshe\u201d, \u201cher sister\u201d, \u201cthe old man\u201d) and that now counts as stated, so it arrives at the top of the card with everything else, ready to approve or change. Where your text genuinely never says, nothing is guessed. [gap audit #4]',
+      '**And it is written in the app\u2019s own words.** However the passage phrased it, what lands is one of the values the Sex dropdown offers \u2014 so the map figure, the dossier and the characteristics bar all read it, and a character described as a woman is no longer drawn as a man for want of anyone asking.',
+      '**Re-importing a character can no longer give them two.** Bringing the same person in again from a passage that words it differently used to add a second Sex beside the first; an element that already has one keeps it.',
+      '**Correcting the note on this one.** The audit item behind it said imported characters got \u201ca name-hash gender\u201d, which read as an import fault. It is not \u2014 the name hash is what EVERY character falls back to when nothing has set a Sex, and the figure has always preferred the chosen Sex over it. The fault was only ever that the import never set one. The hash is untouched.',
+    ]},
     { v:'2026.07.20.631', date:'September 16, 2026', notes:[
       '**An imported place or artifact keeps its characteristics.** Describe a city’s climate and atmosphere, or a relic’s material and condition, and the import used to bring across the name and the description and leave the card reading **“No characteristics yet”** — under a dropdown listing the very fields your text had just answered. Two things were in the way: the reader was only ever told that CHARACTERS have characteristics, and anything that arrived for a place or a thing was discarded on the way to the review. Both are fixed, and the fields are the ones the card already offers — **Terrain, Climate, Size, Atmosphere, Feature, Condition, Population, Origin, Symbolism** for a place; **Material, Size, Appearance, Condition, Property, Power, Origin, Purpose, Symbolism** for a thing. [gap audit #3]',
       '**They are still yours to approve.** Every characteristic appears on the element’s card in the import review, where you can change it, remove it, or add one the reader missed — exactly as a character’s always could.',
