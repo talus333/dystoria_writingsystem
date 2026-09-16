@@ -30639,7 +30639,11 @@ async function extractImport(){
   var _narrCats = { genre:1, period:1, context:1, theme:1, stakes:1, plot:1 };
   var _haveNarr = []; try { var _seenN = {}; var _scanN = function(arr){ (arr || []).forEach(function(w){ if (w && _narrCats[w.cat] && (w.word || w.name)){ var _k = w.cat + ':' + (w.word || w.name); if (!_seenN[_k]){ _seenN[_k] = 1; _haveNarr.push((w.name || w.word) + ' [' + w.cat + ']'); } } }); }; _scanN(state.prompt && state.prompt.words); (state.frames || []).forEach(function(fr){ _scanN(fr && fr.prompt && fr.prompt.words); }); } catch(e){}
   var narrThreshold = ' NARRATIVE-FRAME THRESHOLD \u2014 be VERY conservative with the high-level frame (genre, context, concepts/themes, stakes, plot): it is easy to over-read. Propose a frame layer ONLY when the text makes it unmistakably clear'
-    + (notesMode ? ' (the author\u2019s notes explicitly state it)' : ' across a substantial amount of prose \u2014 never from a few sentences or a paragraph or two') + '. A hint, a lone image, a mood, or a single scene is NOT enough; when unsure, omit it and return none for that layer. Characters, places, objects, events and in-world terms may be proposed more freely from ordinary prose, but the narrative frame must clear a much higher bar.'
+    + (notesMode ? ' (the author\u2019s notes explicitly state it)' : ' across a substantial amount of prose \u2014 never from a few sentences or a paragraph or two') + '. A hint, a lone image, a mood, or a single scene is NOT enough; when unsure, omit it and return none for that layer.'
+    /* v.711 — a threshold the reader can TEST, and the permission it needs to return nothing. A model asked for
+       a field will fill it; saying plainly that empty is the usual right answer is what makes "only when it is
+       super clear" operable rather than aspirational. */
+    + ' THE TEST: name a frame layer only if you could point to the specific passages that establish it AND a reader of the whole work would name the same thing. If you are choosing between two candidates, that is itself proof the text has not made it clear — return none. Returning NO frame layers at all is a normal and correct answer for most manuscripts, and is far better than a plausible guess: the writer sets this layer themselves, and an unasked-for one costs them a decision they did not want to make. Characters, places, objects, events and in-world terms may be proposed more freely from ordinary prose, but the narrative frame must clear a much higher bar.'
     + (_haveNarr.length ? (' The story ALREADY has these frame layers set \u2014 do NOT re-propose or duplicate them, and add a new frame layer only if the text states one explicitly and clearly: ' + _haveNarr.join('; ') + '.') : '') + ' ';
   let sys, user;
   var _scopeGuide = '';
@@ -30664,7 +30668,10 @@ async function extractImport(){
     'For beings, places and things: ' + traitInfo + '. Do NOT fill sub for beings. ' +
     'For any non-being type that has one: sub = single best subcategory from: ' + nonBeingSubInfo + (narrSubInfo ? ('; ' + narrSubInfo) : '') + '. ' +
     'relationships = up to 8 of the clearest bonds between the named elements; from/to are exact element names; type = a short relationship phrase such as "Guardian of","Rivalry","Keeper of","Born of","Betrayal". ' + proposalGuide + goalGuideProse +
-    'overview = 2 short sentences. Use names exactly as written. Up to 6 elements of each type. Invent nothing.';
+    /* v.711 — "Up to 6 elements of each type" was one ceiling for every type, which reads as licence for six
+       genres and six themes. Six themes is not "unmistakably clear", it is a checklist. The frame gets its own
+       numbers, and they are small on purpose. */
+    'overview = 2 short sentences. Use names exactly as written. Up to 6 elements of each STORY type (being, setting, object, event, concept, organization). The narrative frame is capped far lower because it must clear a much higher bar: AT MOST ONE genre, ONE context and ONE plot, and AT MOST TWO concepts/themes and TWO stakes — for the entire work, not per part. Fewer is better, and none is fine. Invent nothing.';
     user = 'Story:\n\n' + prose.slice(0, 300000) + '\n\nReturn the JSON.';
   }
   // Big documents overflow a single JSON reply → read in chunks, and surface each chunk's elements to the review
@@ -30683,7 +30690,16 @@ async function extractImport(){
     let normC = null;
     for (let attempt = 0; attempt < 2 && !normC; attempt++){
       try {
-        const out = await aiCall(sys, uc, { feature:'import', maxTokens: 8000, json: true, kind: 'import' });   // dedicated large-context import model
+        /* v.711 — THE NARRATIVE FRAME IS READ ONCE, FROM THE OPENING. `sys` is built once and every chunk used
+           to be asked the same question, including "what is this story's genre?", while `uc` told it to extract
+           only what THIS part establishes — so each 45k slice of a novel was asked to name the genre of a book
+           it cannot see, and `_haveNarr` (the do-not-re-propose list) is computed before the loop and never
+           learns what an earlier chunk proposed. Measured on v.710: five chunks, five different genres on the
+           review screen. The threshold already forbade this ("never from a few sentences or a paragraph or
+           two") and a middle chunk could never clear it. Notes are exempt: a later page of an author's own
+           notes may legitimately say "Themes: …", which is the explicit statement this layer is meant to want. */
+        var _sysCk = (ci === 0 || notesMode) ? sys : (sys + ' THE NARRATIVE FRAME HAS ALREADY BEEN READ from the opening of this work. Return NO genre, context, concepts/themes, stakes or plot elements for this part \u2014 those types must be ABSENT from your elements array. Extract only the characters, places, objects, events, in-world terms and organizations THIS part establishes.');
+        const out = await aiCall(_sysCk, uc, { feature:'import', maxTokens: 8000, json: true, kind: 'import' });   // dedicated large-context import model
         normC = normalizeExtract(parseJsonLoose(out));
       } catch (e){ if (!gotAny){ $('importGo').disabled = false; $('importStatus').textContent = aiErrMsg(e); return; } flashStatus(aiErrMsg(e)); break; }   // after at least one good part, a failed part just stops early — keep what we have
     }
@@ -30724,6 +30740,16 @@ async function extractImport(){
         { const sec2 = String(el.section || '').trim(); if (sec2){ ex.sections = ex.sections || (ex.section ? [ex.section] : []); if (ex.sections.map(s => s.toLowerCase()).indexOf(sec2.toLowerCase()) < 0) ex.sections.push(sec2); } }
         if (elTraits.length){ const have = new Set(ex.traits.map(t => t.sub + '|' + t.value.toLowerCase())); elTraits.forEach(t => { const k = t.sub + '|' + t.value.toLowerCase(); if (!have.has(k)){ ex.traits.push(t); have.add(k); } }); }
         return;
+      }
+      /* v.711 — the floor. The prompt above asks for these numbers; this holds them whatever comes back,
+         because the review screen's job is CONSENT and a screen with five genres on it is triage instead.
+         Counted across the whole run, so chunk 4 cannot add a genre chunk 1 already gave. Only NEW records are
+         capped — an existing one gaining detail from a later part is the merge working, not a sixth proposal.
+         PROSE ONLY: an author's own notes listing four themes is exactly the "super clear" case this version
+         exists to protect, and capping those would discard something explicitly stated. */
+      if (!notesMode){
+        var _fcap = { genre:1, period:1, plot:1, theme:2, stakes:2 }[cat];
+        if (_fcap != null && IMP.elements.filter(function(r){ return r.cat === cat; }).length >= _fcap) return;
       }
       const note = notesMode ? (IMP.qa ? aiNote : (importSourceNote(name, IMP.prose) || aiNote)) : '';   // NOTES → verbatim from doc; Q&A → the AI's cleaned restatement; PROSE → summarise
       const rec = { cat, name, sub: validImportSub(cat, el.sub), traits: elTraits, summary, note, section: String(el.section || '').trim(), exists: wordExistsSystem(cat, name), existsStory: existsInStory(cat, name), include: true, sys: false };
@@ -31160,6 +31186,31 @@ async function confirmImport(){
   // concepts & groups that never matched a section still belong to the story — seed them on the first section's sidebar (side-panel, not the map)
   state.frameIdx = firstIdx; state.prompt = state.frames[firstIdx].prompt;
   incl.forEach(el => { if ((el.cat === 'concept' || el.cat === 'org') && !placedAny.has(el)){ if (placeImportElement(el)){ added++; placedAny.add(el); } } });
+  /* v.710 — THE NARRATIVE FRAME IS A FACT ABOUT THE STORY, NOT ABOUT ONE CHAPTER. [gap audit #5]
+     A genre, context, theme, stakes or plot could only land here by one of two routes, and a frame element can
+     take neither: `_inSec` needs its literal NAME in the prose (a manuscript does not contain the string
+     "Science Fiction"), and `_aiSec` needs the reader to have pinned it to a chapter — which is the last thing
+     it will do for the layer that belongs to all of them. The rescue above covers `concept` and `org` only, so
+     everything else in the frame was extracted, shown, APPROVED, and then existed nowhere: not on a bar, not in
+     the Story Legend, not in the roster (`libSyncFromMap`'s ROSTERCAT carries `stakes` and none of the rest).
+     The notes path has had this branch all along — "narrative frame (genre/context/theme/stakes/plot) → the
+     bar". The manuscript path did not.
+
+     On EVERY section, because that is what the app does: a frame element added by hand carries into each new
+     section through `addFrame`'s copy, while the bar itself reads only the current section's words. Leaving it
+     on one section is how the same import put "Science Fiction" on both chapters and the stakes on only the
+     second — an accident of which chapter the reader happened to name, not a decision anyone made. */
+  var _framed = 0;
+  incl.forEach(function(el){
+    if (!(typeof FRAME_IDS !== 'undefined' && FRAME_IDS.has(el.cat))) return;
+    if (el.cat === 'concept' || el.cat === 'org') return;   // side-panel elements — the rescue above owns those
+    for (var si = 0; si < secs.length; si++){
+      state.frameIdx = firstIdx + si; state.prompt = state.frames[firstIdx + si].prompt;
+      if (findPromptElement(el.cat, el.name)) continue;     // already there from the loop, or rode the section copy
+      if (placeImportElement(el)){ added++; _framed++; placedAny.add(el); }
+    }
+  });
+  state.frameIdx = firstIdx; state.prompt = state.frames[firstIdx].prompt;
   const legendOnly = incl.filter(el => MAPCAT_I[el.cat] && !placedAny.has(el)).length;
   // organise each imported section into clean rings (setting centre → settings → beings → objects → events) instead of one central pile
   for (let si = 0; si < secs.length; si++){ try { arrangeImportSection(state.frames[firstIdx + si].prompt); } catch (e){} }
@@ -56221,9 +56272,20 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.632';
+  var APP_VERSION = '2026.07.20.634';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.634', date:'September 16, 2026', notes:[
+      '**A manuscript import stops guessing at your story\u2019s frame.** A long book is read in parts, and every part used to be asked the same question \u2014 including what the whole story\u2019s genre is. Measured on a five-part import: **five different genres**, all of them on the review screen waiting for you to sort out. Each part was being asked to name the genre of a book it could not see. The frame is now read **once, from the opening**, and the later parts are told to leave it alone and bring you only the characters, places, things and events they establish.',
+      '**And it is capped, on purpose.** At most one genre, one era and one plot, and at most two concepts and two stakes \u2014 for the whole work, not per part. A new Dystoria story starts with **none** of these: the frame is something you set, deliberately, not something handed to you. An import that proposed six of each was out of character for the app.',
+      '**The reader is also told that finding none is a normal answer.** It now has a test it can actually apply \u2014 could you point to the passages that establish this, and would a reader of the whole book name the same thing? \u2014 and is told outright that choosing between two candidates is itself proof the text has not made it clear. A review screen is for saying yes; it should not hand you a pile to say no to.',
+      '**Your own notes are exempt from the cap.** A worldbuilding document that lists four themes is stating them, not hinting at them, and that is exactly the case worth taking at its word. This tightening is for manuscripts, where the frame has to be inferred.',
+    ]},
+    { v:'2026.07.20.633', date:'September 16, 2026', notes:[
+      '**Your story\u2019s genre, era, concepts, stakes and plot survive a manuscript import.** They were read out of your pages, shown to you, and approved \u2014 and then, on the prose path, most of them existed **nowhere**: not on a section\u2019s bar, not in your Story Legend, not in the roster. An element only landed if its name literally appeared in the prose, or if the reader had pinned it to a chapter \u2014 and the narrative frame is the one layer that does neither, because it belongs to the whole book. Measured on a two-chapter import: **four of the five frame elements approved were gone afterwards.** [gap audit #5]',
+      '**And they are on every section, not whichever chapter happened to catch them.** The same import used to put the genre on both chapters and the stakes on only the second \u2014 not a decision, just an accident of which chapter the reader named. A frame element you add by hand already carries into each new section; an imported one now does the same, so chapter one is not missing the stakes of its own story.',
+      '**Nothing new is invented.** This places only what you approved on the review screen \u2014 uncheck a genre there and it is not written anywhere, exactly as before.',
+    ]},
     { v:'2026.07.20.632', date:'September 16, 2026', notes:[
       '**An imported character\u2019s sex comes from your manuscript now.** Sex was the one characteristic every character the app makes carries and no imported character could ever have \u2014 it was missing from the list the reader is given and from the dropdown the review card offers, so the text was simply never asked. Your pages say it in the ordinary way (\u201cshe\u201d, \u201cher sister\u201d, \u201cthe old man\u201d) and that now counts as stated, so it arrives at the top of the card with everything else, ready to approve or change. Where your text genuinely never says, nothing is guessed. [gap audit #4]',
       '**And it is written in the app\u2019s own words.** However the passage phrased it, what lands is one of the values the Sex dropdown offers \u2014 so the map figure, the dossier and the characteristics bar all read it, and a character described as a woman is no longer drawn as a man for want of anyone asking.',
