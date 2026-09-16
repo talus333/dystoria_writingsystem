@@ -30339,8 +30339,65 @@ function lockImportedSession(blocks, frame){
   state.session.sessionLog = state.session.sessionLog || [];
   state.session.sessionLog.push({ id: sid, at: new Date().toISOString(), words: words, html: blocks.map(b => b.outerHTML).join(''), review: '', frame: (frame != null ? frame : 0), imported: true });
 }
-/* create directed starter bonds from the AI's relationships (by name); heuristic fallback if none */
+/* v.707 — AN IMPORTED RELATIONSHIP IS A FACT ABOUT THE STORY, NOT ABOUT ONE PAGE.
+   This used to hand-roll a bond: match both names against the CURRENT section's word list, build a link out of
+   array indexes into it, push it onto `state.prompt.links`, and stop. It never wrote `state.session.bonds` — the
+   standing store (v.412) that the dossier, the wiki, `storyFacts()` and every relationship-reasoning AI pass
+   read — and it never filled the reverse side, so every imported bond was one-sided.
+
+   It is an adapter now. Names are resolved to ELEMENT KEYS across the whole story rather than one section (two
+   characters who never share a chapter used to match nothing and vanish), and the app's own `writeBond` does the
+   writing: a section link in every section the pair share, a STANDING bond where they share none, the reverse
+   filled through `relInverse`, the pool sub resolved, edges rebuilt, autosave scheduled.
+
+   The old index path is kept as the fallback for the case where the Bonds module has not loaded — an import must
+   never fail because a view was slow. */
+function importKeyIndex(){
+  var by = {};
+  var take = function(w){
+    if (!w) return;
+    var k = null; try{ k = wordKey(w); }catch(e){ return; }
+    if (!k) return;
+    [w.name, w.word].forEach(function(n){
+      var t = String(n || '').trim().toLowerCase();
+      if (t && !by[t]) by[t] = k;
+    });
+  };
+  try{ ((state.frames || []).forEach(function(fr){ ((fr && fr.prompt && fr.prompt.words) || []).forEach(take); })); }catch(e){}
+  try{ ((state.prompt && state.prompt.words) || []).forEach(take); }catch(e){}
+  return by;
+}
 function seedRelBonds(rels){
+  if (!state.prompt) return 0;
+  var V = null; try{ V = window.BONDSVIEW; }catch(e){}
+  if (!V || typeof V.writeBond !== 'function') return seedRelBondsByIndex(rels);
+  var by = importKeyIndex(), made = 0;
+  (rels || []).forEach(function(r){
+    if (!r || !r.from || !r.to) return;
+    var a = by[String(r.from).trim().toLowerCase()], b = by[String(r.to).trim().toLowerCase()];
+    if (!a || !b || a === b) return;
+    var type = (r.type && String(r.type).trim()) || '';
+    if (V.writeBond(a, b, type, {})) made++;
+  });
+  return made;
+}
+/* the pre-v.707 writer, kept for the case where the Bonds module has not loaded. It walks the sections itself,
+   because `confirmImport` no longer does: the loop that used to call this once per section moved in here, so the
+   fallback behaves exactly as it did before rather than reaching only whichever section happened to be current. */
+function seedRelBondsByIndex(rels){
+  var frs = (state.frames && state.frames.length) ? state.frames : null;
+  if (!frs) return seedRelBondsHere(rels);
+  var keepIdx = state.frameIdx, keepPrompt = state.prompt, made = 0;
+  try{
+    for (var i = 0; i < frs.length; i++){
+      if (!frs[i] || !frs[i].prompt) continue;
+      state.frameIdx = i; state.prompt = frs[i].prompt;
+      made += seedRelBondsHere(rels);
+    }
+  } finally { state.frameIdx = keepIdx; state.prompt = keepPrompt; }
+  return made;
+}
+function seedRelBondsHere(rels){
   if (!state.prompt) return 0;
   const words = state.prompt.words;
   const findIdx = nm => { const t = String(nm || '').trim().toLowerCase(); if (!t) return -1; return words.findIndex(w => (w.name || '').toLowerCase() === t || (w.word || '').toLowerCase() === t); };
@@ -31063,7 +31120,10 @@ async function confirmImport(){
   /* v.706 — only the connections the writer left checked. v.704 stopped the importer INVENTING bonds; this is
      the other half of the same rule — nothing enters the story that was not offered and accepted. */
   var _rels = (IMP.relationships || []).filter(relIncluded);
-  for (let si = 0; si < secs.length; si++){ state.frameIdx = firstIdx + si; state.prompt = state.frames[firstIdx + si].prompt; _bonds += seedRelBonds(_rels); }
+  /* v.707 — one call, not one per section. `writeBond` walks the frames itself and puts a link in every section
+     the pair share, so seeding section by section was doing the same work N times and still reaching only the
+     sections whose own word list happened to hold both names. */
+  _bonds += seedRelBonds(_rels);
   /* v.704: and no fabricated web when the text yielded none — see `seedImportBonds`. Zero bonds is a true
      reading of a manuscript that never says who knows whom; a made-up one is not. */
   state.frameIdx = firstIdx; state.prompt = state.frames[firstIdx].prompt;
@@ -56091,9 +56151,13 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.629';
+  var APP_VERSION = '2026.07.20.630';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.630', date:'September 15, 2026', notes:[
+      '**An imported relationship is a fact about your story, not about one page.** A bond read out of your manuscript was written onto a single section — and if the two people it joined never appeared in the same chapter, it was written **nowhere at all** and quietly lost. Imported bonds now go through the same door the Bonds map itself uses: a link in every section the pair share, and a **standing bond** where they share none, so the relationship holds across the whole story instead of living on one page. [gap audit #8]',
+      '**And they read correctly from both sides.** A bond with a known opposite — Parent of / Child of, Guardian of / Ward of — is written both ways, so it appears on both element cards. Every imported bond used to be one-sided, which is why a relationship you knew was there sometimes could not be found from the character you looked at first. A relation with no known opposite is still left one-sided rather than having one invented for it.',
+    ]},
     { v:'2026.07.20.629', date:'September 15, 2026', notes:[
       '**You can see the connections an import wants to make, and say no to them.** The review screen listed your characters, places and things and let you reject any of them one by one — but the **bonds** between them were never shown at all. They were read out of your text, committed, and drawn, and the first you knew of it was finding them on the map. They now sit in their own block under the elements: both ends, the relation in a box you can retype, and a tick you can clear. Nothing that is unticked is drawn. [completing v.704]',
       '**And it tells you which ones cannot land.** A connection is only drawn when both of its ends match an element you are keeping, so a bond naming someone the reader did not pick up is marked **no match** and left unticked rather than quietly dropped at the last step. Rename the element or leave the connection out — either way you can see what is happening.',
@@ -79762,6 +79826,11 @@ body:not(.eink).research-full #resPanel{ background:#241c12 !important; }
     return { id:gp.id, name:gp.name, type:gp.type, lens:gp.lens, members:(gp.members || []).slice() };
   };
   V.typeForSub = typeFromSub;
+  /* v.707 — the importer used to hand-roll its own bond writer and reached only `state.prompt.links`, by array
+     index, on one section. This is the writer the Bonds UI itself uses: it walks every section, writes a
+     STANDING bond where the pair share no page, fills the reverse through `relInverse`, resolves the relation's
+     pool sub, and saves. Exposed beside `linkGroupToEl` and `typeForSub`, for the same reason — one door. */
+  V.writeBond = function(akey, bkey, type, opts){ try{ return writeBond(akey, bkey, type, opts || {}); }catch(e){ return 0; } };
   /* v.601 — SHOW THIS GROUP. The panel already knows how to open on a group; what it did not have
      was a way to be TOLD which one from outside, which is what the retired chart editors need in
      order to answer rather than 404. It sets the lens the group opens on as well as the group, so
