@@ -1005,10 +1005,21 @@
      The left floor is 40px rather than 10px for the same reason: the Organize TAB lives
      at `left:0` and is about 26px wide, so a card clamped to 10px would slide underneath
      it on a narrow window. Clearing the tab means the tab covers nothing until the writer
-     actually opens the drawer. [v.427] */
-  #aiSugPanel{position:absolute; top:0; left:max(40px, calc(50% - 656px)); right:auto; height:100%; width:272px;
+     actually opens the drawer. [v.427]
+
+     v.719 [Jeremy] — "the refract of a single word opens a window that is shifted right a
+     bit. can we make the left side against the far left without the gap?" The floor was
+     the gap, and measuring the two rules against each other shows it was clearing a tab
+     that is usually not on screen: `#edOrgTab` is `display:none` below 1220px, while this
+     floor only BINDS below 1392px (50% - 656 < 40). The overlap is a 170px band and
+     nothing else, so the floor drops to 0 and is restored for exactly that band below.
+     The z-order is untouched — the drawer and its tab still sit above this panel. */
+  #aiSugPanel{position:absolute; top:0; left:max(0px, calc(50% - 656px)); right:auto; height:100%; width:272px;
     overflow:hidden; background:var(--paper); display:none; z-index:40; box-shadow:14px 0 30px -22px rgba(60,45,20,.45)}
   #editMode.show-aisug #aiSugPanel{display:block}
+  /* v.719 — the ONE band where the Organize tab is on screen AND the floor would bind: it keeps its 40px there,
+     so the tab still covers nothing, and is flush to the edge everywhere else. */
+  @media (min-width:1221px) and (max-width:1391px){ #aiSugPanel{left:40px} }
   /* ---- Organize drawer (Refine): folder tree of Parts → Sections, slide-out from the left ---- */
   /* Hugs the LEFT edge and expands to fill the margin (inner edge ~8px from the text). Full-height, flat, border+shadow
      on the text-facing side. The content flows to use the full width (see the responsive rules below). Tab hides when
@@ -2446,6 +2457,10 @@ body.eink .pt-rh-dev{color:#000}
   .ir-mot-pill .ir-trait-sub{color:#b07a2a}
   .ir-stk-wrap{margin-top:6px; padding:0 1px}   /* v.717 */
   .ir-stk-pill .ir-trait-sub{color:#9c5f54}
+  .ir-th-row{align-items:flex-start}
+  .ir-th-name{flex:0 0 auto;width:150px;font:inherit;font-weight:600;padding:2px 6px;border:1px solid var(--line,#ccc);border-radius:5px;background:transparent;color:inherit}
+  .ir-th-mem{display:flex;flex-wrap:wrap;gap:4px;align-items:center}
+  .ir-th-chip{font-size:11px;padding:1px 7px;border-radius:9px;border:1px solid var(--line,#ccc);opacity:.85}
   .ir-traits{display:flex; flex-wrap:wrap; align-items:center; gap:5px}
   .ir-trait-pill{display:inline-flex; align-items:center; gap:3px; font-family:var(--sans); font-size:11px; background:var(--bg2); border:1px solid var(--line); border-radius:12px; padding:3px 5px 3px 8px; color:var(--ink-soft)}
   .ir-trait-sub{font-size:10.5px; font-weight:700; letter-spacing:.06em; color:var(--ink-faint); text-transform:uppercase; margin-right:1px}
@@ -30121,9 +30136,10 @@ function normalizeExtract(data){
     sections: Array.isArray(data.sections) ? data.sections : [],
     relationships: Array.isArray(data.relationships) ? data.relationships : [],
     proposals: Array.isArray(data.proposals) ? data.proposals : [],
-    goals: Array.isArray(data.goals) ? data.goals : [] };
+    goals: Array.isArray(data.goals) ? data.goals : [],
+    threads: Array.isArray(data.threads) ? data.threads : [] };   /* v.719 — this object is hand-listed, so a field absent here is a field the reader answered and the app discarded */
 }
-const IMP = { mode: 'new', kind: 'prose', title: '', prose: '', overview: '', elements: [], sections: [], relationships: [], proposals: [], goals: [] };
+const IMP = { mode: 'new', kind: 'prose', title: '', prose: '', overview: '', elements: [], sections: [], relationships: [], proposals: [], goals: [], threads: [] };
 // For NOTES/worldbuilding imports: pull the verbatim source text about an element (its own heading section, its
 // bold-label block, or — failing those — the paragraphs that name it) so nothing the author wrote is lost to a summary.
 function importSourceNote(name, prose){
@@ -30580,7 +30596,10 @@ async function importLoadFile(f){
 }
 function openImport(){
   closeLibrary();
-  IMP.mode = 'new'; IMP.qa = false; IMP.proposals = []; IMP.goals = []; if (typeof renderImportProposals === 'function') renderImportProposals(); importConfigForMode();
+  IMP.mode = 'new'; IMP.qa = false; IMP.proposals = []; IMP.goals = []; IMP.threads = [];   /* v.719 */
+  if (typeof renderImportProposals === 'function') renderImportProposals();
+  if (typeof renderImportThreads === 'function') try{ renderImportThreads(); }catch(e){}
+  importConfigForMode();
   $('importTitle').value = ''; $('importText').value = ''; $('importStatus').textContent = ''; $('importGo').disabled = false;
   const _pk = document.querySelector('input[name=impkind][value=prose]'); if (_pk) _pk.checked = true; importApplyKind();
   importShow('entry');
@@ -30745,6 +30764,18 @@ async function extractImport(){
     + (notesMode ? '' : ' WHY THIS LAYER IS DIFFERENT: the narrative frame is a statement of the AUTHOR\u2019S INTENT, not a feature of the prose. Writers set it themselves, in their notes or by hand in the app; a manuscript almost never states it, so reading it out of prose is always an inference. That is why it is held to one or two at most and why finding none is the usual outcome \u2014 the characters, places, things and events are what a manuscript is actually evidence of.')
     + ' THE TEST: name a frame layer only if you could point to the specific passages that establish it AND a reader of the whole work would name the same thing. If you are choosing between two candidates, that is itself proof the text has not made it clear — return none. Returning NO frame layers at all is a normal and correct answer for most manuscripts, and is far better than a plausible guess: the writer sets this layer themselves, and an unasked-for one costs them a decision they did not want to make. Characters, places, objects, events and in-world terms may be proposed more freely from ordinary prose, but the narrative frame must clear a much higher bar.'
     + (_haveNarr.length ? (' The story ALREADY has these frame layers set \u2014 do NOT re-propose or duplicate them, and add a new frame layer only if the text states one explicitly and clearly: ' + _haveNarr.join('; ') + '.') : '') + ' ';
+  /* v.719 — audit #6. Declared AFTER `notesMode`, which it reads: `const` is in a temporal dead zone, and
+     this is the fourth guide in a row to need saying out loud.
+
+     A thread is a STORYLINE, and a storyline is a statement of the author's STRUCTURE rather than something the
+     prose states — the same distinction the narrative frame is held to since v.712. So notes may name as many
+     as they set out, and a manuscript is held to two at the very most, with none as the normal answer. The
+     floor is concrete in both directions: two members, two sections. One element is not a storyline. */
+  const threadGuide = 'THREADS (storylines): a thread is a STORYLINE running through the work \u2014 a set of elements belonging to one strand of the story that recur together across its sections. Return these at the TOP LEVEL as "threads":[{name, elements:[names]}], never on an element. name = what the work itself calls that strand, or a short plain name for it. elements = names of elements from your OWN elements list, spelled exactly as you gave them there. '
+    + (notesMode
+      ? 'These notes are the author describing their own structure, so name a thread wherever they set out or name a separate storyline, strand, subplot or book. There is NO quota: notes laying out four interleaved storylines should return four. '
+      : 'This is a MANUSCRIPT. A storyline is a statement of the AUTHOR\u2019S STRUCTURE, not a feature of the prose, so return AT MOST TWO threads for the ENTIRE work \u2014 and only where the text plainly runs separate storylines in parallel: a different cast, in a different place, cut between across several sections. A work that follows one storyline returns NONE, and returning none is the normal and correct answer here, not a failure. ')
+    + 'In BOTH cases a thread must have AT LEAST TWO elements from your list and must run across AT LEAST TWO sections. Anything smaller is an element, not a storyline, and must be left out; never invent a thread to group elements that merely share a chapter. ';
   let sys, user;
   var _scopeGuide = '';
   if (IMP.qa && IMP.qaScope){ var _Q = IMP.qaScope;
@@ -30753,19 +30784,19 @@ async function extractImport(){
     else if (_Q.names && _Q.names.length) _scopeGuide = ' THIS CONVERSATION IS SPECIFICALLY ABOUT: ' + _Q.names.join(', ') + '. Attach the notes and traits you extract to THOSE existing elements (match by name); only propose a NEW element if the author clearly introduces one. ';
     else if (_Q.label) _scopeGuide = ' THIS CONVERSATION IS SPECIFICALLY ABOUT: ' + _Q.label + '. Keep the extraction focused there. '; }
   if (notesMode){
-    sys = 'You analyze an author\u2019s NOTES / worldbuilding / character sheets (NOT a finished manuscript) for a worldbuilding app and return ONLY valid minified JSON \u2014 no prose, no code fences. Schema: {"title":string,"overview":string,"sections":[{"title":string}],"elements":[{"type":' + typeUnion + ',"name":string,"note":string,"summary":string,"sub":string,"section":string,"sections":[string],"traits":[{"sub":string,"value":string}],"motivation":{"wants":[string],"stakes":[string],"obstacles":[string],"motivator":string},"stake":{"bearer":string,"threat":string,"axis":string}}],"relationships":[{"from":string,"to":string,"type":string}],"proposals":[{"cat":string,"word":string,"common":boolean}],"goals":[{"word":string,"note":string}]}.' +
+    sys = 'You analyze an author\u2019s NOTES / worldbuilding / character sheets (NOT a finished manuscript) for a worldbuilding app and return ONLY valid minified JSON \u2014 no prose, no code fences. Schema: {"title":string,"overview":string,"sections":[{"title":string}],"elements":[{"type":' + typeUnion + ',"name":string,"note":string,"summary":string,"sub":string,"section":string,"sections":[string],"traits":[{"sub":string,"value":string}],"motivation":{"wants":[string],"stakes":[string],"obstacles":[string],"motivator":string},"stake":{"bearer":string,"threat":string,"axis":string}}],"relationships":[{"from":string,"to":string,"type":string}],"proposals":[{"cat":string,"word":string,"common":boolean}],"goals":[{"word":string,"note":string}],"threads":[{"name":string,"elements":[string]}]}.' +
       'Extract the distinct elements the notes establish — characters, places, objects, events, and in-world concepts/terms — and, only when clearly stated, the narrative frame (genre, context, concepts/themes, stakes, plot). ' + elementSelect + narrThreshold + typeGuide + sectionGuideNotes +
       (IMP.qa ? 'The text is a PLANNING CONVERSATION (interviewer questions + the author\u2019s answers). Treat ONLY the author\u2019s answers as source material. note = a faithful restatement of what the author said about that element, folded together across answers \u2014 keep their exact meaning and specifics, but clean up grammar and spelling and phrase it simply; NEVER quote the questions or copy the answers verbatim. summary = ONE short sentence. ' : 'note = that element\u2019s details taken from the notes, cleaned up and consolidated into 1\u20134 sentences, preserving the author\u2019s specifics. summary = ONE short sentence. ') + _scopeGuide +
-      'For beings, places and things: ' + traitInfo + '. Do NOT fill sub for beings. ' + motGuide + stakeGuide +
+      'For beings, places and things: ' + traitInfo + '. Do NOT fill sub for beings. ' + motGuide + stakeGuide + threadGuide +
       'For any non-being type that has one: sub = single best subcategory from: ' + nonBeingSubInfo + (narrSubInfo ? ('; ' + narrSubInfo) : '') + '. ' +
       relSelect + 'type = a short phrase. ' + proposalGuide + goalGuide +
       'overview = 1\u20132 sentences. Use names exactly as written. Invent nothing \u2014 keep only what the notes say.';
     user = 'Notes:\n\n' + prose.slice(0, 300000) + '\n\nReturn the JSON.';
   } else {
-    sys = 'You analyze a story for a worldbuilding app and return ONLY valid minified JSON — no prose, no code fences. Schema: {"title":string,"overview":string,"sections":[{"title":string,"opening":string}],"elements":[{"type":' + typeUnion + ',"name":string,"summary":string,"sub":string,"section":string,"sections":[string],"traits":[{"sub":string,"value":string}],"motivation":{"wants":[string],"stakes":[string],"obstacles":[string],"motivator":string},"stake":{"bearer":string,"threat":string,"axis":string}}],"relationships":[{"from":string,"to":string,"type":string}],"proposals":[{"cat":string,"word":string,"common":boolean}],"goals":[{"word":string,"note":string}]}.' +
+    sys = 'You analyze a story for a worldbuilding app and return ONLY valid minified JSON — no prose, no code fences. Schema: {"title":string,"overview":string,"sections":[{"title":string,"opening":string}],"elements":[{"type":' + typeUnion + ',"name":string,"summary":string,"sub":string,"section":string,"sections":[string],"traits":[{"sub":string,"value":string}],"motivation":{"wants":[string],"stakes":[string],"obstacles":[string],"motivator":string},"stake":{"bearer":string,"threat":string,"axis":string}}],"relationships":[{"from":string,"to":string,"type":string}],"proposals":[{"cat":string,"word":string,"common":boolean}],"goals":[{"word":string,"note":string}],"threads":[{"name":string,"elements":[string]}]}.' +
     'sections = split the story into its parts by chapter/section titles, headers, or clear scene breaks; title = a short section title; opening = the first ~8 words of that section copied EXACTLY/verbatim from the text. If the story is one continuous piece, return a single section. ' +
     'Extract the story elements — characters, places, objects, events, and in-world concepts/terms — and only the narrative frame (genre, context, concepts/themes, stakes, plot) that the text makes unmistakably clear. ' + narrThreshold + typeGuide + sectionGuideProse + 'summary = ONE short sentence grounded only in the text. ' +
-    'For beings, places and things: ' + traitInfo + '. Do NOT fill sub for beings. ' + motGuide + stakeGuide +
+    'For beings, places and things: ' + traitInfo + '. Do NOT fill sub for beings. ' + motGuide + stakeGuide + threadGuide +
     'For any non-being type that has one: sub = single best subcategory from: ' + nonBeingSubInfo + (narrSubInfo ? ('; ' + narrSubInfo) : '') + '. ' +
     relSelect + 'type = a short relationship phrase such as "Guardian of","Rivalry","Keeper of","Born of","Betrayal". ' + proposalGuide + goalGuideProse +
     /* v.711 — "Up to 6 elements of each type" was one ceiling for every type, which reads as licence for six
@@ -30781,7 +30812,7 @@ async function extractImport(){
   const total = chunks.length;
   IMP.elements = []; IMP.relationships = []; IMP.sections = []; IMP.genres = [];
   const seenEl = {}, seenR = {};
-  let secsRaw = [], propsRaw = [], goalsRaw = [], overview = '', gotTitle = '', gotAny = false;
+  let secsRaw = [], propsRaw = [], goalsRaw = [], threadsRaw = [], overview = '', gotTitle = '', gotAny = false;   /* v.719 — storylines arrive per chunk like everything else */
   const confirmBtn = $('importConfirm');
   const confirmLabel = confirmBtn ? (confirmBtn.textContent || 'Build these in') : 'Build these in';
   const setConfirmProgress = done => { if (!confirmBtn) return; if (done < total){ confirmBtn.disabled = true; confirmBtn.textContent = 'Reading ' + done + '/' + total + '… (you can review now)'; } else { confirmBtn.disabled = false; confirmBtn.textContent = confirmLabel; } };
@@ -30809,6 +30840,7 @@ async function extractImport(){
     if (Array.isArray(normC.sections)) secsRaw = secsRaw.concat(normC.sections);
     if (Array.isArray(normC.proposals)) propsRaw = propsRaw.concat(normC.proposals);
     if (Array.isArray(normC.goals)) goalsRaw = goalsRaw.concat(normC.goals);
+    if (Array.isArray(normC.threads)) threadsRaw = threadsRaw.concat(normC.threads);
     if (!overview && normC.overview) overview = normC.overview;
     if (!gotTitle && normC.title) gotTitle = normC.title;
     // merge this chunk's elements → collect only the NEW ones so we can append their cards
@@ -30948,9 +30980,34 @@ async function extractImport(){
       IMP.goals.push({ word: word, note: String(g.note || '').trim() });
     });
   }
+  /* v.719 — audit #6: threads were absent from the importer entirely. A thread is only worth making if it is
+     really a storyline, so two things are checked here rather than trusted: every member must be a name the
+     model actually put in its OWN elements list (a thread of invented names would tag nothing), and there must
+     be at least two of them. A manuscript is then capped at two threads for the whole work, which is v.711's
+     rule applied to the same kind of claim; notes are not capped, because there the author is stating their own
+     structure. A SESSION import seeds none at all \u2014 the goals block above refuses for the same reason. */
+  { const seenTh = {}; IMP.threads = [];
+    const nameSet = {};
+    (IMP.elements || []).forEach(e => { const t = String((e && e.name) || '').trim().toLowerCase(); if (t) nameSet[t] = 1; });
+    ((typeof IMP !== 'undefined' && IMP._sessionImport) ? [] : threadsRaw).forEach(t => {
+      if (!t || !t.name) return;
+      const nm = String(t.name).trim().slice(0, 60); if (!nm) return;
+      const k = nm.toLowerCase(); if (seenTh[k]) return;
+      const mem = [], seenM = {};
+      (Array.isArray(t.elements) ? t.elements : []).forEach(x => {
+        const v = String(x || '').trim(), lc = v.toLowerCase();
+        if (!v || seenM[lc] || !nameSet[lc]) return; seenM[lc] = 1; mem.push(v);
+      });
+      if (mem.length < 2) return;                 // one element is not a storyline
+      seenTh[k] = 1;
+      IMP.threads.push({ name: nm, elements: mem, accept: true });
+    });
+    if (!notesMode) IMP.threads = IMP.threads.slice(0, 2);
+  }
   $('importGo').disabled = false;
   if (!IMP.elements.length){ $('importStatus').textContent = 'Couldn’t read the structure — try again, or shorten the text.'; return; }
   if (typeof renderImportProposals === 'function') renderImportProposals();
+  if (typeof renderImportThreads === 'function') try{ renderImportThreads(); }catch(e){}   /* v.719 */
   if (typeof renderImportRels === 'function') try{ renderImportRels(); }catch(e){}   /* v.706 — chunks arrive one at a time and each brings more connections */
   setConfirmProgress(total);   // all parts in → enable Build
 }
@@ -31200,6 +31257,32 @@ function renderImportProposals(){
       '<button type="button" class="ipps-btn' + (p.sys ? ' on' : '') + '" data-s="all">all stories</button></span>';
     const inc = row.querySelector('.ipp-i'); inc.addEventListener('change', () => { p.accept = inc.checked; row.classList.toggle('off', !p.accept); });
     row.querySelectorAll('.ipps-btn').forEach(b => b.addEventListener('click', () => { p.sys = b.dataset.s === 'all'; row.querySelectorAll('.ipps-btn').forEach(x => x.classList.toggle('on', (x.dataset.s === 'all') === p.sys)); }));
+    host.appendChild(row);
+  });
+}
+/* v.719 — the storylines the source sets out, shown before they are made. Each is a real thread with its own
+   colour once accepted, so the writer sees which elements it would carry and can drop one they did not mean. */
+function renderImportThreads(){
+  const anchor = $('importElements'); if (!anchor) return;
+  let host = $('importThreads');
+  if (!host){ host = document.createElement('div'); host.id = 'importThreads';
+    const after = $('importProposals') || anchor;
+    after.parentNode.insertBefore(host, after.nextSibling); }
+  host.innerHTML = '';
+  const ths = (IMP.threads || []).filter(t => t && t.name);
+  if (!ths.length){ host.style.display = 'none'; return; }
+  host.style.display = 'block';
+  const head = document.createElement('div'); head.className = 'ipp-head';
+  head.textContent = '\u2726 Storylines found \u2014 each becomes a thread on your map and a column in the Plot grid';
+  host.appendChild(head);
+  ths.forEach(t => {
+    const row = document.createElement('div'); row.className = 'ipp-row ir-th-row' + (t.accept ? '' : ' off');
+    row.innerHTML =
+      '<label class="ipp-inc"><input type="checkbox" class="ipp-i"' + (t.accept ? ' checked' : '') + '></label>' +
+      '<input type="text" class="ir-th-name" value="' + esc(t.name) + '">' +
+      '<span class="ir-th-mem">' + (t.elements || []).map(m => '<span class="ir-th-chip">' + esc(m) + '</span>').join('') + '</span>';
+    const inc = row.querySelector('.ipp-i'); inc.addEventListener('change', () => { t.accept = inc.checked; row.classList.toggle('off', !t.accept); });
+    const nm = row.querySelector('.ir-th-name'); nm.addEventListener('input', () => { t.name = nm.value; });
     host.appendChild(row);
   });
 }
@@ -31500,6 +31583,7 @@ async function confirmImport(){
   if (added || asSection || IMP.prose.trim()){ $('skyEmpty').style.display = 'none'; }
   importWriteMotivations();   /* v.716 — after every character is placed, so each has a key to write against */
   importWriteStakes();        /* v.717 — likewise: the bearer and the threat must exist before they can be named */
+  importWriteThreads();       /* v.719 — and last of all: a storyline can only be tagged onto elements that exist */
   importStampWikiSigs();   /* v.714 — after the prose, the notes and the frames are all in place, so the signature is the true one */
   layoutConstellation(); renderConstellation(); renderTimeline(); saveSession();
   if (typeof renderStoryLibrary === 'function') renderStoryLibrary();
@@ -31616,6 +31700,7 @@ function confirmNotesImport(){
     state.session.frames = state.frames; state.session.words = (state.prompt && state.prompt.words) || [];   /* v.717 — the line that actually threw */
     importWriteMotivations();   /* v.716 — the notes path places its characters in the Legend, so only the ones on the map take a motivation here; the rest keep theirs on the element record */
     importWriteStakes();        /* v.717 — the notes path places its stakes on the bar, so they have keys to write against */
+    importWriteThreads();       /* v.719 — `importKeyIndex` reads the Legend too, so notes-path characters resolve here as well */
     importStampWikiSigs();   /* v.714 — the notes path writes the same cache through the same `registerImportWord` */
     const _props = applyImportProposals();   // Phase 2: add approved net-new words to the pools
     const _goals = applyImportGoals();       // seed any stated goals
@@ -41521,6 +41606,43 @@ function importWriteStakes(){
     }catch(e){}
     if (wrote) n++;
   });
+  return n;
+}
+/* v.719 — audit #6. Nothing here builds a thread by hand: `addThread` picks the id and the next free colour,
+   `toggleWordThread(w, id, 0)` writes tags/from/until together, and `__planAddThreadCardForSection` is the Plot
+   grid's own door, which pulls the members itself — so membership has to be written before it is called.
+
+   Tagging from section 0, open-ended, invents no span: `threadMemberSections` intersects [from, until) with the
+   sections the member actually appears in, so the thread ends up spanning exactly those and no more. And a
+   thread whose members did not land (fewer than two resolved to real elements) is simply not made. */
+function importWriteThreads(){
+  if (typeof addThread !== 'function' || typeof toggleWordThread !== 'function') return 0;
+  var list = (IMP.threads || []).filter(function(t){ return t && t.accept && String(t.name || '').trim(); });
+  if (!list.length) return 0;
+  try{ if (typeof ensureThreads === 'function') ensureThreads(); }catch(e){}
+  var by = {}; try{ by = importKeyIndex() || {}; }catch(e){}
+  var have = {}; try{ (threadsList() || []).forEach(function(t){ have[String(t.name || '').trim().toLowerCase()] = t.id; }); }catch(e){}
+  var n = 0;
+  list.forEach(function(t){
+    var ws = [], seen = {};
+    (t.elements || []).forEach(function(nm){
+      var k = by[String(nm || '').trim().toLowerCase()]; if (!k || seen[k]) return;
+      var w = (typeof npFindEl === 'function') ? npFindEl(k) : null; if (!w) return;
+      seen[k] = 1; ws.push(w);
+    });
+    if (ws.length < 2) return;                      // a storyline needs two of its members to have actually landed
+    var key = String(t.name).trim().toLowerCase(), id = have[key];
+    if (!id){ try{ id = addThread(String(t.name).trim()); }catch(e){ id = null; } if (!id) return; have[key] = id; }
+    ws.forEach(function(w){ try{ if (typeof wordThreadState !== 'function' || wordThreadState(w, id, 0) !== 'member') toggleWordThread(w, id, 0); }catch(e){} });
+    try{
+      var secs = {};
+      if (typeof threadMemberSections === 'function') ws.forEach(function(w){ (threadMemberSections(w, id) || []).forEach(function(x){ secs[x] = 1; }); });
+      if (typeof window.__planAddThreadCardForSection === 'function')
+        Object.keys(secs).map(Number).sort(function(a, b){ return a - b; }).forEach(function(x){ try{ window.__planAddThreadCardForSection(id, x); }catch(e){} });
+    }catch(e){}
+    n++;
+  });
+  if (typeof scheduleAutosave === 'function') try{ scheduleAutosave(); }catch(e){}
   return n;
 }
 function importStampWikiSigs(){
@@ -56679,9 +56801,14 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.641';
+  var APP_VERSION = '2026.07.20.642';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.642', date:'September 17, 2026', notes:[
+      '**The selection bar\u2019s “Word” button is now “Define”.** [Jeremy] It sat on a bar of verbs \u2014 Refract, Replace, Delete, Insert, Note \u2014 reading as a noun beside the very thing it described. It does the same thing it always did.',
+      '**The Refract panel sits flush against the edge of the window.** [Jeremy] Asking for another word for a single word opened its card with a strip of empty page to its left. That margin was there to keep the card from sliding under the **Organize** tab \u2014 but that tab is hidden on any window narrower than about 1220px, while the margin was applied below about 1390px, so on most windows it was making room for something that was not on screen. It is now kept only in the narrow range where the tab really is there.',
+      '**Imports now find your storylines.** Threads were invisible to the importer \u2014 a novel with four interleaved storylines brought in none of them, so the Plot grid never gained a column beyond Main Plot and the Threads tab held nothing you had not made by hand. A source that sets out separate storylines now brings them in as real threads, each with its own colour, its members tagged, and a card in every section it runs through. As with the narrative frame, your NOTES may name as many storylines as they set out \u2014 there you are describing your own structure \u2014 while a MANUSCRIPT yields **two at the very most**, and usually none: a storyline is a statement of how you built the book, not something the prose declares. A thread is never made from fewer than two elements across fewer than two sections, and every one it finds is shown to you, named and editable, before anything is created.',
+    ]},
     { v:'2026.07.20.641', date:'September 17, 2026', notes:[
       '**A brand-new story gets its first section when you file your first session.** [Jeremy] This is the root of yesterday\u2019s \u201cAccept all\u201d failure, and it turned out to be reassuring: a new story starts with **no section at all** until something generates one, so writing before generating anything left the app with nothing to write into. Nothing was ever lost \u2014 the section had simply never existed. Filing that first session now creates it, so the story comes out with a real section holding your writing instead of none.',
     ]},
@@ -67987,6 +68114,7 @@ body.ember:not(.eink) #importProposals .ipps-btn.on{ background:var(--gold-honey
     });
     try{ if(IMP.goals && IMP.goals.length) P.push({ kind:'goals' }); }catch(e){}
     if(layers.length) P.push({ kind:'layers', nodes:layers });
+    try{ if(IMP.threads && IMP.threads.length) P.push({ kind:'threads' }); }catch(e){}   /* v.719 */
     try{ if(IMP.proposals && IMP.proposals.length) P.push({ kind:'pool' }); }catch(e){}
     if(!P.length) P.push({ kind:'empty' });
     return P;
@@ -68057,6 +68185,8 @@ body.ember:not(.eink) #importProposals .ipps-btn.on{ background:var(--gold-honey
     if(cur.kind==='layers') cur.nodes.forEach(function(d){ polishCard(d); d.classList.remove('irdk-off'); });
     var lh = $id('irLayersHead'); if(lh) lh.style.display = cur.kind==='layers' ? 'block' : 'none';
     var gp = $id('irGoalsPage'); if(gp){ gp.style.display = cur.kind==='goals' ? 'block' : 'none'; if(cur.kind==='goals') buildGoalsPage(gp); }
+    var thh = $id('importThreads');
+    if(thh) thh.style.display = cur.kind==='threads' ? 'block' : 'none';   /* v.719 */
     var host = $id('importProposals');
     if(host){
       host.style.display = cur.kind==='pool' ? 'block' : 'none';
@@ -68070,6 +68200,7 @@ body.ember:not(.eink) #importProposals .ipps-btn.on{ background:var(--gold-honey
       t = (nm && nm.value.trim()) ? nm.value.trim() : ('New ' + (lab || 'element')); c = lab;
     } else if(cur.kind==='goals'){ var gn=0; try{ gn=(IMP.goals||[]).length; }catch(e){} t='Goals'; c = gn + ' imported'; }
     else if(cur.kind==='layers'){ t='Narrative Layers'; c = cur.nodes.length + ' imported'; }
+    else if(cur.kind==='threads'){ var tn=0; try{ tn=(IMP.threads||[]).length; }catch(e){} t='Storylines'; c = tn + ' found'; }   /* v.719 */
     else if(cur.kind==='pool'){ var pn=0; try{ pn=(IMP.proposals||[]).length; }catch(e){} t='Concept Word Pool'; c = pn + ' word' + (pn===1?'':'s'); }
     else { t='Nothing to review yet'; }
     $id('irdkTitle').textContent = t;
@@ -71796,15 +71927,17 @@ body.eink #mapTextBtn.in-head{ color:#000; border:2px dashed #000; }
   document.addEventListener('keydown', function(e){ if (e.key === 'Escape') WB.close(); });
   window.addEventListener('resize', WB.close);
 
-  /* The Word button on the selection bar. Deterministic — no AI, no sign-in — so
-     it is added outside the ✦ gate and stays usable when AI is off entirely. */
+  /* The Define button on the selection bar (v.719 [Jeremy] — it read "Word", beside a word, on a bar
+     of verbs; "Define" says what pressing it does). Deterministic — no AI, no sign-in — so it is added
+     outside the ✦ gate and stays usable when AI is off entirely. The `data-sg` key stays `word`: it is
+     what the bar's own handlers and the tour spot are keyed on, and it is not user-facing. */
   function ensureButton(){
     var bar = document.getElementById('sgBar'); if (!bar || bar.querySelector('[data-sg="word"]')) return;
     var ref = bar.querySelector('[data-sg="rephrase"]');
     var b = document.createElement('button');
     b.setAttribute('data-sg','word');
-    b.title = 'Look this word up — how common it is, and what the 1913 dictionary has for it';
-    b.textContent = 'Word';
+    b.title = 'Define this word — what the dictionary has for it, and how common it is';
+    b.textContent = 'Define';
     if (ref && ref.parentNode) ref.parentNode.insertBefore(b, ref); else bar.insertBefore(b, bar.firstChild);
     b.addEventListener('mousedown', function(ev){ ev.preventDefault(); ev.stopPropagation(); openFromSelection(); });
   }
