@@ -2444,6 +2444,8 @@ body.eink .pt-rh-dev{color:#000}
   .ir-traits-wrap{margin-top:6px; padding:0 1px}
   .ir-mot-wrap{margin-top:6px; padding:0 1px}   /* v.716 */
   .ir-mot-pill .ir-trait-sub{color:#b07a2a}
+  .ir-stk-wrap{margin-top:6px; padding:0 1px}   /* v.717 */
+  .ir-stk-pill .ir-trait-sub{color:#9c5f54}
   .ir-traits{display:flex; flex-wrap:wrap; align-items:center; gap:5px}
   .ir-trait-pill{display:inline-flex; align-items:center; gap:3px; font-family:var(--sans); font-size:11px; background:var(--bg2); border:1px solid var(--line); border-radius:12px; padding:3px 5px 3px 8px; color:var(--ink-soft)}
   .ir-trait-sub{font-size:10.5px; font-weight:700; letter-spacing:.06em; color:var(--ink-faint); text-transform:uppercase; margin-right:1px}
@@ -25914,7 +25916,10 @@ function recapRouteProse(sid, target){
     const tf = parseInt(target, 10);
     if (isFinite(tf) && tf !== cur && state.frames && state.frames[tf]){
       recapMoveSessionToFrame(sid, tf);   // move the session's blocks into the chosen existing section
-      try { state.frameIdx = tf; state.prompt = state.frames[tf].prompt; state.activeSet = 0; } catch(e){}
+      /* v.717 — this is where the bad state was MADE: routing a session into a section whose frame has no
+         board set `state.prompt = undefined` and moved the index anyway, and nothing threw here to notice it.
+         The Accept all that followed was where it surfaced. */
+      try { state.frameIdx = tf; state.prompt = framePrompt(tf); state.activeSet = 0; } catch(e){}
       destFrame = tf;
     } else { destFrame = cur; }   // left in the current section
   }
@@ -30423,6 +30428,12 @@ function importKeyIndex(){
   };
   try{ ((state.frames || []).forEach(function(fr){ ((fr && fr.prompt && fr.prompt.words) || []).forEach(take); })); }catch(e){}
   try{ ((state.prompt && state.prompt.words) || []).forEach(take); }catch(e){}
+  /* v.717 — and the Story Legend. Measured on a NOTES import: this index saw nothing, because that path sends
+     characters to the Legend rather than the map (`libraryAddFromImport`), so every bearer and threat failed to
+     resolve and a stake came out with an axis and no ends. A Legend element has a real `wordKey` and the app's
+     own records are keyed by it, so it belongs in the index. Costs nothing on the prose path, where the roster
+     holds the same elements the map does. */
+  try{ ((state.session && state.session.elemLibrary) || []).forEach(function(r){ if (r && r.item) take(r.item); }); }catch(e){}
   return by;
 }
 function seedRelBonds(rels){
@@ -30633,6 +30644,29 @@ function normalizeObstacle(v){
   for (var j = 0; j < pool.length; j++){ var pw = pool[j].word.toLowerCase().replace(/^(a |an |the )/, '').replace(/s$/, ''); if (pw === bare) return { word: pool[j].word, sub: pool[j].sub, isNew: false }; }
   return { word: raw.slice(0, 40), sub: 'Circumstance', isNew: true };
 }
+/* v.717 [gap audit #9] — the axis is a word from the stakes category's "Conflict" subcategory, and it is
+   OPTIONAL: `__stakeAxis` derives one from the threat when none is declared. So this is only ever used for the
+   fallback case — the text names a kind of conflict and there is no threat element to derive from. Same
+   normalise-or-drop shape as v.709's Sex and v.716's obstacles. */
+function conflictAxisWords(){
+  var out = [];
+  try{
+    var c = (typeof getCat === 'function') ? getCat('stakes') : null;
+    ((c && c.subcategories) || []).forEach(function(sb){
+      if (!sb || sb.retired || String(sb.name || '').toLowerCase() !== 'conflict') return;
+      (sb.words || []).forEach(function(x){ var w = (typeof x === 'string') ? x : (x && x.w); if (w) out.push(w); });
+    });
+  }catch(e){}
+  return out;
+}
+function normalizeAxis(v){
+  var raw = String(v || '').trim(); if (!raw) return '';
+  var lc = raw.toLowerCase(), pool = conflictAxisWords();
+  for (var i = 0; i < pool.length; i++){ if (pool[i].toLowerCase() === lc) return pool[i]; }
+  var bare = lc.replace(/^(a |an |the )/, '');
+  for (var j = 0; j < pool.length; j++){ if (pool[j].toLowerCase().replace(/^(a |an |the )/, '') === bare) return pool[j]; }
+  return '';   /* unrecognised: dropped, never guessed — the derivation is a better answer than an invention */
+}
 async function extractImport(){
   const prose = $('importText').value.trim();
   if (!prose){ $('importStatus').textContent = 'Paste some prose first.'; return; }
@@ -30649,6 +30683,12 @@ async function extractImport(){
   const typeGuide = 'being = a named character or creature; setting = a place; object = a notable physical thing; event = a key happening; organization = a collective with a life of its own (company, guild, order, faction, council, cult, church, army, party, clan, house, tribe, secret society) that beings belong to or contend with; genre = the story’s genre(s); context = the time period or setting era; concepts = the central themes / big ideas the work explores; stakes = what is at risk; plot = a plot archetype or through-line; concept = an in-world term, technology, or coined idea (worldbuilding vocabulary). ';
   /* v.713 — declared HERE, above both section guides: `const` is in a temporal dead zone and both guides
      are built before `notesMode` is. */
+  /* v.717 [Jeremy] — "looser than motivation". A want is what a character INTENDS, and a manuscript is
+     evidence of what HAPPENS, which is why v.716 will only take a want the text states outright. A stake's
+     bearer and threat are narration: "the Assessors were taking the ledger" names both ends plainly. So this
+     may be read from what the prose narrates — with the same floor as everywhere else, both ends plain or
+     nothing. The axis is asked for ONLY as a fallback, because `__stakeAxis` derives it from the threat. */
+  const stakeGuide = 'For a STAKES element only, stake={bearer:string,threat:string,axis:string} \u2014 bearer = the NAME of the character or group whose stake it is, threat = the NAME of the character, group, place or thing that is taking it. Use names EXACTLY as they appear in your own elements list so they can be matched; leave a field "" when the text does not make that end plain. Unlike a character\u2019s motivation, these may be read from what the prose NARRATES \u2014 "the Assessors were taking the ledger" names both ends \u2014 but never guessed: both ends must be there in the text. axis = leave "" whenever you have given a threat, because it is worked out from the threat; give one ONLY where the text names a kind of conflict and there is no threat element to name. ';
   const multiSecGuide = 'ALSO: "sections" = EVERY section title the element actually appears in, when that is more than one — the chapters a character is in, the chapters a place is used in. Omit it (or return []) when the element belongs to only the one section already named. List a section only where the element genuinely appears: a character in every chapter gets every chapter, one in two gets two, and there is no quota either way. ';
   const sectionGuideNotes = 'sections = ONLY if these notes describe a story split into chapters/parts, list those titles in order; otherwise []. Each element’s "section" = the chapter/part title it primarily belongs to, or "" if the notes have no chapters or the element is world-wide. ' + multiSecGuide;
   const sectionGuideProse = 'Each element’s "section" = the exact title (from sections) of the section where it first / most centrally appears. ' + multiSecGuide;
@@ -30713,19 +30753,19 @@ async function extractImport(){
     else if (_Q.names && _Q.names.length) _scopeGuide = ' THIS CONVERSATION IS SPECIFICALLY ABOUT: ' + _Q.names.join(', ') + '. Attach the notes and traits you extract to THOSE existing elements (match by name); only propose a NEW element if the author clearly introduces one. ';
     else if (_Q.label) _scopeGuide = ' THIS CONVERSATION IS SPECIFICALLY ABOUT: ' + _Q.label + '. Keep the extraction focused there. '; }
   if (notesMode){
-    sys = 'You analyze an author\u2019s NOTES / worldbuilding / character sheets (NOT a finished manuscript) for a worldbuilding app and return ONLY valid minified JSON \u2014 no prose, no code fences. Schema: {"title":string,"overview":string,"sections":[{"title":string}],"elements":[{"type":' + typeUnion + ',"name":string,"note":string,"summary":string,"sub":string,"section":string,"sections":[string],"traits":[{"sub":string,"value":string}],"motivation":{"wants":[string],"stakes":[string],"obstacles":[string],"motivator":string}}],"relationships":[{"from":string,"to":string,"type":string}],"proposals":[{"cat":string,"word":string,"common":boolean}],"goals":[{"word":string,"note":string}]}.' +
+    sys = 'You analyze an author\u2019s NOTES / worldbuilding / character sheets (NOT a finished manuscript) for a worldbuilding app and return ONLY valid minified JSON \u2014 no prose, no code fences. Schema: {"title":string,"overview":string,"sections":[{"title":string}],"elements":[{"type":' + typeUnion + ',"name":string,"note":string,"summary":string,"sub":string,"section":string,"sections":[string],"traits":[{"sub":string,"value":string}],"motivation":{"wants":[string],"stakes":[string],"obstacles":[string],"motivator":string},"stake":{"bearer":string,"threat":string,"axis":string}}],"relationships":[{"from":string,"to":string,"type":string}],"proposals":[{"cat":string,"word":string,"common":boolean}],"goals":[{"word":string,"note":string}]}.' +
       'Extract the distinct elements the notes establish — characters, places, objects, events, and in-world concepts/terms — and, only when clearly stated, the narrative frame (genre, context, concepts/themes, stakes, plot). ' + elementSelect + narrThreshold + typeGuide + sectionGuideNotes +
       (IMP.qa ? 'The text is a PLANNING CONVERSATION (interviewer questions + the author\u2019s answers). Treat ONLY the author\u2019s answers as source material. note = a faithful restatement of what the author said about that element, folded together across answers \u2014 keep their exact meaning and specifics, but clean up grammar and spelling and phrase it simply; NEVER quote the questions or copy the answers verbatim. summary = ONE short sentence. ' : 'note = that element\u2019s details taken from the notes, cleaned up and consolidated into 1\u20134 sentences, preserving the author\u2019s specifics. summary = ONE short sentence. ') + _scopeGuide +
-      'For beings, places and things: ' + traitInfo + '. Do NOT fill sub for beings. ' + motGuide +
+      'For beings, places and things: ' + traitInfo + '. Do NOT fill sub for beings. ' + motGuide + stakeGuide +
       'For any non-being type that has one: sub = single best subcategory from: ' + nonBeingSubInfo + (narrSubInfo ? ('; ' + narrSubInfo) : '') + '. ' +
       relSelect + 'type = a short phrase. ' + proposalGuide + goalGuide +
       'overview = 1\u20132 sentences. Use names exactly as written. Invent nothing \u2014 keep only what the notes say.';
     user = 'Notes:\n\n' + prose.slice(0, 300000) + '\n\nReturn the JSON.';
   } else {
-    sys = 'You analyze a story for a worldbuilding app and return ONLY valid minified JSON — no prose, no code fences. Schema: {"title":string,"overview":string,"sections":[{"title":string,"opening":string}],"elements":[{"type":' + typeUnion + ',"name":string,"summary":string,"sub":string,"section":string,"sections":[string],"traits":[{"sub":string,"value":string}],"motivation":{"wants":[string],"stakes":[string],"obstacles":[string],"motivator":string}}],"relationships":[{"from":string,"to":string,"type":string}],"proposals":[{"cat":string,"word":string,"common":boolean}],"goals":[{"word":string,"note":string}]}.' +
+    sys = 'You analyze a story for a worldbuilding app and return ONLY valid minified JSON — no prose, no code fences. Schema: {"title":string,"overview":string,"sections":[{"title":string,"opening":string}],"elements":[{"type":' + typeUnion + ',"name":string,"summary":string,"sub":string,"section":string,"sections":[string],"traits":[{"sub":string,"value":string}],"motivation":{"wants":[string],"stakes":[string],"obstacles":[string],"motivator":string},"stake":{"bearer":string,"threat":string,"axis":string}}],"relationships":[{"from":string,"to":string,"type":string}],"proposals":[{"cat":string,"word":string,"common":boolean}],"goals":[{"word":string,"note":string}]}.' +
     'sections = split the story into its parts by chapter/section titles, headers, or clear scene breaks; title = a short section title; opening = the first ~8 words of that section copied EXACTLY/verbatim from the text. If the story is one continuous piece, return a single section. ' +
     'Extract the story elements — characters, places, objects, events, and in-world concepts/terms — and only the narrative frame (genre, context, concepts/themes, stakes, plot) that the text makes unmistakably clear. ' + narrThreshold + typeGuide + sectionGuideProse + 'summary = ONE short sentence grounded only in the text. ' +
-    'For beings, places and things: ' + traitInfo + '. Do NOT fill sub for beings. ' + motGuide +
+    'For beings, places and things: ' + traitInfo + '. Do NOT fill sub for beings. ' + motGuide + stakeGuide +
     'For any non-being type that has one: sub = single best subcategory from: ' + nonBeingSubInfo + (narrSubInfo ? ('; ' + narrSubInfo) : '') + '. ' +
     relSelect + 'type = a short relationship phrase such as "Guardian of","Rivalry","Keeper of","Born of","Betrayal". ' + proposalGuide + goalGuideProse +
     /* v.711 — "Up to 6 elements of each type" was one ceiling for every type, which reads as licence for six
@@ -30790,6 +30830,17 @@ async function extractImport(){
            value drops out here, so the writer is shown a Sex only when there is a real one to approve. */
         ? (Array.isArray(el.traits) ? el.traits : []).filter(t => t && importTraitSubs(cat).includes(t.sub) && String(t.value || '').trim()).map(t => ({ sub: t.sub, value: (t.sub === 'Sex' ? normalizeSexValue(t.value) : shortCharVal(t.value)) })).filter(t => t.value)
         : [];
+      /* v.717 — kept only for a STAKES element. `bearer` and `threat` are NAMES here; they become element keys
+         at write time, once every element exists and has one. The axis is normalised against the app's Conflict
+         words and dropped when unrecognised — the derivation from the threat is a better answer than a guess. */
+      const _stk = (function(){
+        if (cat !== 'stakes') return null;
+        var k = el.stake; if (!k || typeof k !== 'object') return null;
+        var nm = function(x){ return String(x || '').trim().slice(0, 60); };
+        var r = { bearer: nm(k.bearer), threat: nm(k.threat), axis: normalizeAxis(k.axis) };
+        if (r.threat && r.axis) r.axis = '';   /* a declared axis would outrank a derivation that is already right */
+        return (r.bearer || r.threat || r.axis) ? r : null;
+      })();
       /* v.716 — computed HERE, ABOVE the de-dup lookup: the enrichment branch below reads `_mot`, and a
          `const` declared after it is in a temporal dead zone — which is exactly how a chunked import threw
          "Cannot access '_mot' before initialization". Kept only for a BEING, and normalised on the way in so the review card and the writers below
@@ -30817,6 +30868,11 @@ async function extractImport(){
           if (moreNote){ if (!ex.note) ex.note = moreNote; else if (ex.note.toLowerCase().indexOf(moreNote.toLowerCase()) < 0) ex.note = ex.note.replace(/\s*$/, '') + '\n\n' + moreNote; } }
         { const sec2 = String(el.section || '').trim(); if (sec2){ ex.sections = ex.sections || (ex.section ? [ex.section] : []); if (ex.sections.map(s => s.toLowerCase()).indexOf(sec2.toLowerCase()) < 0) ex.sections.push(sec2); } }
         if (elTraits.length){ const have = new Set(ex.traits.map(t => t.sub + '|' + t.value.toLowerCase())); elTraits.forEach(t => { const k = t.sub + '|' + t.value.toLowerCase(); if (!have.has(k)){ ex.traits.push(t); have.add(k); } }); }
+        /* v.717 — a later part may name the end the first one could not; never overwrite one already there */
+        if (_stk){
+          ex.stake = ex.stake || { bearer:'', threat:'', axis:'' };
+          ['bearer', 'threat', 'axis'].forEach(function(f){ if (!ex.stake[f] && _stk[f]) ex.stake[f] = _stk[f]; });
+        }
         /* v.716 — a later part may add a want the first part did not state; fold in rather than replace */
         if (_mot){
           ex.motivation = ex.motivation || { wants:[], stakes:[], obstacles:[], motivator:'' };
@@ -30847,7 +30903,7 @@ async function extractImport(){
         var t = String(x || '').trim();
         if (t && _secsAll.map(function(y){ return y.toLowerCase(); }).indexOf(t.toLowerCase()) < 0) _secsAll.push(t);
       });
-      const rec = { cat, name, sub: validImportSub(cat, el.sub), traits: elTraits, motivation: _mot, summary, note, section: _secOne, sections: _secsAll, exists: wordExistsSystem(cat, name), existsStory: existsInStory(cat, name), include: true, sys: false };
+      const rec = { cat, name, sub: validImportSub(cat, el.sub), traits: elTraits, motivation: _mot, stake: _stk, summary, note, section: _secOne, sections: _secsAll, exists: wordExistsSystem(cat, name), existsStory: existsInStory(cat, name), include: true, sys: false };
       seenEl[key] = rec; IMP.elements.push(rec); newEls.push(rec);
     });
     IMP.genres = IMP.elements.filter(e => e.cat === 'genre').map(e => e.name);   // tag imported words for future generation bias
@@ -30919,6 +30975,33 @@ async function extractImport(){
    app deliberately refuses to place. The real gap is that an imported character has no motivation at all —
    audit finding #10 — and that is where it belongs. Do not "fix" this list by adding obstacle. */
 const IMP_CATS = [['being', 'Character'], ['setting', 'Place'], ['object', 'Artifact'], ['event', 'Event'], ['org', 'Group'], ['genre', 'Genre'], ['period', 'Context'], ['theme', 'Concepts'], ['stakes', 'Stakes'], ['plot', 'Plot'], ['concept', 'Concept']];
+/* v.717 — a stake's bearer and threat on the card, each removable, for the same reason the motivation is:
+   these bind the stake to named characters, and binding is not something that should happen out of sight. */
+function buildStakeArea(d, el){
+  const wrap = d.querySelector('.ir-stk-wrap'); if (!wrap) return;
+  const k = el.stake;
+  const parts = [];
+  if (k){
+    if (k.bearer) parts.push({ f:'bearer', lbl:'whose', txt:k.bearer });
+    if (k.threat) parts.push({ f:'threat', lbl:'taken by', txt:k.threat });
+    if (k.axis)   parts.push({ f:'axis',   lbl:'against', txt:k.axis });
+  }
+  if (!parts.length){ wrap.innerHTML = ''; wrap.style.display = 'none'; return; }
+  wrap.style.display = '';
+  wrap.innerHTML = '<div class="ir-traits">' + parts.map(function(p, i){
+    return '<span class="ir-trait-pill ir-stk-pill">' +
+      '<span class="ir-trait-sub">' + esc(p.lbl) + '</span>' + esc(p.txt) +
+      '<button type="button" class="ir-trait-rm ir-stk-rm" data-i="' + i + '" aria-label="Remove">\u00d7</button></span>';
+  }).join('') + '</div>';
+  wrap.querySelectorAll('.ir-stk-rm').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      const p = parts[+btn.dataset.i]; if (!p) return;
+      el.stake[p.f] = '';
+      if (!el.stake.bearer && !el.stake.threat && !el.stake.axis) el.stake = null;
+      buildStakeArea(d, el);
+    });
+  });
+}
 /* v.716 — the motivation a writer is being asked to approve, on the card, each part removable. No add row:
    the motivation line in the app is a richer editor than this screen should try to be, and the point here is
    consent — see what is proposed, drop what is wrong, and shape it properly afterwards. */
@@ -31013,6 +31096,7 @@ function irBuildCard(el){
       '</div>' +
       (hasTraits ? '<div class="ir-traits-wrap"></div>' : '') +
       (el.cat === 'being' ? '<div class="ir-mot-wrap"></div>' : '') +   /* v.716 — nothing enters a story unseen */
+      (el.cat === 'stakes' ? '<div class="ir-stk-wrap"></div>' : '') +  /* v.717 — nor a stake's bearer and threat */
       '<textarea class="ir-sum" rows="2" placeholder="summary">' + esc(el.summary) + '</textarea>' +
       (el.note ? '<textarea class="ir-note" rows="5" placeholder="notes (verbatim from source)">' + esc(el.note) + '</textarea>' : '') +
       '<div class="ir-scope-row">' +
@@ -31037,6 +31121,7 @@ function irBuildCard(el){
     syncPool();
     if (hasTraits) buildTraitArea(d, el);
     if (el.cat === 'being') buildMotArea(d, el);   /* v.716 */
+    if (el.cat === 'stakes') buildStakeArea(d, el);   /* v.717 */
     return d;
   }
 }
@@ -31414,6 +31499,7 @@ async function confirmImport(){
   setMode('type'); updateWordCount();
   if (added || asSection || IMP.prose.trim()){ $('skyEmpty').style.display = 'none'; }
   importWriteMotivations();   /* v.716 — after every character is placed, so each has a key to write against */
+  importWriteStakes();        /* v.717 — likewise: the bearer and the threat must exist before they can be named */
   importStampWikiSigs();   /* v.714 — after the prose, the notes and the frames are all in place, so the signature is the true one */
   layoutConstellation(); renderConstellation(); renderTimeline(); saveSession();
   if (typeof renderStoryLibrary === 'function') renderStoryLibrary();
@@ -31449,6 +31535,29 @@ async function importDoneNotify(n){
   } catch(e){}
 }
 
+/* v.717 [Jeremy] — "after a writing session, when i click Accept All it fails with couldn't add notes:
+   couldn't read properties". Reproduced exactly: **Cannot read properties of undefined (reading 'words')**,
+   whenever the current frame exists but carries no `prompt`. Three places guarded the FRAME and not the
+   PROMPT — `if (state.frames[fi]) state.prompt = state.frames[fi].prompt` — so a frame without a board
+   assigned `undefined` to `state.prompt`, and the next reader of `state.prompt.words` threw.
+
+   This is the repair the app already performs at 35671 (`state.frames[lo].prompt = state.frames[lo].prompt ||
+   { words: [], … }`), made into one helper so every caller gets it instead of one place getting it right. It
+   invents nothing: an empty board is exactly what a section with no board means, and a story that has lost one
+   should come back with an empty section rather than a dead button. */
+function framePrompt(i){
+  try{
+    if (!state.frames || !state.frames.length) return state.prompt || null;
+    var k = (i == null) ? (state.frameIdx || 0) : i;
+    var fr = state.frames[k]; if (!fr) return state.prompt || null;
+    if (!fr.prompt || typeof fr.prompt !== 'object') fr.prompt = { words: [], sets: 1, links: [], removedLinks: [] };
+    if (!Array.isArray(fr.prompt.words)) fr.prompt.words = [];
+    if (!Array.isArray(fr.prompt.links)) fr.prompt.links = [];
+    if (!Array.isArray(fr.prompt.removedLinks)) fr.prompt.removedLinks = [];
+    if (fr.prompt.sets == null) fr.prompt.sets = 1;
+    return fr.prompt;
+  }catch(e){ return state.prompt || null; }
+}
 function confirmNotesImport(){
   const _qaFlow = !!IMP.qa;                              // this import came from an Explore → End & organize
   const _qaEntryLens = window.__qaEntryLens || '';       // 'interview' = the new-story "Find an Idea" pathway
@@ -31474,7 +31583,7 @@ function confirmNotesImport(){
     // Map-elements go into the story LIBRARY (added to the map on demand, so the canvas stays clean); the narrative
     // frame (genre/context/concepts/stakes/plot) still lands in the bar. Each element's notepad note is written on register.
     const MAPCAT = { being: 1, setting: 1, object: 1, event: 1, concept: 1 };
-    const fi = state.frameIdx || 0; if (state.frames && state.frames[fi]) state.prompt = state.frames[fi].prompt;
+    const fi = state.frameIdx || 0; if (state.frames && state.frames[fi]) state.prompt = framePrompt(fi);   /* v.717 — was `= state.frames[fi].prompt`, which assigned undefined when the frame had no board */
     let added = 0, libbed = 0;
     let pooled = 0;
     incl.forEach(el => {
@@ -31493,8 +31602,9 @@ function confirmNotesImport(){
     // Anything in the source that wasn't turned into an element goes into General Notes so nothing is lost.
     const leftover = importGeneralNotes(IMP.prose, IMP.elements);
     if (leftover){ const cur = state.session.notepad || ''; const keep = npPlain(cur).trim() ? (cur + '<p><br></p>') : ''; state.session.notepad = keep + importNoteHtml(leftover); }
-    state.session.frames = state.frames; state.session.words = state.prompt.words;
+    state.session.frames = state.frames; state.session.words = (state.prompt && state.prompt.words) || [];   /* v.717 — the line that actually threw */
     importWriteMotivations();   /* v.716 — the notes path places its characters in the Legend, so only the ones on the map take a motivation here; the rest keep theirs on the element record */
+    importWriteStakes();        /* v.717 — the notes path places its stakes on the bar, so they have keys to write against */
     importStampWikiSigs();   /* v.714 — the notes path writes the same cache through the same `registerImportWord` */
     const _props = applyImportProposals();   // Phase 2: add approved net-new words to the pools
     const _goals = applyImportGoals();       // seed any stated goals
@@ -32255,7 +32365,7 @@ function openStoryLibrary(){
 function closeStoryLibrary(){ renderStoryLibrary(); }   // story switch / fresh story: re-render for the new story's roster
 function libEnsureFrame(){
   if (state.prompt) return;
-  if (state.frames && state.frames[state.frameIdx || 0]){ state.prompt = state.frames[state.frameIdx || 0].prompt; return; }
+  if (state.frames && state.frames[state.frameIdx || 0]){ state.prompt = framePrompt(state.frameIdx || 0); return; }   /* v.717 — the same frame-guarded, prompt-unguarded read */
   state.prompt = { words: [], sets: 1, links: [], removedLinks: [] }; state.frames = [{ gap: null, prompt: state.prompt }]; state.frameIdx = 0; state.activeSet = 0;
 }
 /* Is this roster element on the surface you are LOOKING AT? On a map that is a question about the
@@ -41361,6 +41471,42 @@ function importWriteMotivations(){
       (m.stakes || []).forEach(function(v, i){ if (i === 0) W.stake(k, v, false); else W.addStake(k, v, false); wrote++; });
       (m.obstacles || []).forEach(function(o){ W.addObstacle(k, o.word, o.sub || 'Circumstance', !!o.isNew); wrote++; });
       if (m.motivator && typeof W.motivator === 'function'){ W.motivator(k, m.motivator); wrote++; }
+    }catch(e){}
+    if (wrote) n++;
+  });
+  return n;
+}
+/* v.717 — two names resolved and one setter called. `importKeyIndex()` is v.707's names→element-keys map
+   across every frame, built for exactly this; `window.__stakeData.set` is the record's own writer, with its
+   own autosave. No second store and no second index.
+
+   `wordKey` is `(set||0)|cat|word` — the leading number is the SET, not the frame — so a stakes element that
+   v.710 put on every section still has ONE key and one record, exactly as `stakeData`'s own comment claims.
+
+   Only what the writer approved: an unchecked element is skipped, and an end that names something not in the
+   story is left empty rather than invented. The AXIS is written only where it survived the merge, which is
+   only where there was no threat to derive it from. */
+function importWriteStakes(){
+  var SD = null; try{ SD = window.__stakeData; }catch(e){}
+  if (!SD || typeof SD.set !== 'function') return 0;
+  var by = {}; try{ by = importKeyIndex() || {}; }catch(e){}
+  var stakeKey = {};
+  try{
+    var takeStake = function(w){ if (!w || w.cat !== 'stakes') return; var t = String(w.name || w.word || '').trim().toLowerCase(); if (t && !stakeKey[t]) stakeKey[t] = wordKey(w); };
+    ((state.frames || []).forEach(function(fr){ ((fr && fr.prompt && fr.prompt.words) || []).forEach(takeStake); }));
+    ((state.prompt && state.prompt.words) || []).forEach(takeStake);
+  }catch(e){}
+  var n = 0;
+  (IMP.elements || []).forEach(function(el){
+    if (!el || !el.include || el.poolOnly || el.cat !== 'stakes' || !el.stake) return;
+    var k = stakeKey[String(el.name || '').trim().toLowerCase()]; if (!k) return;
+    var wrote = 0;
+    var bk = el.stake.bearer ? by[String(el.stake.bearer).trim().toLowerCase()] : null;
+    var tk = el.stake.threat ? by[String(el.stake.threat).trim().toLowerCase()] : null;
+    try{
+      if (bk){ SD.set(k, 'bearer', bk); wrote++; }
+      if (tk){ SD.set(k, 'threat', tk); wrote++; }
+      if (!tk && el.stake.axis){ SD.set(k, 'axis', el.stake.axis); wrote++; }
     }catch(e){}
     if (wrote) n++;
   });
@@ -56522,9 +56668,15 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.639';
+  var APP_VERSION = '2026.07.20.640';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.640', date:'September 17, 2026', notes:[
+      '**An imported stake knows whose it is and what is taking it.** A stake read out of your story used to arrive as a bare phrase with nobody\u2019s name on it \u2014 no bearer, no threat, no record at all. Now the character or group it belongs to and the thing closing in on it come across with it, bound to the actual elements in your story rather than left as loose words. [gap audit #9]',
+      '**And the kind of conflict works itself out.** The app already reads the axis off the threat \u2014 a person taking it means one thing, a place or a law another, and a stake someone poses to themselves another again. So nothing is asked for that the story already answers; a conflict is named only where your text names one and there is no threat to read it from.',
+      '**Fixed: \u201cAccept all\u201d failing after a writing session.** [Jeremy] Ending a session and filing what it found could stop with **\u201cCouldn\u2019t add notes: Cannot read properties of undefined\u201d**, leaving some elements filed and the rest lost. Routing a session into a section whose board had gone missing quietly emptied the app\u2019s idea of the current section, and the button then had nothing to write into. A section with no board is now simply treated as an empty one \u2014 in the three places that had the same gap, not just the one where it showed.',
+      '**Read from what your prose narrates, not from what you might have meant.** \u201cThe Assessors were taking the ledger\u201d names both ends, and that is enough. Where your text leaves an end unsaid it stays unsaid, and where it names something that is not in your story the field is left empty rather than filled with a guess. Both ends show on the review screen before anything is written.',
+    ]},
     { v:'2026.07.20.639', date:'September 16, 2026', notes:[
       '**An imported character can arrive with a motivation.** What they want, what they stand to lose, what blocks them, and who they are doing it for \u2014 the motivation line that every character card has had, and that no imported character has ever had anything on. It shows on the review screen under **Motivation**, one removable pill per part, so you drop what is wrong before anything is written. [gap audit #10]',
       '**From your notes freely; from a manuscript only when the text says so.** A worldbuilding document stating what a character wants is you telling the app your intent, and it is taken at its word. A manuscript is evidence of what HAPPENS \u2014 so a want is carried across only where the prose states it outright, never guessed from how someone behaves. Most characters in most manuscripts yield nothing here, and nothing is exactly what they get.',
@@ -67709,6 +67861,9 @@ body:not(.eink) .ir-el.sys .ir-gen:hover{ background:var(--gold); color:var(--li
 body:not(.eink) .ir-traits-wrap{ margin-top:9px; }
 body:not(.eink) .ir-el > .ir-mot-wrap{ order:4; }
 body:not(.eink) .ir-mot-wrap{ margin-top:9px; }
+body:not(.eink) .ir-el > .ir-stk-wrap{ order:4; }
+body:not(.eink) .ir-stk-wrap{ margin-top:9px; }
+body:not(.eink) .ir-stk-wrap::before{ content:'At stake'; display:block; font-family:var(--sans); font-size:10.5px; font-weight:700; letter-spacing:.16em; text-transform:uppercase; color:#9c5f54; margin:0 0 2px; }
 body:not(.eink) .ir-mot-wrap::before{ content:'Motivation'; display:block; font-family:var(--sans); font-size:10.5px; font-weight:700; letter-spacing:.16em; text-transform:uppercase; color:#b07a2a; margin:0 0 2px; }
 body:not(.eink) .ir-traits-wrap::before{ content:'Characteristics'; display:block; font-family:var(--sans); font-size:10.5px; font-weight:700; letter-spacing:.16em; text-transform:uppercase; color:#a08a56; margin:0 0 2px; }
 body:not(.eink) .ir-traits{ display:block; }
