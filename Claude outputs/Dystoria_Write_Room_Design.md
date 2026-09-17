@@ -1,6 +1,6 @@
 # Dystoria — The Writing Room (Write-mode comfort, keys and questions)
 
-_Design doc · 2026-09-17 · Roadmap **#69** · written against `index.html` `APP_VERSION 2026.07.20.641` (v.718, md5 `724ad0da…`)._
+_Design doc · 2026-09-17 (rulings added the same day, §11) · Roadmap **#69** · written against `index.html` `APP_VERSION 2026.07.20.641` (v.718, md5 `724ad0da…`)._
 
 [Jeremy] _"Here are some ideas to improve the write mode of the app to make it a more comfortable place to hang out."_ Twelve ideas: a shortcuts drawer, a new click-selection model, paired quotes and brackets, keyboard text size, headers as structure, keyboard ink brightness and colour, a two-tone gutter, a matching drawer tab, a questions-only Refract with a right sidebar, and smaller type with a scale bar.
 
@@ -9,7 +9,7 @@ _Design doc · 2026-09-17 · Roadmap **#69** · written against `index.html` `AP
 1. **Super+H can't be used.** macOS takes ⌘H to hide the app before the page ever sees it, and Windows takes the Super key itself.
 2. **"Super+Shift+>" is the same keystroke as "Super+>".** On a keyboard you already need Shift to type `>`, so the two can't be told apart.
 3. **A single click that selects a word would make typing replace it.** Click a word to fix one letter, and the first key you press wipes the whole word. The fix is a *soft target* (§3).
-4. **Refract already exists, in Revise, with a different output.** The Write version should be the same family with a new output — questions only — not a second feature with the same name (§7).
+4. **Refract already exists, in Revise, with a different output.** The Write version is the same tool with a new output — questions only. [Jeremy] It keeps the name **Refract** for now (§7).
 
 ---
 
@@ -39,7 +39,7 @@ _Design doc · 2026-09-17 · Roadmap **#69** · written against `index.html` `AP
 - `#editor` (in a session) and `#editBody` both use `font-size: var(--dy-prose-size)`. Line height is a ratio (1.8), so it scales with the text.
 - **The scale bar:** a small slider in the full-screen header (`#fsHeader`, next to `#fsToggles`), with **A− · slider · A+** and the current size shown as a number. Clicking the number resets it to 19.
 - **⌘+ / ⌘−** (Ctrl on Windows/Linux) change the size 1px at a time and flash a small read-out: _"Text 20"_. **⌘0 resets it.** These keys normally zoom the whole browser, so the handler calls `preventDefault()` **only while a writing session is active**. Everywhere else, browser zoom works as usual.
-- **Living Page:** when it's on, the slider sets the **base size** Living Page grows and shrinks from, and the read-out says _"Living Page · base 19"_. It never fights Living Page for control.
+- **Living Page is switched off for this push** [Jeremy, §11]: its text growth and its fading of earlier text are **turned off, not deleted**. The toggle is hidden and `lpOn*` is not called, so the slider is the only thing that sets the size. _When Living Page comes back, the slider becomes the base size it grows and shrinks from._
 - **E-ink** gets the same slider, with its own default of 22.
 
 ## 2. Ink — brightness and colour from the keyboard
@@ -47,7 +47,7 @@ _Design doc · 2026-09-17 · Roadmap **#69** · written against `index.html` `AP
 **Reaction: good, with two guardrails.** Every option has to stay readable on the charcoal background, and every change has to say what it did.
 
 - **Brightness:** five steps of the ink colour, from dim to bright (about 55% → 96% lightness). **Every step is checked at ≥ 4.5:1 contrast** against the writing background, and a test asserts this so a later palette change can't quietly break it.
-- **Colour:** a short fixed list of tints: **Parchment** (the default), **Amber**, **Ash** (cool grey), **Sage**, **Rose**. Each one is built at all five brightness steps, so the two controls don't interfere with each other.
+- **Colour:** a short fixed list of tints: **Parchment** (the default), **Amber**, **Ash** (cool grey), **Sage**, **Rose** — approved as the starting five [Jeremy]. Each one is built at all five brightness steps, so the two controls don't interfere with each other.
 - **Keys.** The first keystroke below is what Jeremy asked for. The second changes because `>` already needs Shift:
   - **⌘< / ⌘>** (which you type as ⌘⇧, and ⌘⇧.) → dimmer / brighter.
   - **⌘⌥< / ⌘⌥>** → previous / next colour. _(This replaces "Super+Shift+>", which can't be told apart from ⌘>.)_
@@ -65,7 +65,7 @@ _Design doc · 2026-09-17 · Roadmap **#69** · written against `index.html` `AP
 |---|---|
 | **Click on a word** | Caret where you clicked, plus a soft target on that word (a faint gold underlay). Typing just types; the target clears when you type or move the caret with the arrow keys. Formatting shortcuts (§4) and Questions (§7) act on the target. |
 | **Click in the space between words** | Caret only, **no target.** (Jeremy's rule.) The test is whether the click lands on whitespace or a word character, using `caretPositionFromPoint`. |
-| **Double-click** | Selects the **sentence**. This is a real selection. A sentence ends at `. ! ? …` plus any closing quotes or brackets; common abbreviations (Mr., Dr., St., e.g.) don't count as endings. |
+| **Double-click** | Selects the **sentence** — **on by default** [Jeremy]. This is a real selection. A sentence ends at `. ! ? …` plus any closing quotes or brackets; common abbreviations (Mr., Dr., St., e.g.) don't count as endings. |
 | **Triple-click** | Selects the **paragraph** (the block). It's a real selection, set explicitly so every browser behaves the same. |
 | **Click the session's gutter marker** | Selects the **whole session block**. This is how Questions can work on "the entire session" without adding a fourth click. |
 
@@ -86,7 +86,7 @@ Double-clicking normally selects one word, so this changes a habit. The shortcut
 | Text size | ⌘+ / ⌘− / ⌘0 | Ctrl+ / Ctrl− / Ctrl+0 | §1 |
 | Ink brightness | ⌘< / ⌘> | Ctrl+< / Ctrl+> | §2 |
 | Ink colour | ⌘⌥< / ⌘⌥> | Ctrl+Alt+< / > | §2 |
-| Questions on the target | ⌘⌥R | Ctrl+Alt+R | §7 (✦). Plain ⌘R reloads the page, so it can't be used. |
+| Refract the target | ⌘⌥R | Ctrl+Alt+R | §7 (✦). Plain ⌘R reloads the page, so it can't be used. |
 | Toggle the right sidebar | ⌘⌥] | Ctrl+Alt+] | §6 |
 
 **"Super" means ⌘ on a Mac and Ctrl everywhere else.** Browsers never pass the Windows key to a web page.
@@ -112,14 +112,14 @@ Double-clicking normally selects one word, so this changes a habit. The shortcut
 
 - **The block you're writing in** keeps the writing charcoal. **Every other `.session-start` block and the gutter strip** are one small step lighter, about +4% lightness: a new `--dy-room-2` next to `--dy-room-1`. Only the background changes; the text stays the same.
 - **The drawer tab uses `--dy-room-1`** — the writing tone, not the chrome tone — so it reads as part of the page with a hairline edge. With the gutter on the lighter tone, the screen has **exactly two background tones.**
-- **Living Page's dimming is a separate effect.** It fades earlier *text*; this changes the *background*. Roadmap #68 says to ask before removing the dimming. **Question for Jeremy: with the two tones in place, should the dimming stay?**
+- **Living Page's dimming is off for this push** [Jeremy]. It's turned off, not deleted (§1), so the two background tones are the only way the page separates the current block from the rest. This settles the open question in roadmap #68.
 - Both themes get the tones (Ember is a little warmer). E-ink gets neither.
 
 ## 6. The right sidebar — Context · Questions · Keys
 
 **Reaction: one sidebar on the right with three tabs** is better than three separate drawers.
 
-- **Context** — the session's focus elements, goals and guides. **Today these are in the left `#focusPanel`.** Moving them means following the rule "before you delete a control, check what it was the last way into": the left panel is also where **+ Add element**, **Start**, the goal and the images are reached. **Proposal: phase 4 moves the whole panel to the right as a tab and retires `#focusTab`**, and the harness checks that every one of those controls can still be clicked (`elementFromPoint`) at 1100px wide. Until then, the left panel stays where it is.
+- **Context** — the session's focus elements, goals and guides. **Today these are in the left `#focusPanel`.** Moving them means following the rule "before you delete a control, check what it was the last way into": the left panel is also where **+ Add element**, **Start**, the goal and the images are reached. **Ruled [Jeremy]: the whole left panel moves to the right as the Context tab**, and `#focusTab` is retired. The test harness checks that every one of those controls can still be clicked (`elementFromPoint`) at 1100px wide, and the old tab's click handler opens the right-hand drawer rather than doing nothing. Until phase 4 ships, the left panel stays where it is.
 - **Questions** — the questions you've pinned (§7).
 - **Keys** — the drawer from §4.
 - The sidebar can be opened, hidden or collapsed to its tabs, and remembers its open tab per viewer. It's **hidden on phones** (≤500px), where the minimal mode already decides what's shown.
@@ -128,7 +128,7 @@ Double-clicking normally selects one word, so this changes a habit. The shortcut
 
 **Reaction: this is the strongest idea on the list, and it fits Dystoria's approach: the app points, it doesn't rewrite.** Refract in Revise already returns no replacement sentences. The Write version goes further and returns **only questions**, which fits the rule that Write is for writing. Nothing it produces can end up in the manuscript.
 
-**What it's called.** It should belong to the Refract family without being mistaken for the Revise panel. **Proposal: "Refract · Questions"** in the menu, with the panel titled **Questions**. _(Open for Jeremy — "Ask the page" is another option.)_
+**What it's called.** [Jeremy] **Just "Refract"** for now — _"until I feel it out, the name can stay the same."_ The menu and the card both say **Refract**; the sidebar tab that holds pinned questions is **Questions**. In code it's `refractQ*` / `feature:'refract-q'` so it doesn't collide with Revise's `refractPhrase`.
 
 **Input (the scope):** the real selection or soft target — a **word, sentence, paragraph, or the whole session** (from the gutter marker, §3). Unlike Revise's Refract, there's **no one-paragraph limit**, because questions don't get worse with longer input the way rewrites do. Long input is shortened with a note saying so.
 
@@ -148,6 +148,8 @@ Double-clicking normally selects one word, so this changes a habit. The shortcut
 
 **Access and cost:** it's an AI feature, so it wears the ✦, and `__aigateReport()` has to list it. **With AI off, it doesn't disappear** — the "what's missing" check still runs on its own and shows up to three plain prompts (_"The Lighthouse is in Context but not on this page yet."_). That's the no-AI part of the "code first, optional ✦ AI" pattern. It counts against the AI cap under `feature:'refract-q'`.
 
+**Pinned questions in Revise** [Jeremy]: a pinned question can be **sent to Revise as a note**. It appears as an ordinary anchored note on the passage it was asked about (the same anchored-note path Refract's "Keep both" and the Review tools already use), labelled _Refract · <voice>_. The Write copy is marked **sent**, not removed. Sending is an action, not a sync: editing the note in Revise doesn't change the pinned question, and the passage's anchor follows Revise's existing rules.
+
 **Relationship to Explore:** Explore's "Questions the story raises" works on the **whole story**. This works on **the passage you're in**. The two can share a prompt style but keep separate lists: `elementQuestions` stays Explore's, and pinned questions belong to the section.
 
 ---
@@ -156,28 +158,33 @@ Double-clicking normally selects one word, so this changes a habit. The shortcut
 
 | Phase | What | Risk | Mostly |
 |---|---|---|---|
-| **1 · The room** | §1 size (19 default, shared variable, slider, ⌘± / ⌘0) · §5 two tones + tab colour · §2 ink brightness and colour | Low | CSS and a key handler. Visible from the first session. |
+| **1 · The room** | **Living Page off (hidden, not deleted)** · §1 size (19 default, shared variable, slider, ⌘± / ⌘0) · §5 two tones + tab colour · §2 ink brightness and colour | Low | CSS and a key handler. Visible from the first session. |
 | **2 · The keys** | §4 key handler + Keys drawer (a first version of the right sidebar) · paired characters · `#`/`##` and ⌘⌥1/2 (Section **through `__planSectionSplit`**) | Medium: the section split | One keydown handler for the writing session. |
 | **3 · The pointer** | §3 soft target, sentence double-click, paragraph triple-click, gutter-marker session selection, the classic-mode setting | Medium: habits and edge cases | Highlight API plus a sentence splitter. |
-| **4 · The questions** | §7 Refract · Questions · §6 the full right sidebar (Context moved from the left, Questions tab) | Medium: moving Context | AI prompt + the "missing" check + storage in `npNotes`. |
+| **4 · The questions** | §7 Refract (questions) · §6 the full right sidebar (Context moved from the left, Questions tab) · send a pinned question to Revise as a note | Medium: moving Context | AI prompt + the "missing" check + storage in `npNotes`. |
 
 Phases 1–3 can ship without AI. Phase 4 depends on phase 3's targets (a real selection works without it, but the "whole session" scope needs the gutter-marker selection).
 
 ## 9. How each phase gets checked
 
-- **Size:** the computed `font-size` of `#editor` in a session equals `#editBody`'s at the default and after ⌘+; ⌘+ calls `preventDefault` **only** during a session; Living Page and the slider agree.
+- **Size:** the computed `font-size` of `#editor` in a session equals `#editBody`'s at the default and after ⌘+; ⌘+ calls `preventDefault` **only** during a session; with Living Page off, typing fast or pausing never changes the size and earlier blocks never fade, and a story saved with Living Page on opens with it off.
 - **Ink:** every tint × step clears **≥ 4.5:1** against `--dy-room-1` (an automated check that has been seen to fail at least once).
 - **Clicks:** clicking a word and then typing a letter leaves the word **intact, plus the letter**. That's the data-loss check, and the most important assertion in this item. Clicking whitespace creates no target. Double-click selects exactly one sentence, including `Mr. Hale said "Go." Then…`. Triple-click selects the block.
 - **Keys:** ⌘⌥1 splits the section, and a stake, a plot card and a bubble seeded in the second half **move with it** (checked against a store the split is already known to carry). `## ` + Backspace brings back the typed characters. `don't` gets no paired quote. A selection is wrapped, not replaced.
-- **Questions:** the prompt string contains the passage, the facts, the goal, the voice and the missing list. An "absent" question names an element on that list. With AI off, the card still shows the plain prompts. After a section insert, pinned questions stay with their section.
+- **Refract:** a pinned question sent to Revise shows up there as a note on the right passage, and the Write copy reads *sent*. The prompt string contains the passage, the facts, the goal, the voice and the missing list. An "absent" question names an element on that list. With AI off, the card still shows the plain prompts. After a section insert, pinned questions stay with their section.
 - **Photos** at 1440 and 1100 wide, in Ember and Classic, with the sidebar open and closed. **Take them with the hover and target states actually triggered.**
 - **Help guide:** every key and every new control gets its line in `DYSTORIA_GUIDE` in the same session it ships.
 
-## 10. Open questions for Jeremy
+## 10. Still open
 
-1. **Living Page dimming** — keep it now that the gutter has two tones? (#68 says to ask.)
-2. **Name** — "Refract · Questions", or something of its own ("Ask the page")?
-3. **Moving Context to the right** — move the whole left Focus panel (proposal), or leave it on the left and show a read-only copy on the right?
-4. **Double-click = sentence** — on by default (proposal), or opt-in?
-5. **Ink tints** — are Parchment · Amber · Ash · Sage · Rose the right five, or do you have particular colours in mind?
-6. **Pinned questions** — only visible in Write, or also shown in Revise next to the passage they were asked about?
+- Should Living Page come back once the groundwork is done, and in what form? That's for after this push; nothing here removes it.
+- Whether Refract in Write keeps its name after you've used it for a while.
+
+## 11. Rulings — Jeremy, 2026-09-17
+
+1. **Living Page:** its text growth and its fading of earlier text are **turned off for this push — not deleted, just not a feature until the groundwork is done.** (Settles roadmap #68's open question for now.)
+2. **Name:** the Write tool is **just "Refract"** for now.
+3. **Context:** the left Context panel **moves to the right, into the drawer.**
+4. **Double-click selects a sentence by default.**
+5. **Ink colours:** Parchment · Amber · Ash · Sage · Rose are the starting five.
+6. **Pinned questions can be added to Revise as notes.**
