@@ -31,16 +31,26 @@ _Design doc · 2026-09-17 (rulings added the same day, §11) · Roadmap **#69** 
 
 ---
 
-## 1. Text size — match Revise, add a scale bar, ⌘+ / ⌘−
+## 1. Text size and view zoom — match Revise, then zoom the view
 
-**Reaction: yes, and it should be one setting that both Write and Revise read.** Otherwise the two sizes drift apart again the first time one of them is changed ("two copies of a decision will disagree").
+**Two separate things** [Jeremy, 2026-09-17: _"the size slider should be more of a zoom than something that affects the actual text size… it should scale up all the different text sizes relatively, as a view."_]:
 
-- **One value: `--dy-prose-size`**, default **19px**, range **15–30px**, stored per viewer at `localStorage['dystoria.proseSize']`. It's a display preference, so it doesn't go in `state.session`, for the same reason `BUB_AT` doesn't.
-- `#editor` (in a session) and `#editBody` both use `font-size: var(--dy-prose-size)`. Line height is a ratio (1.8), so it scales with the text.
-- **The scale bar:** a small slider in the full-screen header (`#fsHeader`, next to `#fsToggles`), with **A− · slider · A+** and the current size shown as a number. Clicking the number resets it to 19.
-- **⌘+ / ⌘−** (Ctrl on Windows/Linux) change the size 1px at a time and flash a small read-out: _"Text 20"_. **⌘0 resets it.** These keys normally zoom the whole browser, so the handler calls `preventDefault()` **only while a writing session is active**. Everywhere else, browser zoom works as usual.
-- **Living Page is switched off for this push** [Jeremy, §11]: its text growth and its fading of earlier text are **turned off, not deleted**. The toggle is hidden and `lpOn*` is not called, so the slider is the only thing that sets the size. _When Living Page comes back, the slider becomes the base size it grows and shrinks from._
-- **E-ink** gets the same slider, with its own default of 22.
+1. **The base size is fixed:** in-session prose goes from 22px to **19px**, matching Revise (`#editBody`). This is a one-time CSS change, not a setting.
+2. **The slider is a view zoom.** It enlarges the whole page proportionally — prose, section titles (`h3`, 26px), scene breaks (`.scene-mark`, 26px), the section diamond, the session markers in the gutter and the column width — the way a magnifier would. **It never changes the text's own formatting:** nothing is written into the prose, the manuscript and exports are unaffected, and a heading stays exactly 26/19 × the body size at every zoom level.
+
+**How it's built — CSS `zoom` on the page column, not a font-size variable.** This matters because of what's already in the prose: the toolbar's **Size** menu (`#edSize` → `edFmt('size')`) writes **fixed inline pixel sizes** (14 / 18.5 / 24 / 32px) into the text. A font-size variable or `em` units would scale the body but leave those spans at their fixed size, so the relative sizes would drift apart as you zoomed. `zoom` scales everything inside the column, inline pixels included, so every size stays in proportion.
+- Applied to the writing column (`#editor` in a session, `#editBody` in Revise), **not** to the header, drawers or dialogs, so the controls stay where they are.
+- **One value: `--dy-view-zoom`**, default **100%**, range **70–180%**, steps of 10%. It's stored per viewer at `localStorage['dystoria.viewZoom']`. It's a display preference, so it doesn't go in `state.session` (the same reason `BUB_AT` doesn't). **Write and Revise share it**, so a passage looks the same size when you switch modes.
+- **⚠ Check pointer maths under zoom.** Current Chrome and Safari (and Firefox 126+) report positions correctly inside a zoomed element, but the soft target (`caretPositionFromPoint`, §3), the Highlight ranges, the gutter `.sess-focus` buttons and any `getBoundingClientRect`-positioned popover (the Refract card, §7) must be tested at 70% and 180%. **If a browser gets this wrong, the fallback** is converting the editor's CSS sizes to `em` and making `edFmt('size')` write `em` (14/19 → `.74em`, etc.), with a one-time conversion for existing spans when a story loads. That's more work, which is why `zoom` is tried first.
+
+**Controls:**
+- **The zoom bar:** a small slider in the full-screen header (`#fsHeader`, next to `#fsToggles`), with **− · slider · +** and the zoom shown as a percentage. Clicking the number resets it to 100%. The same bar appears in Revise's header.
+- **⌘+ / ⌘−** (Ctrl on Windows/Linux) step 10% and flash _"View 110%"_; **⌘0 resets it.** These keys normally zoom the whole browser, so the handler calls `preventDefault()` **only while Write or Revise is showing prose**. Everywhere else, browser zoom works as usual. The two zooms stack, which is expected.
+- **Scroll position is kept:** when you zoom, the paragraph at the caret stays where it was on screen.
+
+**Living Page is switched off for this push** [Jeremy, §11]: its text growth and its fading of earlier text are **turned off, not deleted**. The toggle is hidden and `lpOn*` is not called. _When Living Page comes back, it should change the zoom, not the text size, so both features work the same way._
+
+**E-ink** keeps its own base size (22px) and uses the same zoom bar.
 
 ## 2. Ink — brightness and colour from the keyboard
 
@@ -83,7 +93,7 @@ Double-clicking normally selects one word, so this changes a habit. The shortcut
 | Bold · Italic · Underline | ⌘B · ⌘I · ⌘U | Ctrl+B/I/U | Uses the app's existing `edFmt`. |
 | New **Section** (main header) | ⌘⌥1 | Ctrl+Alt+1 | ⌘H can't work (see the top of this doc). Also: type `# ` at the start of a line. |
 | New **Scene** (smaller header) | ⌘⌥2 | Ctrl+Alt+2 | Also: type `## ` at the start of a line. |
-| Text size | ⌘+ / ⌘− / ⌘0 | Ctrl+ / Ctrl− / Ctrl+0 | §1 |
+| View zoom | ⌘+ / ⌘− / ⌘0 | Ctrl+ / Ctrl− / Ctrl+0 | §1 — scales the view, not the text |
 | Ink brightness | ⌘< / ⌘> | Ctrl+< / Ctrl+> | §2 |
 | Ink colour | ⌘⌥< / ⌘⌥> | Ctrl+Alt+< / > | §2 |
 | Refract the target | ⌘⌥R | Ctrl+Alt+R | §7 (✦). Plain ⌘R reloads the page, so it can't be used. |
@@ -158,7 +168,7 @@ Double-clicking normally selects one word, so this changes a habit. The shortcut
 
 | Phase | What | Risk | Mostly |
 |---|---|---|---|
-| **1 · The room** | **Living Page off (hidden, not deleted)** · §1 size (19 default, shared variable, slider, ⌘± / ⌘0) · §5 two tones + tab colour · §2 ink brightness and colour | Low | CSS and a key handler. Visible from the first session. |
+| **1 · The room** | **Living Page off (hidden, not deleted)** · §1 base 19px + **view zoom** (CSS `zoom` on the column, shared by Write and Revise, bar, ⌘± / ⌘0) · §5 two tones + tab colour · §2 ink brightness and colour | Low | CSS and a key handler. Visible from the first session. |
 | **2 · The keys** | §4 key handler + Keys drawer (a first version of the right sidebar) · paired characters · `#`/`##` and ⌘⌥1/2 (Section **through `__planSectionSplit`**) | Medium: the section split | One keydown handler for the writing session. |
 | **3 · The pointer** | §3 soft target, sentence double-click, paragraph triple-click, gutter-marker session selection, the classic-mode setting | Medium: habits and edge cases | Highlight API plus a sentence splitter. |
 | **4 · The questions** | §7 Refract (questions) · §6 the full right sidebar (Context moved from the left, Questions tab) · send a pinned question to Revise as a note | Medium: moving Context | AI prompt + the "missing" check + storage in `npNotes`. |
@@ -167,7 +177,7 @@ Phases 1–3 can ship without AI. Phase 4 depends on phase 3's targets (a real s
 
 ## 9. How each phase gets checked
 
-- **Size:** the computed `font-size` of `#editor` in a session equals `#editBody`'s at the default and after ⌘+; ⌘+ calls `preventDefault` **only** during a session; with Living Page off, typing fast or pausing never changes the size and earlier blocks never fade, and a story saved with Living Page on opens with it off.
+- **Size and zoom:** at 100%, in-session `#editor` prose computes to the same 19px as `#editBody`. **At 150%, every size in the column scales by exactly 1.5 relative to the others** — body, `h3`, `.scene-mark`, and a span set to *Huge* through the Size menu — and **the saved HTML is byte-identical before and after zooming** (zoom writes nothing). The soft target, highlights, gutter buttons and the Refract card land on the right word at 70% and 180%. ⌘+ calls `preventDefault` **only** while prose is showing. With Living Page off, typing speed never changes the size and earlier blocks never fade, and a story saved with Living Page on opens with it off.
 - **Ink:** every tint × step clears **≥ 4.5:1** against `--dy-room-1` (an automated check that has been seen to fail at least once).
 - **Clicks:** clicking a word and then typing a letter leaves the word **intact, plus the letter**. That's the data-loss check, and the most important assertion in this item. Clicking whitespace creates no target. Double-click selects exactly one sentence, including `Mr. Hale said "Go." Then…`. Triple-click selects the block.
 - **Keys:** ⌘⌥1 splits the section, and a stake, a plot card and a bubble seeded in the second half **move with it** (checked against a store the split is already known to carry). `## ` + Backspace brings back the typed characters. `don't` gets no paired quote. A selection is wrapped, not replaced.
@@ -181,6 +191,8 @@ Phases 1–3 can ship without AI. Phase 4 depends on phase 3's targets (a real s
 - Whether Refract in Write keeps its name after you've used it for a while.
 
 ## 11. Rulings — Jeremy, 2026-09-17
+
+0. **The slider is a view zoom, not a text size** — it scales every size in the page proportionally and changes nothing in the text itself (§1).
 
 1. **Living Page:** its text growth and its fading of earlier text are **turned off for this push — not deleted, just not a feature until the groundwork is done.** (Settles roadmap #68's open question for now.)
 2. **Name:** the Write tool is **just "Refract"** for now.
