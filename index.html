@@ -10416,6 +10416,30 @@ function goalContext(){
    own material and never invents beyond it. Reuses the same wiki serializers the Review passes use,
    so grounding is consistent everywhere. The backbone for structure-aware AI (grounds Refract today;
    R6 continuity / R9 series / R11 Arcs build on it). Exposed as window.storyFacts. */
+/* v.721 [Jeremy] — the STORY GLOSSARY. A definition that belongs to the work rather than to English.
+   Keyed by the BARE word (the same normalisation the Define card looks up with), so "Assessors", "assessors"
+   and "assessors'" all reach one entry; the word is stored as the writer typed it for display. Story-scoped by
+   Jeremy's decision: this lives in `state.session`, so it travels with the story, exports with it, and a
+   Coruscan sense of a word cannot leak into an unrelated story. */
+function glossBare(w){ return String(w == null ? '' : w).toLowerCase().replace(/[\u2019]/g, "'").replace(/[^a-z'-]/g, '').replace(/^['-]+|['-]+$/g, ''); }
+function glossAll(){ try{ return (state.session && state.session.glossary) || {}; }catch(e){ return {}; } }
+function glossGet(w){ var k = glossBare(w); return k ? (glossAll()[k] || null) : null; }
+function glossSet(w, def){
+  var k = glossBare(w); if (!k) return null;
+  var d = String(def == null ? '' : def).trim();
+  if (typeof ensureSession === 'function') ensureSession();
+  if (!state.session) return null;
+  state.session.glossary = state.session.glossary || {};
+  if (!d){ delete state.session.glossary[k]; }
+  else state.session.glossary[k] = { word: String(w || '').trim() || k, def: d.slice(0, 600), at: Date.now() };
+  if (typeof scheduleAutosave === 'function') try{ scheduleAutosave(); }catch(e){}
+  return state.session.glossary[k] || null;
+}
+function glossList(){
+  var g = glossAll();
+  return Object.keys(g).map(function(k){ return g[k]; }).filter(Boolean)
+    .sort(function(a, b){ return String(a.word || '').toLowerCase() < String(b.word || '').toLowerCase() ? -1 : 1; });
+}
 function storyFacts(opts){
   opts = opts || {};
   var maxEls = opts.maxEls || 40, noteCap = opts.noteCap || 160, maxChars = opts.maxChars || 6000;
@@ -10429,6 +10453,16 @@ function storyFacts(opts){
     if(gc) out.push(gc);
     // Author-defined plot (Main Plot + sub-plots) — guidance for the AI, never a forced structure.
     try{ if(typeof window!=='undefined' && window.__planPlotFacts){ var _pf=window.__planPlotFacts(); if(_pf) out.push('Plot (author-defined — track progress against it; do not impose structure):\n'+_pf); } }catch(e){}
+    /* v.721 — the point of the whole feature. `storyFacts` is what Refract, Continuity, Craft, the session
+       passes and the wiki rollups all read, so a word the writer has REDEFINED reached every one of them as
+       its ordinary English self — and the app quietly pulled the prose back toward the sense the writer is
+       writing against. It goes high in the block, before the elements, because it changes how everything
+       below it should be read. */
+    try{
+      var _gl = (typeof glossList === 'function') ? glossList() : [];
+      if (_gl.length) out.push('Words this story uses in its own sense (the author\u2019s definitions \u2014 prefer these over the ordinary English meaning):\n'
+        + _gl.slice(0, 60).map(function(g){ return '- ' + g.word + ': ' + strip(g.def); }).join('\n'));
+    }catch(e){}
     // section order
     try{
       var frames = (state && state.frames) || [];
@@ -37742,6 +37776,14 @@ function wikiRenderWoven(body, els, hasDoc){
     });
     put(rows.join('\n'), 'det');
   });
+  /* v.721 — the writer's own vocabulary as a chapter of its own. Placed after the storylines because it is
+     the same kind of thing: not an element of the world but a fact about how the work is written. */
+  { var _gl = (typeof glossList === 'function') ? glossList() : [];
+    if (_gl.length){
+      put('## Glossary', 'nav');
+      put('*Words this story uses in its own sense. Your definitions, not the dictionary\u2019s.*', 'det');
+      _gl.forEach(function(g){ put('### ' + g.word, 'nav'); put(g.def, 'det'); });
+    } }
   if (CH.missing && CH.missing.length) put('*Not shown here: ' + CH.missing.join('; ') + '.*', 'det');
 
   /* Questions and the Suggested Reading List close the document as their own sections —
@@ -37871,6 +37913,14 @@ function wikiComputedMarkdown(opts){
     else gp.members.forEach(function(m){ L.push('- ' + m.label + (m.missing ? '  (no longer in the story)' : '')); });
     L.push('');
   });
+
+  // ---- Glossary (v.721) — the author's own senses, before the storylines that use them ----
+  { var _glx = (typeof glossList === 'function') ? glossList() : [];
+    if (_glx.length){
+      L.push('## Glossary', '');
+      L.push('*Words this story uses in its own sense. The author\u2019s definitions, not the dictionary\u2019s.*', '');
+      _glx.forEach(function(g){ L.push('### ' + g.word, '', g.def, ''); });
+    } }
 
   // ---- Threads & arcs ----
   L.push('## Threads & arcs', '');
@@ -47553,6 +47603,11 @@ document.addEventListener('DOMContentLoaded', init);
       (Array.isArray(data.traits)?data.traits:[]).forEach(t=>{ if(t && t.word){ const sub=(CO_DIMS.indexOf(t.sub)>=0)?t.sub:'Adjective'; slots.push({ sub, word:String(t.word).trim() }); } });
       var _sn={}; CO.slots=slots.filter(function(s){ var k=(s.sub||'')+'|'+String(s.word||'').trim().toLowerCase(); if(_sn[k]) return false; _sn[k]=1; return true; }); closeDescPrompt(); openConceptCreator({ keep:true });   // drop exact duplicates
     }
+    /* v.721 — `CO` is closure-private and `openConceptCreator({keep:1})` already knows how to open on a
+       pre-filled record, so promoting a glossed word needs an adapter, not a second creator. Same shape as
+       v.716's `__motWrite`: take what the caller has (a word and a definition), hand it to the door that
+       exists. Nothing is created until the writer presses Create in the creator itself. */
+    window.__conceptFrom=function(name, desc){ try{ CO.name=String(name||'').trim(); CO.desc=String(desc||'').trim(); CO.complexity=0; openConceptCreator({keep:true}); return true; }catch(e){ return false; } };
     window.openConceptChooser=openConceptChooser; window.openConceptCreator=openConceptCreator; window.openConceptByDesc=openConceptByDesc; window.coFromDescription=coApplyDescription;
     function openObstaclePicker(i, x, y){
       const w=_motWord(i); if(!w) return;
@@ -56813,9 +56868,14 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.643';
+  var APP_VERSION = '2026.07.20.644';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.644', date:'September 17, 2026', notes:[
+      '**Define what a word means in YOUR story.** [Jeremy] The Define card read you Webster\u2019s 1913 and how common the word is \u2014 both facts about English, which is exactly the wrong answer when your book has quietly moved a word. Now every word takes **your own definition**, kept beside the dictionary\u2019s rather than over it, so the drift between the two stays visible \u2014 and a word the book has no entry for stops being a dead end.',
+      '**And every ✦ pass reads your sense first.** A glossed word joins your story\u2019s facts, so Refract, the continuity and craft reviews, the session passes and the wiki summaries all know what it means to you. That is the part that matters: until now the app read a redefined word as its ordinary self and quietly pulled your prose back toward the meaning you were writing AGAINST. Your glossary also becomes a chapter in the story wiki and its export.',
+      '**A defined word can become a Concept \u2014 if you say so.** A line under your definition opens the concept creator with the word and your text already filled in. Nothing is created until you press Create: most words worth defining are ordinary words used oddly, not story terms, and the map should not fill up with vocabulary. Definitions belong to one story \u2014 they travel and export with it, and never reach another.',
+    ]},
     { v:'2026.07.20.643', date:'September 17, 2026', notes:[
       '**The Refract panel is flush against the edge at every width \u2014 and the Organize tab gets out of its way.** [Jeremy] The last version kept a small margin in the one range of window widths where the **Organize** tab is on screen, so the card could not slide under it. That range is exactly where there is least room to spare, and it made the panel sit differently depending on how wide your window happened to be. Now the panel always opens flush to the edge, and the tab simply hides while it is open \u2014 the same thing that already happens when you open the Organize drawer itself. The tab is back the moment you close the panel.',
     ]},
@@ -71426,6 +71486,18 @@ body.eink #wkNavBody .wkn-sec.on, body.eink #wkNavBody .wkn-item.on{ background:
    var(--ink) directly gets the LIGHT theme's near-black on it — which is how the
    definition came out invisible the first time it was rendered in Ember. One
    place to redefine, and the whole card follows. */
+/* v.721 — the story gloss. Deliberately quieter than the 1913 entry above it: this is the writer's own
+   note, not a second authority, and the card should not become two dictionaries arguing. Colours come from the
+   card's OWN `--wb-*` variables, for the reason its comment above gives. */
+#wbCard .wb-gl-h{font-family:var(--sans); font-size:10.5px; font-weight:700; letter-spacing:.14em; text-transform:uppercase; color:var(--wb-faint); margin:14px 0 6px}
+#wbCard .wb-gl-def{font-family:var(--serif); font-size:14px; line-height:1.55; color:var(--wb-ink)}
+#wbCard .wb-gl-ta{width:100%; box-sizing:border-box; font-family:var(--serif); font-size:13.5px; line-height:1.5;
+  padding:7px 9px; border:1px solid var(--wb-line); border-radius:7px; background:transparent; color:var(--wb-ink); resize:vertical}
+#wbCard .wb-gl-row{display:flex; flex-wrap:wrap; gap:6px; margin-top:7px}
+#wbCard .wb-gl-mini{font-family:var(--sans); font-size:10.5px; font-weight:700; letter-spacing:.1em; text-transform:uppercase;
+  padding:4px 10px; border:1px solid var(--wb-line); border-radius:999px; background:transparent; color:var(--wb-soft); cursor:pointer}
+#wbCard .wb-gl-mini:hover{color:var(--wb-ink); border-color:var(--wb-faint)}
+#wbCard .wb-gl-note{font-family:var(--serif); font-style:italic; font-size:11.5px; color:var(--wb-faint); margin-top:7px; line-height:1.5}
 #wbCard{
   --wb-paper:var(--paper); --wb-ink:var(--ink); --wb-soft:var(--ink-soft);
   --wb-faint:var(--ink-faint); --wb-line:var(--line); --wb-line2:var(--line-soft); --wb-bg2:var(--bg2);
@@ -71877,12 +71949,81 @@ body.eink #mapTextBtn.in-head{ color:#000; border:2px dashed #000; }
       } else {
         html += '<div class="wb-empty">No entry in the 1913 dictionary. It may be newer than the book, or a name, or a form the book files elsewhere.</div>';
       }
+      html += '<div class="wb-gloss"></div>';   /* v.721 */
       html += '<div class="wb-ask"></div>';
       body.innerHTML = html;
+      mountGloss(body.querySelector('.wb-gloss'), word, !!hit, anchorRect);
       mountAsk(body.querySelector('.wb-ask'), hit ? hit.word : w, hit);
       if (anchorRect) place(c, anchorRect);
     });
   };
+
+  /* v.721 [Jeremy] — "if the word has no definition, it would be cool to let the user add a definition. and
+     if it already has one, the user could add their own definition which could become part of the story facts."
+
+     The gloss sits BESIDE the 1913 sense rather than over it, because the gap between them is usually the thing
+     the writer is doing: a speculative story earns its strangeness by moving a word a little, and seeing both
+     senses at once is how you tell how far it has moved. Where the book has no entry at all, this is simply
+     the definition — and the empty state says so instead of leaving the card with nothing to offer.
+
+     Promotion is OFFERED and never taken (Jeremy's call): a saved gloss carries one line to make the word a
+     Concept, opening the app's own creator pre-filled. Most glossed words are ordinary words used oddly, not
+     story terms, and minting them unasked would fill the map with vocabulary. */
+  function mountGloss(slot, word, hasEntry, anchorRect){
+    if (!slot || typeof glossGet !== 'function') return;
+    var render = function(){
+      slot.innerHTML = '';
+      var cur = glossGet(word);
+      var h = document.createElement('div'); h.className = 'wb-gl-h';
+      h.textContent = hasEntry ? 'In this story' : 'No entry \u2014 give it one';
+      slot.appendChild(h);
+
+      if (cur && !slot._editing){
+        var p = document.createElement('div'); p.className = 'wb-gl-def'; p.textContent = cur.def; slot.appendChild(p);
+        var row = document.createElement('div'); row.className = 'wb-gl-row';
+        var ed = document.createElement('button'); ed.type = 'button'; ed.className = 'wb-gl-mini'; ed.textContent = 'Edit';
+        ed.addEventListener('click', function(e){ e.stopPropagation(); slot._editing = 1; render(); });
+        var rm = document.createElement('button'); rm.type = 'button'; rm.className = 'wb-gl-mini'; rm.textContent = 'Remove';
+        rm.addEventListener('click', function(e){ e.stopPropagation(); glossSet(word, ''); slot._editing = 0; render(); });
+        row.appendChild(ed); row.appendChild(rm);
+        /* the offer, not the act */
+        if (typeof window.__conceptFrom === 'function'){
+          var pr = document.createElement('button'); pr.type = 'button'; pr.className = 'wb-gl-mini wb-gl-promote';
+          pr.textContent = 'Make this a Concept';
+          pr.title = 'Opens the concept creator with this word and your definition already filled in \u2014 nothing is created until you say so';
+          pr.addEventListener('click', function(e){ e.stopPropagation();
+            try{ WB.close(); }catch(_){}
+            try{ window.__conceptFrom(cur.word || word, cur.def); }catch(_){}
+          });
+          row.appendChild(pr);
+        }
+        slot.appendChild(row);
+        var note = document.createElement('div'); note.className = 'wb-gl-note';
+        note.textContent = hasEntry ? 'Your sense, kept beside the dictionary\u2019s. Every ✦ pass reads yours first.'
+                                    : 'Every ✦ pass reads this instead of guessing.';
+        slot.appendChild(note);
+        return;
+      }
+
+      var ta = document.createElement('textarea'); ta.className = 'wb-gl-ta'; ta.rows = 3;
+      ta.placeholder = hasEntry ? 'What it means in this story\u2026' : 'What this word means in this story\u2026';
+      ta.value = cur ? cur.def : '';
+      ta.addEventListener('mousedown', function(e){ e.stopPropagation(); });
+      slot.appendChild(ta);
+      var row2 = document.createElement('div'); row2.className = 'wb-gl-row';
+      var sv = document.createElement('button'); sv.type = 'button'; sv.className = 'wb-gl-mini wb-gl-save'; sv.textContent = 'Save';
+      sv.addEventListener('click', function(e){ e.stopPropagation(); glossSet(word, ta.value); slot._editing = 0; render(); });
+      row2.appendChild(sv);
+      if (cur){ var cx = document.createElement('button'); cx.type = 'button'; cx.className = 'wb-gl-mini'; cx.textContent = 'Cancel';
+        cx.addEventListener('click', function(e){ e.stopPropagation(); slot._editing = 0; render(); }); row2.appendChild(cx); }
+      slot.appendChild(row2);
+      var n2 = document.createElement('div'); n2.className = 'wb-gl-note';
+      n2.textContent = 'Kept with this story, not with the language \u2014 it travels and exports with the story, and never reaches another one.';
+      slot.appendChild(n2);
+    };
+    if (!glossGet(word)) slot._editing = 0;
+    render();
+  }
 
   /* The optional ✦ pass. Webster's is 113 years old and occasionally says
      something the language has since stopped meaning; this is the only part that
