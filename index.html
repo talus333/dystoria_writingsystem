@@ -1018,7 +1018,18 @@
      panel is flush at EVERY width, and the Organize tab hides while the panel is open
      (the rule below). The z-order is untouched — the drawer and its tab still sit above
      this panel whenever the tab is showing at all. */
-  #aiSugPanel{position:absolute; top:0; left:max(0px, calc(50% - 656px)); right:auto; height:100%; width:272px;
+  /* v.722 [Jeremy] — "when really wide the refract hugs the right side of the gutter and separates from the
+     left side. I'd like it to stay on the left, not the right" / "if it's easy to make it space the full gutter
+     and expand and shrink in real time as you scale a window, that would be good."
+
+     It was anchored to the PROSE COLUMN, not to the window: `left: calc(50% - 656px)` with a fixed 272px width
+     puts its RIGHT edge on the column at `50% - 384px`, so the wider the window, the further right it sat and
+     the more empty gutter opened to its left. Now the left edge is the window's and the WIDTH takes the gutter:
+     `max(272px, calc(50% - 384px))`, so its right edge still meets the prose exactly and its left never leaves
+     the edge. Capped at 560px — the full gutter on an ultrawide is nearly 900px, which is a page, not a panel;
+     that number is the only thing to change if it should fill everything. All of it is plain CSS, so it grows
+     and shrinks live while the window is dragged: no listener, nothing to fall out of sync. */
+  #aiSugPanel{position:absolute; top:0; left:0; right:auto; height:100%; width:max(272px, calc(50% - 384px));
     overflow:hidden; background:var(--paper); display:none; z-index:40; box-shadow:14px 0 30px -22px rgba(60,45,20,.45)}
   #editMode.show-aisug #aiSugPanel{display:block}
   /* v.720 [Jeremy] — "even when the left tab is there the refract should open touching the left side. just
@@ -13995,9 +14006,12 @@ async function editStageName(k){
   if (!state.frames[k]) return;
   const plotW = findPlotWord();
   const stages = plotW ? PLOT_STAGES[plotW.word] : null;
+  /* v.722 — the rename dialog's default: the section's own name if it has one, else the stage the writer
+     placed it on, else nothing. It no longer offers a stage nobody chose as though it were already true. */
+  const _stK = (typeof framePlotStageIdx === 'function') ? framePlotStageIdx(state.frames[k], k) : null;
   const cur = (state.frames[k].stageName != null && state.frames[k].stageName !== '')
     ? state.frames[k].stageName
-    : ((stages && stages[frameStage(state.frames[k], k)]) || '');
+    : ((stages && _stK != null && stages[Math.min(_stK, stages.length - 1)]) || '');
   const g = await sitePrompt('Name this stage', cur);
   if (g === null) return;
   const nm = g.trim();
@@ -14170,6 +14184,21 @@ function findPlotWord(){
 }
 function frameStage(fr, k){ return (fr && fr.stage != null) ? fr.stage : k; }
 function framePlotName(fr){ return (fr && fr.plotWord) || (findPlotWord() ? findPlotWord().word : null); }   // which plot this section belongs to (multi-plot); legacy → the single plot
+/* v.722 — audit #7. `frameStage` means "index into this plot's stage list", and its fallback for a frame
+   with no stored stage was the section's own index. Every reader then clamps with `Math.min(st, len - 1)`, so
+   a story longer than its plot gave every section past the last stage THE LAST STAGE. Measured on nine
+   chapters and a five-stage plot: five chapters in a row reading "The Monster Falls"; on a thirty-chapter
+   novel, twenty-six of them.
+
+   [Jeremy] "stages should not be applied on import, and the plot creation should be very light. this is
+   something that a writer needs to work out themselves for the most part."
+
+   So the answer is not a better guess. A section nobody has PLACED on a stage claims no stage at all, and the
+   readers below show nothing for it. Which stage a chapter is belongs to the writer — the same rule drawn at
+   v.711 and v.712 for the narrative frame, in a new place. A section with an explicit `stage` is untouched. */
+function framePlotStageIdx(fr, k){
+  return (fr && fr.stage != null) ? fr.stage : null;   // null = the writer has not placed this one
+}
 function framePlotStages(fr){ const n = framePlotName(fr); return (n && typeof PLOT_STAGES !== 'undefined' && PLOT_STAGES[n]) || null; }
 /* v.664 · #48 — one pruner: drop the words a predicate names, and the rels that hang off them,
    remapping every index that survives. Events (below) and zones (`pruneZonesFromCopy`) both use it. */
@@ -25291,8 +25320,10 @@ function renderWriteFrame(){
   });
   const plotW = findPlotWord();
   const stages = plotW ? PLOT_STAGES[plotW.word] : null;
-  if (stages){
-    const st = Math.min(frameStage(state.frames[state.frameIdx], state.frameIdx || 0), stages.length - 1);
+  /* v.722 — the pill appears only for a section the writer has actually placed on a stage. */
+  const _stIdx = (typeof framePlotStageIdx === 'function') ? framePlotStageIdx(state.frames[state.frameIdx], state.frameIdx || 0) : null;
+  if (stages && _stIdx != null){
+    const st = Math.min(_stIdx, stages.length - 1);
     const el = document.createElement('span');
     el.className = 'wf-stage';
     const pn = document.createElement('span');
@@ -31547,7 +31578,11 @@ async function confirmImport(){
       // a section's map holds ONLY what its own prose mentions — imported elements don't auto-carry forward
       prompt.words = (prompt.words || []).filter(w => !(w.role === 'rel' || w.cat === 'concept' || (MAPCAT_I[w.cat] && (w.role === 'being' || w.role === 'word'))));
       prompt.links = []; prompt.removedLinks = [];
-      state.frames.push({ gap: 'later', prompt: prompt, stage: absIdx, stageName: secs[si].title || '' });
+      /* v.722 [Jeremy] — "stages should not be applied on import". `stage: absIdx` wrote a PLOT-STAGE ordinal
+         from a SECTION index: a number no manuscript states, which also stopped matching the moment a writer
+         inserted or reordered a section. `stageName` — the chapter's real title — is the fact the importer
+         genuinely reads, and it still writes that. The plot is the writer's to work out. */
+      state.frames.push({ gap: 'later', prompt: prompt, stageName: secs[si].title || '' });
       appendDivider(absIdx, secs[si].title);
       lockImportedSession(appendImportProse(ed, secs[si].body), absIdx);   // each section's imported prose = one complete (locked) session
     }
@@ -32720,8 +32755,11 @@ function wikiCatName(cat){ const c = getCat(cat); return c ? c.name : cat; }
 function plotStageName(fi){
   const fr = (state.frames || [])[fi]; if (!fr) return '';
   const stages = (typeof framePlotStages === 'function') ? framePlotStages(fr) : null; if (!stages) return '';
-  const st = Math.min(typeof frameStage === 'function' ? frameStage(fr, fi) : fi, stages.length - 1);
-  return stages[st] || '';
+  /* v.722 — was `frameStage(fr, fi)`, whose fallback is the section index, clamped to the last stage: that is
+     how five chapters in a row came out named after the climax. An unplaced section now says nothing. */
+  const st = (typeof framePlotStageIdx === 'function') ? framePlotStageIdx(fr, fi) : null;
+  if (st == null) return '';
+  return stages[Math.min(st, stages.length - 1)] || '';
 }
 // "Section N" with the section's name and/or events — never "timeframe"
 function wikiSectionLabel(fi){
@@ -56868,9 +56906,14 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.644';
+  var APP_VERSION = '2026.07.20.645';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.645', date:'September 17, 2026', notes:[
+      '**A section only shows a plot stage once YOU have put it on one.** [Jeremy] Before, a section you had not placed took its stage from its position in the list \u2014 and since every reader stops at the last stage, a story longer than its plot gave the same stage to everything after it: on a nine-chapter story with a five-stage plot, five chapters in a row read \u201cThe Monster Falls\u201d, and on a thirty-chapter novel, twenty-six did. Nothing is guessed now. A stage you set yourself is exactly where you put it; a section you have not placed simply says nothing.',
+      '**And importing no longer gives your chapters a plot stage.** It was writing each one a stage number taken from its place in the list \u2014 something no manuscript states, which then stopped matching the moment you inserted or reordered a section. Importing keeps your chapter titles, which it genuinely reads, and leaves the plot to you.',
+      '**The Refract panel now fills the left margin and stays there.** [Jeremy] It was pinned to the edge of your prose rather than to the window, so the wider your screen the further right it sat, with empty page opening up beside it. It now starts at the left edge and grows to meet your prose \u2014 resizing as you drag the window.',
+    ]},
     { v:'2026.07.20.644', date:'September 17, 2026', notes:[
       '**Define what a word means in YOUR story.** [Jeremy] The Define card read you Webster\u2019s 1913 and how common the word is \u2014 both facts about English, which is exactly the wrong answer when your book has quietly moved a word. Now every word takes **your own definition**, kept beside the dictionary\u2019s rather than over it, so the drift between the two stays visible \u2014 and a word the book has no entry for stops being a dead end.',
       '**And every ✦ pass reads your sense first.** A glossed word joins your story\u2019s facts, so Refract, the continuity and craft reviews, the session passes and the wiki summaries all know what it means to you. That is the part that matters: until now the app read a redefined word as its ordinary self and quietly pulled your prose back toward the meaning you were writing AGAINST. Your glossary also becomes a chapter in the story wiki and its export.',
