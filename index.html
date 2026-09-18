@@ -30521,9 +30521,26 @@ function splitProseBySections(prose, sections){
   return out;
 }
 /* append a body of prose as paragraph <div>s into the editor; returns the blocks created */
+/* v.725 — audit #12. A manuscript STATES its scene breaks: `***`, `* * *`, `#`, `# # #`, `~`, `◇` on a line of
+   their own — and Dystoria's own export writes a scene mark as `◇`, so a story exported and imported back was
+   coming in with its breaks turned into paragraphs reading "◇". This recognises exactly those lines and nothing
+   else: a run of blank lines is not read as a break, because paragraph spacing is not a claim. The mark made is
+   the app's own (`_orgMakeSceneMark`, the same div "+ scene" inserts, with a stable sid), so the Organize
+   drawer, the Plot grid's scene rows and per-scene cards all see it without change. A break at the very top or
+   bottom of a section is dropped, matching the editor's rule that a section opens on prose. `secType` and
+   `partId` are the author's and are deliberately not touched. */
+const IMPORT_SCENE_BREAK = /^(?:[#~\u25C7\u2042]|(?:[*\-\u2014\u2013\u2022]\s*){3,9}|(?:#\s*){2,9}|(?:~\s*){2,9})$/;
+function isImportSceneBreak(t){ return IMPORT_SCENE_BREAK.test(String(t || '').trim()); }
 function appendImportProse(ed, body){
   const made = [];
-  String(body || '').split(/\n{2,}/).forEach(p => { const t = p.trim(); if (!t && ed.lastElementChild) return; const x = document.createElement('div'); x.textContent = t; ed.appendChild(x); if (t) made.push(x); });
+  let pendingBreak = false;   // a break is only inserted once prose follows it, so none can lead or trail a section
+  String(body || '').split(/\n{2,}/).forEach(p => {
+    const t = p.trim();
+    if (!t && ed.lastElementChild) return;
+    if (t && isImportSceneBreak(t)){ if (made.length) pendingBreak = true; return; }
+    if (pendingBreak && t){ pendingBreak = false; try{ if (typeof _orgMakeSceneMark === 'function') ed.appendChild(_orgMakeSceneMark()); }catch(e){} }
+    const x = document.createElement('div'); x.textContent = t; ed.appendChild(x); if (t) made.push(x);
+  });
   return made;
 }
 // Lock a section's imported prose as ONE completed writing session, so it has session identity —
@@ -56955,9 +56972,13 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.647';
+  var APP_VERSION = '2026.07.20.648';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.648', date:'September 18, 2026', notes:[
+      '**The notepad closes from an × in its header, and its buttons are smaller.** [Jeremy] New research and Export were nearly as tall as the bar they sat in; they have room above and below now. And the Hide tab that used to appear at the top while the notepad was open is gone \u2014 there is an × at the right of the header instead, where a close belongs. Phones had that × already; it simply had no business being phone-only.',
+      '**Importing keeps your scene breaks.** A line of asterisks, a lone `#`, a `~` or a `\u25C7` between paragraphs is how manuscripts mark a scene change \u2014 and how Dystoria\u2019s own export writes one \u2014 but importing turned each into a paragraph of punctuation. They come in as real scene breaks now, so the Organize drawer and the Plot grid see the scenes you already had. Only a marker you actually typed counts: a run of blank lines is never read as a break, and which section is a prologue or which Part it belongs to stays yours to set.',
+    ]},
     { v:'2026.07.20.647', date:'September 18, 2026', notes:[
       '**Importing a story builds an Overview column in the Plot grid.** [Jeremy] Every section gets a card with the elements found in that section already linked to it \u2014 a quick reference down the side of the book, rather than a plot shape you have to agree with. Nothing about your plot is decided for you: the column is a summary, not a structure.',
       '**Press Summarize on a card for one sentence per element.** What this section achieves, changes, reveals or sets up for each thing on the card, grounded in the section\u2019s text and written into the card\u2019s note where you can edit it. It runs only when you press it, so a thirty-chapter import costs nothing until you ask. Any thread card with linked elements has the button.',
@@ -82135,6 +82156,13 @@ html body .oc-btn{
   height:var(--btn-h-sm) !important; min-height:var(--btn-h-sm) !important; max-height:var(--btn-h-sm) !important;
   padding:0 var(--btn-px-sm) !important;
 }
+/* v.725 [Jeremy] — "the new research and export buttons are too big, shrink them so there is more space above
+   and below in the header bar". The notepad's head bar is 34px, not 40, so the compact-28 size above left 3px of
+   air; 22px leaves 6. Scoped to that bar only, after the size block so it wins. */
+html body #planPad .pad-head .pad-menu, html body #planPad .pad-head .np-resbtn{
+  height:22px !important; min-height:22px !important; max-height:22px !important;
+  padding:0 10px !important; font-size:10px !important; line-height:1 !important;
+}
 /* regular 34 — the mode bar's Notepad pill and the legend's footer primary */
 html body .slw-add, html body .pad-toggle.pad-toggle, html body #deskbar .pad-toggle{
   height:var(--btn-h) !important; min-height:var(--btn-h) !important; max-height:var(--btn-h) !important; padding:0 var(--btn-px) !important;
@@ -89636,10 +89664,18 @@ html body .cat-org-bd{ z-index:170 !important; }
     border-radius:50% !important; color:var(--ink-faint) !important; background:none !important; border:none !important; padding:0 !important; }
   html body:not(.eink) #planPad .pad-head #padCloseBtn:hover{ color:var(--ink) !important; background:rgba(0,0,0,.06) !important; }
 }
-/* the × is hidden everywhere by default and shown only by the phone rule above — a `min-width:769px` hide would
-   have left it on an e-ink phone, where the rest of this block deliberately stands down. The desktop closes the
-   drawer from the Notepad toggle in the mode bar, as it always has. */
-html body #padCloseBtn{ display:none !important; }
+/* v.725 [Jeremy] — "put an X to close the notepad to the right of the export instead of the Hide tab". The ×
+   v.698 built for phones is promoted to every width — the same request, in the same words, now for the desktop
+   too — and the Hide tab stands down while the drawer is open, as it already did on a phone. One × rather than
+   two; e-ink keeps standing down as before. */
+html body:not(.eink) #planPad .pad-head #padCloseBtn{
+  flex:none !important; margin-left:8px !important; width:26px !important; height:26px !important;
+  display:inline-flex !important; align-items:center !important; justify-content:center !important;
+  font-family:var(--sans) !important; font-size:18px !important; font-weight:400 !important; line-height:1 !important;
+  border-radius:50% !important; color:var(--ink-faint) !important; background:none !important; border:none !important; padding:0 !important; }
+html body:not(.eink) #planPad .pad-head #padCloseBtn:hover{ color:var(--ink) !important; background:rgba(0,0,0,.06) !important; }
+html body.pad-open:not(.eink) #npTab, html body.np-open:not(.eink) #npTab{ display:none !important; }
+html body.eink #padCloseBtn{ display:none !important; }
 </style>
 <style id="dyst-doors">
 /* v.699 — the doors pages. Not phone-only: the title sat on this chooser at every width. */
