@@ -15193,6 +15193,7 @@ function mapCentreOn(mx, my){
 /* an element, a drawing, an image — each says where its own middle is, and then it is the same job */
 function mapCentreOnWord(idx){
   var w = state.prompt && state.prompt.words[idx]; if (!w) return false;
+  try{ window.__mapCentred = { idx: idx, at: Date.now() }; }catch(e){}   /* v.729: so a drawer that opens for this selection can centre it again against the new edge */
   if (w.deco){
     var at = (typeof drawLabelAt === 'function') ? drawLabelAt(w) : null;
     return at ? mapCentreOn(at.x, at.y) : false;
@@ -56822,22 +56823,50 @@ body.eink #expMenu{background:#fff; border-color:#000}
    open. The rows the drawer shows while focused are the ones `drawWeb` marks `.on` — see dyst-sel-focus (CSS). */
 (function(){
   'use strict';
-  var opened = false;
+  /* v.729 [Jeremy]: "if there is no connection to the context drawer on the right, that drawer should also be hidden like
+     the others." The drawer opens only for a selection with a connected row; with none it is hidden, tab and all. */
+  var opened = false;      // we opened the drawer for this selection → close it on deselect
+  var closedByUs = false;  // the writer had it open and the selection had no connections → we closed it; reopen on deselect
+  var timer = null, rowsObs = null;
   function want(){ var b = document.body; try{ return b.classList.contains('expb') && !b.classList.contains('eink') && b.classList.contains('plan-view-map') && b.classList.contains('mapbars-open') && !b.classList.contains('writing') && window.innerWidth >= 769; }catch(e){ return false; } }
+  function connected(){ try{ return !!document.querySelector('#expRight .xb-row.on'); }catch(e){ return false; } }
+  function setStrip(hidden){
+    if (typeof window.__expSetStrip !== 'function') return;
+    try{ window.__expSetStrip('R', hidden, false); }catch(e){}
+    /* v.630 centred the map on an element pressed in a drawer — in the middle of what you can SEE, between the drawers.
+       Changing the right drawer here moves that middle. If the selection was just centred (t630 #6 caught this: 103px
+       off), centre it again against the new edge; an ordinary map click was never centred and is not moved. */
+    try{ var c = window.__mapCentred; if (c && typeof state !== 'undefined' && state && c.idx === state.selNode && (Date.now() - c.at) < 1500 && typeof mapCentreOnWord === 'function') mapCentreOnWord(c.idx); }catch(e){}
+  }
+  function decide(){
+    var b = document.body; if (!b.classList.contains('sel-focus')) return;
+    var conn = connected(), rhide = b.classList.contains('expb-rhide');
+    b.classList.toggle('sel-noconn', !conn);
+    if (conn){
+      if (rhide){ setStrip(false); if (!closedByUs) opened = true; closedByUs = false; }   // reopening the writer's own drawer is not "ours" to close later
+    } else {
+      if (!rhide){ setStrip(true); if (opened) opened = false; else closedByUs = true; }
+    }
+  }
+  function schedule(){ if (timer) return; timer = setTimeout(function(){ timer = null; decide(); }, 90); }   // a beat for drawWeb's next frame
   function sync(){
     var b = document.body, w = want(), cur = b.classList.contains('sel-focus');
     if (w && !cur){
-      b.classList.add('sel-focus');
-      if (b.classList.contains('expb-rhide') && typeof window.__expSetStrip === 'function'){ try{ window.__expSetStrip('R', false, false); opened = true; }catch(e){} }
+      b.classList.add('sel-focus'); b.classList.add('sel-noconn');   // nothing shown until the first decision
+      opened = false; closedByUs = false; schedule();
+      try{ var R = document.getElementById('expRight'); if (R && !rowsObs){ rowsObs = new MutationObserver(schedule); rowsObs.observe(R, { subtree:true, attributes:true, attributeFilter:['class'], childList:true }); } }catch(e){}
     } else if (!w && cur){
-      b.classList.remove('sel-focus');
-      if (opened && typeof window.__expSetStrip === 'function'){ try{ window.__expSetStrip('R', true, false); }catch(e){} }
-      opened = false;
+      b.classList.remove('sel-focus'); b.classList.remove('sel-noconn');
+      if (timer){ clearTimeout(timer); timer = null; }
+      if (rowsObs){ try{ rowsObs.disconnect(); }catch(e){} rowsObs = null; }
+      if (opened) setStrip(true);
+      if (closedByUs) setStrip(false);
+      opened = false; closedByUs = false;
     }
   }
   function start(){ try{ new MutationObserver(sync).observe(document.body, { attributes:true, attributeFilter:['class'] }); }catch(e){} window.addEventListener('resize', sync); sync(); }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start); else start();
-  window.__selFocus = { sync: sync, opened: function(){ return opened; } };
+  window.__selFocus = { sync: sync, decide: decide, opened: function(){ return opened; }, closedByUs: function(){ return closedByUs; } };
 })();
 </script>
 <style id="dyst-sel-focus">
@@ -56852,9 +56881,9 @@ body.eink #expMenu{background:#fff; border-color:#000}
   html body.sel-focus:not(.eink) #expRight #threadsBar, html body.sel-focus:not(.eink) #expRight .xb-n{ display:none !important; }   /* #threadsBar: the thread chips + “＋ thread” pill that live in the Threads section; .xb-n: a section count that would not match what is shown */
   html body.sel-focus:not(.eink) #expRight .xb-row:not(.on){ display:none !important; }
   html body.sel-focus:not(.eink) #expRight .xb-sec:not(:has(.xb-row.on)){ display:none !important; }
-  html body.sel-focus:not(.eink) #expRight #expAcc:not(:has(.xb-row.on))::after{
-    content:'No connections yet — draw one from the element to a concept, group, event or thread.';
-    display:block; padding:16px 18px; font-family:var(--serif); font-style:italic; font-size:13.5px; line-height:1.5; color:var(--ink-faint); text-align:center; }
+  /* v.729 [Jeremy]: no connections → the drawer is hidden like the others, its tab with it (the "No connections yet" line
+     v.728 wrote into the open drawer is gone with the open drawer) */
+  html body.sel-focus.sel-noconn:not(.eink) #expRTab{ display:none !important; }
 }
 </style>
 <style id="soundscapeCss">
@@ -57016,9 +57045,13 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.651';
+  var APP_VERSION = '2026.07.20.652';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.652', date:'September 18, 2026', notes:[
+      '**The notepad\u2019s search box is always one box.** [Jeremy] If a category pill was clicked while the cursor was still in the search box, a second box could appear on the filter row; there is one now, and it keeps your cursor.',
+      '**A selection with no connections hides the Scene Context too.** [Jeremy] Selecting an element on Places opens the Scene Context only when the element is connected to something in it; with nothing connected the drawer and its tab step aside with the other tabs. Draw a connection while the element is selected and the drawer comes in; deselect and a drawer you had open yourself comes back.',
+    ]},
     { v:'2026.07.20.651', date:'September 18, 2026', notes:[
       '**Selecting an element on Places clears the way.** [Jeremy] While an element is selected and its bar is up, the Story Legend, Zones, Images and Text tabs and the Notepad tab step out of sight, and the Scene Context opens on the right showing only what the element is connected to \u2014 the concepts, groups, events and threads its lines run to \u2014 with nothing else in the drawer. Deselect and everything comes back as it was; a drawer you had open yourself stays open.',
       '**The Notepad tab dresses like the other tabs.** [Jeremy] Charcoal at rest, gold on hover, the same as Story Legend and Scene Context.',
@@ -84409,9 +84442,13 @@ html body.ember:not(.eink) #msSecMenu, html body.ember:not(.eink) #prepSecMenu{
       var desk=!(window.matchMedia && window.matchMedia('(max-width:768px)').matches);
       var fs=document.querySelector('#npElements .np-search');
       if(!desk){ if(fs) head.querySelectorAll('.np-search').forEach(function(old){ if(old!==fs && !old.contains(document.activeElement)) old.remove(); }); }
-      else if(fs){ var res=head.querySelector('.np-resbtn'); var stale=head.querySelectorAll('.np-search'); var typing=false;
-        stale.forEach(function(old){ if(old!==fs){ if(old.contains(document.activeElement)) typing=true; else old.remove(); } });
-        if(!typing) head.insertBefore(fs, res||exp||null); }
+      else if(fs){ var res=head.querySelector('.np-resbtn'); var stale=head.querySelectorAll('.np-search');
+        /* v.729: one box, always — a stale box that has focus hands focus and the caret to the fresh one (Safari keeps
+           focus in the input across a pill click, which used to leave two boxes) */
+        var focusIn=null, caret=0;
+        stale.forEach(function(old){ if(old===fs) return; var oi=old.querySelector('input'); if(oi && oi===document.activeElement){ focusIn=oi; try{ caret=oi.selectionStart; }catch(e){} } old.remove(); });
+        head.insertBefore(fs, res||exp||null);
+        if(focusIn){ var ni=fs.querySelector('input'); if(ni){ try{ ni.focus(); ni.setSelectionRange(caret, caret); }catch(e){} } } }
       /* v.726 [Jeremy]: dictate moves down to the Notes band, first of the formatting buttons (desktop; the phone's
          notepad keeps it in the head bar, where its own layout expects it) */
       var mic=document.getElementById('npDictBtn'), fmt=document.getElementById('npFmtBar');
