@@ -1729,7 +1729,21 @@ body.eink .pt-rh-dev{color:#000}
   /* v.634 — the card carries a FORK now: carry on here, or begin somewhere new. Both are answers, so
      both are buttons of the same weight; asking for the earlier writing back is the quieter third. */
   #continueHint .ch-acts{display:flex; gap:9px}
-  #continueHint .ch-acts .ch-ok, #continueHint .ch-acts .ch-new{flex:1 1 0; min-width:0}
+  #continueHint .ch-acts .ch-ok, #continueHint .ch-acts .ch-new, #continueHint .ch-acts .ch-other{flex:1 1 0; min-width:0}
+  /* v.742 [Jeremy] — the third answer, between the two: the outline dress of "Start a new section", and the list it unfolds */
+  #continueHint .ch-other{padding:11px 6px; border:1px solid var(--line); border-radius:11px; background:transparent; color:var(--ink); font-family:var(--sans); font-size:11px; font-weight:600; letter-spacing:.12em; text-transform:uppercase; cursor:pointer}
+  #continueHint .ch-other:hover, #continueHint .ch-other.open{border-color:var(--gold); color:var(--gold)}
+  #continueHint .ch-other .ch-caret{font-size:9px; opacity:.7; margin-left:2px}
+  #continueHint .ch-list{margin-top:10px; max-height:224px; overflow:auto; border:1px solid var(--line); border-radius:11px; text-align:left}
+  #continueHint .ch-list[hidden]{display:none}
+  #continueHint .ch-sec{display:flex; align-items:baseline; gap:10px; width:100%; padding:9px 12px; border:0; border-bottom:1px solid var(--line); background:transparent; color:var(--ink); font-family:var(--serif); font-size:14px; text-align:left; cursor:pointer}
+  #continueHint .ch-sec:last-child{border-bottom:0}
+  #continueHint .ch-sec:hover{background:rgba(196,158,74,.1)}
+  #continueHint .ch-sec-n{flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+  #continueHint .ch-sec-w{flex:0 0 auto; font-family:var(--sans); font-size:10.5px; letter-spacing:.08em; text-transform:uppercase; color:var(--ink-soft); opacity:.8}
+  #continueHint .ch-sec-empty .ch-sec-w{opacity:.55}
+  #continueHint .ch-list-none{padding:10px 12px; font-family:var(--sans); font-size:12px; color:var(--ink-soft)}
+  body.eink #continueHint .ch-other{border:2px solid #000; color:#000}
   #continueHint .ch-new{padding:11px 8px; border:1px solid var(--line); border-radius:11px; background:transparent; color:var(--ink); font-family:var(--sans); font-size:11px; font-weight:600; letter-spacing:.12em; text-transform:uppercase; cursor:pointer}
   #continueHint .ch-new:hover{border-color:var(--gold); color:var(--gold)}
   /* v.648 — `.ch-show` retired with its button: "Continue here" reveals the prose itself now. */
@@ -34355,6 +34369,72 @@ function newSectionFromSession(){
   }catch(e){ return false; }
 }
 try{ window.newSectionFromSession = newSectionFromSession; }catch(e){}
+/* v.742 [Jeremy] — the card's list: every section but the one asked about, with its word count from the page. */
+function sectionRowsForCard(cur){
+  var rows = [];
+  try{
+    var frames = (state && state.frames) || []; var ed = document.getElementById('editor');
+    var fm = (ed && typeof nodeFrameMap === 'function') ? nodeFrameMap() : null;
+    var counts = {};
+    if (ed){ Array.prototype.forEach.call(ed.children, function(c){
+      if (c.tagName === 'H3' || (c.classList && (c.classList.contains('sec-mark') || c.classList.contains('ph')))) return;
+      var t = (c.textContent || '').trim(); if (!t) return;
+      var fk = fm ? fm.get(c) : 0; if (fk == null) fk = 0;
+      counts[fk] = (counts[fk] || 0) + t.split(/\s+/).length;
+    }); }
+    for (var i = 0; i < frames.length; i++){
+      if (i === cur) continue;
+      var nm = (frames[i] && (frames[i].stageName || '').trim()) || '';
+      rows.push({ k: i, label: 'Section ' + (i + 1) + (nm ? (' \u00b7 ' + nm) : ''), words: counts[i] || 0 });
+    }
+  }catch(e){}
+  return rows;
+}
+/* v.742 [Jeremy] — CONTINUE IN ANOTHER SECTION: the session's open line moves to the end of section j (as
+   `newSectionFromSession` moves it to a new one), the frame switches, and the writer lands as Continue here lands them —
+   the prose revealed and held, the caret at its end — or, in an empty section, on a Begin… line under the header. */
+function continueInSection(j){
+  try{
+    if (!state || !state.frames || j < 0 || j >= state.frames.length) return false;
+    var ed = document.getElementById('editor'); if (!ed) return false;
+    if (typeof switchFrame === 'function') switchFrame(j);
+    var fm = (typeof nodeFrameMap === 'function') ? nodeFrameMap() : null;
+    var old = ed.querySelector('.ph.sess-open');
+    if (old && (old.textContent || '').trim()){ old.classList.remove('sess-open'); old.classList.remove('ph'); old = null; }   // typed into already — it stays where it was written
+    var ph = null, last = null, hasP = false;
+    Array.prototype.forEach.call(ed.children, function(c){
+      if (c === old) return;
+      if ((fm ? fm.get(c) : 0) !== j) return;
+      if (c.classList && c.classList.contains('ph') && !(c.textContent || '').trim()){ if (!ph) ph = c; return; }
+      if ((c.textContent || '').trim() && !(c.classList && c.classList.contains('sec-mark')) && c.tagName !== 'H3') hasP = true;
+      last = c;
+    });
+    if (ph && old && ph !== old) old.remove();          // the section already had an empty line to write on — use it
+    if (!ph) ph = old;
+    if (!ph){ ph = document.createElement('div'); ph.className = 'ph'; }
+    ph.classList.add('ph'); ph.classList.add('sess-open');
+    ph.dataset.ph = hasP ? 'Continue\u2026' : 'Begin\u2026';
+    if (last && last.nextSibling) ed.insertBefore(ph, last.nextSibling);
+    else if (last) ed.appendChild(ph);
+    else if (!ph.isConnected) ed.appendChild(ph);
+    /* the solo-section view ran inside `switchFrame` while the open line still belonged to the section
+       we are leaving, so it carries that pass's inline display:none. Re-paint now that it has moved. */
+    try{ if (typeof paintSectionFocus === 'function') paintSectionFocus(); }catch(e){}
+    try{ if (typeof applyFsHeader === 'function') applyFsHeader(); }catch(e){}
+    try{ if (window.__writeRoom3 && window.__writeRoom3.sync) window.__writeRoom3.sync(); }catch(e){}
+    try{ ed.focus({ preventScroll:true }); var r = document.createRange(); r.selectNodeContents(ph); r.collapse(true); var sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r); }catch(e){}
+    if (hasP){
+      try{ if (typeof lpKeepPrior === 'function') lpKeepPrior(); else if (typeof lpShowPrior === 'function') lpShowPrior(); }catch(e){}
+      try{ if (typeof continueAtEnd === 'function') setTimeout(continueAtEnd, 60); }catch(e){}
+    } else {
+      try{ if (typeof LP !== 'undefined') LP.keepPrior = false; if (typeof lpHidePrior === 'function') lpHidePrior(); }catch(e){}
+      try{ var wrap = document.getElementById('editorWrap'); var hdr = document.getElementById('fsHeader'); if (wrap){ var hh = hdr ? hdr.getBoundingClientRect().height : 0; var pr = ph.getBoundingClientRect(), wr = wrap.getBoundingClientRect(); var delta = (pr.top - wr.top) - (hh + 12); if (Math.abs(delta) > 1) wrap.scrollTop += delta; } }catch(e){}
+    }
+    try{ var nm = (state.frames[j].stageName || '').trim(); if (typeof flashStatus === 'function') flashStatus((hasP ? 'Continuing in ' : 'Writing in ') + 'Section ' + (j + 1) + (nm ? ' \u00b7 ' + nm : '') + ' \u2014 the clock is still running.'); }catch(e){}
+    return true;
+  }catch(e){ return false; }
+}
+try{ window.continueInSection = continueInSection; window.sectionRowsForCard = sectionRowsForCard; }catch(e){}
 /* v.648 · #68 — PUT THE WRITER WHERE THEY LEFT OFF: caret at the end of the writing surface, with
    the tail of what they already wrote visible above it. Kept out of the card's click handler because
    it is a whole answer to a question ("where does continuing put me?") rather than a step in one. */
@@ -34411,10 +34491,31 @@ function maybeContinueHint(hasProse, k, anyProse){
         : '<div class="ch-body"><b>'+esc(label)+'</b> is empty \u2014 your writing so far is in other sections. Write here, or start a new section after it.</div>')
       +'<div class="ch-acts">'
       +'<button type="button" class="ch-ok">'+(hasProse ? 'Continue here' : 'Write here')+'</button>'
+      +'<button type="button" class="ch-other" aria-expanded="false">Continue another section <span class="ch-caret">\u25BE</span></button>'   /* v.742 [Jeremy] */
       +'<button type="button" class="ch-new">Start a new section</button>'
       +'</div>'
+      +'<div class="ch-list" hidden></div>'
       +'</div>';
     document.body.appendChild(ov);
+    /* v.742 [Jeremy] — "a third option between the two — 'Continue another section' which shows a drop down list of all
+       the other sections you can click on". The list unfolds inside the card; each row is a section that is not this
+       one, with what it holds; choosing one carries the session there (`continueInSection`). */
+    try{
+      var otherBtn = ov.querySelector('.ch-other'), list = ov.querySelector('.ch-list');
+      var fillList = function(){
+        list.innerHTML = '';
+        var rows = (typeof sectionRowsForCard === 'function') ? sectionRowsForCard(ki) : [];
+        if (!rows.length){ var none = document.createElement('div'); none.className = 'ch-list-none'; none.textContent = 'This is the only section.'; list.appendChild(none); return; }
+        rows.forEach(function(rw){
+          var b = document.createElement('button'); b.type = 'button'; b.className = 'ch-sec' + (rw.words ? '' : ' ch-sec-empty'); b.dataset.k = rw.k;
+          var nm = document.createElement('span'); nm.className = 'ch-sec-n'; nm.textContent = rw.label; b.appendChild(nm);
+          var wc = document.createElement('span'); wc.className = 'ch-sec-w'; wc.textContent = rw.words ? (rw.words.toLocaleString() + ' words') : 'empty'; b.appendChild(wc);
+          b.addEventListener('click', function(){ dismiss(); try{ continueInSection(rw.k); }catch(e){} });
+          list.appendChild(b);
+        });
+      };
+      otherBtn.addEventListener('click', function(e){ e.stopPropagation(); var open = list.hasAttribute('hidden'); if (open){ fillList(); list.removeAttribute('hidden'); } else list.setAttribute('hidden', ''); otherBtn.setAttribute('aria-expanded', open ? 'true' : 'false'); otherBtn.classList.toggle('open', open); });
+    }catch(e){}
     requestAnimationFrame(function(){ ov.classList.add('show'); });
     /* v.652 [Jeremy] — "the prose from previous sections does not show up until you press Continue,
        which is jarring. can we have it load with the pop-up to decide is still there." The card is
@@ -57125,9 +57226,13 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.664';
+  var APP_VERSION = '2026.07.20.665';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.665', date:'September 19, 2026', notes:[
+      '**Continue another section.** [Jeremy] The \u201cWhere do you want to write?\u201d card has a third answer between the two: Continue another section unfolds a list of every other section \u2014 with what each holds \u2014 and choosing one carries the session there, the way Continue here does.',
+      '**The zoom scales the column again.** [Jeremy] Yesterday\u2019s change that held the writing column at one width under the zoom is undone \u2014 it was better the way it was. The column grows with the text, as it did before.',
+    ]},
     { v:'2026.07.20.664', date:'September 19, 2026', notes:[
       '**The column keeps its width when you zoom.** [Jeremy] In the writing room the view zoom now enlarges the text within the same column, the way Revise does, instead of widening the column with it \u2014 so the drawers to come can sit beside it at one width without ever crossing the text.',
     ]},
@@ -81423,12 +81528,12 @@ body.ember:not(.eink) #importCard, body.ember:not(.eink) #tipJar .tip-card, body
 }
 
 /* --- three widths --- */
-#settingsModal .set-card, #aiModelPanel .amp-card, #donateModal .dn-card, #mobileNotice .mn-card, #continueHint .ch-card{
+#settingsModal .set-card, #aiModelPanel .amp-card, #donateModal .dn-card, #mobileNotice .mn-card{
   width:var(--dlg-w-s) !important; max-width:calc(100vw - 32px) !important;
 }
 #feedbackModal .fb-card, #acctNudge .an-card, #orgMergeModal .omm-card, #descPrompt, #startModal .sm-panel, #bookSetup .bs-card, #customWordsModal .cw-panel,
 #goalModal .gm-panel, #aiConsent .aic-card, #tipJar .tip-card, #importCard, #elNamePop .elnp-card, #upgradeCard .up-card,
-#charCreator, #settingCreator, #objectCreator, #groupCreator, #eventCreator, #conceptCreator{
+#charCreator, #settingCreator, #objectCreator, #groupCreator, #eventCreator, #conceptCreator, #continueHint .ch-card{   /* v.742: three answers */
   width:var(--dlg-w-m) !important; max-width:calc(100vw - 32px) !important;
 }
 #versionsModal .ver-card, #helpPanel .help-card, #legalModal .lg-card, #statsModal .stx-card, #writeIntro .wi-card{
@@ -90082,7 +90187,7 @@ html body #placesSegMore #expMenu{ left:0; right:auto; top:calc(100% + 8px); min
 html body.writing.insession:not(.eink) #editor{ zoom:var(--dy-view-zoom); }
 html body:not(.eink) #editMode #editBody{ zoom:var(--dy-view-zoom); }
 /* the room's ink and column (LP sets the size itself: LP.base, 19 since v.732) */
-html body.lp-live:not(.eink) #editor{ color:var(--dy-ink) !important; max-width:min(calc(760px / var(--dy-view-zoom, 1)), calc(92vw / var(--dy-view-zoom, 1))) !important; position:relative; }   /* v.741 [Jeremy]: the column's width is divided by the zoom, so on screen it is always 760 (like Revise's) — the text reflows inside it */
+html body.lp-live:not(.eink) #editor{ color:var(--dy-ink) !important; max-width:min(40em, 92vw) !important; position:relative; }   /* v.742 [Jeremy]: v.741's fixed-width-under-zoom undone — "it was better the way it was before"; the column scales with the zoom */
 html body.lp-live:not(.eink) #editor{ caret-color:var(--dy-ink) !important; }
 /* two tones: every earlier session's block one step lighter than the block you write in */
 /* v.734 [Jeremy]: "the lighter charcoal where the writing is should go from top of screen to bottom, one continuous section" —
@@ -90200,7 +90305,7 @@ html body.eink #dyZoomEd{ display:none; }
       var ed = document.getElementById('editor'); if (!ed) return;
       var el = document.getElementById('dyColumn'); if (!el){ el = document.createElement('div'); el.id = 'dyColumn'; document.body.appendChild(el); }
       var r = ed.getBoundingClientRect(); if (!(r.width > 0)) return;
-      var inset = 19;   /* v.741: the column is a constant width on screen, so its inset is too */
+      var z = parseFloat(getComputedStyle(ed).zoom) || 1; var inset = 19 * z;   /* v.742: the inset scales with the column again */
       document.documentElement.style.setProperty('--dy-col-x', Math.round(r.left - inset) + 'px');
       document.documentElement.style.setProperty('--dy-col-w', Math.round(r.width + 2 * inset) + 'px');
     }catch(e){}
