@@ -526,6 +526,9 @@
   #recapBody .rc-route-sec:hover{border-color:var(--gold); color:var(--ink)}
   #recapBody .rc-route-done{margin-top:9px; font-size:11px; font-style:italic; color:var(--gold)}
   /* R37 — background notes-import progress pill (bottom-center, appears while the → Notes import runs) */
+  #bgNotesToast .bgn-clock{font-size:12px; opacity:.6; margin-left:4px; white-space:nowrap}   /* v.737 */
+  #bgNotesToast .bgn-x{margin-left:6px; width:24px; height:24px; border-radius:50%; border:none; background:rgba(255,255,255,.1); color:inherit; font-size:16px; line-height:1; cursor:pointer; display:inline-flex; align-items:center; justify-content:center; padding:0; flex:none}
+  #bgNotesToast .bgn-x:hover{background:rgba(255,255,255,.22); border-color:transparent !important}
   #bgNotesToast{position:fixed; left:50%; top:50%; transform:translate(-50%,-50%) scale(.96); z-index:var(--z-panel-hi); display:flex; align-items:center; gap:10px; max-width:min(520px,92vw); padding:14px 22px; border-radius:24px; background:#1c1b19; color:var(--linen); font-family:var(--sans); font-size:13.5px; line-height:1.4; box-shadow:0 18px 54px rgba(0,0,0,.4); border:1px solid rgba(255,255,255,.08); opacity:0; pointer-events:none; transition:opacity .28s ease, transform .28s ease}
   #bgNotesToast.show{opacity:1; transform:translate(-50%,-50%) scale(1)}
   #bgNotesToast.done{background:#22321f; border-color:rgba(196,158,74,.32)}
@@ -26115,10 +26118,18 @@ function bgNotesToast(msg, opts){
   let t = document.getElementById('bgNotesToast');
   if (!t){ t = document.createElement('div'); t.id = 'bgNotesToast'; document.body.appendChild(t); }
   t.className = 'show' + (opts.done ? ' done' : '') + (opts.err ? ' err' : '');
-  t.innerHTML = (opts.done ? '<span class="bgn-mk">✓</span> ' : opts.err ? '<span class="bgn-mk bgn-err">⚠</span> ' : '<span class="spin"></span> ') + esc(msg);
-  clearTimeout(t._h);
+  /* v.737 [Jeremy]: a working pill shows how long it has been at it after 20s, and carries a ✕ that gives up (the scan is
+     abandoned, the session still routes) — a pill that spins with no way out was the bug */
+  t.innerHTML = (opts.done ? '<span class="bgn-mk">✓</span> ' : opts.err ? '<span class="bgn-mk bgn-err">⚠</span> ' : '<span class="spin"></span> ') + '<span class="bgn-msg">' + esc(msg) + '</span>'
+    + ((opts.done || opts.err) ? '' : '<span class="bgn-clock"></span><button type="button" class="bgn-x" title="Give up on this scan">\u00d7</button>');
+  clearTimeout(t._h); clearInterval(t._clk);
   if (opts.done || opts.err){ t._h = setTimeout(function(){ t.classList.remove('show'); }, opts.err ? 6500 : 5000); }
+  else {
+    var t0 = Date.now(); t._clk = setInterval(function(){ var c = t.querySelector('.bgn-clock'); if (!c){ clearInterval(t._clk); return; } var sec = Math.round((Date.now() - t0) / 1000); c.textContent = sec >= 20 ? ('still reading\u2026 ' + (sec >= 60 ? Math.floor(sec / 60) + 'm ' + (sec % 60) + 's' : sec + 's')) : ''; }, 1000);
+    var x = t.querySelector('.bgn-x'); if (x) x.addEventListener('click', function(ev){ ev.stopPropagation(); try{ if (typeof window.__bgScanGiveUp === 'function') window.__bgScanGiveUp(); }catch(e){} });
+  }
 }
+window.__bgScanGiveUp = null;   /* set by the scan that is running; cleared when it ends */
 // Scan the just-written passage for elements/traits IN THE BACKGROUND (progress pill), then SURFACE the
 // importer's review list so the writer approves what gets added. Whether they approve or dismiss the review,
 // `onDone` runs (via closeImport's hook) so the session sorting always completes to its destination.
@@ -26128,6 +26139,8 @@ async function runSessionImport(passage, title, onDone, kind){
   if (!passage || typeof IMP === 'undefined'){ onDone(); return; }
   if (typeof aiAuthed === 'function' && !aiAuthed()){ bgNotesToast('Signed out — skipped the element scan.', { done: true }); onDone(); return; }
   bgNotesToast('Reading your session for elements…');
+  /* v.737: the ✕ on the pill — give up on the scan, route the session anyway (the elements can be scanned from the Notepad later) */
+  var _gaveUp = false; window.__bgScanGiveUp = function(){ if (_gaveUp) return; _gaveUp = true; window.__bgScanGiveUp = null; IMP._bg = false; IMP._sessionImport = false; bgNotesToast('Skipped the element scan \u2014 your session is kept.', { done: true }); try{ onDone(); }catch(e){} };
   // The session's writing is PROSE. Route → Prose scans it through the PROSE import path (which never
   // infers authorial goals from a story); route → Notes uses the notes/worldbuilding path. Either way,
   // _sessionImport keeps prose out of element notes and out of goal-seeding.
@@ -26142,6 +26155,8 @@ async function runSessionImport(passage, title, onDone, kind){
     IMP.kind = _kind;   // importApplyKind re-reads the radio group; re-assert the kind so the session import is never at the mercy of stale radio state
     const ds = document.querySelector('input[name=impdest][value=section]'); if (ds) ds.checked = true;
     await extractImport();
+    if (_gaveUp) return;   /* v.737: the writer gave up while it read — onDone already ran */
+    window.__bgScanGiveUp = null;
     const n = (IMP.elements || []).filter(el => el && el.include !== false).length;
     if (n){
       // Surface the results for approval. Keep _sessionImport so confirm suppresses its own UI reveals; hook the
@@ -26155,7 +26170,7 @@ async function runSessionImport(passage, title, onDone, kind){
     } else {
       IMP._sessionImport = false; bgNotesToast('No new elements found.', { done: true }); onDone();
     }
-  } catch(e){ IMP._bg = false; IMP._sessionImport = false; bgNotesToast('Couldn’t finish the scan (' + ((e && e.message) || 'error') + ').', { err: true }); onDone(); }
+  } catch(e){ if (_gaveUp) return; window.__bgScanGiveUp = null; IMP._bg = false; IMP._sessionImport = false; bgNotesToast('Couldn’t finish the scan (' + ((typeof aiErrMsg === 'function') ? aiErrMsg(e) : ((e && e.message) || 'error')) + ').', { err: true }); onDone(); }
 }
 // The end-session sort card: Add-to-section (the chosen section, via #rcSecSelect) or Discard.
 function recapRoute(route){
@@ -31011,7 +31026,7 @@ async function extractImport(){
         var _sysCk = (ci === 0 || notesMode) ? sys : (sys + ' THE NARRATIVE FRAME HAS ALREADY BEEN READ from the opening of this work. Return NO genre, context, concepts/themes, stakes or plot elements for this part \u2014 those types must be ABSENT from your elements array. Extract only the characters, places, objects, events, in-world terms and organizations THIS part establishes.');
         const out = await aiCall(_sysCk, uc, { feature:'import', maxTokens: 8000, json: true, kind: 'import' });   // dedicated large-context import model
         normC = normalizeExtract(parseJsonLoose(out));
-      } catch (e){ if (!gotAny){ $('importGo').disabled = false; $('importStatus').textContent = aiErrMsg(e); return; } flashStatus(aiErrMsg(e)); break; }   // after at least one good part, a failed part just stops early — keep what we have
+      } catch (e){ if (!gotAny){ $('importGo').disabled = false; $('importStatus').textContent = aiErrMsg(e); if (IMP._sessionImport) throw e; return; }   /* v.737: a session scan reports the reason on its pill */ flashStatus(aiErrMsg(e)); break; }   // after at least one good part, a failed part just stops early — keep what we have
     }
     if (!normC) { setConfirmProgress(ci + 1); continue; }   // a part failed to parse — keep what the other parts gave
     (normC.relationships || []).forEach(r => { if (!r || !r.from || !r.to) return; const k = (String(r.from) + '|' + String(r.to)).toLowerCase(); if (seenR[k]) return; seenR[k] = 1; IMP.relationships.push(r); });
@@ -41453,7 +41468,15 @@ async function aiCall(system, prompt, opts){
   if (opts.json) body.json = true;
   if (opts.image) body.image = opts.image;
   if (opts.model) body.model = opts.model;
-  const r = await fetch(AI_ENDPOINT, { method: 'POST', headers: aiHeaders(), body: JSON.stringify(body) });
+  /* v.737 [Jeremy]: a hard timeout on every AI call — a stalled provider used to spin a pill forever and strand the
+     session behind it. 120s by default, 180s for the import kind (a long session + the story's element list), opts.timeoutMs to override. */
+  const _ctl = (typeof AbortController === 'function') ? new AbortController() : null;
+  const _ms = opts.timeoutMs || (opts.kind === 'import' ? 180000 : 120000);
+  const _tm = _ctl ? setTimeout(function(){ try{ _ctl.abort(); }catch(e){} }, _ms) : null;
+  let r;
+  try { r = await fetch(AI_ENDPOINT, { method: 'POST', headers: aiHeaders(), body: JSON.stringify(body), signal: _ctl ? _ctl.signal : undefined }); }
+  catch (e){ if (_tm) clearTimeout(_tm); if (e && (e.name === 'AbortError' || /abort/i.test(String(e.message || '')))) throw new Error('timed out after ' + Math.round(_ms / 1000) + 's'); throw e; }
+  if (_tm) clearTimeout(_tm);
   let data; try { data = await r.json(); } catch (e){ throw new Error('HTTP ' + r.status); }
   if (!r.ok || data.error){ const msg = data.error || ('HTTP ' + r.status); const _e = new Error(msg); _e.limit = data.limit || ''; if (data.limit === 'feature') aiFeatureCapNotice(msg); else if (data.limit === 'day' || aiIsDailyLimit(msg)) aiDailyNotice(); throw _e; }
   window._aiLastVia = data.via || '';   // which model in the chain served this call (e.g. claude, gemini-2.5-pro)
@@ -41597,6 +41620,7 @@ function aiIsDailyLimit(m){ return /today.?s (free |shared )?limit|resets tomorr
 function aiErrMsg(e){
   const m = String((e && e.message) || e || '');
   if (/sign in|401/i.test(m)) return 'Sign in to use the AI features.';
+  if (/timed out/i.test(m)) return 'The AI took too long \u2014 try again.';   /* v.737 */
   if (/not configured|AI not/i.test(m)) return 'AI isn’t set up yet — add the keys/bindings in Cloudflare and redeploy.';
   if (/Failed to fetch|HTTP 404|Load failed/i.test(m)) return 'AI is unavailable — this works on dystoria.net once deployed.';
   if (aiIsDailyLimit(m)) return 'Dystoria’s AI features are at today’s shared free limit — they reset tomorrow. (The whole site shares one daily AI quota.)';
@@ -57105,9 +57129,12 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.659';
+  var APP_VERSION = '2026.07.20.660';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.660', date:'September 19, 2026', notes:[
+      '**No AI call can spin forever.** [Jeremy] Every AI request now has a hard time limit (two minutes; three for reading a session), and the \u201cReading your session for elements\u201d pill shows how long it has been at it and carries a \u00d7 to give up \u2014 the session still lands in its section either way. A stalled request used to spin the pill without end and hold the session behind it.',
+    ]},
     { v:'2026.07.20.659', date:'September 19, 2026', notes:[
       '**The mark lives in the \u2630 menu.** [Jeremy] Centred at the top of the menu, above your name. Signed out, it opens the welcome page as it always did; signed in, it opens the labyrinth of the story you are in \u2014 and the hover note says which.',
     ]},
