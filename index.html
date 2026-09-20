@@ -57240,9 +57240,13 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.668';
+  var APP_VERSION = '2026.07.20.669';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.669', date:'September 20, 2026', notes:[
+      '**The keys act on the word you clicked.** [Jeremy] A word lit by a click is now what \u2318B, \u2318I, \u2318U, \u2318\u21E7X and \u2318\\ act on \u2014 they used to switch themselves on and leave the word alone. The word is styled and handed straight back as a light, so nothing is left selected and typing still cannot replace it.',
+      '**The ink follows the words you picked.** [Jeremy] With words selected or a word lit, \u2318\u2325< and \u2318\u2325> (and \u2318< / \u2318>) colour THOSE words instead of the whole page. With nothing picked they are the page\u2019s ink, as before.',
+    ]},
     { v:'2026.07.20.668', date:'September 20, 2026', notes:[
       '**A click lights the word.** [Jeremy] In a writing session a click now marks the word under it instead of selecting it \u2014 so the next letter you type can never replace it. Double-click takes the sentence (it knows \u201cMr. Hale\u201d is not the end of one), triple-click the paragraph. There is a switch at the foot of the Keys drawer if you would rather have the plain caret.',
       '**Bold on a selection is a one-time thing.** [Jeremy] Styling words you have selected no longer leaves the style switched on: the words are styled, and when you carry on typing the typing is plain. Pressing \u2318B and then \u2318I on the same selection still works as you would expect.',
@@ -90302,6 +90306,22 @@ html body.eink #dyZoomEd{ display:none; }
     if (flash && typeof flashStatus === 'function') flashStatus('Ink · ' + TINTS[t][0] + ' · ' + (st + 1) + ' of 5');
   }
   function inSession(){ var b = document.body; return b.classList.contains('writing') && b.classList.contains('insession') && b.classList.contains('lp-live') && !eink(); }
+  /* v.746 — the ink on the words the writer has chosen, not on the page. Returns false when nothing is chosen, and
+     the caller falls through to the page's own ink. The tint is remembered as the LAST one used on words, so ⌘⌥>
+     walks the palette on the words the way it walks it on the page. */
+  var _wInk = null;
+  function inkWords(t, st, kind){
+    try{
+      if (!inSession()) return false;
+      var K = window.__writeKeys; if (!K || !K.colorWords) return false;
+      var base = _wInk || { t: t, s: st };
+      var tt = (kind === 'tint') ? t : base.t, ss = (kind === 'step') ? st : base.s;
+      if (!K.colorWords(inkColor(tt, ss))) return false;
+      _wInk = { t: tt, s: ss };
+      if (typeof flashStatus === 'function') flashStatus('These words — ' + TINTS[tt][0] + ' · ' + (ss + 1) + ' of 5');
+      return true;
+    }catch(e){ return false; }
+  }
   /* the keys — capture, so the editor's own handlers never see them */
   document.addEventListener('keydown', function(e){
     var mod = e.metaKey || e.ctrlKey; if (!mod) return;
@@ -90314,8 +90334,21 @@ html body.eink #dyZoomEd{ display:none; }
     if (proseShowing() && !e.altKey && e.shiftKey && (e.key === '+' || e.key === '_')){ e.preventDefault(); e.stopPropagation(); stepZoom(e.key === '_' ? -0.1 : 0.1); return; }
     if (!inSession()) return;
     var k = inkNow();
-    if (!e.altKey && (e.key === '<' || e.key === '>')){ e.preventDefault(); e.stopPropagation(); applyInk(k.t, k.s + (e.key === '>' ? 1 : -1), true); return; }
-    if (e.altKey && (e.code === 'Comma' || e.code === 'Period')){ e.preventDefault(); e.stopPropagation(); applyInk(k.t + (e.code === 'Period' ? 1 : -1), k.s, true); return; }
+    /* v.746 [Jeremy]: "the color text changes apply to the whole prose, not just the selected words." When words are
+       chosen — selected, or lit by the pointer — the ink keys colour THOSE WORDS in the room's tint and leave the
+       page's own ink alone. With nothing chosen they are the page's ink, exactly as they were. */
+    if (!e.altKey && (e.key === '<' || e.key === '>')){
+      e.preventDefault(); e.stopPropagation();
+      var st = Math.min(4, Math.max(0, k.s + (e.key === '>' ? 1 : -1)));
+      if (inkWords(k.t, st, 'step')) return;
+      applyInk(k.t, st, true); return;
+    }
+    if (e.altKey && (e.code === 'Comma' || e.code === 'Period')){
+      e.preventDefault(); e.stopPropagation();
+      var tn = ((k.t + (e.code === 'Period' ? 1 : -1)) % 5 + 5) % 5;
+      if (inkWords(tn, k.s, 'tint')) return;
+      applyInk(tn, k.s, true); return;
+    }
   }, true);
   function mount(){
     if (!document.getElementById('dyZoom')) document.body.appendChild(zoomPill('dyZoom'));
@@ -90768,16 +90801,72 @@ html body.lp-live:not(.eink) #editor h4, html body.lp-live:not(.eink) #editor h5
   function charBefore(){ try{ var s = window.getSelection(); var n = s.anchorNode; if (!n || n.nodeType !== 3) return s.anchorOffset === 0 ? '' : ''; return (n.textContent || '').charAt(s.anchorOffset - 1) || ''; }catch(e){ return ''; } }
 
   /* ── 1 · the universal formatting keys, owned ──────────────────────────────────────────────────────────────── */
+  /* v.746 [Jeremy]: "the bold and italics … should apply to the highlighted words from the pointer selections."
+     The lit word is a selection for the length of the keystroke and no longer: it is selected, styled, and handed
+     back as a light with the caret after it. Nothing is left selected, so typing still cannot eat the word. */
+  function litRange(){ try{ return (window.__writePointer && window.__writePointer.range) ? window.__writePointer.range() : null; }catch(e){ return null; } }
+  function actOn(){
+    var s = window.getSelection();
+    if (s && s.rangeCount && !s.isCollapsed) return { sel: true };
+    var r = litRange(); if (!r) return null;
+    var e = ed(); if (!e || !e.contains(r.startContainer)) return null;
+    try{ s.removeAllRanges(); s.addRange(r); }catch(err){ return null; }
+    return { sel: false, lit: true };
+  }
+  function handBack(lit){
+    /* the words are styled now; put the light back on exactly them and the caret after them */
+    try{
+      var s = window.getSelection(); if (!s || !s.rangeCount) return;
+      var r = s.getRangeAt(0).cloneRange();
+      var end = r.cloneRange(); end.collapse(false);
+      if (lit && window.__writePointer && window.__writePointer.light) window.__writePointer.light(r.cloneRange());
+      s.removeAllRanges(); s.addRange(end);
+    }catch(e){}
+  }
   function fmtCmd(cmd){
-    var had = false;
+    var on = null;
     try{
       var e = ed(); if (!e) return false;
-      var s0 = window.getSelection(); had = !!(s0 && s0.rangeCount && !s0.isCollapsed);
+      on = actOn();                                  /* a selection, or the lit word; null when neither */
       e.focus({ preventScroll:true });
       document.execCommand('styleWithCSS', false, false);   /* the TAGS — one markup shape with Revise (v.743) and the one `htmlToMd` reads */
       document.execCommand(cmd, false, null);
-      if (had) armOneShot();   /* v.745 [Jeremy]: a style put on a SELECTION is a one-time application */
+      /* v.745: applied to WORDS it is a one-time application; on a bare caret it stays the ordinary
+         "type the next words in bold", which is why nothing is armed there. */
+      if (on){ armOneShot(); if (on.lit) handBack(true); }
     }catch(err){ return false; }
+    saved(); return true;
+  }
+  /* v.746 — the ink keys, when words are chosen: colour THOSE WORDS instead of the page. The wrap is Revise's own
+     (`edWrapRange`, 34714) minus its `commitEdit`, which belongs to Revise's buffer, not to the session's page. */
+  function wrapColor(range, col){
+    if (!range || range.collapsed) return null;
+    var span = document.createElement('span'); span.style.color = col;
+    try{
+      var rng = range.cloneRange(); var frag = rng.extractContents();
+      if (frag.querySelectorAll){
+        frag.querySelectorAll('*').forEach(function(el){ if (el.style && el.style.color) el.style.color = ''; });
+        frag.querySelectorAll('font[color]').forEach(function(f){ f.removeAttribute('color'); });
+      }
+      span.appendChild(frag); rng.insertNode(span);
+    }catch(e){ return null; }
+    return span;
+  }
+  function colorWords(col){
+    if (!col) return false;
+    var e = ed(); if (!e) return false;
+    var s = window.getSelection(); var r = null, wasLit = false;
+    if (s && s.rangeCount && !s.isCollapsed) r = s.getRangeAt(0).cloneRange();
+    else { r = litRange(); wasLit = !!r; }
+    if (!r || r.collapsed || !e.contains(r.startContainer)) return false;
+    var span = wrapColor(r, col); if (!span) return false;
+    try{
+      var nr = document.createRange(); nr.selectNodeContents(span);
+      if (wasLit && window.__writePointer && window.__writePointer.light) window.__writePointer.light(nr.cloneRange());
+      var end = nr.cloneRange(); end.collapse(false);
+      var sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(end);
+      _oneShot = { el: span, at: Date.now() };       /* what you type after the coloured words is not coloured */
+    }catch(err){}
     saved(); return true;
   }
   /* v.745 [Jeremy] — "the bold and italics keys can affect selected text in isolation, without having it toggled on
@@ -90791,7 +90880,7 @@ html body.lp-live:not(.eink) #editor h4, html body.lp-live:not(.eink) #editor h5
     var e = ed(); if (!e || !node) return null;
     if (node.nodeType === 3) node = node.parentNode;
     var out = null;
-    while (node && node !== e){ if (['B','STRONG','I','EM','U','S','STRIKE','DEL'].indexOf(node.tagName) >= 0) out = node; node = node.parentNode; }
+    while (node && node !== e){ if (['B','STRONG','I','EM','U','S','STRIKE','DEL'].indexOf(node.tagName) >= 0 || (node.tagName === 'SPAN' && node.style && node.style.color)) out = node; node = node.parentNode; }   /* v.746: a colour span counts too */
     return out;
   }
   function armOneShot(){
@@ -90945,6 +91034,7 @@ html body.lp-live:not(.eink) #editor h4, html body.lp-live:not(.eink) #editor h5
     { n:'Back to 100%',      k:M + '0',               info:1 },
     { n:'Ink, lighter \u00b7 darker', k:M + '<  ' + M + '>', info:1 },
     { n:'Ink colour',        k:M + ALT + '<  ' + M + ALT + '>', info:1 },
+    { n:'\u2026or just the words you picked', k:'select \u00b7 click', info:1 },
     { h:'Drawers' },
     { n:'These keys',        k:M + '/',               info:1 },
     { n:'This drawer',       k:M + ALT + ']',         info:1 },
@@ -91031,7 +91121,7 @@ html body.lp-live:not(.eink) #editor h4, html body.lp-live:not(.eink) #editor h5
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mount); else mount();
   window.addEventListener('load', function(){ setTimeout(mount, 800); });
   try{ new MutationObserver(mount).observe(document.body, { attributes:true, attributeFilter:['class'] }); }catch(e){}
-  window.__writeKeys = { open: open, close: close, toggle: toggle, fmt: fmtCmd, scene: newScene, pairsOn: pairsOn, sync: syncRows };
+  window.__writeKeys = { open: open, close: close, toggle: toggle, fmt: fmtCmd, scene: newScene, pairsOn: pairsOn, sync: syncRows, colorWords: colorWords };
 })();
 </script>
 <style id="dyst-pointer">
@@ -91056,8 +91146,18 @@ html body.eink ::highlight(wr-target){ background-color:transparent; text-decora
   function inSession(){ var b = document.body; return b.classList.contains('writing') && b.classList.contains('insession') && !b.classList.contains('eink'); }
   function wantsTarget(){ try{ return (typeof flowPrefs === 'function') ? (flowPrefs().target !== false) : true; }catch(e){ return true; } }
   function touch(){ try{ return window.matchMedia && window.matchMedia('(pointer: coarse)').matches; }catch(e){ return false; } }
-  function clear(){ try{ if (able()) CSS.highlights.delete(NAME); }catch(e){} }
-  function light(range){ try{ if (!able()) return false; CSS.highlights.set(NAME, new Highlight(range)); return true; }catch(e){ return false; } }
+  function clear(){ _lit = null; try{ if (able()) CSS.highlights.delete(NAME); }catch(e){} }
+  var _lit = null;   /* v.746: the keys act on the lit word, so the range has to be gettable */
+  function light(range){ try{ if (!able()) return false; CSS.highlights.set(NAME, new Highlight(range)); _lit = range.cloneRange(); return true; }catch(e){ return false; } }
+  function litRange(){
+    try{
+      if (!_lit) return null;
+      var e = ed(); if (!e) return null;
+      if (!_lit.startContainer || !_lit.startContainer.isConnected || !e.contains(_lit.startContainer)) { _lit = null; return null; }
+      if (_lit.collapsed || !_lit.toString()) { _lit = null; return null; }
+      return _lit.cloneRange();
+    }catch(e){ _lit = null; return null; }
+  }
 
   /* the word under a point — Revise's own rule, which keeps apostrophes and hyphens and stops at terminal punctuation */
   function isW(c){ return !!c && /\S/.test(c) && !/[.,;:!?"“”()\[\]{}…—–]/.test(c); }
@@ -91146,7 +91246,7 @@ html body.eink ::highlight(wr-target){ background-color:transparent; text-decora
   document.addEventListener('input', function(e){ if (inSession()) drop(); }, true);
   window.addEventListener('blur', drop);
   document.addEventListener('selectionchange', function(){ try{ var s = window.getSelection(); if (s && s.rangeCount && !s.isCollapsed) drop(); }catch(e){} });
-  window.__writePointer = { on: wantsTarget, clear: clear, word: wordRange, sentence: sentenceAt, able: able };
+  window.__writePointer = { on: wantsTarget, clear: clear, word: wordRange, sentence: sentenceAt, able: able, range: litRange, light: light };
 })();
 </script>
 <style id="dyst-subbar-small">
