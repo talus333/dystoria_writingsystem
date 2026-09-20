@@ -769,11 +769,16 @@
     font-family:var(--sans); font-size:11px; line-height:1.45}
   #edImgWarn.show{display:block}
   #edImgWarn b{color:var(--gold); font-weight:600}
-  /* formatting is shown in Read + Edit but neutralized in Write mode (a clean, distraction-free surface) */
-  body.writing #editor span[style], body.writing #editor font,
-  body.writing #editor b, body.writing #editor strong,
-  body.writing #editor i, body.writing #editor em{
-    font-family:inherit !important; font-size:inherit !important; color:inherit !important; font-weight:inherit !important; font-style:inherit !important;
+  /* v.747 [Jeremy: "the words are not actually becoming bold or italic"] — this rule used to flatten EVERY inline
+     mark in a session (b, strong, i, em and any styled span): "formatting is shown in Read + Edit but neutralized in
+     Write mode (a clean, distraction-free surface)". That was right when the room had no marks of its own. Since
+     v.743 the room has ⌘B ⌘I ⌘U ⌘⇧X, and since v.746 the ink colours the words you pick — so the rule was quietly
+     overruling the writer: the <b> was really there and rendered at weight 400, and `color:inherit !important` beat
+     the inline colour of the ink-on-words. It now does only the job it is still needed for: keeping a foreign FONT
+     and SIZE out of the column when text is pasted in. A pasted colour shows in Write now, as it always has in Read
+     and Refine, and ⌘\ takes it off. */
+  body.writing #editor span[style], body.writing #editor font{
+    font-family:inherit !important; font-size:inherit !important;
   }
   /* inserted story images — shown only in Read + Refine, hidden in Write */
   .story-img{display:block; max-width:100%; height:auto; margin:18px auto; border-radius:4px}
@@ -57240,9 +57245,12 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.669';
+  var APP_VERSION = '2026.07.20.670';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.670', date:'September 20, 2026', notes:[
+      '**Bold looks bold.** [Jeremy] A rule written long before the writing room had any keys of its own was flattening every mark in a session \u2014 the bold was really there in the page, and drawn at normal weight; the same rule was hiding the colour the ink keys put on your words. Your own marks show now. Pasted text still cannot drag a foreign font or size into the column.',
+    ]},
     { v:'2026.07.20.669', date:'September 20, 2026', notes:[
       '**The keys act on the word you clicked.** [Jeremy] A word lit by a click is now what \u2318B, \u2318I, \u2318U, \u2318\u21E7X and \u2318\\ act on \u2014 they used to switch themselves on and leave the word alone. The word is styled and handed straight back as a light, so nothing is left selected and typing still cannot replace it.',
       '**The ink follows the words you picked.** [Jeremy] With words selected or a word lit, \u2318\u2325< and \u2318\u2325> (and \u2318< / \u2318>) colour THOSE words instead of the whole page. With nothing picked they are the page\u2019s ink, as before.',
@@ -90316,9 +90324,9 @@ html body.eink #dyZoomEd{ display:none; }
       var K = window.__writeKeys; if (!K || !K.colorWords) return false;
       var base = _wInk || { t: t, s: st };
       var tt = (kind === 'tint') ? t : base.t, ss = (kind === 'step') ? st : base.s;
-      if (!K.colorWords(inkColor(tt, ss))) return false;
+      if (!K.colorWords(tt)) return false;
       _wInk = { t: tt, s: ss };
-      if (typeof flashStatus === 'function') flashStatus('These words — ' + TINTS[tt][0] + ' · ' + (ss + 1) + ' of 5');
+      if (typeof flashStatus === 'function') flashStatus('These words — ' + TINTS[tt][0]);
       return true;
     }catch(e){ return false; }
   }
@@ -90337,12 +90345,8 @@ html body.eink #dyZoomEd{ display:none; }
     /* v.746 [Jeremy]: "the color text changes apply to the whole prose, not just the selected words." When words are
        chosen — selected, or lit by the pointer — the ink keys colour THOSE WORDS in the room's tint and leave the
        page's own ink alone. With nothing chosen they are the page's ink, exactly as they were. */
-    if (!e.altKey && (e.key === '<' || e.key === '>')){
-      e.preventDefault(); e.stopPropagation();
-      var st = Math.min(4, Math.max(0, k.s + (e.key === '>' ? 1 : -1)));
-      if (inkWords(k.t, st, 'step')) return;
-      applyInk(k.t, st, true); return;
-    }
+    /* v.747: lighter · darker is the PAGE's ink and nothing else — it is about the room, not about a word. */
+    if (!e.altKey && (e.key === '<' || e.key === '>')){ e.preventDefault(); e.stopPropagation(); applyInk(k.t, k.s + (e.key === '>' ? 1 : -1), true); return; }
     if (e.altKey && (e.code === 'Comma' || e.code === 'Period')){
       e.preventDefault(); e.stopPropagation();
       var tn = ((k.t + (e.code === 'Period' ? 1 : -1)) % 5 + 5) % 5;
@@ -90833,33 +90837,47 @@ html body.lp-live:not(.eink) #editor h4, html body.lp-live:not(.eink) #editor h5
       document.execCommand(cmd, false, null);
       /* v.745: applied to WORDS it is a one-time application; on a bare caret it stays the ordinary
          "type the next words in bold", which is why nothing is armed there. */
+      if (cmd === 'removeFormat' && on) stripInk();   /* v.747 */
       if (on){ armOneShot(); if (on.lit) handBack(true); }
     }catch(err){ return false; }
     saved(); return true;
   }
   /* v.746 — the ink keys, when words are chosen: colour THOSE WORDS instead of the page. The wrap is Revise's own
      (`edWrapRange`, 34714) minus its `commitEdit`, which belongs to Revise's buffer, not to the session's page. */
-  function wrapColor(range, col){
+  function wrapColor(range, tint){
     if (!range || range.collapsed) return null;
-    var span = document.createElement('span'); span.style.color = col;
+    var span = document.createElement('span'); span.className = 'wr-ink wr-ink-' + tint;
     try{
       var rng = range.cloneRange(); var frag = rng.extractContents();
       if (frag.querySelectorAll){
-        frag.querySelectorAll('*').forEach(function(el){ if (el.style && el.style.color) el.style.color = ''; });
+        frag.querySelectorAll('*').forEach(function(el){ if (el.style && el.style.color) el.style.color = ''; if (el.classList){ el.classList.remove('wr-ink'); for (var q = 0; q < 5; q++) el.classList.remove('wr-ink-' + q); } });
         frag.querySelectorAll('font[color]').forEach(function(f){ f.removeAttribute('color'); });
       }
       span.appendChild(frag); rng.insertNode(span);
     }catch(e){ return null; }
     return span;
   }
-  function colorWords(col){
-    if (!col) return false;
+  /* `removeFormat` strips styles and styling elements, but leaves a span that carries only a class — so the tint
+     has to be taken off by hand when the writer clears the words. */
+  function stripInk(){
+    try{
+      var s = window.getSelection(); if (!s || !s.rangeCount) return;
+      var r = s.getRangeAt(0), e = ed(); if (!e) return;
+      Array.prototype.forEach.call(e.querySelectorAll('span.wr-ink'), function(n){
+        if (!r.intersectsNode || !r.intersectsNode(n)) return;
+        var p = n.parentNode; while (n.firstChild) p.insertBefore(n.firstChild, n);
+        p.removeChild(n); p.normalize();
+      });
+    }catch(err){}
+  }
+  function colorWords(tint){
+    if (tint == null) return false;
     var e = ed(); if (!e) return false;
     var s = window.getSelection(); var r = null, wasLit = false;
     if (s && s.rangeCount && !s.isCollapsed) r = s.getRangeAt(0).cloneRange();
     else { r = litRange(); wasLit = !!r; }
     if (!r || r.collapsed || !e.contains(r.startContainer)) return false;
-    var span = wrapColor(r, col); if (!span) return false;
+    var span = wrapColor(r, tint); if (!span) return false;
     try{
       var nr = document.createRange(); nr.selectNodeContents(span);
       if (wasLit && window.__writePointer && window.__writePointer.light) window.__writePointer.light(nr.cloneRange());
@@ -90880,7 +90898,7 @@ html body.lp-live:not(.eink) #editor h4, html body.lp-live:not(.eink) #editor h5
     var e = ed(); if (!e || !node) return null;
     if (node.nodeType === 3) node = node.parentNode;
     var out = null;
-    while (node && node !== e){ if (['B','STRONG','I','EM','U','S','STRIKE','DEL'].indexOf(node.tagName) >= 0 || (node.tagName === 'SPAN' && node.style && node.style.color)) out = node; node = node.parentNode; }   /* v.746: a colour span counts too */
+    while (node && node !== e){ if (['B','STRONG','I','EM','U','S','STRIKE','DEL'].indexOf(node.tagName) >= 0 || (node.tagName === 'SPAN' && ((node.style && node.style.color) || (node.classList && node.classList.contains('wr-ink'))))) out = node; node = node.parentNode; }   /* v.746: a colour span counts too — v.747: by its class */
     return out;
   }
   function armOneShot(){
@@ -91249,6 +91267,24 @@ html body.eink ::highlight(wr-target){ background-color:transparent; text-decora
   window.__writePointer = { on: wantsTarget, clear: clear, word: wordRange, sentence: sentenceAt, able: able, range: litRange, light: light };
 })();
 </script>
+<style id="dyst-word-ink">
+/* v.747 [Jeremy] — the ink a writer puts on chosen words is the room's own tint, held as a CLASS so it follows the
+   page. v.746 wrote the charcoal palette's value inline, and the same word stayed pale when the page turned to Paper.
+   Light values for the charcoal room; darker ones for Paper and for every other mode's parchment (Revise, Review, the
+   wiki, the manuscript), which is where the same prose is read. */
+.wr-ink{ color:var(--wr-ink, inherit); }
+.wr-ink-0{ --wr-ink:hsl(40 38% 34%); }
+.wr-ink-1{ --wr-ink:hsl(36 66% 32%); }
+.wr-ink-2{ --wr-ink:hsl(210 12% 38%); }
+.wr-ink-3{ --wr-ink:hsl(105 22% 28%); }
+.wr-ink-4{ --wr-ink:hsl(350 34% 38%); }
+html body.lp-live.writing:not(.dy-paper):not(.eink) .wr-ink-0{ --wr-ink:hsl(40 38% 85%); }
+html body.lp-live.writing:not(.dy-paper):not(.eink) .wr-ink-1{ --wr-ink:hsl(36 66% 76%); }
+html body.lp-live.writing:not(.dy-paper):not(.eink) .wr-ink-2{ --wr-ink:hsl(210 6% 85%); }
+html body.lp-live.writing:not(.dy-paper):not(.eink) .wr-ink-3{ --wr-ink:hsl(105 18% 80%); }
+html body.lp-live.writing:not(.dy-paper):not(.eink) .wr-ink-4{ --wr-ink:hsl(350 30% 82%); }
+html body.eink .wr-ink{ color:#000 !important; }
+</style>
 <style id="dyst-subbar-small">
 /* v.730 [Jeremy] — the sub-mode bar's controls at ¾: "all the pills in the sub-mode bar smaller. They look more prominent
    than the medallions … the explore and +element buttons are also too big. carry this across all the modes." The
