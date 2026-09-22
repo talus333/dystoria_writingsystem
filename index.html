@@ -27238,7 +27238,23 @@ function waNotesFor(keys, extraNoteKeys){
 function waProseForFrame(frame){
   try {
     var nf = (typeof editorNodeFrames === 'function') ? editorNodeFrames() : []; var t = '';
-    nf.forEach(function(o){ if (o.frame !== frame) return; var node = o.node; if (node.nodeType === 1 && (node.tagName === 'H3' || (node.classList && node.classList.contains('sec-mark')))) return; t += ' ' + (node.textContent || ''); });
+    /* v.760 — THE GUTTER FOOTER WAS BEING READ AS PROSE. `.sess-foot` (its label and the word "Locked") is chrome,
+       documented as such at the top of this file — but it is a DIV *inside* a prose `<p class="lk sess-bot">`, so
+       reading that paragraph's `textContent` swept it up and every prompt quoting the page ended "…SessionLocked".
+       Skipping the node was not enough precisely because it is a child, not a sibling: the chrome has to be removed
+       from a COPY of the paragraph before the text is taken. Measured on a real prompt; the first fix for it was
+       wrong and the harness said so. */
+    var strip = function(node){
+      try{
+        if (node.nodeType !== 1 || !node.querySelector || !node.querySelector('.sess-foot')) return node.textContent || '';
+        var c = node.cloneNode(true);
+        Array.prototype.forEach.call(c.querySelectorAll('.sess-foot'), function(x){ if (x.parentNode) x.parentNode.removeChild(x); });
+        return c.textContent || '';
+      }catch(e){ return node.textContent || ''; }
+    };
+    nf.forEach(function(o){ if (o.frame !== frame) return; var node = o.node;
+      if (node.nodeType === 1 && (node.tagName === 'H3' || (node.classList && (node.classList.contains('sec-mark') || node.classList.contains('sess-foot'))))) return;
+      t += ' ' + strip(node); });
     return t.replace(/\s+/g, ' ').trim();
   } catch(e){ return ''; }
 }
@@ -57239,9 +57255,15 @@ body.eink #soundMenu .sm-grp, body.eink #soundMenu .sm-note{color:#333}
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.682';
+  var APP_VERSION = '2026.07.20.683';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.683', date:'September 22, 2026', notes:[
+      '**Fixed: the questions and the planner were giving up on the AI too early.** [Jeremy] Three calls in the app \u2014 **Refract\u2019s questions**, the **Where next planner**, and **re-seed from the page** \u2014 were cutting the AI off after 60 seconds while every other feature waited the usual two minutes. When the first model is slow and the call falls through to the next one, a minute is not always enough, so those three alone reported *\u201cThe AI took too long\u201d* on calls that were still coming. They now wait as long as everything else. The planner also **says when it is being slow** rather than sitting silent, and says plainly that nothing is lost when it does fail.',
+      '**Fixed: the page\u2019s own gutter label was being read as your prose.** Every prompt that quotes the page \u2014 Write about, Explore, the questions, the planner \u2014 ended with the session footer\u2019s text stuck to your last sentence. The model now sees only what you wrote.',
+      '**The plan has a drawer of its own.** [Jeremy] **Plan** sits under Focus and Questions on the left edge. The storyline checklist and its steps moved out of the Focus drawer \u2014 the plan was the tallest thing in there, and it is not focus.',
+      '**Dictate is a held key now.** [Jeremy] Its tab is gone and the microphone is back in the corner where it started. **Hold \u2318** (Ctrl on Windows) **and talk; let go and it stops.** It only starts if you hold the key on its own \u2014 \u2318B, \u2318S and every other shortcut are untouched \u2014 and switching away from the window stops it listening. The row is in the Keys drawer with everything else.',
+    ]},
     { v:'2026.07.20.682', date:'September 21, 2026', notes:[
       '**Eight seconds to change your mind about a branch.** [Jeremy] Going back to an earlier step and walking the branch you didn\u2019t take still sets aside the steps below it \u2014 but now the planner says so and offers **\u21ba put them back** for eight seconds. Press it and the path is exactly as it was. Carry on and the offer quietly goes. It never blocks anything, and taking a step or closing the planner ends it.',
     ]},
@@ -91173,6 +91195,32 @@ html body.lp-live:not(.eink) #editor h4, html body.lp-live:not(.eink) #editor h5
     saved(); return true;
   }
 
+  /* ── 4b · v.760 · HOLD ⌘ TO DICTATE ────────────────────────────────────────────────────────────────────────
+     [Jeremy] "holding Command turns it on". Push-to-talk: hold the key on its own and dictation starts; let go and
+     it stops. The care is all in NOT firing when ⌘ is a modifier — ⌘B, ⌘S, ⌘Tab and every other shortcut begins
+     with exactly this keydown. So: the key must be held ALONE for 600ms, any other key cancels the pending start,
+     and losing the window stops a live one. It never starts unless dictation is actually available. */
+  var HOLDT = null, HELD = false;
+  function micBtn(){ var m = document.getElementById('writeMic'); return (m && m.classList.contains('avail')) ? m : null; }
+  function micOn(){ var m = micBtn(); if (m && !m.classList.contains('on')) m.click(); }
+  function micOff(){ var m = document.getElementById('writeMic'); if (m && m.classList.contains('on')) m.click(); }
+  function holdCancel(){ if (HOLDT){ clearTimeout(HOLDT); HOLDT = null; } }
+  function holdStop(){ holdCancel(); if (HELD){ HELD = false; micOff(); } }
+  document.addEventListener('keydown', function(e){
+    if (e.key !== 'Meta' && e.key !== 'Control'){ holdCancel(); return; }   /* ⌘ + anything is a shortcut, not a hold */
+    if (e.repeat || HOLDT || HELD) return;
+    if (!inSession() || !micBtn()) return;
+    HOLDT = setTimeout(function(){
+      HOLDT = null;
+      if (!inSession() || !micBtn()) return;
+      HELD = true; micOn();
+      try{ if (typeof flashStatus === 'function') flashStatus('Listening — let go to stop'); }catch(_){}
+    }, 600);
+  }, true);
+  document.addEventListener('keyup', function(e){ if (e.key === 'Meta' || e.key === 'Control') holdStop(); }, true);
+  window.addEventListener('blur', holdStop);          /* ⌘Tab away and it must not keep listening */
+  document.addEventListener('visibilitychange', function(){ if (document.hidden) holdStop(); });
+
   /* ── 5 · the drawer ────────────────────────────────────────────────────────────────────────────────────────── */
   var ROWS = [
     { h:'Formatting' },
@@ -91186,6 +91234,9 @@ html body.lp-live:not(.eink) #editor h4, html body.lp-live:not(.eink) #editor h5
     /* v.757: the path's own key. Owned by `dyst-wherepath-js`, which knows what is ticked; listed here because
        this drawer is where a writer looks for a key, the same arrangement the scale keys have. */
     { n:'Written \u00b7 next step', k:M + SH + '\u2193', act:function(){ try{ window.__wherePath.advance(); }catch(e){} } },
+    /* v.760 [Jeremy] "move the dictate button to the Keys as a quick key, holding Command turns it on." */
+    { n:'Dictate', k:(MAC ? 'hold \u2318' : 'hold Ctrl'), act:function(){ try{ var m = document.getElementById('writeMic'); if (m) m.click(); }catch(e){} },
+      why:'Hold it and talk; let go and it stops. Pressing this row is the same as the microphone.' },
     { h:'The pointer' },
     { n:'Light the word',    k:'click',                info:1 },
     { n:'Take the sentence', k:'double-click',         info:1 },
@@ -91393,7 +91444,7 @@ html body.lp-live:not(.eink) #editor h4, html body.lp-live:not(.eink) #editor h5
   window.addEventListener('load', function(){ setTimeout(mount, 800); });
   try{ new MutationObserver(mount).observe(document.body, { attributes:true, attributeFilter:['class'] }); }catch(e){}
   var build_ = build;
-  window.__writeKeys = { open: open, close: close, toggle: toggle, fmt: fmtCmd, scene: newScene, pairsOn: pairsOn, sync: syncRows, colorWords: colorWords, addTab: addTab, showTab: showTab, rail: rail, tidy: tidy };
+  window.__writeKeys = { hold: function(){ return { pending: !!HOLDT, live: HELD }; }, open: open, close: close, toggle: toggle, fmt: fmtCmd, scene: newScene, pairsOn: pairsOn, sync: syncRows, colorWords: colorWords, addTab: addTab, showTab: showTab, rail: rail, tidy: tidy };
 })();
 </script>
 <style id="dyst-pointer">
@@ -91764,6 +91815,7 @@ body.eink #wpCard .wp-steer{ background:transparent; border-color:#000; border-w
   var LENSCAP = 4;
   var CUR = null;   /* { i, col, sid, key } */
   var BUSY = false;
+  var SLOWT = null;   /* v.760: the "still reading" notice */
 
   function P(){ return window.__planPaths || null; }
   function esc(x){ return String(x == null ? '' : x).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
@@ -91992,12 +92044,26 @@ body.eink #wpCard .wp-steer{ background:transparent; border-color:#000; border-w
       else user += '\n\nThe path is empty — these are the section’s first steps.';
       if (pth.notThese && pth.notThese.length) user += '\n\nNOT THESE (already offered and rejected): ' + pth.notThese.slice(-12).join(' | ');
       user += '\n\nOffer 3 possible next steps.';
-      var out = await aiCall(sys, user, { feature:'where_next_path', maxTokens: 260, json: true, timeoutMs: 60000 });
+      /* v.760 — THE SIXTY-SECOND BUG. [Jeremy] "it wouldn't generate questions. it froze on the ai trying to read
+         the card: The AI took too long — try again."
+         Exactly THREE calls in this file carried `timeoutMs: 60000` — this one, re-seed, and `refract_q`. Two of
+         those three are the two features that failed; everything else in the app inherits `aiCall`'s own default
+         and rode through the same conditions. The 60s came from the v.737 timeout note being read as a convention
+         when v.737's actual default is 120s, and the worker runs a FALLBACK CHAIN: when the first provider is slow
+         or down, the chain legitimately spends longer than a minute before the second one answers. These three
+         gave up halfway through a call that was still coming.
+         The override is gone, not re-tuned: one place owns this number, and it is `aiCall`. */
+      var out = await aiCall(sys, user, { feature:'where_next_path', maxTokens: 260, json: true });
       CUR.offers = threeFrom(out); CUR.askKind = null; BUSY = false;
+      if (SLOWT){ clearTimeout(SLOWT); SLOWT = null; }
       paint(get(CUR.key) || pth, false, CUR.offers.length ? '' : 'Nothing came back — try again.');
     }catch(e){
       BUSY = false; CUR.askKind = null;
-      paint(get(CUR.key) || pth, false, (typeof aiErrMsg === 'function') ? aiErrMsg(e) : 'The AI did not answer just now.');
+      if (SLOWT){ clearTimeout(SLOWT); SLOWT = null; }
+      /* v.760 — and when it does fail, say what to do about it. ↻ is already in the foot below this line. */
+      var msg = (typeof aiErrMsg === 'function') ? aiErrMsg(e) : 'The AI did not answer just now.';
+      if (/took too long/i.test(msg)) msg = 'The AI took too long. Nothing is lost — press ↻ three more to ask again.';
+      paint(get(CUR.key) || pth, false, msg);
     }
   }
 
@@ -92136,7 +92202,7 @@ body.eink #wpCard .wp-steer{ background:transparent; border-color:#000; border-w
     clearUndo(false);
     var b = document.getElementById('wpBd'); if (b) b.remove(); CUR = null; BUSY = false;
     /* v.754: a plan extended over the room is read back by the room the moment the planner shuts */
-    try{ var pane = document.querySelector('#focusPanel .fpx-pane[data-pane="focus"]'); if (pane && document.getElementById('wpRoom')) roomBlock(pane); }catch(e){}
+    try{ var pane = document.querySelector('#focusPanel .fpx-pane[data-pane="plan"]'); if (pane && document.getElementById('wpRoom')) roomBlock(pane); }catch(e){}
   }
   function paint(pth, thinking, err){
     var bd = document.getElementById('wpBd');
@@ -92334,7 +92400,20 @@ body.eink #wpCard .wp-steer{ background:transparent; border-color:#000; border-w
         card.appendChild(st);
       }
       var lbl = document.createElement('div'); lbl.className = 'wp-lbl'; lbl.textContent = 'Next ▸'; card.appendChild(lbl);
-      if (thinking){ var th = document.createElement('div'); th.className = 'wp-think'; th.textContent = '…reading your card for what could come next'; card.appendChild(th); }
+      if (thinking){
+        var th = document.createElement('div'); th.className = 'wp-think'; th.textContent = '…reading your card for what could come next';
+        card.appendChild(th);
+        /* v.760 — a wait with no sign of life reads as a freeze, and that is what Jeremy saw. The line says so
+           after twelve seconds rather than sitting silent until the timeout. */
+        try{
+          if (SLOWT) clearTimeout(SLOWT);
+          SLOWT = setTimeout(function(){
+            SLOWT = null;
+            var n = document.querySelector('#wpCard .wp-think');
+            if (n && BUSY) n.textContent = '…still reading. The model is being slow — this can take a minute when it falls back to another one.';
+          }, 12000);
+        }catch(e){}
+      }
       else if (err){ var e2 = document.createElement('div'); e2.className = 'wp-think'; e2.textContent = err; card.appendChild(e2); }
       (CUR.offers || []).forEach(function(o){
         var row = document.createElement('div'); row.className = 'wp-o';
@@ -92548,7 +92627,8 @@ body.eink #wpCard .wp-steer{ background:transparent; border-color:#000; border-w
     var box = document.getElementById('wpRoom');
     if (!box){ box = document.createElement('div'); box.id = 'wpRoom'; }
     box.innerHTML = '';
-    var h = document.createElement('div'); h.className = 'fpx-ah'; h.textContent = 'The plan'; box.appendChild(h);
+    /* v.760 — in a drawer of its own the block no longer needs to announce itself; the drawer's title does it. */
+    var h = document.createElement('div'); h.className = 'fpx-ah'; h.textContent = 'Which storylines today'; box.appendChild(h);
 
     var list = document.createElement('div'); list.className = 'wpr-picks';
     cross.forEach(function(c){
@@ -92631,7 +92711,7 @@ body.eink #wpCard .wp-steer{ background:transparent; border-color:#000; border-w
     return { i:i, list:list, at:at, cur:(at >= 0 ? list[at] : null), done:list.filter(function(r){ return r.done; }).length };
   }
   function repaint(){
-    try{ var pane = document.querySelector('#focusPanel .fpx-pane[data-pane="focus"]'); if (pane && document.getElementById('wpRoom')) roomBlock(pane); }catch(e){}
+    try{ var pane = document.querySelector('#focusPanel .fpx-pane[data-pane="plan"]'); if (pane && document.getElementById('wpRoom')) roomBlock(pane); }catch(e){}
     try{ if (typeof applyFsHeader === 'function') applyFsHeader(); }catch(e){}
   }
   /* ⌘⇧↓ / Ctrl+Shift+↓ — "written; next rung". The key does nothing at all when there is no plan, and says so
@@ -92682,7 +92762,7 @@ body.eink #wpCard .wp-steer{ background:transparent; border-color:#000; border-w
         + 'Return ONLY JSON: {"done":[1,3]} — the numbers of the covered steps, or an empty array.';
       var user = 'STEPS:\n' + pth.rungs.map(function(r, n){ return (n + 1) + '. [' + (r.kind || 'own') + '] ' + r.text; }).join('\n')
         + '\n\nPROSE:\n' + prose.slice(-9000) + '\n\nWhich steps does the prose already cover?';
-      var out = await aiCall(sys, user, { feature:'where_next_reseed', maxTokens: 120, json: true, timeoutMs: 60000 });
+      var out = await aiCall(sys, user, { feature:'where_next_reseed', maxTokens: 120, json: true });   /* v.760: see above */
       var d = null; try{ d = JSON.parse(out); }catch(e){ if (typeof parseJsonLoose === 'function'){ try{ d = parseJsonLoose(out); }catch(_){} } }
       var nums = (d && Array.isArray(d.done)) ? d.done : (Array.isArray(d) ? d : []);
       var hit = {}; nums.forEach(function(x){ var k = parseInt(x, 10); if (k >= 1 && k <= pth.rungs.length) hit[k - 1] = 1; });
@@ -92920,11 +93000,10 @@ body.writing.insession:not(.eink) .fpx-pane{ display:flex; flex-direction:column
 /* Dictate — its own drawer since v.751 */
 body.writing.insession:not(.eink) #fpxDictate{ display:flex; align-items:center; gap:9px; width:100%; padding-top:2px; }
 body.writing.insession:not(.eink) #fpxDictate .fpx-dlbl{ font-family:var(--sans); font-size:13px; color:#e7e2d8; }
-body.writing.insession:not(.eink):not(.dict-live) #focusPanel #writeMic{ position:static !important; inset:auto !important; width:34px !important; height:34px !important; flex:0 0 auto; z-index:auto !important; }
+/* v.760 — the three `.dict-live` rules that pulled the mic out of the Dictate drawer are gone with the drawer:
+   the button never enters the panel now, so there is nothing to pull it out of. */
 /* …but while it is LISTENING it goes back to the corner, so it can always be stopped — the same two IDs as the
    resting rule above, or that one wins on specificity and the button cannot be reached once the drawer is shut */
-body.writing.insession:not(.eink).dict-live #focusPanel #writeMic{ position:fixed !important; left:16px !important; top:58px !important; right:auto !important; bottom:auto !important; z-index:121 !important; width:36px !important; height:36px !important; }
-body.writing.insession:not(.eink).dict-live #fpxDictate .fpx-dlbl::after{ content:' \2014 listening in the corner'; opacity:.65; }
 #focusPanel .fpx-lead{ font-family:var(--sans); font-size:11.5px; line-height:1.55; color:rgba(202,191,166,.62); margin:2px 0 4px; }
 /* [Jeremy] "the focus elements are already going to the top of the page when added so they don't need to show in
    the drawer itself" — the chip row is the header's job in a session. */
@@ -92994,8 +93073,12 @@ body.writing.insession:not(.eink) #focusPanel .fb-items{ display:none !important
 (function(){
   'use strict';
   var PANES = {};
-  var ORDER = [['focus', 'Focus'], ['questions', 'Questions'], ['dictate', 'Dictate']];
-  var TITLES = { focus:'Focus', questions:'Questions', dictate:'Dictate' };
+  /* v.760 [Jeremy] "can we move the Plan stuff out of the focus drawer and into a Plan tab below the Questions
+     tab?" · "remove the dictate tab and move the dictate button to the Keys as a quick key". The left edge is
+     Focus · Questions · Plan now — the plan was the tallest thing in the Focus drawer and it is not focus, it is
+     the other half of the room's reading. */
+  var ORDER = [['focus', 'Focus'], ['questions', 'Questions'], ['plan', 'Plan']];
+  var TITLES = { focus:'Focus', questions:'Questions', plan:'Plan' };   /* v.760: Plan replaced Dictate on this edge */
   function panel(){ return document.getElementById('focusPanel'); }
   function inSession(){ var b = document.body; return b.classList.contains('writing') && b.classList.contains('insession') && !b.classList.contains('eink'); }
 
@@ -93123,11 +93206,9 @@ body.writing.insession:not(.eink) #focusPanel .fb-items{ display:none !important
      which storylines to write along today. The block itself lives in `dyst-wherepath-js`, which owns the store. */
   var _pt = 0;
   function plan(){
-    var f = PANES.focus; if (!f || !f.isConnected) return;
+    var f = pane('plan'); if (!f || !f.isConnected) return;
     if (!window.__wherePath || !window.__wherePath.room){ if (_pt++ < 12) setTimeout(plan, 350); return; }
-    var box = window.__wherePath.room(f); if (!box) return;
-    var addBox = document.getElementById('fpxAdd');
-    if (addBox && addBox.parentNode === f && box.previousSibling !== addBox) f.insertBefore(box, addBox.nextSibling);
+    window.__wherePath.room(f);   /* the block is the whole pane now — nothing to slot it between */
   }
 
   /* ── the guides and exercises, in full ───────────────────────────────────────────────────────────────────── */
@@ -93171,11 +93252,24 @@ body.writing.insession:not(.eink) #focusPanel .fb-items{ display:none !important
   }
 
   /* ── Dictate ─────────────────────────────────────────────────────────────────────────────────────────────── */
-  /* v.751 [Jeremy]: "Add a separate tab for dictate below questions with the dictate options." It lives in a drawer
-     of its own — except while it is listening, when it returns to the corner it came from (v.744 put it at 16,58)
-     so there is always a way to stop it with the drawer shut. */
+  /* v.760 [Jeremy]: "remove the dictate tab and move the dictate button to the Keys as a quick key, holding Command
+     turns it on." The drawer is gone. The button goes back to the corner it came from on every screen — which is
+     what v.752 already had to do for phones, so this is the phone rule becoming the only rule — and the KEY is now
+     the way in (`dyst-keys-js` owns it, and lists it where a writer looks for a key). */
   function phone(){ try{ return document.body.classList.contains('mobile-min') || (window.matchMedia && window.matchMedia('(max-width:500px)').matches); }catch(e){ return false; } }
   function dictate(){
+    try{
+      var mic0 = document.getElementById('writeMic'); if (!mic0) return;
+      if (mic0.parentNode !== document.body) document.body.appendChild(mic0);
+      /* v.760 — GUARDED, AND THE GUARD IS THE POINT. `classList.remove()` rewrites the class attribute even when
+         the class was not there, and `#focusPanel` is watched by a MutationObserver that calls `reflow()` — which
+         calls this. An unguarded remove here looped forever and the page never finished loading. A write that
+         looks like a no-op is not a no-op to an observer. */
+      if (document.body.classList.contains('dict-live')) document.body.classList.remove('dict-live');
+    }catch(e){}
+    return;
+  }
+  function _dictateOld(){
     try{
       var mic = document.getElementById('writeMic'); if (!mic) return;
       /* v.752 — THE DRAWERS ARE DESKTOP FURNITURE. `#fpxRail` is `:not(.mobile-min)`, so on a phone there is no
@@ -93480,7 +93574,9 @@ body.writing.insession:not(.eink) #focusPanel .fb-items{ display:none !important
         + (miss.length ? ('\n\nIN THE WRITER’S CONTEXT BUT NOT ON THIS PAGE (computed, not guessed — at most one question may reach for one of these, and only if it belongs): ' + miss.join(', ')) : '')
         + (again ? '\n\nThe writer has asked again: ask three DIFFERENT questions from the obvious ones.' : '')
         + '\n\nThree questions, as a JSON array of strings.';
-      var out = await aiCall(sys, user, { feature: 'refract_q', maxTokens: 300, json: true, timeoutMs: 60000 });
+      /* v.760 — [Jeremy] "it wouldn't generate questions." This is that feature, and it was one of the three
+         carrying a 60s cap while the rest of the app used 120s. See the note in `dyst-wherepath-js`. */
+      var out = await aiCall(sys, user, { feature: 'refract_q', maxTokens: 300, json: true });
       var qs = threeFrom(out);
       _busy = false;
       if (!qs.length) render(sc, [], 'Nothing came back — try again.');
