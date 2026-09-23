@@ -21836,7 +21836,7 @@ function zoneDepth(idx){
 function zoneIsAtStake(w){ return /^at[\s-]?(stake|risk)$/i.test(zoneLabelOf(w)); }
 /* the bearers the story already has — a member who bears a stake is not asked again */
 function stakeBearerKeys(){
-  var out = {}; try{ var all = (window.__stakeData && window.__stakeData.all) ? window.__stakeData.all() : {}; Object.keys(all).forEach(function(k){ var r = all[k]; if(r && r.bearer) out[r.bearer] = 1; }); }catch(e){}
+  var out = {}; try{ var all = (window.__stakeData && window.__stakeData.all) ? window.__stakeData.all() : {}; Object.keys(all).forEach(function(k){ var r = all[k]; if(!r) return; if(r.bearer) out[r.bearer] = 1; (Array.isArray(r.bearers) ? r.bearers : []).forEach(function(b){ if(b) out[b] = 1; }); }); }catch(e){}   /* v.789 — every bearer */
   return out;
 }
 function zoneStakeCandidates(w){
@@ -24012,6 +24012,32 @@ function ensurePlotElement(plotName){
 }
 function renamePart(id, name){ const p = partById(id); if (p){ p.name = (name || '').trim() || p.name; if (typeof scheduleAutosave === 'function') scheduleAutosave(); } }
 function framePartId(i){ const fr = (state.frames || [])[i]; return fr ? (fr.partId || null) : null; }
+/* v.790 [Jeremy] — "the conflict card for the Strange Attractors story says there are no parts, but there are definitely parts".
+   The Plot grid draws a Part wherever a section's `partId` changes — it never asks whether that Part has a RECORD in
+   `state.session.parts`. A section can point to a Part with no record (lost in an import, a merge, a restore), and then
+   the grid still draws it — nameless, "Part name…" — while everything that reads the list of Parts (the Conflict card, the
+   Part's own rename, which does nothing without a record) sees none. The record is given back, in its place in the
+   story, with no name, so the writer can name it; nothing else about the story changes. Run when the grid draws and when
+   the Conflict card asks — never on the story-switch path, where frames and session can briefly belong to two stories. */
+function dystAdoptOrphanParts(){
+  try {
+    if (!state.session || !Array.isArray(state.frames) || !state.frames.length) return 0;
+    ensureParts();
+    const parts = state.session.parts, known = {}; parts.forEach(p => { if (p && p.id) known[p.id] = 1; });
+    let made = 0, prevKnown = null;
+    state.frames.forEach(fr => {
+      const pid = fr && fr.partId; if (!pid) return;
+      if (known[pid]){ prevKnown = pid; return; }
+      /* in its place: right after the Part the story reaches before it, or first */
+      let at = 0; if (prevKnown){ const j = parts.findIndex(p => p && p.id === prevKnown); at = j >= 0 ? j + 1 : parts.length; }
+      parts.splice(at, 0, { id: pid, name: '' });
+      known[pid] = 1; prevKnown = pid; made++;
+    });
+    if (made && typeof scheduleAutosave === 'function') scheduleAutosave();
+    return made;
+  } catch(e){ return 0; }
+}
+try{ window.dystAdoptOrphanParts = dystAdoptOrphanParts; }catch(e){}
 function partOfFrame(i){ const id = framePartId(i); return id ? partById(id) : null; }
 function partStartIndex(id){ const fr = state.frames || []; for (let i = 0; i < fr.length; i++){ if (fr[i].partId === id) return i; } return -1; }
 // The Part name to show as a header BEFORE section i (only when i is that Part's first section), else null.
@@ -25287,6 +25313,7 @@ function migrateElementKey(oldKey, newKey){
         const r = s.stakeData[k]; if (!r) return;
         if (r.bearer === oldKey) r.bearer = newKey;
         if (r.threat === oldKey) r.threat = newKey;
+        ['bearers', 'threats'].forEach(f => { if (Array.isArray(r[f])) r[f] = r[f].map(x => x === oldKey ? newKey : x); });   /* v.789 — the lists */
       });
       /* standing bonds (v.412) are keyed by element key and have NEVER been migrated — a rename
          silently detached the renamed element from every relationship it stood in. */
@@ -46388,6 +46415,12 @@ document.addEventListener('DOMContentLoaded', init);
   #stakeCreator .stb-v{flex:1 1 auto; text-align:left; font-family:var(--serif); font-size:15px; color:var(--ink); background:transparent; border:1px solid transparent; border-radius:7px; padding:4px 8px; cursor:pointer}
   #stakeCreator .stb-v:hover{border-color:var(--line); background:rgba(0,0,0,.03)}
   #stakeCreator .stb-v.empty{color:var(--ink-faint); font-style:italic}
+  #stakeCreator .stb-f{flex-wrap:wrap}
+  #stakeCreator .stb-vals{display:contents}
+  #stakeCreator .stb-chip{display:inline-flex; align-items:center; gap:4px; font-family:var(--serif); font-size:15px; color:var(--ink); background:rgba(0,0,0,.04); border:1px solid var(--line); border-radius:999px; padding:2px 4px 2px 10px}
+  #stakeCreator .stb-chip-x{border:none; background:none; color:var(--ink-faint); font-size:15px; line-height:1; cursor:pointer; padding:0 4px}
+  #stakeCreator .stb-chip-x:hover{color:var(--ink)}
+  #stakeCreator .stb-v.stb-more{flex:0 0 auto; font-family:var(--sans); font-size:11.5px; font-style:normal; color:var(--ink-faint); border:1px dashed var(--line); border-radius:999px; padding:3px 10px}
   #stakeCreator .stb-reads{font-family:var(--serif); font-style:italic; font-size:12.5px; color:var(--ink-soft); padding:8px 2px 0}
   #stakeCreator .stb-gap{font-family:var(--sans); font-size:11.5px; line-height:1.5; color:var(--ink-faint); padding:8px 2px 2px}
   #stakeCreator .stb-gap.ok{color:#5d7a4a}
@@ -58231,9 +58264,16 @@ body.eink .pl-filterpick .pf-row.on .pf-box{ background:#000; border-color:#000;
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.711';
+  var APP_VERSION = '2026.07.20.713';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.713', date:'September 23, 2026', notes:[
+      '**The Plot grid’s frozen edges are solid.** [Jeremy] Scrolled right and down, the cards used to show through the header row and the sections column. Both now have the page’s own ground behind them, gutters included, so the cards pass underneath.',
+      '**Parts the grid shows are Parts everywhere.** [Jeremy] A story could have sections pointing to a Part that had no record of its own — the grid drew it, nameless (“Part name…”), but the Conflict card said the story had no Parts and the name could not be set. Such a Part is given its record back, in its place, ready to be named.'
+    ]},
+    { v:'2026.07.20.712', date:'September 23, 2026', notes:[
+      '**More than one on either side of a stake.** [Jeremy] A stake can be lost by **several characters or groups**, and threatened by **several things at once** — in the Stakes Builder, each one you choose is a chip with its own ×, and **+ another** adds the next; the stake card in the Notepad does the same. The Conflict layer reads every one: a stake threatened by the Witch *and* the Wood runs against another **and** against the world, and shows in both lanes of the Conflict card and the strip. ✦ Break it down can name several too.'
+    ]},
     { v:'2026.07.20.711', date:'September 23, 2026', notes:[
       '**Plainer words for a stake.** [Jeremy] The Stakes Builder’s three fields are now **Who could lose it**, **Threat** and **Kind of conflict** (they were “Whose it is”, “What takes it” and “The axis”), with plain hints in each — and the stake card in the Notepad uses the same three names.'
     ]},
@@ -63555,7 +63595,11 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
      card's prose — carried into the story stake note by the ✎ on the Stakes row [Jeremy]. */
   function stakeBearerName(key){
     try{
-      var r = (window.__stakeData && window.__stakeData.rec) ? window.__stakeData.rec(key) : null; var b = r && r.bearer; if(!b) return '';
+      var r = (window.__stakeData && window.__stakeData.rec) ? window.__stakeData.rec(key) : null;
+      /* v.789 — every bearer, "Hansel & Gretel" */
+      var _all = (window.__stakeData && window.__stakeData.listOf) ? window.__stakeData.listOf(r, 'bearer') : ((r && r.bearer) ? [r.bearer] : []);
+      if(_all.length > 1){ var _ns = _all.map(function(k){ return (window.__conflict && window.__conflict.nameFor) ? window.__conflict.nameFor(k) : ''; }).filter(Boolean); return _ns.length > 2 ? (_ns.slice(0, -1).join(', ') + ' & ' + _ns[_ns.length - 1]) : _ns.join(' & '); }
+      var b = _all[0]; if(!b) return '';
       if(String(b).indexOf('group:') === 0){ var gid = String(b).slice(6); var g = ((state.session && state.session.beingGroups) || []).filter(function(x){ return x && x.id === gid; })[0]; return g ? (g.name || '') : ''; }
       var a = api(); var w = (a && a.npFindEl) ? a.npFindEl(b) : null; return w ? ((a.displayName && a.displayName(w)) || w.name || w.word || '') : '';
     }catch(e){ return ''; }
@@ -63889,7 +63933,7 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
       if(!parts.length) body.appendChild(hint('Your story has no Parts yet. Divide it into Parts on the Plot grid, and each can run against something of its own.'));
       parts.forEach(function(p){
         var r=document.createElement('div'); r.className='cat-org-row pl-cfc-part'; r.dataset.part=p.id;
-        var nm=document.createElement('span'); nm.className='cat-org-nm'; nm.textContent=p.name||'Part'; r.appendChild(nm);
+        var nm=document.createElement('span'); nm.className='cat-org-nm'; nm.textContent=p.name||('Part '+(parts.indexOf(p)+1)+' \u00b7 unnamed'); r.appendChild(nm);
         var w=C.byPart(p.id);
         var sel=document.createElement('button'); sel.type='button'; sel.className='cat-org-sel pl-cfc-partsel'+(w?' on':''); sel.textContent=(w?w.toLowerCase():'same as the story')+' \u25be';
         sel.title='What '+(p.name||'this Part')+' chiefly runs against';
@@ -63907,13 +63951,15 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
         var ln=document.createElement('div'); ln.className='pl-cfc-lane'; ln.dataset.lane=b;
         var lh=document.createElement('div'); lh.className='pl-cfc-lanehd'; lh.textContent=CF_LANE_BTN[b]; ln.appendChild(lh);
         var lr=document.createElement('div'); lr.className='pov-narr pl-cfc-lanerow';
-        var mine=reads.filter(function(x){ return x.bucket===b; });
+        var mine=reads.filter(function(x){ return (x.buckets||[]).indexOf(b)>=0; });   /* v.789 — every lane it runs in */
+        var amp=function(ks){ var ns=ks.map(function(k){ return C.nameFor(k); }).filter(Boolean); return ns.length>2 ? (ns.slice(0,-1).join(', ')+' & '+ns[ns.length-1]) : ns.join(' & '); };
         mine.forEach(function(x){
           var pl=document.createElement('span'); pl.className='pl-cfc-stk'; pl.dataset.key=x.key;
           var n1=document.createElement('b'); n1.textContent=x.name; pl.appendChild(n1);
-          var bn=C.nameFor(x.bearer); if(bn) pl.appendChild(document.createTextNode(' \u2014 '+bn));
-          var tn=(x.threat && x.threat!==x.bearer)?C.nameFor(x.threat):''; if(tn){ var th=document.createElement('span'); th.className='pl-cfc-threat'; th.textContent=' \u27f5 '+tn; pl.appendChild(th); }
-          else if(x.axis){ var ax=document.createElement('span'); ax.className='pl-cfc-axis'; ax.textContent=' '+x.axis.toLowerCase(); pl.appendChild(ax); }
+          var bn=amp(x.bearers||[]); if(bn) pl.appendChild(document.createTextNode(' \u2014 '+bn));
+          var lt=[]; (x.axes||[]).forEach(function(a){ if(a.bucket!==b) return; (a.threats||[]).forEach(function(t){ if((x.bearers||[]).indexOf(t)<0 && lt.indexOf(t)<0) lt.push(t); }); });
+          var tn=amp(lt); if(tn){ var th=document.createElement('span'); th.className='pl-cfc-threat'; th.textContent=' \u27f5 '+tn; pl.appendChild(th); }
+          else if(x.axis && !(x.threats||[]).length){ var ax=document.createElement('span'); ax.className='pl-cfc-axis'; ax.textContent=' '+x.axis.toLowerCase(); pl.appendChild(ax); }
           pl.title='Open this stake in the Stakes Builder';
           pl.addEventListener('click', function(e){ e.stopPropagation(); if(typeof window.openStakeCreator==='function'){ window.openStakeCreator({ edit:x.key }); cfAfterBuilder(render); } });
           lr.appendChild(pl); });
@@ -63922,11 +63968,11 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
         add.addEventListener('click', function(e){ e.stopPropagation(); if(typeof window.openStakeCreator==='function'){ window.openStakeCreator({ axis:CF_LANE_AXIS[b] }); cfAfterBuilder(render); } });
         lr.appendChild(add); ln.appendChild(lr); body.appendChild(ln);
       });
-      var waiting=reads.filter(function(x){ return !x.bucket; });
+      var waiting=reads.filter(function(x){ return !(x.buckets||[]).length; });
       if(waiting.length){
         var wb=document.createElement('div'); wb.className='pl-cfc-waiting';
         var wh=document.createElement('b'); wh.textContent='Waiting for a threat'; wb.appendChild(wh);
-        waiting.forEach(function(x){ var bn=C.nameFor(x.bearer); var a2=document.createElement('button'); a2.type='button'; a2.className='pl-cfc-wait'; a2.dataset.key=x.key; a2.textContent=x.name+(bn?(' \u2014 '+bn):''); a2.title='Name its threat';
+        waiting.forEach(function(x){ var bn=(x.bearers||[]).map(function(k){ return C.nameFor(k); }).filter(Boolean).join(' & '); var a2=document.createElement('button'); a2.type='button'; a2.className='pl-cfc-wait'; a2.dataset.key=x.key; a2.textContent=x.name+(bn?(' \u2014 '+bn):''); a2.title='Name its threat';
           a2.addEventListener('click', function(e){ e.stopPropagation(); if(typeof window.openStakeCreator==='function'){ window.openStakeCreator({ edit:x.key }); cfAfterBuilder(render); } }); wb.appendChild(a2); });
         body.appendChild(wb);
       }
@@ -65154,6 +65200,7 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
   var paintPlotColsBtns=null;   // set when the plot bar is built
   function renderPlot(){
     var host=document.getElementById('planPlot'); if(!host) return;
+    try{ if(typeof window.dystAdoptOrphanParts==='function') window.dystAdoptOrphanParts(); }catch(e){}   /* v.790 — a Part the sections point to has a record */
     /* The Arc Analysis and Compare open INSIDE Plot, exactly as they opened inside the
        Arcs tab, with a way back to the grid. [Jeremy, #25 step 3: "i see the arcs
        analysis as a section that opens within the plot section just like it does
@@ -65642,7 +65689,7 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
        this; the invariant is that every row is label + drawn columns + end. */
     // label column: a single ＋ on the timeline — opens the insert menu (Add a section / scene row / Part / prologue / epilogue).
     // It carries a solid background so the gold spine reads UNDER it, not through it.
-    var lab=document.createElement('div'); lab.className='pl-insrow pl-inscell';
+    var lab=document.createElement('div'); lab.className='pl-insrow pl-inscell pl-inslab';   /* v.790 — frozen with the section column */
     var more=document.createElement('button'); more.className='pl-plus pl-insmore'; more.textContent='＋'; more.title='Add here — a section (its own diamond), a Part, or a prologue/epilogue';
     more.addEventListener('click', function(e){ e.stopPropagation(); openInsertMenu(more, i); });
     lab.appendChild(more); frag.appendChild(lab);
@@ -85872,6 +85919,30 @@ html body:not(.eink) .pl-pcolhd, html body.ember:not(.eink) .pl-pcolhd, html bod
 html body:not(.eink) .pl-addthread-cell, html body.ember:not(.eink) .pl-addthread-cell, html body:not(.ember):not(.eink) .pl-addthread-cell{
   background:transparent !important;
 }
+/* v.790 [Jeremy] — "when scrolling right and down in the plot grid, the header bar and sections column should not be having
+   the cards overlap, there should be a white background … that the cards go behind". v.527 (above) made these cells
+   transparent to kill a seam against the ground — and they are STICKY, so every card scrolled under them showed through.
+   They take the ground's own token now (--paper-page, what the grid stands on, so there is still no seam), and each
+   reaches over the 9px gutter beside it with a shadow of the same colour, so cards do not show in the gaps either:
+   the header row all round; the section column to its right and downward only — downward, because the gold spine of the
+   NEXT section runs up into that gap and must stay drawn over it. */
+/* (the soft edge shadows these already had are kept, listed first so they paint over the solid gutters) */
+html body:not(.eink) #planPlot .pl-pcolhd, html body:not(.eink) #planPlot .pl-addthread-cell{
+  background:var(--paper-page, #fff) !important; box-shadow:0 6px 7px -7px rgba(0,0,0,.11), 0 0 0 9px var(--paper-page, #fff) !important;
+}
+html body:not(.eink) #planPlot .pl-pcorner{
+  background:var(--paper-page, #fff) !important; box-shadow:0 6px 7px -7px rgba(0,0,0,.11), 6px 0 7px -7px rgba(0,0,0,.11), 0 0 0 9px var(--paper-page, #fff) !important;
+}
+html body:not(.eink) #planPlot .pl-scell2{
+  background:var(--paper-page, #fff) !important; box-shadow:6px 0 7px -7px rgba(0,0,0,.11), 9px 0 0 var(--paper-page, #fff), 0 9px 0 var(--paper-page, #fff), 9px 9px 0 var(--paper-page, #fff) !important;
+}
+/* the thin insert row between sections: its timeline cell (the ＋) freezes with the column, so the column is solid all the way down */
+#planPlot .pl-inslab{ position:sticky; left:0; z-index:6; }   /* above the section cells, so its ＋ still masks the spine as it always did */
+html body:not(.eink) #planPlot .pl-inslab{ background:var(--paper-page, #fff) !important; box-shadow:6px 0 7px -7px rgba(0,0,0,.11), 9px 0 0 var(--paper-page, #fff), 0 9px 0 var(--paper-page, #fff), 9px 9px 0 var(--paper-page, #fff) !important; }
+body.eink #planPlot .pl-inslab{ background:#fff !important; box-shadow:9px 0 0 #fff, 0 9px 0 #fff, 9px 9px 0 #fff !important; }
+html body:not(.eink) #planPlot .pl-parttop, html body:not(.eink) #planPlot .pl-partctrls{ background:var(--paper-page, #fff); }
+body.eink #planPlot .pl-pcorner, body.eink #planPlot .pl-pcolhd, body.eink #planPlot .pl-addthread-cell{ background:#fff !important; box-shadow:0 0 0 9px #fff !important; }
+body.eink #planPlot .pl-scell2{ background:#fff !important; box-shadow:9px 0 0 #fff, 0 9px 0 #fff, 9px 9px 0 #fff !important; }
 html body:not(.eink) .pl-gappill, html body.ember:not(.eink) .pl-gappill, html body:not(.ember):not(.eink) .pl-gappill,
 html body:not(.eink) .pl-sname2, html body.ember:not(.eink) .pl-sname2, html body:not(.ember):not(.eink) .pl-sname2,
 html body:not(.eink) .pl-plus.pl-insmore, html body.ember:not(.eink) .pl-plus.pl-insmore, html body:not(.ember):not(.eink) .pl-plus.pl-insmore,
@@ -89983,6 +90054,11 @@ html body.ember:not(.eink) #msSecMenu, html body.ember:not(.eink) #prepSecMenu{
 .stk-slot:hover{background:#f6efdd}
 .stk-slot-cap{font-size:10.5px; letter-spacing:.08em; text-transform:uppercase; color:#9a8f78}
 .stk-slot-val{font-weight:500}
+.stk-slot-multi{flex-wrap:wrap; row-gap:3px}
+.stk-slot-vals{display:inline-flex; flex-wrap:wrap; align-items:baseline; gap:2px 4px}
+.stk-slot-name{cursor:pointer} .stk-slot-name:hover{text-decoration:underline dotted}
+.stk-slot-x{color:#b6ad9c; cursor:pointer; margin-right:5px} .stk-slot-x:hover{color:#6b675f}
+.stk-slot-add{color:#9a8f78; cursor:pointer; border:1px dashed #d8cba8; border-radius:999px; padding:0 6px; font-size:11px} .stk-slot-add:hover{color:#6b675f; border-color:#b6ad9c}
 .stk-slot-val.stk-slot-empty{font-weight:400; font-style:italic; color:#9a8f78}
 .stk-desc{flex:0 0 100%; font-size:12px; line-height:1.5; color:#7d735f; margin:2px 0 0}
 
@@ -90345,7 +90421,34 @@ body.eink #evSweep .sw-nav{display:flex; align-items:center; gap:10px; margin:0 
     return s.stakeData;
   }
   function rec(key){ var b = bag(false); return (b && key && b[key]) || null; }
+  /* v.789 [Jeremy] — "there may also be more than one being that loses it, or more than one threat". Each of the two
+     fields is a LIST now, kept the one way that breaks no reader: `bearer` / `threat` stay the FIRST of each (every
+     reader written before today reads them and is right about the first), and `bearers` / `threats` hold the whole
+     list when there is more than one. `list(key,f)` is the reader for the rest; `setList` the writer. Setting the
+     single field changes the first and keeps the others; clearing it moves the next one up. */
+  function listOf(r, f){
+    var out = [], seen = {};
+    var add = function(k){ k = String(k == null ? '' : k).trim(); if(k && !seen[k]){ seen[k] = 1; out.push(k); } };
+    if(r){ add(r[f]); (Array.isArray(r[f + 's']) ? r[f + 's'] : []).forEach(add); }
+    return out;
+  }
+  function list(key, f){ return listOf(rec(key), f); }
+  function pruneRec(b, key){ var r = b[key]; if(!r) return; for(var f in r){ if(Object.prototype.hasOwnProperty.call(r, f) && r[f] && !(Array.isArray(r[f]) && !r[f].length)) return; } delete b[key]; }
+  function setList(key, f, arr){
+    if(f !== 'bearer' && f !== 'threat') return;
+    var b = bag(true); if(!b || !key) return;
+    var r = b[key] || (b[key] = {});
+    var out = listOf({ x: '', xs: arr || [] }, 'x');
+    if(out.length) r[f] = out[0]; else delete r[f];
+    if(out.length > 1) r[f + 's'] = out; else delete r[f + 's'];
+    pruneRec(b, key);
+    try { if(typeof scheduleAutosave === 'function') scheduleAutosave(400); } catch(e){}
+  }
   function setField(key, field, val){
+    if(field === 'bearer' || field === 'threat'){
+      var rest = list(key, field).slice(1); val = (val == null ? '' : String(val).trim());
+      setList(key, field, val ? [val].concat(rest) : rest); return;
+    }
     var b = bag(true); if(!b || !key) return;
     var r = b[key] || (b[key] = {});
     val = (val == null ? '' : String(val).trim());
@@ -90360,7 +90463,7 @@ body.eink #evSweep .sw-nav{display:flex; align-items:center; gap:10px; margin:0 
   function axesWithLane(){
     try{ return axisWords().map(function(w){ return { word: w, bucket: bucketOf(w), known: !!AXIS_BUCKET[String(w||'').toLowerCase()] }; }); }catch(e){ return []; }
   }
-  window.__stakeData = { rec: rec, set: setField, all: function(){ return bag(false) || {}; }, bucketOf: bucketOf, axes: axesWithLane };   /* v.668 — the one word→bucket map, asked by #47 */
+  window.__stakeData = { rec: rec, set: setField, list: list, setList: setList, listOf: listOf, all: function(){ return bag(false) || {}; }, bucketOf: bucketOf, axes: axesWithLane };   /* v.789 — list/setList */   /* v.668 — the one word→bucket map, asked by #47 */
 
   /* ---------- element lookups (all through the __dystPlan bridge) ---------- */
   function plan(){ return window.__dystPlan || null; }
@@ -90398,10 +90501,12 @@ body.eink #evSweep .sw-nav{display:flex; align-items:center; gap:10px; margin:0 
     for(var sk in b){
       if(!Object.prototype.hasOwnProperty.call(b, sk)) continue;
       var r = b[sk];
-      if(!r || !r.bearer || !on[r.bearer]) continue;
+      var _bs = listOf(r, 'bearer'), _hit = null;   /* v.789 — any of its bearers */
+      for(var _i = 0; _i < _bs.length; _i++){ if(on[_bs[_i]]){ _hit = _bs[_i]; break; } }
+      if(!_hit) continue;
       var tx = stakeText(sk); if(!tx) continue;
       /* level carries WHOSE rather than which scale — the caller renders it in the echo's level slot */
-      return { text: tx, level: nameFor(r.bearer) || 'bearer', own: false, bearer: r.bearer, stakeKey: sk };
+      return { text: tx, level: nameFor(_hit) || 'bearer', own: false, bearer: _hit, stakeKey: sk };
     }
     return null;
   };
@@ -90454,19 +90559,34 @@ body.eink #evSweep .sw-nav{display:flex; align-items:center; gap:10px; margin:0 
 
   /* declared if the writer picked one; otherwise derived from the threat's category.
      bearer === threat means against themselves — no self-flag, no extra field. */
+  /* the lane ONE threat puts a stake in: one of its own bearers → themselves; a character → another; a group → society
+     (v.785 — design doc §2); anything else → the world; an element that no longer exists → nothing */
+  function deriveBucket(threat, bearers){
+    if(!threat) return null;
+    if((bearers || []).indexOf(threat) >= 0) return 'themselves';
+    var cat = '';
+    if(String(threat).indexOf('group:') === 0){ cat = 'org'; }
+    else { var w = elFor(threat); cat = (w && w.cat) || ''; }
+    if(!cat) return null;
+    return cat === 'being' ? 'another' : (cat === 'org' ? 'society' : 'world');
+  }
   window.__stakeAxis = function(stakeKey){
     var r = rec(stakeKey) || {};
     if(r.axis) return { axis: r.axis, bucket: bucketOf(r.axis), source: 'declared' };
     if(!r.threat) return { axis: '', bucket: null, source: null };
-    if(r.bearer && r.threat === r.bearer) return { axis: '', bucket: 'themselves', source: 'derived' };
-    var cat = '';
-    if(String(r.threat).indexOf('group:') === 0){ cat = 'org'; }
-    else { var w = elFor(r.threat); cat = (w && w.cat) || ''; }
-    if(!cat) return { axis: '', bucket: null, source: null };
-    /* v.785 — a Group is society (design doc §2: "against a Group → society, the institution, the family"). v.761 gave
-       society a lane of its own for the axis WORDS and left this derivation filing every Group threat under the world. */
-    return { axis: '', bucket: (cat === 'being' ? 'another' : (cat === 'org' ? 'society' : 'world')), source: 'derived' };
+    var b = deriveBucket(r.threat, listOf(r, 'bearer'));   /* v.789 — the first threat; a threat that is ANY of its bearers is themselves */
+    return b ? { axis: '', bucket: b, source: 'derived' } : { axis: '', bucket: null, source: null };
   };
+  /* v.789 — every lane the stake runs in, one entry per threat: a stake threatened by the Witch AND the Wood is against
+     another and against the world at once. A declared axis is one lane for all its threats (the writer said so). */
+  window.__stakeAxes = function(stakeKey){
+    var r = rec(stakeKey) || {}, bs = listOf(r, 'bearer'), ts = listOf(r, 'threat');
+    if(r.axis) return [{ threat: ts[0] || '', threats: ts, bucket: bucketOf(r.axis), axis: r.axis, source: 'declared' }];
+    var out = [];
+    ts.forEach(function(t){ var b = deriveBucket(t, bs); if(b) out.push({ threat: t, threats: [t], bucket: b, axis: '', source: 'derived' }); });
+    return out;
+  };
+  window.__stakeDerive = deriveBucket;
 
   /* ---------- the picker menu ---------- */
   function closeMenu(){ var m = document.getElementById('stkPickMenu'); if(m && m.parentNode) m.parentNode.removeChild(m); }
@@ -90550,25 +90670,39 @@ body.eink #evSweep .sw-nav{display:flex; align-items:center; gap:10px; margin:0 
       var lab = document.createElement('span'); lab.className = 'npc-seclbl'; lab.textContent = 'At risk';
       sec.appendChild(lab);
 
+      /* v.789 — each slot holds a LIST: every one a name with its ×, and a + for another */
       var slot = function(field, caption, hint){
-        var pill = document.createElement('span'); pill.className = 'stk-slot';
+        var pill = document.createElement('span'); pill.className = 'stk-slot stk-slot-multi'; pill.dataset.field = field;
         var cap = document.createElement('span'); cap.className = 'stk-slot-cap'; cap.textContent = caption; pill.appendChild(cap);
-        var val = document.createElement('span'); val.className = 'stk-slot-val';
-        var cur = (rec(key) || {})[field] || '';
-        val.textContent = cur ? (nameFor(cur) || cur) : hint;
-        if(!cur) val.classList.add('stk-slot-empty');
-        pill.appendChild(val);
+        var vals = document.createElement('span'); vals.className = 'stk-slot-vals'; pill.appendChild(vals);
         pill.title = caption + ' — ' + hint;
-        pill.addEventListener('click', function(ev){
-          ev.stopPropagation();
-          openPicker(pill, (rec(key) || {})[field] || '', function(picked){
-            setField(key, field, picked);
-            var nk = (rec(key) || {})[field] || '';
-            val.textContent = nk ? (nameFor(nk) || nk) : hint;
-            val.classList.toggle('stk-slot-empty', !nk);
-            try { if(typeof window.__planRefreshPlot === 'function') window.__planRefreshPlot(); } catch(e){}
+        var refresh = function(){ paint(); try { if(typeof window.__planRefreshPlot === 'function') window.__planRefreshPlot(); } catch(e){} };
+        var addOne = function(anchor){
+          var have = list(key, field);
+          var pick = function(picked){ if(!picked) return; if(have.indexOf(picked) < 0) setList(key, field, have.concat([picked])); refresh(); };
+          try{ if(typeof window.__stakePick === 'function'){ window.__stakePick(anchor, '', pick, { add:true, exclude: have }); return; } }catch(e){}
+          openPicker(anchor, '', pick);
+        };
+        var paint = function(){
+          vals.innerHTML = '';
+          var ks = list(key, field);
+          if(!ks.length){ var e = document.createElement('span'); e.className = 'stk-slot-val stk-slot-empty'; e.textContent = hint; vals.appendChild(e); return; }
+          ks.forEach(function(k, i){
+            var v = document.createElement('span'); v.className = 'stk-slot-val stk-slot-name'; v.dataset.key = k; v.textContent = nameFor(k) || k;
+            v.title = 'Change this one';
+            v.addEventListener('click', function(ev){ ev.stopPropagation();
+              openPicker(v, k, function(picked){ var cur = list(key, field); if(picked){ if(cur.indexOf(picked) < 0) cur[i] = picked; } else cur.splice(i, 1); setList(key, field, cur); refresh(); }); });
+            vals.appendChild(v);
+            var x = document.createElement('span'); x.className = 'stk-slot-x'; x.textContent = '\u00d7'; x.title = 'Remove';
+            x.addEventListener('click', function(ev){ ev.stopPropagation(); setList(key, field, list(key, field).filter(function(y){ return y !== k; })); refresh(); });
+            vals.appendChild(x);
           });
-        });
+          var plus = document.createElement('span'); plus.className = 'stk-slot-add'; plus.textContent = '+'; plus.title = field === 'bearer' ? 'Someone else who could lose it too' : 'Another threat to it';
+          plus.addEventListener('click', function(ev){ ev.stopPropagation(); addOne(plus); });
+          vals.appendChild(plus);
+        };
+        paint();
+        pill.addEventListener('click', function(ev){ ev.stopPropagation(); if(!list(key, field).length) addOne(pill); });
         return pill;
       };
 
@@ -90584,10 +90718,13 @@ body.eink #evSweep .sw-nav{display:flex; align-items:center; gap:10px; margin:0 
         var paint = function(){
           var cur = (rec(key) || {}).axis || '';
           if(cur){ val.textContent = cur; val.classList.remove('stk-slot-empty'); pill.title = 'Axis — the struggle this risk runs along'; return; }
-          var d = window.__stakeAxis(key) || {};
-          val.textContent = d.bucket ? ('against ' + (d.bucket === 'themselves' ? 'themselves' : d.bucket === 'another' ? 'another' : 'the world')) : 'the axis it runs along';
+          /* v.789 — every lane its threats put it in, in the Conflict layer's own words (society included, v.785) */
+          var LL = (window.__conflict && window.__conflict.laneLabel) || { another:'against another', themselves:'against themselves', society:'against society', world:'against the world' };
+          var bks = []; ((window.__stakeAxes ? window.__stakeAxes(key) : []) || []).forEach(function(a){ if(a.bucket && bks.indexOf(a.bucket) < 0) bks.push(a.bucket); });
+          var labs = bks.map(function(b){ return LL[b] || b; });
+          val.textContent = labs.length ? (labs.length > 1 ? (labs.slice(0, -1).join(', ') + ' and ' + labs[labs.length - 1]) : labs[0]) : 'the kind of struggle it is';
           val.classList.add('stk-slot-empty');
-          pill.title = d.bucket ? 'Read from the threat — pick a word to say it yourself' : 'Axis — the struggle this risk runs along';
+          pill.title = labs.length ? 'Read from the threat — pick a word to say it yourself' : 'Kind of conflict — the struggle this risk runs along';
         };
         paint();
         pill.addEventListener('click', function(ev){
@@ -91838,9 +91975,11 @@ body.eink .stk-offer-tx,body.eink .stk-offer-btn{color:#000; border-color:#000; 
 
   /* ── a picker with a search box, which the card's never had ─────────────────────────────────────────────── */
   function closePick(){ var m = document.getElementById('stbPick'); if(m && m.parentNode) m.parentNode.removeChild(m); }
-  function openPick(anchor, cur, onPick){
+  function openPick(anchor, cur, onPick, popts){
     closePick();
-    var list = candidates();
+    popts = popts || {};
+    var _ex = {}; (popts.exclude || []).forEach(function(k){ _ex[k] = 1; });
+    var list = candidates().filter(function(it){ return !_ex[it.key]; });   /* v.789 — adding: the ones already chosen are not offered again */
     var menu = document.createElement('div'); menu.id = 'stbPick'; menu.className = 'stb-pick';
     var sb = document.createElement('input'); sb.type = 'text'; sb.className = 'stb-pick-s'; sb.placeholder = 'Search…'; sb.autocomplete = 'off';
     menu.appendChild(sb);
@@ -91851,7 +91990,7 @@ body.eink .stk-offer-tx,body.eink .stk-offer-btn{color:#000; border-color:#000; 
       var none = document.createElement('button'); none.type = 'button'; none.className = 'stb-pick-r' + (cur ? '' : ' on');
       none.textContent = '— none —';
       none.addEventListener('click', function(e){ e.stopPropagation(); closePick(); onPick(''); });
-      if(!q) rows.appendChild(none);
+      if(!q && !popts.add) rows.appendChild(none);
       var n = 0;
       list.forEach(function(it){
         if(q && it.name.toLowerCase().indexOf(q) < 0 && String(it.kind).toLowerCase().indexOf(q) < 0) return;
@@ -91913,12 +92052,21 @@ body.eink .stk-offer-tx,body.eink .stk-offer-btn{color:#000; border-color:#000; 
   /* what the lane reads as RIGHT NOW, declared or derived — the same rule `__stakeAxis` applies */
   function readsAs(){
     if(STB.axis){ var d = SD(); var b = (d && d.bucketOf) ? d.bucketOf(STB.axis) : ''; return { text: laneLabel(b), why: 'you named it' }; }
-    if(!STB.threat) return { text:'', why:'' };
-    if(STB.threat === STB.bearer) return { text: laneLabel('themselves'), why: 'the threat is the bearer' };
-    if(String(STB.threat).indexOf('group:') === 0) return { text: laneLabel('world'), why: 'the threat is a group' };
-    var w = null; try{ var p = plan(); w = (p && p.npFindEl) ? p.npFindEl(STB.threat) : null; }catch(e){}
-    if(w && w.cat === 'being') return { text: laneLabel('another'), why: 'the threat is a character' };
-    return { text: laneLabel('world'), why: 'the threat is not a character' };
+    var ts = lst('threat'), bs = lst('bearer');
+    if(!ts.length) return { text:'', why:'' };
+    /* v.789 — one reading per threat, the same rule `__stakeAxes` applies; one threat says why, as it always did */
+    var why1 = function(t){
+      if(bs.indexOf(t) >= 0) return { b:'themselves', why:'the threat is the bearer' };
+      if(String(t).indexOf('group:') === 0) return { b:'society', why:'the threat is a group' };   /* v.789 — as __stakeAxis has read it since v.785 */
+      var w = null; try{ var p = plan(); w = (p && p.npFindEl) ? p.npFindEl(t) : null; }catch(e){}
+      if(w && w.cat === 'being') return { b:'another', why:'the threat is a character' };
+      if(w && w.cat === 'org') return { b:'society', why:'the threat is a group' };
+      return { b:'world', why:'the threat is not a character' };
+    };
+    if(ts.length === 1){ var r1 = why1(ts[0]); return { text: laneLabel(r1.b), why: r1.why }; }
+    var lanes = []; ts.forEach(function(t){ var b = why1(t).b; if(lanes.indexOf(b) < 0) lanes.push(b); });
+    var labs = lanes.map(laneLabel);
+    return { text: labs.length > 1 ? (labs.slice(0, -1).join(', ') + ' and ' + labs[labs.length - 1]) : labs[0], why: 'one for each threat' };
   }
 
   /* ── the panel ──────────────────────────────────────────────────────────────────────────────────────────── */
@@ -91935,8 +92083,8 @@ body.eink .stk-offer-tx,body.eink .stk-offer-btn{color:#000; border-color:#000; 
         +   '<div class="gc-seclbl">Describe it (optional)</div>'
         +   '<div class="el-descrow"><textarea class="gc-desc" id="stbDesc" rows="2" placeholder="a sentence in your own words — who could lose what, and to whom"></textarea><button type="button" class="el-descgo" id="stbDescGo">✦ Break it down</button></div>'
         +   '<div class="gc-seclbl">At risk</div>'
-        +   '<div class="stb-f"><span class="stb-lbl" id="stbBearerL" title="The character or group who stands to lose this">Who could lose it</span><button type="button" class="stb-v" id="stbBearer"></button></div>'
-        +   '<div class="stb-f"><span class="stb-lbl" id="stbThreatL" title="Whoever or whatever puts it in danger — a person, a group, a place, an event, an idea">Threat</span><button type="button" class="stb-v" id="stbThreat"></button></div>'
+        +   '<div class="stb-f"><span class="stb-lbl" id="stbBearerL" title="The characters or groups who stand to lose this — as many as it takes">Who could lose it</span><span class="stb-vals" id="stbBearerVals"></span><button type="button" class="stb-v" id="stbBearer"></button></div>'
+        +   '<div class="stb-f"><span class="stb-lbl" id="stbThreatL" title="Whoever or whatever puts it in danger — a person, a group, a place, an event, an idea. There can be more than one.">Threat</span><span class="stb-vals" id="stbThreatVals"></span><button type="button" class="stb-v" id="stbThreat"></button></div>'
         +   '<div class="stb-f"><span class="stb-lbl" id="stbAxisL" title="What sort of struggle this is — against another person, against themselves, against society, against nature…">Kind of conflict</span><button type="button" class="stb-v" id="stbAxis"></button></div>'
         +   '<div class="stb-reads" id="stbReads"></div>'
         +   '<div class="stb-gap" id="stbGap"></div>'
@@ -91950,8 +92098,9 @@ body.eink .stk-offer-tx,body.eink .stk-offer-btn{color:#000; border-color:#000; 
       document.getElementById('stbDescGo').addEventListener('click', function(ev){ ev.stopPropagation();
         try{ if(typeof runInlineDesc === 'function'){ runInlineDesc('stbDesc','stbDescGo', applyDescription); return; } }catch(_){ }
         applyDescription(document.getElementById('stbDesc').value); });
-      document.getElementById('stbBearer').addEventListener('click', function(ev){ ev.stopPropagation(); openPick(ev.currentTarget, STB.bearer, function(k){ STB.bearer = k; render(); }); });
-      document.getElementById('stbThreat').addEventListener('click', function(ev){ ev.stopPropagation(); openPick(ev.currentTarget, STB.threat, function(k){ STB.threat = k; render(); }); });
+      /* v.789 — the button ADDS one (the first, or "+ another"); each chosen one is a chip with its own × */
+      document.getElementById('stbBearer').addEventListener('click', function(ev){ ev.stopPropagation(); openPick(ev.currentTarget, '', function(k){ addTo('bearer', k); }, { add:true, exclude: lst('bearer') }); });
+      document.getElementById('stbThreat').addEventListener('click', function(ev){ ev.stopPropagation(); openPick(ev.currentTarget, '', function(k){ addTo('threat', k); }, { add:true, exclude: lst('threat') }); });
       document.getElementById('stbAxis').addEventListener('click', function(ev){ ev.stopPropagation(); openAxisMenu(ev.currentTarget); });
       document.getElementById('stbGen').addEventListener('click', function(ev){ ev.stopPropagation(); generate(); });
       document.getElementById('stbCreate').addEventListener('click', function(ev){ ev.stopPropagation(); commit(); });
@@ -91959,11 +92108,28 @@ body.eink .stk-offer-tx,body.eink .stk-offer-btn{color:#000; border-color:#000; 
     return e;
   }
   function pillText(k, empty){ return k ? (nameOf(k) || 'unknown') : empty; }
+  /* v.789 — each side is the first (`STB.bearer`, where every earlier reader looks) plus the rest (`STB.moreBearers`) */
+  function moreKey(f){ return f === 'bearer' ? 'moreBearers' : 'moreThreats'; }
+  function lst(f){ var out = [], seen = {}; var add = function(k){ if(k && !seen[k]){ seen[k] = 1; out.push(k); } }; add(STB[f]); (STB[moreKey(f)] || []).forEach(add); return out; }
+  function putList(f, arr){ STB[f] = arr[0] || ''; STB[moreKey(f)] = arr.slice(1); }
+  function addTo(f, k){ if(!k) return; var l = lst(f); if(l.indexOf(k) < 0) l.push(k); putList(f, l); render(); }
+  function dropFrom(f, k){ putList(f, lst(f).filter(function(x){ return x !== k; })); render(); }
+  function paintVals(f, box){
+    if(!box) return; box.innerHTML = '';
+    lst(f).forEach(function(k){
+      var c = document.createElement('span'); c.className = 'stb-chip'; c.dataset.key = k;
+      var t = document.createElement('span'); t.textContent = nameOf(k) || 'unknown'; c.appendChild(t);
+      var x = document.createElement('button'); x.type = 'button'; x.className = 'stb-chip-x'; x.innerHTML = '&times;'; x.title = 'Remove';
+      x.addEventListener('click', function(ev){ ev.stopPropagation(); dropFrom(f, k); }); c.appendChild(x);
+      box.appendChild(c);
+    });
+  }
   function render(){
     el();
     var b = document.getElementById('stbBearer'), t = document.getElementById('stbThreat'), a = document.getElementById('stbAxis');
-    if(b){ b.textContent = pillText(STB.bearer, 'choose a character or group…'); b.classList.toggle('empty', !STB.bearer); }   /* v.788 — plain words [Jeremy] */
-    if(t){ t.textContent = pillText(STB.threat, 'who or what puts it in danger…'); t.classList.toggle('empty', !STB.threat); }
+    paintVals('bearer', document.getElementById('stbBearerVals')); paintVals('threat', document.getElementById('stbThreatVals'));
+    if(b){ var nb = lst('bearer').length; b.textContent = nb ? '+ another' : 'choose a character or group…'; b.classList.toggle('empty', !nb); b.classList.toggle('stb-more', !!nb); b.title = nb ? 'Someone else who could lose it too' : ''; }   /* v.788 — plain words [Jeremy] */
+    if(t){ var nt = lst('threat').length; t.textContent = nt ? '+ another' : 'who or what puts it in danger…'; t.classList.toggle('empty', !nt); t.classList.toggle('stb-more', !!nt); t.title = nt ? 'Another threat to it' : ''; }
     if(a){ a.textContent = STB.axis || 'worked out from the threat'; a.classList.toggle('empty', !STB.axis); }
     var r = readsAs(); var rd = document.getElementById('stbReads');
     if(rd){
@@ -91989,7 +92155,7 @@ body.eink .stk-offer-tx,body.eink .stk-offer-btn{color:#000; border-color:#000; 
   function open(opts){
     opts = opts || {};
     try{ if(typeof addsLocked === 'function' && addsLocked()){ flash('End the session to add elements'); return; } }catch(e){}
-    STB = { name:'', desc:'', kind:'', bearer:'', threat:'', axis:(opts.axis ? String(opts.axis) : ''), editKey:null, editIdx:null };   /* v.785 — + stake on a Conflict lane */
+    STB = { name:'', desc:'', kind:'', bearer:'', threat:'', moreBearers:[], moreThreats:[], axis:(opts.axis ? String(opts.axis) : ''), editKey:null, editIdx:null };   /* v.785 — + stake on a Conflict lane; v.789 — the rest of each list */
     if(opts.edit){
       var w = null; try{ w = (typeof npFindEl === 'function') ? npFindEl(opts.edit) : null; }catch(e){}
       if(w){
@@ -91998,6 +92164,7 @@ body.eink .stk-offer-tx,body.eink .stk-offer-btn{color:#000; border-color:#000; 
         STB.name = (w.name || w.word || '');
         var d = SD(); var rec = (d && d.rec) ? (d.rec(opts.edit) || {}) : {};
         STB.bearer = rec.bearer || ''; STB.threat = rec.threat || ''; STB.axis = rec.axis || '';
+        try{ if(d && d.listOf){ STB.moreBearers = d.listOf(rec, 'bearer').slice(1); STB.moreThreats = d.listOf(rec, 'threat').slice(1); } }catch(_){}   /* v.789 */
       }
     }
     el();
@@ -92024,8 +92191,8 @@ body.eink .stk-offer-tx,body.eink .stk-offer-btn{color:#000; border-color:#000; 
   /* ── writing it ─────────────────────────────────────────────────────────────────────────────────────────── */
   function writeFields(key){
     var d = SD(); if(!d || !key) return;
-    d.set(key, 'bearer', STB.bearer || '');
-    d.set(key, 'threat', STB.threat || '');
+    if(d.setList){ d.setList(key, 'bearer', lst('bearer')); d.setList(key, 'threat', lst('threat')); }   /* v.789 — every one */
+    else { d.set(key, 'bearer', STB.bearer || ''); d.set(key, 'threat', STB.threat || ''); }
     /* a declared axis would outrank a derivation that is already right — the importer's own rule (v.717) */
     d.set(key, 'axis', (STB.threat && !STB.axis) ? '' : (STB.axis || ''));
   }
@@ -92087,7 +92254,7 @@ body.eink .stk-offer-tx,body.eink .stk-offer-btn{color:#000; border-color:#000; 
     var sys = 'You read a sentence about something AT STAKE in a story and return ONLY compact JSON, no prose, no fences. '
       + 'Shape: {"name":"","bearer":"","threat":"","axis":"","note":""}. '
       + 'name = a SHORT noun phrase for the thing that could be lost (Survival, Her name, The ledger) — never a sentence. '
-      + 'bearer = the NAME of whoever could lose it. threat = the NAME of whoever or whatever is taking it. '
+      + 'bearer = the NAME of whoever could lose it — or several names separated by " | " when more than one could. threat = the NAME of whoever or whatever is taking it — or several, separated by " | ". '
       + 'Use names EXACTLY as they appear in this list where one fits, and "" when the text does not make that end plain: ' + (names.length ? names.join(' | ') : '(the story has no elements yet)') + '. '
       + 'axis = one of: against another, against the self, against society, against nature, against fate, against the divine, against the machine, against the unknown, against time, against the past — and ONLY when the text names a kind of struggle and gives no threat; leave "" whenever you gave a threat, because the axis is worked out from it. '
       + 'note = the sentence tidied, or "". Never invent an element that is not in the list and not in the text.';
@@ -92098,16 +92265,18 @@ body.eink .stk-offer-tx,body.eink .stk-offer-btn{color:#000; border-color:#000; 
     if(!d) throw new Error('Could not read that — try rephrasing.');
     var byName = {}; candidates().forEach(function(c){ byName[String(c.name).trim().toLowerCase()] = c.key; });
     if(d.name) STB.name = String(d.name).trim();
-    if(d.bearer) STB.bearer = byName[String(d.bearer).trim().toLowerCase()] || STB.bearer;
-    if(d.threat) STB.threat = byName[String(d.threat).trim().toLowerCase()] || STB.threat;
+    /* v.789 — one name or several ("A | B", a list, or "A and B"); each matched back to a key */
+    var names = function(v){ var a = Array.isArray(v) ? v : String(v || '').split(/\s*\|\s*|\s*,\s*|\s+&\s+|\s+and\s+/i); return a.map(function(x){ return String(x || '').trim(); }).filter(Boolean); };
+    var keysOf = function(v){ var out = []; names(v).forEach(function(n){ var k = byName[n.toLowerCase()]; if(k && out.indexOf(k) < 0) out.push(k); }); if(!out.length){ var whole = byName[String(Array.isArray(v) ? '' : v || '').trim().toLowerCase()]; if(whole) out.push(whole); } return out; };
+    if(d.bearer){ var kb = keysOf(d.bearer); if(kb.length) putList('bearer', kb); }
+    if(d.threat){ var kt = keysOf(d.threat); if(kt.length) putList('threat', kt); }
     if(d.axis && !STB.threat) STB.axis = String(d.axis).trim().toLowerCase();
     if(d.note) STB.desc = String(d.note).trim();
     var nm = document.getElementById('stbName'); if(nm) nm.value = STB.name || '';
     var ds = document.getElementById('stbDesc'); if(ds) ds.value = STB.desc || '';
     render();
     var unmatched = [];
-    if(d.bearer && !byName[String(d.bearer).trim().toLowerCase()]) unmatched.push(String(d.bearer).trim());
-    if(d.threat && !byName[String(d.threat).trim().toLowerCase()]) unmatched.push(String(d.threat).trim());
+    names(d.bearer).concat(names(d.threat)).forEach(function(n){ if(!byName[n.toLowerCase()] && unmatched.indexOf(n) < 0) unmatched.push(n); });   /* v.789 */
     if(unmatched.length) flash('No element named ' + unmatched.join(' or ') + ' — pick by hand, or add them first');
   }
 
@@ -92127,7 +92296,7 @@ body.eink .stk-offer-tx,body.eink .stk-offer-btn{color:#000; border-color:#000; 
   window.openStakeCreator = open;
   window.closeStakeCreator = close;
   window.openStakeChooser = chooser;
-  window.__stakeBuilder = { open: open, close: close, chooser: chooser, state: function(){ return STB; }, readsAs: readsAs, candidates: candidates };
+  window.__stakeBuilder = { open: open, close: close, chooser: chooser, state: function(){ return STB; }, readsAs: readsAs, candidates: candidates, list: function(f){ return lst(f); } };
 })();
 </script>
 <script id="dyst-conflict-js">
@@ -92148,7 +92317,8 @@ body.eink .stk-offer-tx,body.eink .stk-offer-btn{color:#000; border-color:#000; 
   function layer(){ var b=box(); if(!b) return {}; if(!b.conflict || typeof b.conflict!=='object') b.conflict={}; return b.conflict; }
   /* the per-Part driver (design doc §4 — "the concession that makes the whole feature survivable"): keyed by partId,
      which is stable and index-safe. Empty means "same as the story". */
-  function parts(){ try{ return ((state.session && state.session.parts) || []).filter(function(p){ return p && p.id; }); }catch(e){ return []; } }
+  function parts(){ try{ if(typeof window.dystAdoptOrphanParts==='function') window.dystAdoptOrphanParts(); }catch(e){}   /* v.790 — the Parts the sections point to, recorded or not */
+    try{ return ((state.session && state.session.parts) || []).filter(function(p){ return p && p.id; }); }catch(e){ return []; } }
   function byPart(pid){ var l=layer(); return (l.by && l.by[pid]) ? String(l.by[pid]) : ''; }
   function setByPart(pid, w){
     var l=layer(); if(!pid) return false; l.by = (l.by && typeof l.by==='object') ? l.by : {};
@@ -92156,7 +92326,7 @@ body.eink .stk-offer-tx,body.eink .stk-offer-btn{color:#000; border-color:#000; 
     try{ if(typeof scheduleAutosave==='function') scheduleAutosave(700); }catch(e){}
     return true;
   }
-  function partDrivers(){ return parts().map(function(p){ return { id:p.id, name:p.name||'', word:byPart(p.id) }; }).filter(function(x){ return !!x.word; }); }
+  function partDrivers(){ return parts().map(function(p, i){ return { id:p.id, name:p.name||('Part '+(i+1)), word:byPart(p.id) }; }).filter(function(x){ return !!x.word; }); }
   /* ⚔ bonds, by name — a standing hostility is not a stake, so it is listed beside the lanes, never counted into them */
   function hostilities(){
     var out=[], seen={};
@@ -92188,7 +92358,11 @@ body.eink .stk-offer-tx,body.eink .stk-offer-btn{color:#000; border-color:#000; 
       if(typeof stakeIsConflictWord==='function' && stakeIsConflictWord(w.name||w.word)) continue;   /* an axis filed as a stake is not a stake */
       var r=(window.__stakeData&&window.__stakeData.rec)?(window.__stakeData.rec(e.key)||{}):{};
       var ax=(window.__stakeAxis)?window.__stakeAxis(e.key):{ axis:'', bucket:null, source:null };
-      out.push({ key:e.key, name:w.name||w.word||'', bearer:r.bearer||'', threat:r.threat||'', bucket:ax.bucket||null, axis:ax.axis||'', source:ax.source||null });
+      /* v.789 — the whole lists, and one entry per lane the stake runs in */
+      var LO=(window.__stakeData&&window.__stakeData.listOf)?window.__stakeData.listOf:function(x,f){ return (x&&x[f])?[x[f]]:[]; };
+      var axes=(window.__stakeAxes)?(window.__stakeAxes(e.key)||[]):(ax.bucket?[{ threat:r.threat||'', threats:r.threat?[r.threat]:[], bucket:ax.bucket, axis:ax.axis||'', source:ax.source }]:[]);
+      var bks=[]; axes.forEach(function(a){ if(a.bucket && bks.indexOf(a.bucket)<0) bks.push(a.bucket); });
+      out.push({ key:e.key, name:w.name||w.word||'', bearer:r.bearer||'', threat:r.threat||'', bearers:LO(r,'bearer'), threats:LO(r,'threat'), axes:axes, buckets:bks, bucket:ax.bucket||null, axis:ax.axis||'', source:ax.source||null });
     }
     return out;
   }
@@ -92200,9 +92374,18 @@ body.eink .stk-offer-tx,body.eink .stk-offer-btn{color:#000; border-color:#000; 
        below threw on the missing one — on every render of the Conflict row. */
     var by={}; BUCKETS.forEach(function(b){ by[b]=[]; });
     read().forEach(function(s){
-      if(!s.bucket) return;
-      if(s.bucket==='themselves'){ var bn=nameFor(s.bearer); if(bn) by.themselves.push(bn+' against themselves'); return; }
-      var tn=s.threat?nameFor(s.threat):''; if(tn) by[s.bucket].push(tn); else if(s.axis) by[s.bucket].push(String(s.axis).replace(/^against\s+/i,'').toLowerCase());   /* v.785 — "against nature", not "against Against Nature" */
+      /* v.789 — every lane a stake runs in, and every threat in it */
+      (s.axes||[]).forEach(function(a){
+        if(!a.bucket || !by[a.bucket]) return;
+        if(a.bucket==='themselves'){
+          var who=(a.source==='derived') ? [a.threat] : (s.bearers||[]).filter(function(b){ return (a.threats||[]).indexOf(b)>=0; });
+          if(!who.length && s.bearers && s.bearers.length) who=[s.bearers[0]];
+          who.forEach(function(k){ var bn=nameFor(k); if(bn) by.themselves.push(bn+' against themselves'); }); return; }
+        var ts=(a.threats||[]).filter(function(t){ return (s.bearers||[]).indexOf(t)<0; });
+        var named=ts.map(nameFor).filter(Boolean);
+        if(named.length) named.forEach(function(n){ by[a.bucket].push(n); });
+        else if(a.axis) by[a.bucket].push(String(a.axis).replace(/^against\s+/i,'').toLowerCase());   /* v.785 — "against nature", not "against Against Nature" */
+      });
     });
     BUCKETS.forEach(function(b){ by[b]=uniq(by[b]); });
     return by;
@@ -92254,10 +92437,14 @@ body.eink .stk-offer-tx,body.eink .stk-offer-btn{color:#000; border-color:#000; 
       /* v.761: built FROM the bucket list, so a lane can never again exist in the vocabulary and not in the cell */
       var m=onBoard(i), cell={ bonds:[] }; BUCKETS.forEach(function(b){ cell[b]=[]; });
       stakes.forEach(function(s){
-        if(!s.bucket) return;
-        if(!has(m, s.bearer)) return;
-        if(s.threat && s.bucket!=='themselves' && !has(m, s.threat)) return;
-        cell[s.bucket].push(s.name);
+        /* v.789 — live in a lane when ANY of its bearers stands here and one of THAT lane's threats does too */
+        if(!(s.bearers||[]).some(function(b){ return has(m, b); })) return;
+        (s.axes||[]).forEach(function(a){
+          if(!a.bucket || !cell[a.bucket] || cell[a.bucket].indexOf(s.name)>=0) return;
+          var ts=a.threats||[];
+          if(ts.length && a.bucket!=='themselves' && !ts.some(function(t){ return has(m, t); })) return;
+          cell[a.bucket].push(s.name);
+        });
       });
       /* ⚔ bonds whose two ends stand here — a lighter mark in the "another" lane [Jeremy] */
       edges.forEach(function(e){ if(has(m, e.akey) && has(m, e.bkey)) cell.bonds.push(nameFor(e.akey)+' \u2694 '+nameFor(e.bkey)); });
@@ -92269,15 +92456,15 @@ body.eink .stk-offer-tx,body.eink .stk-offer-btn{color:#000; border-color:#000; 
   function findings(){
     var out=[];
     try{
-      var st=read().filter(function(s){ return !!s.bucket; });
-      if(st.length>=2 && !st.some(function(s){ return s.bucket==='themselves'; })){
+      var st=read().filter(function(s){ return (s.buckets||[]).length>0; });
+      if(st.length>=2 && !st.some(function(s){ return (s.buckets||[]).indexOf('themselves')>=0; })){
         out.push({ certain:true, element:null, section:null, text:'\u2691 certain \u2014 no one in the story is set against themselves: each of the '+st.length+' stakes is lost to something outside its bearer.' });
       }
       var d=driver(), db=d?bucketOfWord(d):null;
       /* v.761: the test is "the declared axis is not about people" — which is now TWO lanes, not one. Left as
          `db==='world'` the split would have switched this observation off for *against society* and *against the
          machine*, the two words it most obviously applies to. */
-      if((db==='world' || db==='society') && st.length && st.every(function(s){ return s.bucket==='another'; })){
+      if((db==='world' || db==='society') && st.length && st.every(function(s){ return (s.buckets||[]).every(function(b){ return b==='another'; }); })){
         out.push({ certain:true, element:null, section:null, text:'\u2691 certain \u2014 the story is declared to run '+d+', but every stake in it is threatened by a person.' });
       }
       if(db && !partDrivers().length){   /* v.785 — a Part given its own driver means the drift was meant (design doc §5.2) */
