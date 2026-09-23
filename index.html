@@ -15355,6 +15355,19 @@ function gridStepRaw(){ const g = gridState(); let n = Math.round(+((g && g.step
 function gridStep(){ return gridMode() === 'free' ? 1 : gridStepRaw(); }
 function gridBase(){ if (gridMode() !== 'free') return GRID_UNIT; const g = gridState(); return Math.max(8, Math.min(160, (g && g.size) || GRID_UNIT)); }
 function gridStepSize(n){ const b = gridBase(); return n >= 1 ? b * n : b / (-n); }
+/* v.787 [Jeremy] — "when switching from Freeform back to the scale, snap the grid back to the closest of the scales, so that the
+   scales are always working from the same position, and not from the new position set by the freeform". The Scale step
+   nearest a spacing: every candidate is the ONE unit × or ÷ a whole number, hung off the unit's own anchor — so whatever the
+   slider did, the grid it lands on is one of the scale's own, in the scale's own place. Nearest by spacing on screen; a tie
+   goes to the finer step. Only steps the − and + would reach (4 … 480 apart). */
+function gridNearestStep(size){
+  const sz = +size; if (!isFinite(sz) || sz <= 0) return 1;
+  let best = 1, bd = Infinity;
+  for (let n = -8; n <= 8; n++){ if (n === 0 || n === -1) continue;
+    const c = n >= 1 ? GRID_UNIT * n : GRID_UNIT / (-n); if (c < 4 || c > 480) continue;
+    const d = Math.abs(c - sz); if (d < bd - 1e-9){ bd = d; best = n; } }
+  return best;
+}
 function gridAnchor(){ return gridBase() / 2; }
 function gridStepLabel(n){ return n >= 1 ? '\u00d7' + n : '\u00f7' + (-n); }
 /* one tile of the dot pattern. At ×n it is one dot per (big) cell; at ÷n the tile is ONE BASE CELL holding n×n dots,
@@ -15386,7 +15399,7 @@ function gridPatternUpdate(gs){
 try{ window.__dystGridPattern = gridPatternUpdate; }catch(e){}
 function gridSize(){ return gridStepSize(gridStep()); }
 function snapToGrid(x, y){ if (!gridOn()) return { x: x, y: y }; const s = gridSize(), a = gridAnchor(); return { x: Math.round((x - a) / s) * s + a, y: Math.round((y - a) / s) * s + a }; }
-try{ window.__dystGrid = { step: gridStep, base: gridBase, size: gridSize, anchor: gridAnchor, snap: snapToGrid, mode: gridMode, unit: GRID_UNIT }; }catch(e){}
+try{ window.__dystGrid = { step: gridStep, base: gridBase, size: gridSize, anchor: gridAnchor, snap: snapToGrid, mode: gridMode, unit: GRID_UNIT, nearest: gridNearestStep }; }catch(e){}
 function snapToBeing(){
   let target = null;
   const beings = state.nodes.map((nd, i) => nd.role === 'being' ? i : -1).filter(i => i >= 0);
@@ -22208,9 +22221,14 @@ function buildDrawSection(root){
   gSpace.addEventListener('input', () => gStepSync());
   /* v.786 — switching mode redraws the one grid in the other mode; nothing of the other mode's setting is thrown away */
   const gModeSet = m => { const gst = gridState(); if (!gst){ flashStatus('Roll or add an element first to open the map'); return; }
-    const wasOn = gst.on; gst.mode = m; if (!gst.on){ gst.on = true; gBtn.classList.add('on'); gPanel.hidden = false; }
+    const wasOn = gst.on, from = gridMode();
+    /* v.787 — Freeform → Scale lands on the scale step nearest the freeform spacing (not the step Scale last had) */
+    let landed = null;
+    if (m === 'scale' && from === 'free'){ const fs = Math.max(8, Math.min(160, +gst.size || GRID_UNIT)); gst.step = gridNearestStep(fs); landed = { from: fs, step: gst.step }; }
+    gst.mode = m; if (!gst.on){ gst.on = true; gBtn.classList.add('on'); gPanel.hidden = false; }
     if (state.session){ state.session.grid = gst; scheduleAutosave(); }
     gSpace.value = String(gst.size || GRID_UNIT); gStepSync();
+    if (landed && typeof flashStatus === 'function'){ const n = landed.step, sz = gridStepSize(n); flashStatus('Scale ' + gridStepLabel(n) + ' \u2014 every ' + (Math.round(sz * 10) / 10) + ', the nearest to your freeform ' + landed.from); }
     /* the tile's own size changes with the mode, and so does the anchor — a full redraw re-seats both */
     if (typeof renderConstellation === 'function') renderConstellation(); else if (!wasOn) gridPatternUpdate(); };
   gMScale.addEventListener('click', ev => { ev.stopPropagation(); gModeSet('scale'); });
@@ -58213,9 +58231,15 @@ body.eink .pl-filterpick .pf-row.on .pf-box{ background:#000; border-color:#000;
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.709';
+  var APP_VERSION = '2026.07.20.711';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.711', date:'September 23, 2026', notes:[
+      '**Plainer words for a stake.** [Jeremy] The Stakes Builder’s three fields are now **Who could lose it**, **Threat** and **Kind of conflict** (they were “Whose it is”, “What takes it” and “The axis”), with plain hints in each — and the stake card in the Notepad uses the same three names.'
+    ]},
+    { v:'2026.07.20.710', date:'September 23, 2026', notes:[
+      '**Back to Scale, onto the nearest scale.** [Jeremy] Switching the grid from Freeform back to Scale now snaps it to the scale step closest to the spacing you had in Freeform (a freeform 20 becomes ÷2, every 22; a freeform 100 becomes ×2, every 88) — always on the scale’s own points, never shifted to where Freeform put them.'
+    ]},
     { v:'2026.07.20.709', date:'September 23, 2026', notes:[
       '**One grid, Scale or Freeform.** [Jeremy] The Places grid had two systems on top of each other — a divided grid still drew the default grid’s points, and the slider moved that default underneath the steps. Now the grid has a **Scale | Freeform** toggle. **Scale** (the default) is whole steps of one grid, ÷8 … ×8, every point alike, each still landing on the grid it came from. **Freeform** is the slider, and only the slider. Maps saved before keep what they were.'
     ]},
@@ -63772,7 +63796,7 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
         /* v.761 [Jeremy] — this line told you what to do and gave you nowhere to do it. */
         try{ if(typeof window.openStakeChooser === 'function'){
           var mb=document.createElement('button'); mb.type='button'; mb.className='pl-cf-ctl'; mb.textContent='\u2726 Build a stake';
-          mb.title='Open the Stakes Builder \u2014 name what is at stake, whose it is, and what takes it';
+          mb.title='Open the Stakes Builder \u2014 name what is at stake, who could lose it, and the threat';
           mb.addEventListener('click', function(ev){ ev.stopPropagation(); window.openStakeChooser(); });
           axes.appendChild(mb);
         } }catch(_){}
@@ -63902,7 +63926,7 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
       if(waiting.length){
         var wb=document.createElement('div'); wb.className='pl-cfc-waiting';
         var wh=document.createElement('b'); wh.textContent='Waiting for a threat'; wb.appendChild(wh);
-        waiting.forEach(function(x){ var bn=C.nameFor(x.bearer); var a2=document.createElement('button'); a2.type='button'; a2.className='pl-cfc-wait'; a2.dataset.key=x.key; a2.textContent=x.name+(bn?(' \u2014 '+bn):''); a2.title='Name what takes it';
+        waiting.forEach(function(x){ var bn=C.nameFor(x.bearer); var a2=document.createElement('button'); a2.type='button'; a2.className='pl-cfc-wait'; a2.dataset.key=x.key; a2.textContent=x.name+(bn?(' \u2014 '+bn):''); a2.title='Name its threat';
           a2.addEventListener('click', function(e){ e.stopPropagation(); if(typeof window.openStakeCreator==='function'){ window.openStakeCreator({ edit:x.key }); cfAfterBuilder(render); } }); wb.appendChild(a2); });
         body.appendChild(wb);
       }
@@ -90548,14 +90572,14 @@ body.eink #evSweep .sw-nav{display:flex; align-items:center; gap:10px; margin:0 
         return pill;
       };
 
-      sec.appendChild(slot('bearer', 'Bearer', 'who could lose it'));
-      sec.appendChild(slot('threat', 'Threat', 'what is taking it'));
+      sec.appendChild(slot('bearer', 'Who could lose it', 'a character or group'));   /* v.788 — the Builder's words */
+      sec.appendChild(slot('threat', 'Threat', 'who or what puts it in danger'));
 
       /* Axis — the ten Conflict words. Left empty it DERIVES from the threat, so this slot shows
          the derived reading in italics until the writer overrides it with a claim of their own. */
       (function(){
         var pill = document.createElement('span'); pill.className = 'stk-slot stk-slot-axis';
-        var cap = document.createElement('span'); cap.className = 'stk-slot-cap'; cap.textContent = 'Axis'; pill.appendChild(cap);
+        var cap = document.createElement('span'); cap.className = 'stk-slot-cap'; cap.textContent = 'Kind of conflict'; pill.appendChild(cap);
         var val = document.createElement('span'); val.className = 'stk-slot-val'; pill.appendChild(val);
         var paint = function(){
           var cur = (rec(key) || {}).axis || '';
@@ -91911,9 +91935,9 @@ body.eink .stk-offer-tx,body.eink .stk-offer-btn{color:#000; border-color:#000; 
         +   '<div class="gc-seclbl">Describe it (optional)</div>'
         +   '<div class="el-descrow"><textarea class="gc-desc" id="stbDesc" rows="2" placeholder="a sentence in your own words — who could lose what, and to whom"></textarea><button type="button" class="el-descgo" id="stbDescGo">✦ Break it down</button></div>'
         +   '<div class="gc-seclbl">At risk</div>'
-        +   '<div class="stb-f"><span class="stb-lbl" id="stbBearerL">Whose it is</span><button type="button" class="stb-v" id="stbBearer"></button></div>'
-        +   '<div class="stb-f"><span class="stb-lbl" id="stbThreatL">What takes it</span><button type="button" class="stb-v" id="stbThreat"></button></div>'
-        +   '<div class="stb-f"><span class="stb-lbl">The axis</span><button type="button" class="stb-v" id="stbAxis"></button></div>'
+        +   '<div class="stb-f"><span class="stb-lbl" id="stbBearerL" title="The character or group who stands to lose this">Who could lose it</span><button type="button" class="stb-v" id="stbBearer"></button></div>'
+        +   '<div class="stb-f"><span class="stb-lbl" id="stbThreatL" title="Whoever or whatever puts it in danger — a person, a group, a place, an event, an idea">Threat</span><button type="button" class="stb-v" id="stbThreat"></button></div>'
+        +   '<div class="stb-f"><span class="stb-lbl" id="stbAxisL" title="What sort of struggle this is — against another person, against themselves, against society, against nature…">Kind of conflict</span><button type="button" class="stb-v" id="stbAxis"></button></div>'
         +   '<div class="stb-reads" id="stbReads"></div>'
         +   '<div class="stb-gap" id="stbGap"></div>'
         + '</div>'
@@ -91938,8 +91962,8 @@ body.eink .stk-offer-tx,body.eink .stk-offer-btn{color:#000; border-color:#000; 
   function render(){
     el();
     var b = document.getElementById('stbBearer'), t = document.getElementById('stbThreat'), a = document.getElementById('stbAxis');
-    if(b){ b.textContent = pillText(STB.bearer, 'who could lose it…'); b.classList.toggle('empty', !STB.bearer); }
-    if(t){ t.textContent = pillText(STB.threat, 'what is taking it…'); t.classList.toggle('empty', !STB.threat); }
+    if(b){ b.textContent = pillText(STB.bearer, 'choose a character or group…'); b.classList.toggle('empty', !STB.bearer); }   /* v.788 — plain words [Jeremy] */
+    if(t){ t.textContent = pillText(STB.threat, 'who or what puts it in danger…'); t.classList.toggle('empty', !STB.threat); }
     if(a){ a.textContent = STB.axis || 'worked out from the threat'; a.classList.toggle('empty', !STB.axis); }
     var r = readsAs(); var rd = document.getElementById('stbReads');
     if(rd){
@@ -91953,8 +91977,8 @@ body.eink .stk-offer-tx,body.eink .stk-offer-btn{color:#000; border-color:#000; 
     var g = document.getElementById('stbGap'); if(!g) return;
     var miss = [];
     if(!String(STB.name || '').trim()) miss.push('a name');
-    if(!STB.bearer) miss.push('whose it is');
-    if(!STB.threat) miss.push('what takes it');
+    if(!STB.bearer) miss.push('who could lose it');
+    if(!STB.threat) miss.push('the threat');
     if(!miss.length){ g.textContent = 'The Conflict layer has everything it needs from this one.'; g.className = 'stb-gap ok'; return; }
     g.className = 'stb-gap';
     var what = miss.join(', ').replace(/, ([^,]*)$/, ' and $1');
@@ -92091,7 +92115,7 @@ body.eink .stk-offer-tx,body.eink .stk-offer-btn{color:#000; border-color:#000; 
     try{
       if(typeof openAddChooser === 'function'){
         openAddChooser([
-          ['Stakes Builder', 'name it, then say whose it is and what takes it', function(){ try{ if(typeof closeAddChooser === 'function') closeAddChooser(); }catch(e){} open(); }],
+          ['Stakes Builder', 'name it, then say who could lose it and what threatens it', function(){ try{ if(typeof closeAddChooser === 'function') closeAddChooser(); }catch(e){} open(); }],
           ['By description', '✦ describe it — AI breaks it down', function(){ try{ if(typeof closeAddChooser === 'function') closeAddChooser(); }catch(e){} open(); setTimeout(function(){ try{ document.getElementById('stbDesc').focus(); }catch(e){} }, 60); }]
         ]);
         return;
