@@ -24977,6 +24977,11 @@ function migrateElementKey(oldKey, newKey){
       });
     }
     if (typeof state !== 'undefined' && Array.isArray(state.focusKeys)) state.focusKeys = state.focusKeys.map(k => k === oldKey ? newKey : k);
+    /* v.775 — a board's Setting/Region is held by element key on every board: each section's, each scene's, each map's */
+    try{ const _pk = p => { if (p && p.placeKey === oldKey) p.placeKey = newKey; };
+      (state.frames || []).forEach(fr => _pk(fr && fr.prompt));
+      const _sb = state.session && state.session.sceneBoards; if (_sb) Object.keys(_sb).forEach(k => _pk(_sb[k]));
+      ((state.session && state.session.maps) || []).forEach(m => _pk(m && m.prompt)); }catch(e){}
     if (typeof window.__dystMigrateKey === 'function') window.__dystMigrateKey(oldKey, newKey);   // plan layer: arcs, goal links, group-chart nodes
   }catch(e){}
 }
@@ -57818,9 +57823,12 @@ body.eink .pl-filterpick .pf-row.on .pf-box{ background:#000; border-color:#000;
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.697';
+  var APP_VERSION = '2026.07.20.698';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.698', date:'September 23, 2026', notes:[
+      '**Every board names the place that contains it.** [Jeremy] Under the Scenes | Maps toggle there is now a title: the **Setting** of the scene you are on, or the **Region** of the map — the area that holds everything else on the board. Click it to choose from the story’s places, or type a new name and **Create** it; a new place joins the story’s elements (the Story Legend and the Elements list, with the other places) without being set down on the board it contains. Each section, scene and map keeps its own.',
+    ]},
     { v:'2026.07.20.697', date:'September 23, 2026', notes:[
       '**A smaller link icon under a selected Bonds pill.** [Jeremy] The link glyph had been stretched to fill its whole circle by a rule meant for the map; it now sits small in the middle of the circle, like the ×.',
     ]},
@@ -67938,8 +67946,12 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
           if(!bb||!sk||pv.parentElement!==sk) return;
           var rb=bb.getBoundingClientRect(), rs=sk.getBoundingClientRect();
           pv.style.top=Math.max(6, Math.round(rb.bottom-rs.top)+6)+'px';
+          /* v.775 — the board's title (its Setting, or a map's Region) sits under the toggle, and everything that
+             used to take the toggle's slot steps down by its height */
+          var pt=document.getElementById('placeTitle'), _pth=0;
+          if(pt && pt.parentElement===sk && !pt.hidden && pt.offsetHeight){ pt.style.top=(Math.max(6, Math.round(rb.bottom-rs.top)+6)+(pv.offsetHeight||22)+6)+'px'; _pth=pt.offsetHeight+6; }
           var cb=document.getElementById('sceneCarryBar');
-          var slot=Math.max(6, Math.round(rb.bottom-rs.top)+6+(pv.offsetHeight||22)+10);
+          var slot=Math.max(6, Math.round(rb.bottom-rs.top)+6+(pv.offsetHeight||22)+10)+_pth;
           if(cb) cb.style.top=slot+'px';
           /* v.666 — the placement banner ("Click where…") kept its classic-map `top:12px`, which on
              this canvas is BEHIND the header bar: every click-to-place, pin and bring gesture had its
@@ -91988,6 +92000,202 @@ html body:not(.eink) #appMenu > #aiModelsBtn{ --mi:url("data:image/svg+xml,%3Csv
 html body:not(.eink) #appMenu > #tourMenuBtn{ --mi:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='M15.5 8.5l-2 5-5 2 2-5z' fill='black' stroke='none'/%3E%3C/svg%3E"); }
 </style>
 
+<script id="dyst-placetitle-js">
+/* v.775 — THE BOARD'S TITLE. [Jeremy] "For the Scenes and maps, can we have a Title underneath the Toggle to represent
+   the Setting of the Scene or Region of the map, essentially the area or environment that contains everything else.
+   There should be the picker for this, with the list of existing story places and the ability to create a new one.
+   In creating a new one, the Pill should be added to the elements list."
+
+   What it is: the PLACE THAT CONTAINS THE BOARD — not one more thing on it. So it is held on the board itself
+   (`state.prompt.placeKey`, an element key, with `placeName` kept beside it so a title never goes blank if the
+   element is later removed), and it is never drawn as a pawn on the board it contains. Every board has its own:
+   a section's, each scene's, each map's — `state.prompt` is always whichever board you are looking at.
+
+   The older `mapContainer` (a bare word, read only by the retired map-level selector) is left alone.
+
+   Picking lists the story's places (every setting in the story, placed or not); typing a name no place has offers
+   "Create", which makes a setting ELEMENT in the story — in the Story Legend and the Elements list, like any other
+   place — without putting it on a board: a place that contains the board is not a thing standing on it. */
+(function(){
+  'use strict';
+  function st(){ try{ return state; }catch(e){ return null; } }
+  function board(){ var s=st(); return (s && s.prompt) || null; }
+  function isMaps(){ return document.body.classList.contains('places-maps') || window.__dystPlacesView==='maps'; }
+  function nameOf(key){
+    try{ var w=(typeof npFindEl==='function') ? npFindEl(key) : null; if(w) return (typeof elDisplayName==='function') ? elDisplayName(w) : (w.name||w.word||''); }catch(e){}
+    return '';
+  }
+  function current(){ var b=board(); if(!b || !b.placeKey) return null; return { key:b.placeKey, name: nameOf(b.placeKey) || b.placeName || '' }; }
+  function caption(){
+    if(isMaps()) return 'Region';
+    var s=st(), fi=(s && s.frameIdx) || 0, out='Setting \u00b7 '+(fi+1);
+    try{ if(s.sceneSid && typeof sceneListFor==='function'){ var l=sceneListFor(fi)||[], ix=-1; l.forEach(function(x, j){ if(x && x.sid===s.sceneSid) ix=j; }); if(ix>0) out+=' \u00b7 Scene '+(ix+1); } }catch(e){}
+    return out;
+  }
+  function places(){
+    var a=window.__dystPlan, seen={}, out=[];
+    try{ (a && a.storyElements ? a.storyElements() : []).forEach(function(o){
+      if(!o || !o.w || o.w.cat!=='setting' || o.w.deco || seen[o.key]) return; seen[o.key]=1;
+      out.push({ key:o.key, name:(a.displayName ? a.displayName(o.w) : (o.w.name||o.w.word||'')), sub:o.w.sub||'' }); }); }catch(e){}
+    out.sort(function(x, y){ return String(x.name).localeCompare(String(y.name)); });
+    return out;
+  }
+  function save(){ try{ if(typeof syncFramesToSession==='function') syncFramesToSession(); }catch(e){} try{ if(typeof scheduleAutosave==='function') scheduleAutosave(); }catch(e){} }
+  function setPlace(key, name){
+    var b=board(); if(!b) return;
+    if(key){ b.placeKey=key; b.placeName=name||nameOf(key)||''; } else { delete b.placeKey; delete b.placeName; }
+    save(); paint();
+  }
+  /* a new place: a setting ELEMENT in the story, not on the board (the Story Legend's record shape, so adding it
+     to a section later finds this record instead of minting a second one) */
+  function createPlace(nm){
+    nm=String(nm||'').trim(); if(!nm) return null;
+    try{
+      if(typeof ensureSession==='function') ensureSession();
+      var s=st(); if(!s || !s.session) return null;
+      var item=makeElementItem('setting', nm, 0, isMaps() ? 'Terrain' : 'Places'); item.name=nm;
+      var lib=s.session.elemLibrary=s.session.elemLibrary||[];
+      var lk=(typeof libKeyOf==='function') ? libKeyOf('setting', nm) : null;
+      var ex=lk ? lib.filter(function(r){ return r && libKeyOf(r.cat, r.name||r.word)===lk; })[0] : null;
+      if(ex && ex.item) item=ex.item;
+      else lib.push({ id:'lib'+Date.now().toString(36)+Math.random().toString(36).slice(2,6), cat:'setting', name:nm, sub:item.sub, word:item.word,
+                      item:JSON.parse(JSON.stringify(item)), placed:false, frames:[] });
+      try{ if(typeof renderStoryLibrary==='function') renderStoryLibrary(); }catch(e){}
+      try{ if(typeof renderNpElements==='function') renderNpElements(); }catch(e){}
+      try{ if(typeof window.__planRefreshNarrative==='function') window.__planRefreshNarrative(); }catch(e){}
+      save();
+      return wordKey(item);
+    }catch(e){ return null; }
+  }
+  var el=null, nmB=null, capE=null;
+  function ensure(){
+    var sk=document.getElementById('sky'); if(!sk) return null;
+    if(el && el.parentElement===sk) return el;
+    el=document.getElementById('placeTitle');
+    if(!el){
+      el=document.createElement('div'); el.id='placeTitle';
+      nmB=document.createElement('button'); nmB.type='button'; nmB.className='pt-name';
+      capE=document.createElement('div'); capE.className='pt-cap';
+      el.appendChild(nmB); el.appendChild(capE);
+      nmB.addEventListener('click', function(e){ e.stopPropagation(); openPicker(nmB); });
+      el.addEventListener('pointerdown', function(e){ e.stopPropagation(); });
+    }
+    if(el.parentElement!==sk) sk.appendChild(el);
+    nmB=el.querySelector('.pt-name'); capE=el.querySelector('.pt-cap');
+    return el;
+  }
+  var lastH=-1;
+  function paint(){
+    if(!ensure()) return;
+    var c=current(), maps=isMaps();
+    nmB.textContent = c && c.name ? c.name : (maps ? 'Choose the region\u2026' : 'Choose the setting\u2026');
+    nmB.classList.toggle('empty', !(c && c.name));
+    nmB.title = maps ? 'The region this map shows \u2014 the place that contains everything on it. Click to choose or create one.'
+                     : 'The setting of this scene \u2014 the place that contains everything in it. Click to choose or create one.';
+    capE.textContent = caption();
+    var h=el.offsetHeight; if(h!==lastH){ lastH=h; try{ if(window.__dystPlaceSeg) window.__dystPlaceSeg(); }catch(e){} }
+  }
+  /* the app's tooltip would otherwise sit over the open picker: the name's title is held back while it is open */
+  var heldTitle=null;
+  function closePicker(){ var m=document.getElementById('ptPick'); if(m) m.remove(); document.removeEventListener('pointerdown', outside, true);
+    if(heldTitle!=null && nmB){ nmB.title=heldTitle; heldTitle=null; } }
+  function outside(e){ var m=document.getElementById('ptPick'); if(m && !m.contains(e.target) && !(el && el.contains(e.target))) closePicker(); }
+  function openPicker(anchor){
+    if(document.getElementById('ptPick')){ closePicker(); return; }
+    var maps=isMaps(), cur=current();
+    if(nmB){ heldTitle=nmB.title; nmB.removeAttribute('title'); try{ if(typeof hideTip==='function') hideTip(); }catch(e){} }
+    var m=document.createElement('div'); m.id='ptPick';
+    var hd=document.createElement('div'); hd.className='ptp-hd'; hd.textContent = maps ? 'Region of this map' : 'Setting of this scene'; m.appendChild(hd);
+    var q=document.createElement('input'); q.type='text'; q.className='ptp-q'; q.placeholder='Search places, or name a new one\u2026'; q.autocomplete='off'; m.appendChild(q);
+    var list=document.createElement('div'); list.className='ptp-list'; m.appendChild(list);
+    var foot=document.createElement('div'); foot.className='ptp-foot'; m.appendChild(foot);
+    function draw(){
+      var term=String(q.value||'').trim(), low=term.toLowerCase(), all=places(), exact=false;
+      list.innerHTML='';
+      all.forEach(function(p){
+        if(low && String(p.name).toLowerCase().indexOf(low)<0) return;
+        if(String(p.name).toLowerCase()===low) exact=true;
+        var b=document.createElement('button'); b.type='button'; b.className='ptp-row'+(cur && cur.key===p.key ? ' on' : ''); b.setAttribute('data-key', p.key);
+        var n=document.createElement('span'); n.className='ptp-nm'; n.textContent=p.name; b.appendChild(n);
+        if(p.sub){ var t=document.createElement('span'); t.className='ptp-sub'; t.textContent=p.sub; b.appendChild(t); }
+        b.addEventListener('click', function(e){ e.stopPropagation(); setPlace(p.key, p.name); closePicker(); });
+        list.appendChild(b);
+      });
+      if(term && !exact){
+        var c=document.createElement('button'); c.type='button'; c.className='ptp-row ptp-new';
+        c.textContent='\uFF0B Create \u201c'+term+'\u201d'; c.title='A new place in the story \u2014 it joins the story\u2019s elements';
+        c.addEventListener('click', function(e){ e.stopPropagation(); var k=createPlace(term); if(k) setPlace(k, term); closePicker(); });
+        list.appendChild(c);
+      }
+      if(!list.children.length){ var em=document.createElement('div'); em.className='ptp-empty'; em.textContent='No places in the story yet \u2014 type a name to create one.'; list.appendChild(em); }
+      foot.innerHTML='';
+      if(cur){ var x=document.createElement('button'); x.type='button'; x.className='ptp-clear'; x.textContent='Clear';
+        x.title='This board no longer names the place that contains it (the place itself stays in the story)';
+        x.addEventListener('click', function(e){ e.stopPropagation(); setPlace(null); closePicker(); }); foot.appendChild(x); }
+    }
+    q.addEventListener('input', draw);
+    q.addEventListener('keydown', function(e){
+      if(e.key==='Escape'){ e.stopPropagation(); closePicker(); }
+      else if(e.key==='Enter'){ e.preventDefault(); var f=list.querySelector('.ptp-row'); if(f) f.click(); }
+    });
+    m.addEventListener('pointerdown', function(e){ e.stopPropagation(); });
+    draw();
+    document.body.appendChild(m);
+    var r=(el || anchor).getBoundingClientRect(), w=m.offsetWidth||280;   /* under the whole title, caption included */
+    m.style.left=Math.max(8, Math.min(Math.round(r.left + r.width/2 - w/2), window.innerWidth - w - 8))+'px';
+    m.style.top=Math.round(r.bottom + 6)+'px';
+    setTimeout(function(){ try{ q.focus(); }catch(e){} document.addEventListener('pointerdown', outside, true); }, 20);
+  }
+  /* repaint whenever the board may have changed: every draw of the board, the toggle, a map switch, a scene switch */
+  function hook(){
+    try{
+      if(typeof window.renderConstellation==='function' && !window.renderConstellation.__pt){
+        var rc=window.renderConstellation;
+        var w=function(){ var r=rc.apply(this, arguments); try{ hook(); paint(); }catch(e){} return r; }; w.__pt=1;
+        window.renderConstellation=w;
+      }
+      var mc=window.__dystMapChanged; if(!mc || !mc.__pt){ var nm=function(){ var r=mc ? mc.apply(this, arguments) : undefined; try{ paint(); }catch(e){} return r; }; nm.__pt=1; window.__dystMapChanged=nm; }
+      var sc=window.__dystSceneChanged; if(!sc || !sc.__pt){ var ns=function(){ var r=sc ? sc.apply(this, arguments) : undefined; try{ paint(); }catch(e){} return r; }; ns.__pt=1; window.__dystSceneChanged=ns; }
+    }catch(e){}
+  }
+  /* The map and scene hooks are single slots that the Places view re-assigns when it is (lazily) built, so they are
+     re-taken on every board draw; and the Scenes | Maps switch is watched where it lands — the body's class. */
+  function boot(){
+    hook(); paint();
+    var lastCls=document.body.className;
+    try{ new MutationObserver(function(){ var c=document.body.className; if(c===lastCls) return; var was=lastCls; lastCls=c;
+      if((/\bplaces-maps\b/.test(was))!==(/\bplaces-maps\b/.test(c)) || (/\bplan-view-map\b/.test(was))!==(/\bplan-view-map\b/.test(c))){ hook(); setTimeout(paint, 0); } })
+      .observe(document.body, { attributes:true, attributeFilter:['class'] }); }catch(e){}
+  }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', function(){ setTimeout(boot, 0); }); else setTimeout(boot, 0);
+  window.__dystPlaceTitle={ paint:paint, set:setPlace, create:createPlace, places:places, current:current, open:function(){ if(ensure()) openPicker(nmB); } };
+})();
+</script>
+<style id="dyst-placetitle-css">
+/* v.775 — the board's title: the place that contains it, under the Scenes | Maps toggle */
+#placeTitle{ position:absolute; left:50%; top:44px; transform:translateX(-50%); z-index:21; display:flex; flex-direction:column; align-items:center; gap:1px; pointer-events:auto; max-width:60%; text-align:center; }
+body:not(.plan-view-map) #placeTitle{ display:none !important; }
+html body.mobile-min #placeTitle{ display:none !important; }
+#placeTitle .pt-name{ font-family:var(--serif); font-size:26px; line-height:1.15; font-weight:500; color:var(--charcoal); background:none; border:none; padding:0 6px; cursor:pointer; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; border-radius:6px; }
+#placeTitle .pt-name:hover{ background:rgba(196,158,74,.12); }
+#placeTitle .pt-name.empty{ font-style:italic; font-size:19px; color:#8c8374; }
+#placeTitle .pt-cap{ font-family:var(--sans); font-size:10.5px; font-weight:800; letter-spacing:.16em; text-transform:uppercase; color:#7a756a; }
+#ptPick{ position:fixed; z-index:9000; width:280px; background:#fbf8f0; border:1px solid rgba(90,80,60,.22); border-radius:12px; box-shadow:0 8px 28px rgba(40,30,10,.18); padding:10px; font-family:var(--sans); }
+#ptPick .ptp-hd{ font-size:10.5px; font-weight:800; letter-spacing:.1em; text-transform:uppercase; color:#8c8374; padding:0 4px 7px; }
+#ptPick .ptp-q{ width:100%; box-sizing:border-box; font:13px var(--sans); padding:7px 10px; border:1px solid rgba(90,80,60,.25); border-radius:8px; background:#fff; color:#2a2620; outline:none; }
+#ptPick .ptp-q:focus{ border-color:var(--gold); }
+#ptPick .ptp-list{ max-height:280px; overflow-y:auto; margin-top:7px; display:flex; flex-direction:column; gap:1px; }
+#ptPick .ptp-row{ display:flex; align-items:center; justify-content:space-between; gap:8px; width:100%; text-align:left; font:13px var(--sans); color:#2a2620; background:none; border:none; border-radius:7px; padding:7px 9px; cursor:pointer; }
+#ptPick .ptp-row:hover{ background:rgba(196,158,74,.14); }
+#ptPick .ptp-row.on{ background:rgba(196,158,74,.22); font-weight:700; }
+#ptPick .ptp-sub{ font-size:10.5px; color:#8c8374; letter-spacing:.04em; }
+#ptPick .ptp-new{ color:#6b5415; font-weight:700; }
+#ptPick .ptp-empty{ font-size:12.5px; font-style:italic; color:#8c8374; padding:8px 6px; }
+#ptPick .ptp-foot:not(:empty){ margin-top:7px; padding-top:7px; border-top:1px solid rgba(90,80,60,.15); }
+#ptPick .ptp-clear{ width:100%; font:700 10.5px var(--sans); letter-spacing:.09em; text-transform:uppercase; padding:6px; border-radius:8px; border:1px solid rgba(90,80,60,.22); background:transparent; color:#6b675f; cursor:pointer; }
+body.eink #placeTitle .pt-name{ color:#000; }
+body.eink #ptPick{ background:#fff; border-color:#000; }
+</style>
 <script id="dyst-board-menu-js">
 /* v.731 [Jeremy] — the board's ⋯ (Bring from a map… · Put this scene's places on a map… · Clear map) moves from the
    sub-bar's right cluster to the board itself, beside the Scenes | Maps toggle. One re-parenting, once both exist:
