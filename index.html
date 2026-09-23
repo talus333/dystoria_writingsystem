@@ -40416,13 +40416,16 @@ function patShowLens(id){ ensurePatternsDrawer(); var panel=document.getElementB
 var CHECKS = [
   { id:'gap', name:'Gap & Chekhov check', desc:'Under-developed threads — a stake never paid off, a character with no ties, a setting never entered, an object that vanishes.' },
   { id:'continuity', name:'Continuity pass', desc:'Contradictions — a trait that changed, a destroyed place reappearing, a name or number that shifts, a timeline slip.' },
-  { id:'grammar', name:'Grammar & prose review', desc:'Line-level notes — grammar, awkward phrasing, wordiness, weak or repeated word choice — each pinned to its passage.' }
+  { id:'grammar', name:'Grammar & prose review', desc:'Line-level notes — grammar, awkward phrasing, wordiness, weak or repeated word choice — each pinned to its passage.' },
+  /* v.772 — POV phase 5 (design §7.3). The first check in this list that needs no AI: it reads pronouns, so it is
+     instant, free, works signed out, and wears no ✦. */
+  { id:'perspective', ai:false, name:'Perspective check', desc:'Sections that read against the point of view they are set in — first-person words in a third-person book, a first-person section with no “I”, a narrator reporting someone else’s thoughts.' }
 ];
 function ensureChecksDrawer(){
   var cols=document.getElementById('editCols'); if(!cols) return;
   if(document.getElementById('edChkPanel')) return;
   var panel=document.createElement('div'); panel.id='edChkPanel';
-  var items=CHECKS.map(function(c){ return '<button type="button" class="chk-item" data-chk="'+c.id+'"><div class="chk-item-h"><span class="ai-star">✦</span>'+c.name+'</div><div class="chk-item-d">'+c.desc+'</div></button>'; }).join('');
+  var items=CHECKS.map(function(c){ return '<button type="button" class="chk-item" data-chk="'+c.id+'"><div class="chk-item-h">'+(c.ai===false?'':'<span class="ai-star">✦</span>')+c.name+'</div><div class="chk-item-d">'+c.desc+'</div></button>'; }).join('');
   panel.innerHTML='<div id="chkHead"><span class="pt-h">Checks</span><button type="button" class="pt-x" title="Close">×</button></div>'
     +'<div class="chk-lede">Honest diagnostics of the whole draft — a read, never a rewrite.</div>'
     +'<div id="chkBody">'+items+'<div class="chk-foot">Each pass reads the whole story and anchors its findings to the passages they concern.</div></div>'
@@ -53542,7 +53545,73 @@ window.__dystSetupWriteMic = function(){
         });
       });
     }catch(e){}
+    /* v.772 [POV phase 5 · §7.4 — Jeremy: "yes"] — THE SECOND INVARIANT, and its deterministic half: a section told
+       through someone who is not on that section's map. It is either a mistake in the viewpoint or a missing map
+       placement — the app cannot know which, so it says both and changes nothing. A scene with its own eyes is
+       checked against its section's map (scenes share the section's one map). Only where a viewpoint is a pair of
+       eyes: an omniscient or objective book has none to check. */
+    try{
+      var P5=window.__pov; if(P5 && P5.resolve && P5.mode && P5.mode()!=='unset'){
+        var frs=(state.frames)||[];
+        frs.forEach(function(fr, i){
+          var on={}; ((fr.prompt&&fr.prompt.words)||[]).forEach(function(w){ try{ on[wordKey(w)]=1; }catch(e){} });
+          var seen={};
+          var chk=function(r, where){ if(!r || !r.who || on[r.who] || seen[r.who]) return; seen[r.who]=1;
+            out.push({ certain:true, element:r.label, section:i+1,
+              text:'⚑ certain — '+where+' '+(i+1)+' is told through '+r.label+'’s eyes, but '+r.label+' is not on that section’s map. Either the viewpoint is wrong, or '+r.label+' needs placing there.' }); };
+          chk(P5.resolve(i, null, null), 'Section');
+          try{ (window.orgSectionScenes ? window.orgSectionScenes(i) : []).forEach(function(sc){ var rs=P5.resolve(i, null, sc.sid); if(rs && rs.source==='scene') chk(rs, 'A scene in section'); }); }catch(e){}
+        });
+      }
+    }catch(e){}
     return out;
+  }
+  /* v.772 [POV phase 5 · §7.3] — THE PERSPECTIVE CHECK, deterministic. Pronouns against the person the book is set
+     in, OUTSIDE DIALOGUE (anything in “…” or "…" is a character speaking, and a character may say "I" in any book):
+       · a THIRD-person book whose section narrates in first-person singular (two or more sentences, so one letter or
+         remembered line does not trip it);
+       · a FIRST-person book whose section never says "I", over enough narration to mean it;
+       · a FIRST-person section reporting someone else's thoughts in the telltale forms — "she realised", "he
+         wondered", "they had never told anyone" — which the narrator cannot know from inside.
+     Findings are pinned beside the sentence and never applied. And the rule that keeps it from becoming a grade:
+     it reports the mismatch and never changes the card — if a section was written in first person on purpose, the
+     fix may be the book's point of view, not the prose, and only the author knows which. */
+  function detPerspective(){
+    var out=[], P5=window.__pov;
+    if(!P5 || !P5.book) return { none:'no-pov', out:out };
+    var bk=P5.book()||{}, person=bk.person||'';
+    if(!person || person==='Second Person') return { none: person ? 'second' : 'no-pov', out:out };
+    var text={};
+    try{ (editorNodeFrames()||[]).forEach(function(o){ var n=o.node; if(!n || (n.nodeType===1 && (n.tagName==='H3' || (n.classList && (n.classList.contains('sec-mark') || n.classList.contains('scene-mark') || n.classList.contains('sess-foot')))))) return;
+      var t=''; try{ if(n.nodeType===1 && n.querySelector && n.querySelector('.sess-foot')){ var c=n.cloneNode(true); Array.prototype.forEach.call(c.querySelectorAll('.sess-foot'), function(x){ x.remove(); }); t=c.textContent||''; } else t=n.textContent||''; }catch(e){ t=n.textContent||''; }
+      text[o.frame]=(text[o.frame]||'')+'\n'+t; }); }catch(e){}
+    var FIRSTc=/(^|[^\w’'])(I|I’m|I'm|I’d|I'd|I’ve|I've|I’ll|I'll|[Mm]e|[Mm]y|[Mm]ine|[Mm]yself)(?=$|[^\w’'])/;
+    /* someone else's mind: a pronoun OR a name ("Gretel realised …"), never the narrator's own name */
+    var OTHER=/\b(she|he|they|She|He|They|[A-Z][a-z’']+)\s+(realised|realized|wondered|wished|feared|suspected|decided|remembered|had never told anyone|secretly thought|thought to (?:herself|himself|themselves))\b/;
+    Object.keys(text).forEach(function(fk){
+      var i=+fk, raw=text[fk]||'';
+      /* dialogue out — double quotes, curly singles, and STRAIGHT singles (the starter story's own dialogue, found by
+         the harness: 'Only wait for the moon, Gretel,' said Hansel). A straight single quote opens after a space or
+         dash and closes before a space or punctuation, so the apostrophe in "don't" is never taken for one. */
+      var narr=raw.replace(/“[^”]*”/g, ' ').replace(/‘[^’]*’(?=[\s,.;:!?—–)\]]|$)/g, ' ').replace(/"[^"\n]*"/g, ' ')
+                  .replace(/(^|[\s(\[—–-])'[^'\n]*?'(?=[\s,.;:!?—–)\]]|$)/g, '$1 ');
+      var sents=narr.split(/(?<=[.!?…])\s+|\n+/).map(function(x){ return x.trim(); }).filter(function(x){ return x.length>3; });
+      var words=(narr.match(/[A-Za-z’']+/g)||[]).length;
+      var r=P5.resolve(i, null, null)||{}, who=r.label||'', sec='Section '+(i+1);
+      if(person==='Third Person'){
+        var hits=sents.filter(function(x){ return FIRSTc.test(x); });
+        if(hits.length>=2) out.push({ quote:hits[0].slice(0, 160), element:'', section:i+1,
+          text:sec+' is set in the third person, but '+hits.length+' sentences of its narration are in the first — “I”, “me”, “my” outside dialogue. Either this passage is a letter, a diary or a slip, or this section is told differently from the book.' });
+      } else if(person==='First Person'){
+        if(words>=150 && !sents.some(function(x){ return FIRSTc.test(x); }))
+          out.push({ quote:'', element:'', section:i+1,
+            text:sec+' is set in the first person'+(who?(' — '+who+' narrating'):'')+' — but its '+words+' words of narration never say “I”. It reads as third person.' });
+        var n=0; sents.forEach(function(x){ if(n>=3) return; var m=OTHER.exec(x); if(!m) return; if(who && m[1].toLowerCase()===who.toLowerCase()) return; if(/^(I|The|Then|When|But|And|So|If|As|It)$/.test(m[1])) return; n++;
+          out.push({ quote:x.slice(0, 160), element:'', section:i+1,
+            text:sec+' is told by '+(who||'its narrator')+', in the first person — but this sentence reports what someone else '+m[2].toLowerCase()+' from the inside. Can '+(who||'the narrator')+' know it, or is it seen from outside?' }); });
+      }
+    });
+    return { none:'', out:out };
   }
   /* R2 — deterministic Gap & Chekhov checklist: certain, repeatable structural absences computed
      from the model (no AI). Reported as ⚑ certain findings above the AI's subtler suggestions. */
@@ -53794,8 +53863,8 @@ window.__dystSetupWriteMic = function(){
   try{ window.__edMakeNoteAt = edMakeNoteAt; }catch(e){}
   function renderReviewNotes(kind, arr, p){
     var body=document.getElementById('editBody');
-    var prefix = kind==='continuity' ? '\u26A0 Continuity \u2014 ' : (kind==='grammar' ? '\u270D Prose \u2014 ' : '\u2726 Gap \u2014 ');
-    var emptyMsg = kind==='continuity' ? 'No contradictions surfaced \u2014 the continuity holds.' : (kind==='grammar' ? 'The prose reads clean \u2014 no notes.' : 'Nothing under-developed stood out.');
+    var prefix = kind==='continuity' ? '\u26A0 Continuity \u2014 ' : (kind==='grammar' ? '\u270D Prose \u2014 ' : (kind==='perspective' ? '\u25CE Perspective \u2014 ' : '\u2726 Gap \u2014 '));
+    var emptyMsg = kind==='continuity' ? 'No contradictions surfaced \u2014 the continuity holds.' : (kind==='grammar' ? 'The prose reads clean \u2014 no notes.' : (kind==='perspective' ? 'Every section reads in the person its point of view is set in.' : 'Nothing under-developed stood out.'));
     var pinned=0, firstSg=null, unpinned=[];
     if(body){
       arr.forEach(function(f){
@@ -53830,6 +53899,15 @@ window.__dystSetupWriteMic = function(){
   // floating #aisPop; onClose is what its back-button calls. The whole-story notes still anchor to the prose.
   async function aisRun(kind, host, onClose){
     if (kind === 'fingerprint'){ try{ if (typeof window.openStyleFingerprint === 'function') window.openStyleFingerprint(); }catch(e){} var mm=document.getElementById('aiSupportMenu'); if(mm) mm.classList.remove('show'); return; }   // deterministic, no AI — opens the Style Fingerprint dashboard
+    if (kind === 'perspective'){   /* v.772 — deterministic: no AI call, no sign-in needed, renders at once */
+      var inD = !!host, pp = host || pop(); if (!inD) pp.classList.add('show');
+      pp.innerHTML = '<div class="ex-head"><span class="ex-t">Perspective check</span><button type="button" class="ex-x" title="' + (inD ? 'Back' : 'Close') + '">' + (inD ? '‹' : '×') + '</button></div><div class="ex-body"></div>';
+      pp.querySelector('.ex-x').addEventListener('click', function(){ if (inD){ if (typeof onClose === 'function') onClose(); } else { pp.classList.remove('show'); } });
+      var res = detPerspective();
+      if (res.none){ var bb0 = pp.querySelector('.ex-body'); bb0.innerHTML = '<div class="ex-think">' + (res.none === 'second' ? 'The book is in the second person — this check measures first and third person, so there is nothing for it to read yet.' : 'Set the book’s point of view first — Narrative layers → POV — and this check has something to measure the prose against.') + '</div>'; return; }
+      renderReviewNotes('perspective', res.out, pp);
+      return;
+    }
     var tool = TOOLS[kind]; if (!tool) return;
     if (typeof aiAuthed === 'function' && !aiAuthed()){ if (typeof promptAiSignup === 'function') promptAiSignup(); return; }
     var inDrawer = !!host;
@@ -53852,6 +53930,7 @@ window.__dystSetupWriteMic = function(){
     } catch(e){
       /* v.657 · #50 — the deterministic findings do not need the AI, so they do not vanish with it */
       var _cg = (kind === 'gap' && g._certainGaps && g._certainGaps.length) ? g._certainGaps : null;
+      if (!_cg && kind === 'continuity'){ try{ var _dc = detContinuity(); if (_dc.length) _cg = _dc; }catch(_){} }   /* v.772 — Continuity's certain findings need no AI either */
       if (_cg){ try{ renderReviewNotes(kind, _cg, p); var bb2 = p.querySelector('.ex-body'); if (bb2){ var nt = document.createElement('div'); nt.className = 'ex-think ais-noai'; nt.style.marginTop = '10px'; nt.textContent = 'Couldn\'t reach the AI \u2014 these are the certain findings only. Try again for the subtler ones.'; bb2.appendChild(nt); } }catch(e2){ _cg = null; } }
       if (!_cg){ var bb = p.querySelector('.ex-body'); if (bb) bb.innerHTML = '<div class="ex-think">Couldn\'t reach the AI — try again.</div>'; }
     }
@@ -57688,9 +57767,13 @@ body.eink .pl-filterpick .pf-row.on .pf-box{ background:#000; border-color:#000;
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.694';
+  var APP_VERSION = '2026.07.20.695';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.695', date:'September 23, 2026', notes:[
+      '**A Perspective check.** In Refine’s Checks drawer, **Perspective check** reads each section against the point of view the book is set in: first-person narration (“I”, “me”, “my” outside dialogue) in a third-person book, a first-person section that never says “I”, and a first-person narrator reporting someone else’s thoughts from the inside — “she realised”, “he wondered”. Findings are pinned beside the sentence and nothing is changed. It needs no AI, so it is instant and works signed out.',
+      '**Continuity notices a viewpoint who isn’t there.** The Continuity pass now flags a section — or a scene — told through someone’s eyes who is not on that section’s map: either the viewpoint is wrong, or they need placing there. This part needs no AI, so it still shows if the AI can’t be reached.',
+    ]},
     { v:'2026.07.20.694', date:'September 23, 2026', notes:[
       '**Fixed: large stories had become slow to load and to use.** [Jeremy] The point-of-view work in the last few updates was re-reading the whole story — every character, and every scene in the whole manuscript — once for each card on the Plot grid, several times over. Each of those is now worked out once per redraw. On a 60-section test story the Plot grid redraws as fast as it did before POV arrived.',
     ]},

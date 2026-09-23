@@ -428,7 +428,7 @@ map icon (flag + repointing). Cheap, visible, and the part most likely to make t
 **Phase 4 — the planner, Explore, and the Craft review fix. ✓ SHIPPED v.770 (§16).** The `pre` line and the limited-scope
 constraint; the viewpoint in Explore's focus line; `data.pov` finally reaching the craft metrics.
 
-**Phase 5 — the checks.** The deterministic perspective pass and the deterministic Continuity pass
+**Phase 5 — the checks. ◐ deterministic half SHIPPED v.772 (§18); the ✦ passes wait on real-draft use.** The deterministic perspective pass and the deterministic Continuity pass
 first and **alone**; the two ✦ passes only once the deterministic ones have been used on a real draft
 and their false-positive rate is known.
 
@@ -645,3 +645,24 @@ starter that cost a millisecond; on a 60-section, five-column book it made the P
 9-second freeze into load. All three are now held **once per task** (`_pvTask`, dropped on the next microtask) —
 the grid redraws faster than before POV. **Rule for phase 5 and beyond: anything that reads per card goes through
 `_pvTask`, and its harness builds a large story and COUNTS the reads (t771).**
+
+---
+
+## 18 · What building phase 5's deterministic half found (v.772)
+
+- **Perspective check** — a fourth entry in `CHECKS`, `ai:false`, so it wears no ✦ and runs instantly, free and
+  signed out (`aisRun('perspective')` short-circuits before the sign-in gate). Against the BOOK's person:
+  third-person books flag a section with **two or more** first-person narrating sentences (one letter or remembered
+  line should not trip it), pinned beside the first; first-person books flag a section of 150+ narrating words that
+  never says "I", and up to three sentences per section reporting someone else's mind ("she realised", "Gretel
+  wondered" — a pronoun or a name, never the narrator's own). Pinned as notes, never applied; it never changes the card.
+- **Dialogue is stripped first — including STRAIGHT SINGLE QUOTES.** The first build only stripped “…” and "…", and
+  the starter story's own dialogue ('Only wait for the moon, Gretel,' said Hansel) came back as three false
+  positives. A straight single quote opens after a space/dash and closes before a space/punctuation, so the
+  apostrophe in *don't* is never taken for one. *My* at a sentence start also had to be matched.
+- **Continuity, deterministic half (§7.4)** — `detContinuity` adds: a section (or a scene) told through someone
+  who is not on that section's map → *either the viewpoint is wrong, or they need placing there*. Only where a
+  viewpoint is a pair of eyes. Added to the AI-unreachable fallback, so it shows when the AI can't be reached.
+- **Measured on a 60-section book:** Perspective 0.3s, Continuity 0.7s, per click (not per render).
+- **Not built, by §9's rule:** the ✦ head-hopping pass and the ✦ "could not have known" pass. They wait until the
+  deterministic checks have been used on a real draft and their false-positive rate is known.
