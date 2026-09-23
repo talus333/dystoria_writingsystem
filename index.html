@@ -7105,6 +7105,7 @@ try { window.dystGroupTaxonomy = dystGroupTaxonomy; }catch(e){}
 function dystCustomGroupKinds(){ try{ var s = (typeof state !== 'undefined' && state) ? state.session : null; return (s && Array.isArray(s.customGroupKinds)) ? s.customGroupKinds : []; }catch(e){ return []; } }
 function dystSyncCustomGroupKinds(c){
   c = c || CATS.find(function(x){ return x.id === 'org'; });
+  dystAdoptLegacySubs('org');   /* v.783 */
   if (!c || !Array.isArray(c.subcategories)) return;
   var ks = dystCustomGroupKinds(), sid = '';
   try{ sid = (state.session && state.session.id) || ''; }catch(e){}
@@ -7174,7 +7175,37 @@ function dystFamHost(c){
   if (c.id === 'being'){ var t = c.subcategories.find(function(x){ return x && x.name === 'Type'; }); return (t && Array.isArray(t.groups)) ? t.groups : null; }
   return c.subcategories;
 }
+/* v.783 — a name-only subcategory made by the old door becomes a family: its line empty, its kinds the words the story's
+   own elements of it already use (or itself, if none). Moved, not copied — `customSubs` keeps only what is not a family
+   (a Character's own dimensions, and the elements with no families at all), so there is one store of custom families. */
+function dystAdoptLegacySubs(cat){
+  try{
+    var s = state && state.session; if (!s || !s.customSubs || !Array.isArray(s.customSubs[cat]) || !s.customSubs[cat].length) return;
+    var c = CATS.find(function(x){ return x.id === cat; }); if (!c) return;
+    var builtin = {}; (c.subcategories || []).forEach(function(sb){ if (sb && sb.name && !sb.customFam && !sb.customKind) builtin[String(sb.name).toLowerCase()] = 1; });
+    var wordsOf = function(name){ var out = [], seen = {}; var add = function(w){ if (w && w.cat === cat && w.sub === name && w.word && !seen[String(w.word).toLowerCase()]){ seen[String(w.word).toLowerCase()] = 1; out.push(w.word); } };
+      try{ ((state.prompt && state.prompt.words) || []).forEach(add); }catch(e){}
+      try{ (state.frames || []).forEach(function(fr){ ((fr.prompt && fr.prompt.words) || []).forEach(add); }); }catch(e){}
+      try{ (s.elemLibrary || []).forEach(function(r){ if (r) add(r.item); }); }catch(e){}
+      return out; };
+    var moved = false;
+    if (cat === 'org'){
+      if (!Array.isArray(s.customGroupKinds)) s.customGroupKinds = [];
+      s.customSubs[cat].forEach(function(n){ var l = String(n || '').toLowerCase(); if (!l || builtin[l] || s.customGroupKinds.some(function(k){ return k && String(k.name).toLowerCase() === l; })) return;
+        var ws = wordsOf(n); s.customGroupKinds.push({ name:n, cast:'Your own', hint:'', words:ws.length ? ws : [n] }); moved = true; });
+    } else {
+      if (!s.customFamilies || typeof s.customFamilies !== 'object' || Array.isArray(s.customFamilies)) s.customFamilies = {};
+      if (!Array.isArray(s.customFamilies[cat])) s.customFamilies[cat] = [];
+      var fams = s.customFamilies[cat];
+      s.customSubs[cat].forEach(function(n){ var l = String(n || '').toLowerCase(); if (!l || builtin[l] || fams.some(function(k){ return k && String(k.name).toLowerCase() === l; })) return;
+        var ws = wordsOf(n); fams.push({ name:n, hint:'', words:ws.length ? ws : [n] }); moved = true; });
+    }
+    s.customSubs[cat] = [];
+    if (moved){ try{ if (typeof scheduleAutosave === 'function') scheduleAutosave(); }catch(e){} }
+  }catch(e){}
+}
 function dystSyncCustomFamilies(c){
+  if (c && c.id !== 'being') dystAdoptLegacySubs(c.id);   /* v.783 */
   var host = dystFamHost(c); if (!host) return;
   var ks = dystCustomFamilies(c.id);
   if (!ks.length && !c.__cfHas) return;   /* the common case — nothing of the writer's, nothing laid — costs one check */
@@ -7237,6 +7268,24 @@ function allSubNames(cat, opts){ opts=opts||{}; var c=getCat(cat); var names=[];
   if(c){ (c.subcategories||[]).forEach(function(sb){ if(sb.retired) return; if(opts.beingIdentity && cat==='being' && (typeof IDENTITY_SUBS!=='undefined') && IDENTITY_SUBS.indexOf(sb.name)<0) return; names.push(sb.name); }); }
   customSubList(cat).forEach(function(n){ if(names.indexOf(n)<0) names.push(n); });
   return names; }
+/* v.783 [Jeremy] — "switch it to this same form so there's only one kind of custom family". Three doors used to make a
+   custom subcategory by NAME ALONE (the Add-element window's ＋ pill, its subcategory dropdown's "New subcategory…", and the
+   edit menu's "＋ New category…"), kept in `session.customSubs` where the builders never saw it. For every element whose
+   subcategories ARE its families — Places, Artifacts, Events, Concepts, and Groups (whose subcategories are kinds, so the
+   door makes a family of kinds) — the three doors now open the builders' ＋ New family form and hand back the family (or,
+   for Groups, its first kind). Characters keep the old door: a Character's subcategories are its dimensions (Archetype,
+   Occupation…), not families — its families live under Type, where the builder's own ＋ New family already is. Returns
+   false when the element has no families, and the caller keeps its name prompt. */
+function dystNewFamilyDoor(cat, x, y, done){
+  if (!(cat === 'org' || (DYST_FAM_CATS && DYST_FAM_CATS[cat] && cat !== 'being'))) return false;
+  if (typeof window.openWordPicker !== 'function') return false;
+  var nm = ((getCat(cat) || {}).name || 'element').toLowerCase();
+  window.openWordPicker({ cat:cat, sub:(cat === 'org' ? 'Kind' : DYST_FAM_CATS[cat]), x:x, y:y, newFamily:true,
+    title:(cat === 'org' ? 'Kind of group' : ('Kind of ' + nm)),
+    onPick:function(word, isNew, fam){ try{ done(fam || word); }catch(e){} } });
+  return true;
+}
+try{ window.dystNewFamilyDoor = dystNewFamilyDoor; }catch(e){}
 // A reusable subcategory picker (the edit-pencil menu look) — lists the category's subcategories + a "＋ New category…" creator.
 function openSubcatPicker(cat, cur, anchorEl, onPick){
   var old=document.getElementById('subcatPickMenu'); if(old) old.remove();
@@ -7247,7 +7296,10 @@ function openSubcatPicker(cat, cur, anchorEl, onPick){
     b.addEventListener('click', function(e){ e.stopPropagation(); m.remove(); if(onPick) onPick(sname); }); m.appendChild(b); });
   var sep=document.createElement('div'); sep.className='pm-sep'; m.appendChild(sep);
   var nb=document.createElement('button'); nb.type='button'; nb.className='pm-lib'; nb.textContent='＋ New category…';
-  nb.addEventListener('click', function(e){ e.stopPropagation(); m.remove(); (async function(){
+  if(cat!=='being' && (cat==='org' || (DYST_FAM_CATS && DYST_FAM_CATS[cat]))) nb.textContent='\uff0b New family\u2026';   /* v.783 */
+  nb.addEventListener('click', function(e){ e.stopPropagation(); m.remove();
+    if(dystNewFamilyDoor(cat, e.clientX, e.clientY, function(f){ if(onPick) onPick(f); })) return;   /* v.783 — the one form */
+    (async function(){
     var nm=(typeof sitePrompt==='function')?await sitePrompt('New category for '+((getCat(cat)||{}).name||'this element'),''):null;
     if(nm==null) return; nm=(nm||'').trim(); if(!nm) return; addCustomSubcat(cat, nm); if(onPick) onPick(nm);
   })(); });
@@ -11850,7 +11902,11 @@ function renderECPills(){
   names.forEach(n => mk(n, n));
   if (canCreate){
     const nb = document.createElement('button'); nb.type = 'button'; nb.className = 'ec-pill ec-pill-new'; nb.textContent = '＋'; nb.title = 'New subcategory';
-    nb.addEventListener('click', () => { (async function(){
+    if (EC.cat !== 'being' && (EC.cat === 'org' || (DYST_FAM_CATS && DYST_FAM_CATS[EC.cat]))) nb.title = 'New family \u2014 a name, a line on what it is, and what is in it';   /* v.783 */
+    nb.addEventListener('click', (ev) => {
+      const _r = nb.getBoundingClientRect();
+      if (dystNewFamilyDoor(EC.cat, _r.left, _r.bottom + 4, function(f){ EC.subSel = new Set([f]); EC.fam = ''; if (typeof ecRenderSubOptions === 'function') ecRenderSubOptions(f); renderECPills(); renderECResults(); })) return;   /* v.783 — the one form */
+      (async function(){
       let nmv = (typeof sitePrompt === 'function') ? await sitePrompt('New subcategory for ' + ((getCat(EC.cat) || {}).name || 'this element'), '') : null;
       nmv = (nmv == null) ? null : (nmv || '').trim(); if (!nmv) return;
       if (typeof addCustomSubcat === 'function') addCustomSubcat(EC.cat, nmv);
@@ -11912,7 +11968,10 @@ function openElemCard(catId, mode, node, opts){
     : ((mode === 'replace' ? 'Change \u2014 ' : 'Add \u2014 ') + (cat ? cat.name : catId));
   ecRenderSubOptions('', containerSub);
   { const _ss = $('ecSub'); if (_ss && !_ss._newSubWired){ _ss._newSubWired = 1; _ss.addEventListener('change', function(){
-      if (_ss.value === '__newsub__'){ (async function(){
+      if (_ss.value === '__newsub__'){
+        { const _prev = (EC.subSel && EC.subSel.size) ? [...EC.subSel][0] : ''; const _r = _ss.getBoundingClientRect();
+          if (dystNewFamilyDoor(EC.cat, _r.left, _r.bottom + 4, function(f){ ecRenderSubOptions(f); EC.subSel = new Set([f]); EC.fam = ''; renderECPills(); renderECResults(); })){ ecRenderSubOptions(_prev); return; } }   /* v.783 — the one form */
+        (async function(){
         let nmv = (typeof sitePrompt === 'function') ? await sitePrompt('New subcategory for ' + ((getCat(EC.cat) || {}).name || 'this element'), '') : null;
         nmv = (nmv == null) ? null : (nmv || '').trim();
         if (!nmv){ ecRenderSubOptions((EC.subSel && EC.subSel.size) ? [...EC.subSel][0] : ''); return; }
@@ -44597,6 +44656,7 @@ function init(){
     const card = $('elemCard');
     if (!card.classList.contains('show') || card.contains(e.target)) return;
     if (e.target.closest && e.target.closest('.cat-add')) return;
+    if (e.target.closest && e.target.closest('#traitPicker')) return;   /* v.783 — the window's own ＋ opens the family form there; working in it is not leaving the window */
     const g = e.target.closest ? e.target.closest('#skySvg g.node[data-node]') : null;
     if (g && window._ecKeepIdx != null && +g.getAttribute('data-node') === window._ecKeepIdx) return;   // clicking the element just added keeps the window
     window._ecKeepIdx = null;
@@ -46635,7 +46695,7 @@ document.addEventListener('DOMContentLoaded', init);
       return here.length + away.length;
     }
     function tpRender(){
-      if(TP.newKind && (TP.cat==='org' || DYST_FAM_CATS[TP.cat])){ const p0=tpEl(), r0=p0.querySelector('.tp-results'); if(!r0.querySelector('.tp-nk')){ r0.innerHTML=''; tpNewKindForm(r0, p0.querySelector('.tp-search').value.trim()); } return; }   /* v.780 — the form holds the list's place until it is used or left */
+      if(TP.newKind && (TP.cat==='org' || DYST_FAM_CATS[TP.cat])){ const p0=tpEl(), r0=p0.querySelector('.tp-results'); { const _ex=r0.querySelector('.tp-nk'); if(!_ex || _ex._tp!==TP){ r0.innerHTML=''; tpNewKindForm(r0, p0.querySelector('.tp-search').value.trim()); } } return; }   /* v.780 — the form holds the list's place until it is used or left */
       const p=tpEl(), res=p.querySelector('.tp-results'); res.innerHTML='';
       const raw=p.querySelector('.tp-search').value.trim(), q=raw.toLowerCase();
       if(TP.mode==='obstacle'){
@@ -46825,7 +46885,7 @@ document.addEventListener('DOMContentLoaded', init);
       event:   { h:'A new family of events',    name:'Omens, Trials, Crossings',          hint:'What they are, in a line (optional)',    l:'Kinds in it', eg:'Eclipse, Blood Moon',            one:'kind' },
       concept: { h:'A new family of concepts',  name:'Debts, Thresholds, Silences',       hint:'What they are, in a line (optional)',    l:'Kinds in it', eg:'Unpaid Debt, Oath-Debt',         one:'kind' } };
     function tpNewKindForm(res, raw){
-      const f=document.createElement('div'); f.className='tp-nk';
+      const f=document.createElement('div'); f.className='tp-nk'; f._tp=TP;
       const esc=x=>String(x||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
       const W=TP_FAM_WORDS[TP.cat]||TP_FAM_WORDS.org;
       f.innerHTML='<div class="tp-nk-h">'+W.h+'</div>'
@@ -46926,7 +46986,7 @@ document.addEventListener('DOMContentLoaded', init);
     // Generic "add system" word picker for the builders — filtered to one dimension, scroll or type to filter, create-your-own by typing. onPick(word,isNew).
     function openWordPicker(opts){
       opts=opts||{};
-      TP={ i:-1, cat:opts.cat||'', sub:opts.sub||'', mode:'trait', single:true, fam:'', cast:'', onPick:opts.onPick||null, pool:(Array.isArray(opts.pool)?opts.pool:null) };
+      TP={ i:-1, cat:opts.cat||'', sub:opts.sub||'', mode:'trait', single:true, fam:'', cast:'', onPick:opts.onPick||null, pool:(Array.isArray(opts.pool)?opts.pool:null), newKind:!!opts.newFamily };   /* v.783 — newFamily opens on the form */
       const p=tpEl();
       p.querySelector('.tp-title').textContent=opts.title||('Pick a '+String(opts.sub||'word').toLowerCase());
       p.querySelector('.tp-search').placeholder=opts.placeholder||('search or type a '+String(opts.sub||'word').toLowerCase()+'…');
@@ -58109,9 +58169,12 @@ body.eink .pl-filterpick .pf-row.on .pf-box{ background:#000; border-color:#000;
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.705';
+  var APP_VERSION = '2026.07.20.706';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.706', date:'September 23, 2026', notes:[
+      '**One kind of custom family.** [Jeremy] The Add-element window’s **＋** (and its “New subcategory…” and the edit menu’s “New category…”) now open the same **New family** form as the builders — a name, a line on what it is, and what is in it — for Places, Artifacts, Events, Concepts and Groups. A family made anywhere shows everywhere. Subcategories you made the old way, by name only, have become families, holding the kinds your elements already use. (A Character’s ＋ still adds a trait dimension; its families live under Type.)'
+    ]},
     { v:'2026.07.20.705', date:'September 23, 2026', notes:[
       '**A new thread starts with its card.** [Jeremy] Adding a thread column on the Plot grid now opens the thread’s card first, ready for its name. The card sets the thread up: its description, its **point of view**, the **key elements** its cards start with, its **stakes** (every card in the thread carries them unless it names its own), the **concepts driving it**, and its plot shape. Each card can still change any of it.',
       '**Every thread is equal.** [Jeremy] The first column is no longer “the Main Plot” — its card, the story facts, the wiki and the exports treat it as a thread like the rest, and its stake is its own. The story stake keeps its place on the notepad’s story card and still shows on cards where nothing nearer is set. To say which thread matters most, give it a role in the Thread organizer.'
