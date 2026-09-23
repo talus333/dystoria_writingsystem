@@ -422,7 +422,7 @@ the chooser. The POV row unchanged.
 **Phase 2 — the marks. ✓ SHIPPED v.768 (§14).** The viewpoint pills on the POV row, the glyph in the Characters list, the
 map icon (flag + repointing). Cheap, visible, and the part most likely to make the feature feel real.
 
-**Phase 3 — the Viewpoint group in the grid filter.** The filter itself is its own feature
+**Phase 3 — the Viewpoint group in the grid filter. ✓ SHIPPED v.769 (§15).** The filter itself is its own feature
 (`Dystoria_Plot_Grid_Filter_Design.md`, v.765). This phase only adds the Viewpoint group to its list.
 
 **Phase 4 — the planner, Explore, and the Craft review fix.** The `pre` line and the limited-scope
@@ -600,3 +600,18 @@ and the same eye opens the chooser (t767 #6).
   at -10. **Still to be looked at on a crowded map** (§5's warning stands).
 - **Test lesson:** `parity` run three-way in parallel gave three different signatures (one a different story
   entirely); run sequentially it was byte-identical. Run parity one at a time.
+
+---
+
+## 15 · What building phase 3 found (v.769)
+
+- **Keyed `pov:<character>`**, never the bare element key: *"Gretel's eyes"* and *"Gretel appears"* are different
+  questions, and ANDing them is the point. Rows read *Gretel's eyes*, with the card's eye; the badge says so too.
+- **A card carries every pair of eyes in it** — its section's resolved viewpoint plus each scene's (the filter's
+  union rule). A Hansel section with one Gretel scene answers to both.
+- **Only a card that holds something carries a viewpoint.** Every cell of a Hansel book resolves to Hansel; filtering
+  by his eyes would otherwise turn up empty "add a card" slots.
+- **The group appears only with two or more viewpoints** (one would match every card). Stale entries are pruned like
+  any other key; a rename follows `pov:` entries in `plotCardFilter`; setting a viewpoint repaints the badge.
+- Same build, [Jeremy]: **✦ Summarize moved from the card header to the bottom-right of the note**, in the element
+  card's ✦ Enrich dress, shown only while the POV (general-notes) tab is selected — the note it writes into.
