@@ -3705,6 +3705,15 @@ body.eink .pt-rh-dev{color:#000}
   .draw-custom-pill:hover{border-color:var(--gold); color:var(--ink-soft)}
   .draw-chip{width:14px; height:14px; border-radius:50%; border:1px solid rgba(255,255,255,.35); display:inline-block; flex:none}
   .draw-thick{width:100%; accent-color:var(--gold)}
+  /* v.777 — the grid's Steps: − readout + */
+  .gstep-lab{margin-top:8px}
+  .gstep-row{display:flex; align-items:center; justify-content:space-between; gap:6px; margin-top:4px}
+  .gstep-btn{flex:none; width:26px; height:24px; border-radius:999px; border:1px solid rgba(138,99,32,.3); background:transparent; color:var(--charcoal,#2b2926); font-family:var(--sans); font-size:14px; line-height:1; cursor:pointer; padding:0; display:flex; align-items:center; justify-content:center}
+  .gstep-btn:hover:not(:disabled){border-color:var(--gold); color:var(--gold)}
+  .gstep-btn:disabled{opacity:.35; cursor:default}
+  .gstep-val{flex:1 1 auto; min-width:0; height:24px; border:none; background:transparent; color:var(--charcoal,#2b2926); font-family:var(--sans); font-size:12px; font-weight:700; letter-spacing:.06em; cursor:pointer; border-radius:7px}
+  .gstep-val:hover{background:rgba(138,99,32,.08)}
+  body.eink .gstep-btn, body.eink .gstep-val{color:#000; border-color:#000}
   /* dark rail theme (default app look) — match the category pills */
   body:not(.eink) #rail .draw-pill,
   body:not(.eink) #rail .draw-custom-pill{background:#3a3733; border-color:rgba(255,255,255,.14); color:#bdb6a9}
@@ -15125,17 +15134,49 @@ function gridOn(){ const g = gridState(); return !!(g && g.on); }
    on a busy map takes longer than a frame, so the queue still ran behind the thumb. The grid is not
    drawn — it is ONE SVG `<pattern>` tiled over the canvas, so changing its spacing is three
    attributes on a node that is already there. No render at all. */
+/* v.777 [Jeremy] — "can we make the snapping grid in Places increase incrementally as well as freely, so that you can
+   increase or decrease by 2x, 3x, 4x etc allowing for precise connections at points and making blueprints".
+   The slider is still the FREE control and sets the BASE spacing. The STEP multiplies it (×2…×8) or divides it
+   (÷2…÷8) by a whole number, and the whole point of whole numbers is that the grids NEST: every point of a ÷2 grid's
+   parent is still a point of the ÷2 grid, and every point of a ×2 grid was already a point at ×1. That only holds if
+   all of them hang off ONE anchor, so the anchor is the base's own (half a base cell, exactly where the ×1 grid has
+   always put its first dot) rather than half of whatever the current step is. At ×1 every number below is the one
+   the grid has always used, so an existing map snaps exactly as it did.
+   `state.session.grid.step`: 1 = ×1; 2…8 = ×n; −2…−8 = ÷n. */
+function gridStep(){ const g = gridState(); let n = Math.round(+((g && g.step) || 1)); if (!isFinite(n) || n === 0 || n === -1) n = 1; return Math.max(-8, Math.min(8, n)); }
+function gridBase(){ const g = gridState(); return Math.max(8, Math.min(160, (g && g.size) || 44)); }
+function gridStepSize(n){ const b = gridBase(); return n >= 1 ? b * n : b / (-n); }
+function gridAnchor(){ return gridBase() / 2; }
+function gridStepLabel(n){ return n >= 1 ? '\u00d7' + n : '\u00f7' + (-n); }
+/* one tile of the dot pattern. At ×n it is one dot per (big) cell; at ÷n the tile is ONE BASE CELL holding n×n dots,
+   and the base's own dot is drawn a little stronger than the ones between — a blueprint's major and minor points, so
+   you can still see the grid you divided. */
+function gridPatternFill(pat){
+  if (!pat) return;
+  const b = gridBase(), n = gridStep(), sz = gridStepSize(n), NS = 'http://www.w3.org/2000/svg';
+  while (pat.firstChild) pat.removeChild(pat.firstChild);
+  const tile = n >= 1 ? sz : b;
+  pat.setAttribute('width', tile); pat.setAttribute('height', tile);
+  const dot = function(cx, cy, r, op){ const c = document.createElementNS(NS, 'circle');
+    c.setAttribute('cx', cx.toFixed(2)); c.setAttribute('cy', cy.toFixed(2)); c.setAttribute('r', r.toFixed(2));
+    c.setAttribute('fill', '#a49d8e'); c.setAttribute('fill-opacity', op); pat.appendChild(c); };
+  const rBase = Math.max(0.7, Math.min(b, 120) * 0.035);
+  if (n >= 1){ dot(b / 2, b / 2, rBase, '0.3'); return; }
+  const k = -n, rMin = Math.max(0.6, sz * 0.035);
+  for (let i = 0; i < k; i++) for (let j = 0; j < k; j++){
+    const cx = (b / 2 + i * sz) % b, cy = (b / 2 + j * sz) % b;
+    if (i === 0 && j === 0) dot(cx, cy, rBase * 1.3, '0.45'); else dot(cx, cy, rMin, '0.28');
+  }
+}
 function gridPatternUpdate(gs){
   var pat = document.getElementById('gridDots'); if (!pat) return false;
-  pat.setAttribute('width', gs); pat.setAttribute('height', gs);
-  var c = pat.querySelector('circle');
-  if (c){ c.setAttribute('cx', (gs / 2).toFixed(2)); c.setAttribute('cy', (gs / 2).toFixed(2));
-          c.setAttribute('r', Math.max(0.7, gs * 0.035).toFixed(2)); }
+  gridPatternFill(pat);   /* v.777 — rebuilt from the grid's state, so the step and the slider move the same pattern */
   return true;
 }
 try{ window.__dystGridPattern = gridPatternUpdate; }catch(e){}
-function gridSize(){ const g = gridState(); return Math.max(8, Math.min(160, (g && g.size) || 44)); }
-function snapToGrid(x, y){ if (!gridOn()) return { x: x, y: y }; const s = gridSize(), h = s / 2; return { x: Math.round((x - h) / s) * s + h, y: Math.round((y - h) / s) * s + h }; }
+function gridSize(){ return gridStepSize(gridStep()); }
+function snapToGrid(x, y){ if (!gridOn()) return { x: x, y: y }; const s = gridSize(), a = gridAnchor(); return { x: Math.round((x - a) / s) * s + a, y: Math.round((y - a) / s) * s + a }; }
+try{ window.__dystGrid = { step: gridStep, base: gridBase, size: gridSize, anchor: gridAnchor, snap: snapToGrid }; }catch(e){}
 function snapToBeing(){
   let target = null;
   const beings = state.nodes.map((nd, i) => nd.role === 'being' ? i : -1).filter(i => i >= 0);
@@ -21280,7 +21321,7 @@ function renderTerrains(svg){
     const gs = gridSize();
     const gdefs = tEl('defs', {});
     const pat = tEl('pattern', { id: 'gridDots', width: gs, height: gs, patternUnits: 'userSpaceOnUse' });
-    pat.appendChild(tEl('circle', { cx: (gs / 2).toFixed(2), cy: (gs / 2).toFixed(2), r: Math.max(0.7, gs * 0.035).toFixed(2), fill: '#a49d8e', 'fill-opacity': '0.3' }));
+    gridPatternFill(pat);   /* v.777 — the step's tile (one place draws it, for the render and the live controls alike) */
     gdefs.appendChild(pat); layer.appendChild(gdefs);
     layer.appendChild(tEl('rect', { x: -8000, y: -8000, width: 16000, height: 16000, fill: 'url(#gridDots)', 'pointer-events': 'none' }));
   }
@@ -21909,6 +21950,42 @@ function buildDrawSection(root){
   });
   gSpace.addEventListener('click', ev => ev.stopPropagation());
   gPanel.appendChild(gSpace);
+  /* v.777 [Jeremy] — the grid in whole steps as well as freely: − and + walk ÷8 … ÷2, ×1, ×2 … ×8, and the dots you
+     already had stay where they were (see gridPatternFill). Pressing the readout goes back to ×1. */
+  const gStepLab = document.createElement('div'); gStepLab.className = 'draw-sublabel gstep-lab'; gStepLab.textContent = 'Steps'; gPanel.appendChild(gStepLab);
+  const gStepRow = document.createElement('div'); gStepRow.className = 'gstep-row'; gStepRow.id = 'drawGridStep';
+  const gDn = document.createElement('button'); gDn.type = 'button'; gDn.className = 'gstep-btn gstep-dn'; gDn.textContent = '\u2212';
+  const gVal = document.createElement('button'); gVal.type = 'button'; gVal.className = 'gstep-val';
+  const gUp = document.createElement('button'); gUp.type = 'button'; gUp.className = 'gstep-btn gstep-up'; gUp.textContent = '+';
+  gStepRow.appendChild(gDn); gStepRow.appendChild(gVal); gStepRow.appendChild(gUp); gPanel.appendChild(gStepRow);
+  const gNext = (n, d) => { let m = n + d; if (m === 0 || m === -1) m = d > 0 ? 1 : -2; if (n === -2 && d > 0) m = 1; return m; };
+  const gStepSync = () => {
+    const n = gridStep(), sz = gridStepSize(n);
+    gVal.textContent = gridStepLabel(n);
+    gVal.title = n === 1 ? 'The spacing the slider sets' : ('Every ' + (Math.round(sz * 10) / 10) + ' \u2014 press to go back to \u00d71');
+    const dn = gNext(n, -1), up = gNext(n, 1);
+    gDn.disabled = dn < -8 || gridStepSize(dn) < 4;
+    gUp.disabled = up > 8 || gridStepSize(up) > 480;
+    gDn.title = n <= 1 ? 'Divide the grid: a finer set of points between the ones you have \u2014 they stay where they are' : 'A step back \u2014 finer';
+    gUp.title = n >= 1 ? 'Multiply the grid: fewer, wider points \u2014 every one of them is a point you already had' : 'A step back \u2014 wider';
+  };
+  const gStepSet = n => {
+    const gst = gridState(); if (!gst){ flashStatus('Roll or add an element first to open the map'); return; }
+    const wasOn = gst.on;
+    gst.step = n; if (!gst.on){ gst.on = true; gBtn.classList.add('on'); gPanel.hidden = false; }
+    if (state.session){ state.session.grid = gst; scheduleAutosave(); }
+    gStepSync();
+    if (!wasOn || !(typeof gridPatternUpdate === 'function' && gridPatternUpdate())){
+      if (typeof renderConstellation === 'function') renderConstellation();
+    }
+  };
+  gDn.addEventListener('click', ev => { ev.stopPropagation(); gStepSet(gNext(gridStep(), -1)); });
+  gUp.addEventListener('click', ev => { ev.stopPropagation(); gStepSet(gNext(gridStep(), 1)); });
+  gVal.addEventListener('click', ev => { ev.stopPropagation(); if (gridStep() !== 1) gStepSet(1); });
+  gSpace.addEventListener('input', () => gStepSync());   /* the free slider moves the base, so the step's limits move with it */
+  gBtn.addEventListener('click', () => { try{ gSpace.value = String((gridState() && gridState().size) || 44); }catch(_){} gStepSync(); });
+  try{ window.__dystGridStepSync = gStepSync; }catch(_){}
+  gStepSync();
   gWrap.appendChild(gBtn); gWrap.appendChild(gPanel);
   gBtn.classList.toggle('on', gridOn()); gPanel.hidden = !gridOn();
 
@@ -57823,9 +57900,16 @@ body.eink .pl-filterpick .pf-row.on .pf-box{ background:#000; border-color:#000;
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.698';
+  var APP_VERSION = '2026.07.20.700';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.700', date:'September 23, 2026', notes:[
+      '**The Places grid in whole steps.** [Jeremy] Under the grid’s Spacing slider there is now **Steps**: **−** and **+** divide the grid (÷2, ÷3, ÷4 … ÷8) or multiply it (×2, ×3, ×4 … ×8), and the slider still sets the spacing freely. The steps nest — the points you had stay where they were, and a divided grid shows its original points a little stronger than the ones in between — so connections meet exactly and a blueprint lines up. Press the readout to go back to ×1.',
+      '**Finer zone icons.** [Jeremy] The four tools at the top of the Zones drawer are drawn smaller in their circles, with a lighter line.'
+    ]},
+    { v:'2026.07.20.699', date:'September 23, 2026', notes:[
+      '**Text boxes on a Bonds drawing.** [Jeremy] The Bonds drawer now has a column of tabs on its edge, the way the Map’s does: **Groups** and **Text**. Open **Text** and press **+ Text box** to write a note on the drawing — click inside to type, drag its top bar to move it, its corner to size it. Every text box on the open group is listed in the drawer; press one to bring it to the middle of the screen. The notes belong to the group, so they are there whichever lens you look through, and they travel with the story.'
+    ]},
     { v:'2026.07.20.698', date:'September 23, 2026', notes:[
       '**Every board names the place that contains it.** [Jeremy] Under the Scenes | Maps toggle there is now a title: the **Setting** of the scene you are on, or the **Region** of the map — the area that holds everything else on the board. Click it to choose from the story’s places, or type a new name and **Create** it; a new place joins the story’s elements (the Story Legend and the Elements list, with the other places) without being set down on the board it contains. Each section, scene and map keeps its own.',
     ]},
@@ -60056,6 +60140,13 @@ body.eink #drawGridBtn.zt-ic.on .zt-glyph{ border-color:transparent; background:
 body.eink .zone-tool-icons .draw-cat.zt-ic.on .zt-glyph{ border-color:#000; background:none; }
 body.eink .zone-tool-icons .draw-cat.zt-ic:hover .zt-glyph{ background:rgba(0,0,0,.10); }
 .zone-tool-icons .draw-cat.zt-ic .dc-name, .zone-tool-icons .draw-cat.zt-ic .dc-toggle{ display:none !important; }
+/* v.777 [Jeremy] — "can we make the icons for the zones a bit smaller and the line a bit thinner?" Measured, they were
+   neither of the sizes v.632 and v.702 set: the glyph's own width="20" lost to `#sky svg{width:100%;height:100%}` (the
+   drawer lives inside #sky — the same trap as v.766's eye and v.774's link glyph), so each drew at 34px in its 36px
+   circle, and the 1.7 pen on the 24 grid came out at 2.4px of ink. Named #sky so this rule outranks that one. "A bit"
+   is the brief, so a sixth off rather than all the way back to v.702's 20: 28px, with a ring of air in the circle,
+   and a 1.4 pen, which lands at 1.6px of ink — about the mode medallions' weight, which v.702 asked for and never got. */
+#sky .zone-tool-icons .draw-cat.zt-ic .zt-glyph svg{ width:28px !important; height:28px !important; flex:none; stroke-width:1.4; }
 
 /* v.627 [Jeremy] — the tool's options open IN the drawer, under the icon row. Nothing is fixed, so
    nothing can sit under the tab column or wander off the drawer, and nothing needs a × : the button
@@ -78337,6 +78428,7 @@ body:not(.eink) #libExportMenu button:hover{ background:rgba(255,255,255,.08) !i
     /* v.661 [Jeremy] — the groups live in a drawer on the left; the drawing takes the rest */
     if (m.mini){ host.appendChild(wrap); }
     else { var body = el('div','bn-body'); if (drawerHidden()) body.classList.add('dhid'); body.appendChild(drawer(m)); body.appendChild(wrap); activeTitle(m, body); host.appendChild(body); }   /* v.662 — the title on the body, so it does not move with the drawer */
+    if (!m.mini){ try{ paintTexts(m, world, cam); }catch(e){} }   /* v.776 — the drawing's text boxes, on the paper */
 
     m._counts = {};
     /* pins are only still needed where there is no group to be the node list —
@@ -78570,7 +78662,7 @@ body:not(.eink) #libExportMenu button:hover{ background:rgba(255,255,255,.08) !i
       else m._zoomTo(cam.z * Math.exp(-ev.deltaY * 0.0016), ev.clientX - r.left, ev.clientY - r.top);
     }, { passive:false });
     canvas.addEventListener('pointerdown', function(ev){
-      if (ev.target.closest && ev.target.closest('.bn-node, .bn-lab, .bn-card')) return;
+      if (ev.target.closest && ev.target.closest('.bn-node, .bn-lab, .bn-card, .bn-tx')) return;
       ev.preventDefault();
       var sx = ev.clientX, sy = ev.clientY, ox = cam.x, oy = cam.y;
       canvas.classList.add('bn-panning');
@@ -78591,7 +78683,7 @@ body:not(.eink) #libExportMenu button:hover{ background:rgba(255,255,255,.08) !i
     var canvas = host.querySelector('.bn-canvas'), world = host.querySelector('.bn-world');
     if (!canvas || !world) return;
     var x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
-    Array.prototype.slice.call(world.querySelectorAll('.bn-node')).forEach(function(d){
+    Array.prototype.slice.call(world.querySelectorAll('.bn-node, .bn-tx')).forEach(function(d){   /* v.776 — a note is part of "all of it" */
       var l = d.offsetLeft, t = d.offsetTop;
       if (l < x0) x0 = l; if (t < y0) y0 = t;
       if (l + d.offsetWidth > x1) x1 = l + d.offsetWidth;
@@ -79203,7 +79295,7 @@ body:not(.eink) #libExportMenu button:hover{ background:rgba(255,255,255,.08) !i
      _The v.408 `sets → groups` migration deliberately does NOT take this list: it retires pins
      rather than remapping them (a group IS its node list, so a pin has nothing left to do there),
      and a store old enough to speak `sets` predates `saved` entirely._ */
-  var SLOT_BAGS = ['layouts', 'hide', 'views', 'saved', 'pins'];
+  var SLOT_BAGS = ['layouts', 'hide', 'views', 'saved', 'pins', 'texts'];   /* v.776 — + the drawing's text boxes */
   function slotPrefix(id){ return 'group:' + id + '|'; }
   /* A group's identity may change — a reading of a member chart becomes a record the first time
      anybody writes to it — and when it does, EVERYTHING the writer arranged has to come with it.
@@ -80071,14 +80163,36 @@ body:not(.eink) #libExportMenu button:hover{ background:rgba(255,255,255,.08) !i
   /* A group that has just been made is the active one, and a writer who presses + Group and answers the builder
      must see what they built — so its category opens whether or not they had folded it. Called from both doors. */
   function dsecReveal(gp){ try{ if (gp) setDsecClosed(typeOf(gp) || '', false); }catch(e){} }
+  /* v.776 [Jeremy] — "can you add a tab for adding text boxes to the bonds section, just like the one in Places".
+     The Map's gesture, brought across whole: ONE drawer, a column of tabs riding its edge, and which panel it shows
+     is the tab you pressed. Pressing the tab that is already open closes the drawer, the same as its ×; pressing
+     another swaps the panel without closing anything. The tabs stay on the edge while the drawer is open (the
+     Groups tab used to vanish then, because it was the drawer's only way back). Which panel is per device. */
+  var DPANEL_KEY = 'dystoria.bonds.dpanel';
+  function dpanel(){ try{ return localStorage.getItem(DPANEL_KEY) === 'text' ? 'text' : 'groups'; }catch(e){ return 'groups'; } }
+  function setDpanel(v){ try{ if (v === 'text') localStorage.setItem(DPANEL_KEY, 'text'); else localStorage.removeItem(DPANEL_KEY); }catch(e){} }
+  function tabPress(which, m){
+    try{ if (typeof hideTip === 'function') hideTip(); }catch(e){}   /* the pressed tab is rebuilt; its tooltip must not outlive it */
+    if (!drawerHidden() && dpanel() === which){ setDrawerHidden(true); V.render(m); return; }
+    setDpanel(which); setDrawerHidden(false); V.render(m);
+  }
   function drawer(m){
     var frag = document.createDocumentFragment();
-    var tab = el('div','bn-dtab'); tab.id = 'bnDTab'; tab.title = 'Show the groups';
-    tab.appendChild(el('span', null, 'Groups'));
-    tab.addEventListener('click', function(){ setDrawerHidden(false); V.render(m); });
-    frag.appendChild(tab);
+    var hid = drawerHidden(), pnl = dpanel();
+    var col = el('div','bn-dtabs'); col.id = 'bnDTabs';
+    [['groups', 'bnDTab', 'Groups'], ['text', 'bnTTab', 'Text']].forEach(function(c){
+      var t = el('div','bn-dtab bn-dtab-' + c[0]); t.id = c[1];
+      t.appendChild(el('span', null, c[2]));
+      var on = !hid && pnl === c[0];
+      if (on) t.classList.add('dtab-on');
+      t.title = (on ? 'Close the ' : 'Open the ') + c[2] + ' drawer';
+      t.addEventListener('click', function(ev){ ev.stopPropagation(); tabPress(c[0], m); });
+      col.appendChild(t);
+    });
+    frag.appendChild(col);
     var d = el('aside','bn-drawer'); d.id = 'bnDrawer';
-    if (drawerHidden()) d.classList.add('hide'); else tab.classList.add('off');
+    if (hid) d.classList.add('hide');
+    if (pnl === 'text'){ d.classList.add('bn-drawer-text'); textPanel(m, d); frag.appendChild(d); return frag; }
     var head = el('div','bn-dhead');
     head.appendChild(el('span','bn-dttl','Groups'));
     var mine = groupsOf(m);
@@ -80097,6 +80211,149 @@ body:not(.eink) #libExportMenu button:hover{ background:rgba(255,255,255,.08) !i
     frag.appendChild(d);
     return frag;
   }
+  /* ---- v.776 · TEXT BOXES ON A BONDS DRAWING ----------------------------------------------------------------
+     The Map's text box, on the Bonds sheet. A box belongs to the GROUP's drawing — the Bonds counterpart of "kept
+     here, on this surface" — and it is the same box whichever lens the group is seen through, because a note is
+     about the group, not about one arrangement of it. Stored in the bonds store (which travels with the story) under
+     the group's slot prefix, so `rekeyGroup` carries it and `dropGroup` takes it, with nothing written out twice.
+     World coordinates, like the pills: it pans and zooms with the paper. */
+  function txKey(m){ var gp = activeGroup(m); return gp ? slotPrefix(gp.id) + 'text' : null; }
+  function txList(m, make){
+    var k = txKey(m); if (!k) return null;
+    var s = store();
+    if (!s.texts || typeof s.texts !== 'object'){ if (!make) return []; s.texts = {}; }
+    if (!Array.isArray(s.texts[k])){ if (!make) return []; s.texts[k] = []; }
+    return s.texts[k];
+  }
+  function txRec(m, id){ var a = txList(m, false) || []; for (var i = 0; i < a.length; i++) if (a[i] && a[i].id === id) return a[i]; return null; }
+  function txFirst(r){ return String((r && r.text) || '').split(/\n/).map(function(x){ return x.trim(); }).filter(Boolean)[0] || ''; }
+  function txName(nm, r){ var f = txFirst(r); nm.textContent = f || 'Empty text box'; nm.classList.toggle('bn-txnm-empty', !f); }
+  function textPanel(m, d){
+    var gp = activeGroup(m), recs = txList(m, false) || [];
+    var head = el('div','bn-dhead');
+    head.appendChild(el('span','bn-dttl bn-dttl-text','Text'));
+    if (recs.length) head.appendChild(el('span','bn-dn', String(recs.length)));
+    var x = el('button','bn-dhide','\u00d7'); x.type = 'button'; x.title = 'Hide the text drawer';
+    x.addEventListener('click', function(ev){ ev.stopPropagation(); setDrawerHidden(true); V.render(m); });
+    head.appendChild(x);
+    d.appendChild(head);
+    var rows = el('div','bn-drows bn-txrows');
+    if (!gp) rows.appendChild(el('div','bn-dempty','Open a group first \u2014 a text box belongs to the drawing it sits on.'));
+    else if (!recs.length) rows.appendChild(el('div','bn-dempty','Nothing yet \u2014 add a text box and it is kept here, on this group\u2019s drawing.'));
+    else recs.forEach(function(r){
+      var row = el('div','bn-txrow'); row.dataset.tx = r.id; row.title = 'Press to find it on the drawing';
+      var nm = el('span','bn-txnm'); txName(nm, r); row.appendChild(nm);
+      var rx = el('button','bn-txx','\u00d7'); rx.type = 'button'; rx.title = 'Remove this text box from the drawing';
+      rx.addEventListener('click', function(ev){ ev.stopPropagation(); removeTx(r.id, m); });
+      row.appendChild(rx);
+      row.addEventListener('click', function(){ findTx(r.id, m); });
+      rows.appendChild(row);
+    });
+    d.appendChild(rows);
+    var foot = el('div','bn-dfoot');
+    var add = el('button','slw-add bn-drawer-add bn-tx-add','+ Text box'); add.type = 'button';
+    add.title = gp ? 'Add a text box to this drawing' : 'Open a group first';
+    if (!gp) add.disabled = true;
+    add.addEventListener('click', function(ev){ ev.stopPropagation(); addTx(m); });
+    foot.appendChild(add); d.appendChild(foot);
+  }
+  function txFocus(m, id, tries){
+    var host = hostOf(m), e = host && host.querySelector('.bn-tx[data-tx="' + id + '"] .bn-tx-edit');
+    if (e && document.activeElement !== e){ try{ e.focus(); }catch(er){} }
+    if ((!e || document.activeElement !== e) && tries > 0) setTimeout(function(){ txFocus(m, id, tries - 1); }, 120);
+  }
+  function addTx(m){
+    var arr = txList(m, true); if (!arr) return;
+    var host = hostOf(m), canvas = host && host.querySelector('.bn-canvas'), cam = m._cam || camera(m);
+    var w = 220, h = 84, cx = 400, cy = 300;
+    if (canvas){ var r = canvas.getBoundingClientRect(); cx = (r.width / 2 - cam.x) / (cam.z || 1); cy = (r.height / 2 - cam.y) / (cam.z || 1); }
+    /* a second box does not land exactly on the first — it steps down and right until it is clear */
+    var off = 0;
+    while (off < 240 && arr.some(function(q){ return Math.abs(q.x - Math.round(cx - w / 2 + off)) < 8 && Math.abs(q.y - Math.round(cy - h / 2 + off)) < 8; })) off += 24;
+    var rec = { id: 'tx' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), text: '',
+                x: Math.round(cx - w / 2 + off), y: Math.round(cy - h / 2 + off), w: w, h: h };
+    arr.push(rec); saveStore(store());
+    V.render(m);
+    setTimeout(function(){ txFocus(m, rec.id, 4); }, 40);
+    if (typeof flashStatus === 'function') flashStatus('Text box added \u2014 click inside to type, drag the top bar to move');
+  }
+  function removeTx(id, m){
+    var arr = txList(m, false); if (!arr) return;
+    var at = arr.findIndex(function(q){ return q && q.id === id; }); if (at < 0) return;
+    arr.splice(at, 1); saveStore(store());
+    V.render(m);
+  }
+  /* the row's press: bring the box to the middle of the drawing and let it say which one it is — the Map's row
+     centres the same way */
+  function findTx(id, m){
+    var r = txRec(m, id), host = hostOf(m); if (!r || !host) return;
+    var canvas = host.querySelector('.bn-canvas'), world = host.querySelector('.bn-world'), cam = m._cam;
+    if (!canvas || !world || !cam) return;
+    var rc = canvas.getBoundingClientRect();
+    cam.x = Math.round(rc.width / 2 - (r.x + r.w / 2) * cam.z);
+    cam.y = Math.round(rc.height / 2 - (r.y + r.h / 2) * cam.z);
+    applyCam(world, cam); saveCamera(m, cam); m._camTouched = 1;
+    var b = world.querySelector('.bn-tx[data-tx="' + id + '"]');
+    if (b){ b.classList.add('bn-tx-hi'); clearTimeout(b._hiT); b._hiT = setTimeout(function(){ b.classList.remove('bn-tx-hi'); }, 1400); }
+  }
+  function txDrag(handle, b, id, m, cam, mode){
+    handle.addEventListener('pointerdown', function(ev){
+      ev.preventDefault(); ev.stopPropagation();
+      var r = txRec(m, id); if (!r) return;
+      var sx = ev.clientX, sy = ev.clientY, ox = r.x, oy = r.y, ow = r.w, oh = r.h, moved = false;
+      b.classList.add('bn-tx-busy');
+      var move = function(e2){
+        var z = (cam && cam.z) || 1, dx = (e2.clientX - sx) / z, dy = (e2.clientY - sy) / z;
+        moved = true;
+        if (mode === 'move'){ r.x = Math.round(ox + dx); r.y = Math.round(oy + dy); b.style.left = r.x + 'px'; b.style.top = r.y + 'px'; }
+        else { r.w = Math.max(90, Math.round(ow + dx)); r.h = Math.max(40, Math.round(oh + dy)); b.style.width = r.w + 'px'; b.style.height = r.h + 'px'; }
+      };
+      var up = function(){
+        document.removeEventListener('pointermove', move, true);
+        document.removeEventListener('pointerup', up, true);
+        b.classList.remove('bn-tx-busy');
+        if (moved) saveStore(store());
+      };
+      document.addEventListener('pointermove', move, true);
+      document.addEventListener('pointerup', up, true);
+    });
+  }
+  function paintTexts(m, world, cam){
+    (txList(m, false) || []).forEach(function(r){
+      if (!r || !r.id) return;
+      var b = el('div','bn-tx'); b.dataset.tx = r.id;
+      b.style.left = (r.x || 0) + 'px'; b.style.top = (r.y || 0) + 'px';
+      b.style.width = (r.w || 220) + 'px'; b.style.height = (r.h || 84) + 'px';
+      var ed = el('div','bn-tx-edit'); ed.setAttribute('contenteditable', 'true'); ed.setAttribute('spellcheck', 'true');
+      ed.textContent = r.text || ''; if (!String(r.text || '').trim()) ed.setAttribute('data-empty', '1');
+      var mv = el('div','bn-tx-move','\u22EE\u22EE'); mv.title = 'Drag to move';
+      var del = el('div','bn-tx-del','\u00D7'); del.title = 'Delete';
+      var rs = el('div','bn-tx-rsz'); rs.title = 'Drag to resize';
+      b.appendChild(ed); b.appendChild(mv); b.appendChild(del); b.appendChild(rs);
+      var saveT = null;
+      /* innerText, not textContent: a contenteditable keeps a new line as a block, and textContent flattens it */
+      ed.addEventListener('input', function(){
+        var rr = txRec(m, r.id); if (!rr) return;
+        rr.text = String(ed.innerText || '').replace(/\n$/, '');
+        if (rr.text.trim()) ed.removeAttribute('data-empty'); else ed.setAttribute('data-empty', '1');
+        clearTimeout(saveT); saveT = setTimeout(function(){ saveStore(store()); }, 350);
+        var nm = document.querySelector('#planBonds .bn-txrow[data-tx="' + r.id + '"] .bn-txnm'); if (nm) txName(nm, rr);
+      });
+      ed.addEventListener('blur', function(){ if (saveT){ clearTimeout(saveT); saveT = null; saveStore(store()); } });
+      /* typing in a box is not a pan, and a press on it is not a press on open paper */
+      b.addEventListener('pointerdown', function(ev){ ev.stopPropagation(); });
+      b.addEventListener('click', function(ev){ ev.stopPropagation(); });
+      txDrag(mv, b, r.id, m, cam, 'move');
+      txDrag(rs, b, r.id, m, cam, 'size');
+      del.addEventListener('pointerdown', function(ev){ ev.stopPropagation(); });
+      del.addEventListener('click', function(ev){ ev.stopPropagation(); removeTx(r.id, m); });
+      world.appendChild(b);
+    });
+  }
+  V.texts = { list: function(m){ return (txList(m || MAIN, false) || []).slice(); }, add: function(m){ addTx(m || MAIN); },
+              remove: function(id, m){ removeTx(id, m || MAIN); }, find: function(id, m){ findTx(id, m || MAIN); },
+              panel: function(){ return dpanel(); }, tab: function(w, m){ tabPress(w, m || MAIN); } };
+
   /* v.662 [Jeremy] — "the group name on one line and the type underneath in smaller font. don't have
      it inside a pill, just make it look like a title for the section" — and "don't move the group
      title over when the drawer opens and closes": it is centred on the whole Bonds area, not the
@@ -82504,7 +82761,48 @@ body:not(.eink) #libExportMenu button:hover{ background:rgba(255,255,255,.08) !i
       '.bn-mini .bn-empty{ padding:34px 16px; font-size:13.5px; }',
       '.bn-mini-t{ font-family:var(--serif); font-size:15px; font-weight:600; color:#2b2419;line-height:1.55}',
       '.bn-mini .bn-node{ font-size:12px; padding:5px 11px; }',
-      '.bn-mini .bn-card{ position:absolute; right:10px; bottom:10px; width:250px; }'
+      '.bn-mini .bn-card{ position:absolute; right:10px; bottom:10px; width:250px; }',
+      /* v.776 — the drawer's tab column: on the drawer's edge while it is open, on the room's edge while it is not */
+      '.bn-dtabs{ position:absolute; left:225px; top:14px; z-index:7; display:flex; flex-direction:column; align-items:flex-start; gap:6px; }',
+      '.bn-body.dhid .bn-dtabs{ left:0; }',
+      '.bn-dtabs .bn-dtab{ position:static; border-color:rgba(138,99,32,.3); }',
+      '.bn-body .bn-lensbox{ left:44px; }',
+      '.bn-dtabs .bn-dtab span{ color:var(--charcoal,#2b2926); }',
+      'body.ember:not(.eink) .bn-dtabs .bn-dtab span{ color:#463b26; }',
+      'body.ember:not(.eink) .bn-dtabs .bn-dtab{ color:#e7b25e; }',
+      '.bn-dtabs .bn-dtab:hover span{ color:var(--gold); }',
+      'body:not(.eink) .bn-dtabs .bn-dtab.dtab-on{ color:var(--gold); }',
+      'body:not(.eink) .bn-dtabs .bn-dtab.dtab-on span, body:not(.eink) .bn-dtabs .bn-dtab:hover span{ color:var(--gold); }',
+      'body.eink .bn-dtabs .bn-dtab span{ color:#000; }',
+      '#bnTTab{ --dtab-ic:url("data:image/svg+xml;utf8,<svg xmlns=\'http://www.w3.org/2000/svg\' viewBox=\'0 0 24 24\' fill=\'none\' stroke=\'white\' stroke-width=\'1.9\' stroke-linecap=\'round\' stroke-linejoin=\'round\'><polyline points=\'4 7 4 4 20 4 20 7\'/><line x1=\'9\' y1=\'20\' x2=\'15\' y2=\'20\'/><line x1=\'12\' y1=\'4\' x2=\'12\' y2=\'20\'/></svg>"); }',
+      '.bn-dhead .bn-dttl.bn-dttl-text{ --dhd-ic:url("data:image/svg+xml;utf8,<svg xmlns=\'http://www.w3.org/2000/svg\' viewBox=\'0 0 24 24\' fill=\'none\' stroke=\'white\' stroke-width=\'1.9\' stroke-linecap=\'round\' stroke-linejoin=\'round\'><polyline points=\'4 7 4 4 20 4 20 7\'/><line x1=\'9\' y1=\'20\' x2=\'15\' y2=\'20\'/><line x1=\'12\' y1=\'4\' x2=\'12\' y2=\'20\'/></svg>"); }',
+      /* the Text panel's rows — the Map's Text drawer, in this drawer's measure */
+      '.bn-txrows{ padding-top:8px; }',
+      '.bn-txrow{ display:flex; align-items:center; gap:7px; padding:5px 6px 5px 8px; border-radius:7px; cursor:pointer; }',
+      '.bn-txrow:hover{ background:rgba(138,99,32,.08); }',
+      '.bn-txnm{ flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-family:var(--sans); font-size:12px; font-weight:600; color:#2b2926; }',
+      '.bn-txnm.bn-txnm-empty{ font-family:var(--serif); font-style:italic; font-weight:400; color:#8d8a84; }',
+      '.bn-txx{ flex:none; border:none; background:none; color:#8d8a84; font-size:14px; line-height:1; padding:0 2px; border-radius:6px; cursor:pointer; opacity:0; transition:opacity .12s, color .12s; }',
+      '.bn-txrow:hover .bn-txx{ opacity:1; }',
+      '.bn-txx:hover{ color:#a8462f; }',
+      '.bn-tx-add:disabled{ opacity:.45; cursor:default; }',
+      'body.eink .bn-txnm{ color:#000; }',
+      /* the box — the Map's own, on the Bonds paper */
+      '.bn-tx{ position:absolute; z-index:5; box-sizing:border-box; background:rgba(245,239,225,.94); border:1px solid rgba(138,99,32,.4); border-radius:8px; box-shadow:0 3px 11px rgba(0,0,0,.16); overflow:hidden; font-family:var(--serif); text-align:left; }',
+      'html body:not(.ember):not(.eink) .bn-tx{ background:var(--paper-card,#faf7ef); border-color:rgba(0,0,0,.18); }',
+      'body.eink .bn-tx{ background:#fff; border:1.5px solid #000; }',
+      '.bn-tx-edit{ width:100%; height:100%; box-sizing:border-box; padding:9px 10px 7px; outline:none; color:var(--charcoal,#2b2926); font-size:14px; line-height:1.35; overflow:auto; word-break:break-word; white-space:pre-wrap; cursor:text; }',
+      'body.eink .bn-tx-edit{ color:#000; }',
+      '.bn-tx-edit[data-empty]::before{ content:\'Note\\2026\'; color:#a89a82; font-style:italic; pointer-events:none; }',
+      '.bn-tx-move, .bn-tx-del{ position:absolute; opacity:0; transition:opacity .12s; line-height:1; background:rgba(245,239,225,.85); border-radius:4px; user-select:none; }',
+      '.bn-tx:hover .bn-tx-move, .bn-tx:hover .bn-tx-del, .bn-tx.bn-tx-busy .bn-tx-move{ opacity:1; }',
+      '.bn-tx-move{ top:2px; left:3px; font-size:11px; letter-spacing:-3px; color:#9a8a63; cursor:move; padding:2px 3px; touch-action:none; }',
+      '.bn-tx-del{ top:1px; right:3px; font-size:17px; color:var(--rust,#a8462f); cursor:pointer; padding:1px 6px; }',
+      '.bn-tx-del:hover{ color:#c0392b; }',
+      '.bn-tx-rsz{ position:absolute; right:0; bottom:0; width:15px; height:15px; cursor:nwse-resize; touch-action:none; }',
+      '.bn-tx-rsz::before{ content:\'\'; position:absolute; right:3px; bottom:3px; width:6px; height:6px; border-right:2px solid rgba(138,99,32,.55); border-bottom:2px solid rgba(138,99,32,.55); opacity:0; transition:opacity .12s; }',
+      '.bn-tx:hover .bn-tx-rsz::before{ opacity:1; }',
+      '.bn-tx.bn-tx-hi{ box-shadow:0 0 0 2px var(--gold), 0 3px 11px rgba(0,0,0,.16); transition:box-shadow .2s; }'
     ].join('\n');
     document.head.appendChild(s);
   }
