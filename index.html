@@ -6,18 +6,39 @@
 <!-- Boot cloak: hide the page until theme (ember/eink) + the desktop webs layout have applied, so a refresh
      doesn't visibly jump through the un-themed / pre-restructure state. visibility:hidden (not display:none)
      keeps layout measurable during boot; reveal is idempotent with load + hard-timeout fail-safes. -->
-<style id="bootCloak">html.dyst-boot body{visibility:hidden !important}</style>
+<!-- v.791 [Jeremy] — "when refreshing the screen, a lot of older states of the ui cycle through … so that the base is the current
+     design". The page is one 9MB file, and the design is LAYERED in it: a base stylesheet near the top, and hundreds of later
+     <style> blocks further down that restyle it version by version. Served over the network the browser paints the file AS IT
+     ARRIVES — so a refresh walks through the old designs in order, each one overwritten as the next block lands. The cloak
+     below was meant to hide that, but its fail-safe fired 3s after the FIRST byte: on a real connection the file is still
+     arriving then, and the cloak lifted onto a half-built page. Now nothing is shown before the whole file is in and parsed
+     (DOMContentLoaded — every style block applied), the story has drawn in the view it was left in, and the fonts have
+     landed (so the type does not swap in front of you either). The 3s fail-safe counts from DOMContentLoaded. Meanwhile the
+     page shows its own ground and a quiet gold diamond. A first-time visitor's welcome page is never hidden by any of this. -->
+<style id="bootCloak">
+html.dyst-boot body{visibility:hidden !important}
+html.dyst-boot #landingFrame{visibility:visible !important}
+html.dyst-boot{background:#f6f2ea}
+html.dyst-boot::after{content:''; position:fixed; left:50%; top:50%; width:14px; height:14px; margin:-7px 0 0 -7px; transform:rotate(45deg); background:#c49e4a; border-radius:2px; opacity:.25; animation:dystBootPulse 1.4s ease-in-out infinite; z-index:2147483647}
+@keyframes dystBootPulse{ 0%,100%{opacity:.18} 50%{opacity:.6} }
+@media (prefers-reduced-motion: reduce){ html.dyst-boot::after{animation:none; opacity:.4} }
+</style>
 <script id="bootCloakJS">
 (function(){
   var d=document.documentElement; d.classList.add('dyst-boot');
-  var shown=false;
-  function reveal(){ if(shown) return; shown=true; d.classList.remove('dyst-boot'); }
-  // Primary trigger: openSession() calls window.__dystReveal once the story's first render is on screen,
-  // so a refresh reveals directly in the restored view (no flash of the map first). The fail-safes below
-  // only matter when no story opens (logged-out landing page, empty library, offline).
+  var shown=false, parsed=(document.readyState!=='loading'), asked=false;
+  function lift(){ if(shown) return; shown=true; d.classList.remove('dyst-boot'); }
+  /* two frames after the fonts are in (1.2s at most for them) — the first frame of the finished page, never a draft of it */
+  function settle(){ var go=function(){ requestAnimationFrame(function(){ requestAnimationFrame(lift); }); };
+    try{ if(document.fonts && document.fonts.ready){ var t=setTimeout(go,1200); document.fonts.ready.then(function(){ clearTimeout(t); go(); }, go); return; } }catch(e){}
+    go(); }
+  function reveal(){ if(shown) return; asked=true; if(!parsed) return; settle(); }
+  // Primary trigger: openSession() calls window.__dystReveal once the story's first render is on screen (in the view the
+  // writer left). It waits for the parse; the fail-safes only matter when no story opens (landing, empty library, offline).
   window.__dystReveal=reveal;
-  window.addEventListener('load', function(){ setTimeout(reveal, 250); });   // grace lets a synchronous story-open reveal first
-  setTimeout(reveal, 3000);                                                  // hard fail-safe: never stay hidden
+  document.addEventListener('DOMContentLoaded', function(){ parsed=true; if(asked) settle(); setTimeout(reveal, 3000); });   // v.791 — counted from the END of the file, not its first byte
+  window.addEventListener('load', function(){ parsed=true; setTimeout(reveal, 250); });
+  setTimeout(function(){ parsed=true; reveal(); }, 25000);   // absolute cap: a page that never finishes parsing is still shown
 })();
 </script>
 <title>Dystoria</title>
@@ -5222,6 +5243,10 @@ body.eink #consentBar #cbAccept{background:#000; color:#fff; border-color:#000}
   var THIN_LETTERS   = 3200;    // under this the page pins its grid to the screen and shows the write-more note
   var frame = null, shown = false;
   function signedIn(){ try{ return typeof window.__dystHasSession === 'function' && window.__dystHasSession(); }catch(e){ return false; } }
+  function isReload(){
+    try{ var nav = (performance.getEntriesByType && performance.getEntriesByType('navigation')[0]) || null; if (nav) return nav.type === 'reload'; }catch(e){}
+    try{ return !!(performance.navigation && performance.navigation.type === 1); }catch(e){ return false; }
+  }
   function skip(){
     try{
       if (location.search) return true;
@@ -5230,6 +5255,10 @@ body.eink #consentBar #cbAccept{background:#000; color:#fff; border-color:#000}
       if (document.body.classList.contains('guest')) return true;
       if (window.__dystOnbPending) return true;   // a first visit belongs to the guided tour; the labyrinth begins with the next load
       if (window.matchMedia && window.matchMedia('(max-width: 768px)').matches) return true;   // the field is noise at a phone's cell size
+      /* v.791 [Jeremy] — "can we also have the refresh stay on the current section and not go to the labyrinth of the active
+         story?" A RELOAD is someone mid-work pressing refresh — they go back to the section and view they were in (the app
+         restores both). The labyrinth stays the welcome for a fresh visit: a new tab, a typed address, a bookmark. */
+      if (isReload()) return true;
     }catch(e){}
     return false;
   }
@@ -24024,14 +24053,14 @@ function dystAdoptOrphanParts(){
     if (!state.session || !Array.isArray(state.frames) || !state.frames.length) return 0;
     ensureParts();
     const parts = state.session.parts, known = {}; parts.forEach(p => { if (p && p.id) known[p.id] = 1; });
-    let made = 0, prevKnown = null;
+    let made = 0, lastKnownPid = null;
     state.frames.forEach(fr => {
       const pid = fr && fr.partId; if (!pid) return;
-      if (known[pid]){ prevKnown = pid; return; }
+      if (known[pid]){ lastKnownPid = pid; return; }
       /* in its place: right after the Part the story reaches before it, or first */
-      let at = 0; if (prevKnown){ const j = parts.findIndex(p => p && p.id === prevKnown); at = j >= 0 ? j + 1 : parts.length; }
+      let at = 0; if (lastKnownPid){ const j = parts.findIndex(p => p && p.id === lastKnownPid); at = j >= 0 ? j + 1 : parts.length; }
       parts.splice(at, 0, { id: pid, name: '' });
-      known[pid] = 1; prevKnown = pid; made++;
+      known[pid] = 1; lastKnownPid = pid; made++;
     });
     if (made && typeof scheduleAutosave === 'function') scheduleAutosave();
     return made;
@@ -58264,9 +58293,13 @@ body.eink .pl-filterpick .pf-row.on .pf-box{ background:#000; border-color:#000;
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.713';
+  var APP_VERSION = '2026.07.20.714';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.714', date:'September 23, 2026', notes:[
+      '**A refresh opens straight onto the current design.** [Jeremy] Refreshing used to flicker through older looks of the app while the page was still arriving. Now nothing shows until the whole page is in, your story has drawn in the view you left it in, and its fonts have landed — a quiet gold diamond holds the screen until then.',
+      '**Refresh keeps your place.** [Jeremy] Refreshing the page returns you to the section and view you were in; the labyrinth of your story is kept for a fresh visit (a new tab, or opening Dystoria again).'
+    ]},
     { v:'2026.07.20.713', date:'September 23, 2026', notes:[
       '**The Plot grid’s frozen edges are solid.** [Jeremy] Scrolled right and down, the cards used to show through the header row and the sections column. Both now have the page’s own ground behind them, gutters included, so the cards pass underneath.',
       '**Parts the grid shows are Parts everywhere.** [Jeremy] A story could have sections pointing to a Part that had no record of its own — the grid drew it, nameless (“Part name…”), but the Conflict card said the story had no Parts and the name could not be set. Such a Part is given its record back, in its place, ready to be named.'
