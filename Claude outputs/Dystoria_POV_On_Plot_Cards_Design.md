@@ -305,47 +305,14 @@ eyes am I reading through*, which is a fact about the page rather than a label a
 
 ---
 
-## 6 · The Plot grid filter
+## 6 · The Plot grid filter — moved
 
-[Jeremy] _"a Filter button and then using the pop up that lists all story elements with the search
-filter bar for the list would be great. also allowing for more than one selection so you can see all
-the cards that have feo and Delphia for example."_ · _"the filter is not about POV, it's about any
-linked elements on a card"_ · _"pov included"_
+**Now its own doc: `Dystoria_Plot_Grid_Filter_Design.md`** (split out 2026-09-23, building as v.765).
+It filters the grid by any element linked to a card, AND only, hiding what does not match; POV is one
+group in its list, not its point.
 
-**This is its own feature, and it is not a POV feature.** It filters the grid by **what is linked to
-a card** — characters, places, objects, events, groups, concepts — and **POV is one more thing in
-that list**, not the point of it. Recorded here because it came up in this conversation; it would sit
-equally well in a doc of its own. _(§12.)_
-
-It needs no new machinery. The grid already filters *columns* with a visible badge
-(`#plotFilterBadge` / `setPlotColFilter`), and that code wrote down two laws this inherits:
-
-- **The badge says when it is on**, and clears in one click. _A filter you cannot see is
-  indistinguishable from cards that have gone missing._
-- **It is only offered when it would do something** (`plotFilterWorthIt`'s rule: _"every option but
-  one empties the page"_). In practice that means the Viewpoint group appears only once the story
-  has more than one viewpoint — and the filter as a whole only once there is more than one card.
-
-**Selection semantics: AND, everywhere** [Jeremy]. Every selection narrows, across every kind.
-_"All the cards that have Feo and Delphia"_ gives the cards carrying both. A character *and* a place
-gives the cards where they meet. A **viewpoint and a character** gives the cards through Feo's eyes
-where Delphia appears — which is the combination this feature is most worth having for, and the
-reason POV belongs in the list at all.
-
-One consequence, handled by the empty state rather than by a rule: **two viewpoints AND together to
-nothing**, because a card has one viewpoint. That is a fair thing to discover by trying it, so the
-picker does not prevent it — it just answers honestly.
-
-**The popup** is the same searchable element list the card's viewpoint chooser uses, with checkboxes
-and a search box, grouped by kind, with **Viewpoint** at the top when it applies.
-
-**Non-matching cards are hidden, not dimmed** [Jeremy] — matching the column filter already on the
-bar, so the grid has one behaviour rather than two. The badge reads `Feo · Delphia  ×` and clears in
-one click, which is the condition that makes hiding safe.
-
-**A filter matching nothing must say so.** With multi-select AND it is easy to land on an empty grid;
-it shows _"No cards match Feo + Delphia — clear the filter"_ rather than going blank, **because a
-blank grid and a broken grid look identical.**
+What this doc owes it: once phase 1 lands and cards carry a viewpoint, the filter gains a
+**Viewpoint** group (that doc, §6). Nothing else here depends on it, and it depends on nothing here.
 
 ---
 
@@ -455,10 +422,8 @@ unchanged. This is the whole of what was asked for on the cards, and it is testa
 **Phase 2 — the marks.** The viewpoint pills on the POV row, the glyph in the Characters list, the
 map icon (flag + repointing). Cheap, visible, and the part most likely to make the feature feel real.
 
-**Phase 3 — the grid filter.** **A separate feature that does not depend on any of the above** — it
-filters by anything linked to a card, and POV is one group in its list. Built on the existing badge
-and `plotFilterWorthIt`. It can be built before phase 1 or years after; the only thing phases 1–2
-give it is a Viewpoint group to offer.
+**Phase 3 — the Viewpoint group in the grid filter.** The filter itself is its own feature
+(`Dystoria_Plot_Grid_Filter_Design.md`, v.765). This phase only adds the Viewpoint group to its list.
 
 **Phase 4 — the planner, Explore, and the Craft review fix.** The `pre` line and the limited-scope
 constraint; the viewpoint in Explore's focus line; `data.pov` finally reaching the craft metrics.
@@ -483,15 +448,7 @@ and their false-positive rate is known.
 - **Setting a card's viewpoint to the book's own narrator clears it** rather than storing a copy.
 - **The map icon reads the live source.** Set a viewpoint on one card only; that character gets the
   scroll. Nothing sets `nd.narrator`.
-- **The grid filter's badge is visible whenever the filter is on**, and one click clears it — the
-  condition that makes hiding safe rather than indistinguishable from cards gone missing.
-- **Every group is multi-select and ANDs**, including Viewpoint. Selecting two viewpoints is allowed
-  and answers honestly rather than being prevented.
-- **A filter matching nothing says so.** Combine two elements that never share a card — and two
-  viewpoints, which can never share one; the grid must name the filter and offer to clear it rather
-  than going blank.
-- **The filter works on a story with no POV set at all**, because it is a filter over linked
-  elements and POV is only one of its groups.
+- **The grid filter's own checks live in its doc** (§7 there).
 - **Look at the picture.** Two photographs the harness cannot replace: the map at real element
   density with the scroll icons on, and a grid of forty cards with the viewpoint labels on. The
   question for both is whether it reads as *information* or as *clutter*.
@@ -545,10 +502,7 @@ were closed the same day:
 - **The filter hides rather than dims**, matching the column filter already on the bar (§6).
 - **The "make it Multiple POVs" offer appears at the second viewpoint**, not the third (§3.3).
 
-**One thing to decide when it is built rather than now:** §6 is a general Plot-grid feature that
-has nothing POV-specific about it, and it is written down inside a POV doc, which is not where anyone
-will look for it. It should probably be lifted into `Dystoria_Plot_Grid_Filter_Design.md` before it
-is built, with a pointer left here.
+The grid filter was lifted into its own doc on 2026-09-23 and is being built first.
 
 What otherwise remains uncertain is not a decision but a measurement, and both are named where they
 belong:
