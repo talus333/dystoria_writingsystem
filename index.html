@@ -57688,9 +57688,12 @@ body.eink .pl-filterpick .pf-row.on .pf-box{ background:#000; border-color:#000;
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.693';
+  var APP_VERSION = '2026.07.20.694';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.694', date:'September 23, 2026', notes:[
+      '**Fixed: large stories had become slow to load and to use.** [Jeremy] The point-of-view work in the last few updates was re-reading the whole story — every character, and every scene in the whole manuscript — once for each card on the Plot grid, several times over. Each of those is now worked out once per redraw. On a 60-section test story the Plot grid redraws as fast as it did before POV arrived.',
+    ]},
     { v:'2026.07.20.693', date:'September 23, 2026', notes:[
       '**Where Next plans through the card’s eyes.** The planner now knows how the book is told and whose eyes this section or scene is through. In a limited, close or first-person telling it offers only what that character can see, hear, infer or feel — never something they are not there for, or the inside of someone else’s head. An omniscient or objective book is never held to one pair of eyes.',
       '**Explore from a card knows its viewpoint too.** Opening ✦ Explore on a plot card carries whose eyes that section is told through into the questions it asks.',
@@ -64287,7 +64290,7 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     try{
       if(col.id==='main') add(data.plotElems && data.plotElems[i]);
       else add(data.plotThreadElems && data.plotThreadElems[col.id+'|'+i]);
-      _plotScenes(i).forEach(function(sc){ if(!sc.sid) return; var r=_scnGet(col, sc.sid); if(r) add(r.els); });
+      _pvScenes(i).forEach(function(sc){ if(!sc.sid) return; var r=_scnGet(col, sc.sid); if(r) add(r.els); });   /* v.771 — memoised per task */
     }catch(e){}
     return set;
   }
@@ -64303,14 +64306,14 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     if(Object.keys(keys).length) return true;
     try{
       if((plotCardTitle(i, col)||'').trim() || (plotCellText(i, col)||'').trim()) return true;
-      return _plotScenes(i).some(function(sc){ if(!sc.sid) return false; var r=_scnGet(col, sc.sid); return !!(r && ((r.title||'').trim() || (r.text||'').trim())); });
+      return _pvScenes(i).some(function(sc){ if(!sc.sid) return false; var r=_scnGet(col, sc.sid); return !!(r && ((r.title||'').trim() || (r.text||'').trim())); });
     }catch(e){ return false; }
   }
   function _cardPovKeys(i, col, keys, els){
     try{
       var add=function(who){ if(!who) return; var k='pov:'+who; keys[k]={ pov:true, who:who, label:_povName(who) }; if(!els[k]) els[k]=keys[k]; };
       add(povResolve(i, col, null).who);
-      _plotScenes(i).forEach(function(sc){ if(sc.sid) add(povResolve(i, col, sc.sid).who); });
+      _pvScenes(i).forEach(function(sc){ if(sc.sid) add(povResolve(i, col, sc.sid).who); });
     }catch(e){}
   }
   /* every card on the grid as {i, col, keys}, and every element linked to at least one of them */
@@ -65646,10 +65649,30 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
      character who carries one chapter is not that. There are four "who narrates" stores already; this is not a
      fifth, because it means something else. */
   var _povGridOn = false;   /* set once per render: viewpoint labels on grid cards only when there is more than one */
-  function _povBeing(key){ if(!key) return null; try{ return (treeBeings()||[]).filter(function(b){ return b.key===key; })[0] || null; }catch(e){ return null; } }
+  /* v.771 — THE SLOW LOAD [Jeremy: "since the last two updates, dystoria is having trouble loading. it is unresponsive"].
+     Measured on a 60-section manuscript: the Plot grid's render went from 301ms (v.765) to 843ms, and it grows with
+     every column. The viewpoint readers were each re-deriving the same three things, per card, per scene:
+       · the story's characters — `treeBeings()` walks every element in the story, and `_povBeing` called it for
+         every key it checked, two or three times per `povResolve`;
+       · the book's mode — `_povBookMode` rebuilt the narrator list (another `treeBeings`) on every resolve;
+       · a section's scenes — `orgSectionScenes` walks the WHOLE manuscript and rebuilds its node→section map on
+         every call, and v.769's filter index called it three times per card.
+     None of them can change in the middle of one render, so each is now computed once PER TASK and dropped on the
+     next microtask: a render, a filter index or a map draw pays once; the next click reads fresh. Nothing is cached
+     across user actions, so nothing can go stale. */
+  var _pvT=null;
+  function _pvTask(){ if(!_pvT){ _pvT={ sc:{} }; try{ Promise.resolve().then(function(){ _pvT=null; }); }catch(e){ setTimeout(function(){ _pvT=null; }, 0); } } return _pvT; }
+  function _pvBeings(){ var t=_pvTask(); if(!t.beings){ t.beings={}; try{ (treeBeings()||[]).forEach(function(b){ if(b && !t.beings[b.key]) t.beings[b.key]=b; }); }catch(e){} } return t.beings; }
+  function _pvScenes(i){ var t=_pvTask(); if(!t.sc[i]){ var l=[]; try{ l=(typeof window.orgSectionScenes==='function') ? (window.orgSectionScenes(i)||[]) : []; }catch(e){} t.sc[i]=l; } return t.sc[i]; }
+  function _povBeing(key){ if(!key) return null; return _pvBeings()[key] || null; }
   function _povName(key){ var b=_povBeing(key); return b ? b.label : ''; }
   function _povBookMode(){
-    var p=ensurePov(), nar=[]; try{ nar=povNarratorList(); }catch(e){}
+    var t=_pvTask(), p=ensurePov(), sig=''; try{ sig=JSON.stringify(p); }catch(e){}
+    if(t.book && t.bookSig===sig) return t.book;   /* v.771 — once per task (keyed on the POV record, so an edit in the same task still reads fresh) */
+    t.bookSig=sig; t.book=_povBookMode0(p); return t.book;
+  }
+  function _povBookMode0(p){
+    var nar=[]; try{ nar=povNarratorList(); }catch(e){}
     var scope=p.scope||'', person=p.person||'';
     if(scope==='Omniscient')         return { mode:'omniscient', who:'', label:'omniscient', nar:nar };
     if(scope==='Objective')          return { mode:'objective',  who:'', label:'camera',     nar:nar };
@@ -65702,14 +65725,14 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     if(_povFixed(bk.mode)) return out;
     (state.frames||[]).forEach(function(fr, i){
       add(_povSecGet(i));
-      try{ (window.orgSectionScenes ? window.orgSectionScenes(i) : []).forEach(function(sc){ add(_povScnGet(sc.sid)); }); }catch(e){}
+      try{ _pvScenes(i).forEach(function(sc){ add(_povScnGet(sc.sid)); }); }catch(e){}
     });
     return out;
   }
   function povDepartures(){
     var out=[]; (state.frames||[]).forEach(function(fr, i){
       var r=povResolve(i, null, null); if(r.departs && r.source==='section') out.push({ i:i, sid:null, from:r.book, to:r.who });
-      try{ (window.orgSectionScenes ? window.orgSectionScenes(i) : []).forEach(function(sc){ var rs=povResolve(i, null, sc.sid); if(rs.source==='scene' && rs.departs) out.push({ i:i, sid:sc.sid, from:rs.book, to:rs.who }); }); }catch(e){}
+      try{ _pvScenes(i).forEach(function(sc){ var rs=povResolve(i, null, sc.sid); if(rs.source==='scene' && rs.departs) out.push({ i:i, sid:sc.sid, from:rs.book, to:rs.who }); }); }catch(e){}
     }); return out;
   }
   /* v.768 — PHASE 2: THE MARKS. Design §5: one mark, one source, three placements (the POV row, the Characters list,
@@ -65725,7 +65748,7 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     bk.nar.forEach(function(b){ put(b.key, true); });
     if(!_povFixed(bk.mode)) (state.frames||[]).forEach(function(fr, i){
       var here={}; var r=povResolve(i, null, null); if(r.who) here[r.who]=1;
-      try{ (window.orgSectionScenes ? window.orgSectionScenes(i) : []).forEach(function(sc){ var w=_povScnGet(sc.sid); if(w) here[w]=1; }); }catch(e){}
+      try{ _pvScenes(i).forEach(function(sc){ var w=_povScnGet(sc.sid); if(w) here[w]=1; }); }catch(e){}
       Object.keys(here).forEach(function(k){ var v=put(k, false); if(v) v.n++; });
     });
     _pvMemo=out; _pvMemoT=now; return out;

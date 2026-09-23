@@ -634,3 +634,14 @@ and the same eye opens the chooser (t767 #6).
 - **Craft review (§7.5):** `structuralMetrics` adds *Point of view (the author's own)* and either *Viewpoint by
   section* (Multiple POVs) or *Sections told through other eyes than the book's* (with scene departures); the system
   prompt measures "consistency of the narrating voice" against them.
+
+---
+
+## 17 · v.771 — the slow load, and the rule it leaves
+
+Each phase added a viewpoint reader, and each reader re-derived the story's characters (`treeBeings`), the book's
+mode, and a section's scenes (`orgSectionScenes`, a whole-manuscript walk) per card, per scene. On the seven-section
+starter that cost a millisecond; on a 60-section, five-column book it made the Plot grid 2.4× slower and put a
+9-second freeze into load. All three are now held **once per task** (`_pvTask`, dropped on the next microtask) —
+the grid redraws faster than before POV. **Rule for phase 5 and beyond: anything that reads per card goes through
+`_pvTask`, and its harness builds a large story and COUNTS the reads (t771).**
