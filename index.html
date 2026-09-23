@@ -7062,7 +7062,9 @@ window.openAccount = openAccount;
 CATS.forEach(c => { state.counts[c.id] = 1; enableCat(c.id); });
 state.selection.being = new Set(['Archetype']);
 
-function getCat(id){ const c = CATS.find(c => c.id === id); if (id === 'org' && c){ try{ dystSyncCustomGroupKinds(c); }catch(e){} } return c; }   /* v.780 — the story's own kinds of group ride on the pool */
+function getCat(id){ const c = CATS.find(c => c.id === id);
+  if (c){ if (id === 'org'){ try{ dystSyncCustomGroupKinds(c); }catch(e){} } else if (DYST_FAM_CATS && DYST_FAM_CATS[id]){ try{ dystSyncCustomFamilies(c); }catch(e){} } }   /* v.780/v.781 — the story's own families ride on the pool */
+  return c; }   /* v.780 — the story's own kinds of group ride on the pool */
 /* ---- #52 · the group taxonomy, read off the pool itself -----------------------------------
    [Jeremy, 2026-09-03] "remember element groups and bonds are supposed to be in sync."
    They are the same vocabulary seen from two rooms: the `org` pool's subcategories are what the
@@ -7157,6 +7159,68 @@ function dystAddCustomGroupFamily(o){
   }
   return { ok:true, family:fam, kinds:made };
 }
+/* ---- v.781 [Jeremy] — "add this new category with the description and kinds to all the Elements". The Group builder's
+   ＋ New family (v.780), for every builder whose Kind list has families: Places, Artifacts, Events and Concepts (whose
+   families ARE the pool's subcategories: Settlements, Weapons, Personal, Symbols…) and Characters' Type (whose families
+   are the Type subcategory's groups: Humanfolk, Beasts, Undead…). A family there is two tiers, not three: its name, its
+   line, and the kinds in it — which are the words the builder offers. Stored per story in
+   `state.session.customFamilies[cat] = [{ name, hint, words[] }]` and laid onto the pool marked `customFam`, re-laid when
+   the story or its list changes — the same rules as the groups' families, so every surface that reads the pool (the
+   builder, the Add-element window, the rolls) sees them. */
+var DYST_FAM_CATS = { being:'Type', setting:'Kind', object:'Kind', event:'Kind', concept:'Kind' };
+function dystCustomFamilies(cat){ try{ var s = (typeof state !== 'undefined' && state) ? state.session : null; var m = s && s.customFamilies; return (m && Array.isArray(m[cat])) ? m[cat] : []; }catch(e){ return []; } }
+function dystFamHost(c){
+  if (!c || !Array.isArray(c.subcategories)) return null;
+  if (c.id === 'being'){ var t = c.subcategories.find(function(x){ return x && x.name === 'Type'; }); return (t && Array.isArray(t.groups)) ? t.groups : null; }
+  return c.subcategories;
+}
+function dystSyncCustomFamilies(c){
+  var host = dystFamHost(c); if (!host) return;
+  var ks = dystCustomFamilies(c.id);
+  if (!ks.length && !c.__cfHas) return;   /* the common case — nothing of the writer's, nothing laid — costs one check */
+  var sid = ''; try{ sid = (state.session && state.session.id) || ''; }catch(e){}
+  var tag = sid + '|' + ks.map(function(k){ return k ? [k.name, k.hint || '', (k.words || []).join(',')].join('/') : ''; }).join(';');
+  if (tag === c.__cfTag) return;
+  for (var i = host.length - 1; i >= 0; i--) if (host[i] && host[i].customFam) host.splice(i, 1);
+  var have = {}; host.forEach(function(g){ if (g && g.name) have[String(g.name).toLowerCase()] = 1; });
+  var n = 0;
+  ks.forEach(function(k){
+    if (!k || !k.name) return; var lk = String(k.name).toLowerCase(); if (have[lk]) return; have[lk] = 1;
+    host.push({ name:k.name, guideline:k.hint || '', words:(Array.isArray(k.words) && k.words.length) ? k.words.slice() : [k.name], customFam:true }); n++;
+  });
+  c.__cfTag = tag; c.__cfHas = n > 0;
+}
+function dystAddCustomFamily(cat, o){
+  o = o || {};
+  if (!DYST_FAM_CATS[cat]) return { error:'This element has no families.' };
+  var fam = String(o.name || '').replace(/\s+/g, ' ').trim();
+  if (!fam) return { error:'Give the family a name.' };
+  var c = getCat(cat), host = dystFamHost(c) || [];
+  var lc = function(x){ return String(x || '').toLowerCase(); };
+  if (host.some(function(g){ return g && lc(g.name) === lc(fam); })) return { error:'There is already a family called \u201c' + fam + '\u201d.' };
+  var words = String(o.kinds || '').split(/[,\n]/).map(function(w){ return w.replace(/\s+/g, ' ').trim(); }).filter(Boolean);
+  var seen = {}; words = words.filter(function(w){ var l = lc(w); if (seen[l]) return false; seen[l] = 1; return true; });
+  if (!words.length) words = [fam];
+  try{ if (typeof ensureSession === 'function') ensureSession(); }catch(e){}
+  if (!state.session) return { error:'Open a story first.' };
+  var m = state.session.customFamilies;
+  if (!m || typeof m !== 'object' || Array.isArray(m)) m = state.session.customFamilies = {};
+  if (!Array.isArray(m[cat])) m[cat] = [];
+  var rec = { name:fam, hint:String(o.hint || '').trim(), words:words };
+  m[cat].push(rec);
+  try{ if (typeof scheduleAutosave === 'function') scheduleAutosave(); }catch(e){}
+  getCat(cat);
+  return { ok:true, family:fam, words:words, rec:rec };
+}
+/* the family a word of the writer's own came from, for its description */
+function dystCustomFamilyOf(cat, word, famName){
+  try{
+    if (cat === 'org'){ var sb = ((getCat('org') || {}).subcategories || []).find(function(x){ return x && x.customKind && (famName ? x.name === famName : (x.words || []).indexOf(word) >= 0); }); return sb || null; }
+    var host = dystFamHost(getCat(cat)) || [];
+    return host.find(function(g){ return g && g.customFam && (famName ? g.name === famName : (g.words || []).indexOf(word) >= 0); }) || null;
+  }catch(e){ return null; }
+}
+try { window.dystAddCustomFamily = dystAddCustomFamily; window.dystCustomFamilies = dystCustomFamilies; window.dystCustomFamilyOf = dystCustomFamilyOf; }catch(e){}
 try { window.dystAddCustomGroupFamily = dystAddCustomGroupFamily; window.dystCustomGroupKinds = dystCustomGroupKinds; window.dystAddCustomGroupKind = dystAddCustomGroupKind; window.dystSyncCustomGroupKinds = dystSyncCustomGroupKinds; }catch(e){}
 /* ===== Custom subcategories — a per-story store so a writer can add their own subcategory (e.g. Object → “Magical Item”)
    and have it appear everywhere subcategories are chosen (add-element window, edit-pencil, and the name popup). ===== */
@@ -46511,6 +46575,10 @@ document.addEventListener('DOMContentLoaded', init);
               fams.appendChild(blk);
             }
           } else famGroups.forEach(g=> mk(g.name, g.name));
+          /* v.781 — the same ＋ New family, for every element whose list has families */
+          if(TP.cat!=='org' && DYST_FAM_CATS[TP.cat] && DYST_FAM_CATS[TP.cat]===TP.sub){ const nb=document.createElement('span'); nb.className='tp-pill tp-fam tp-newkind'+(TP.newKind?' on':''); nb.textContent='\uff0b New family';
+            nb.title='Make a family of your own for this list \u2014 it is kept with this story';
+            nb.addEventListener('click', ()=>{ try{ if(typeof hideTip==='function') hideTip(); }catch(e){} TP.newKind=!TP.newKind; tpRenderPills(); tpRender(); }); fams.appendChild(nb); }
         } else fams.style.display='none';
       }
     }
@@ -46567,7 +46635,7 @@ document.addEventListener('DOMContentLoaded', init);
       return here.length + away.length;
     }
     function tpRender(){
-      if(TP.newKind && TP.cat==='org'){ const p0=tpEl(), r0=p0.querySelector('.tp-results'); if(!r0.querySelector('.tp-nk')){ r0.innerHTML=''; tpNewKindForm(r0, p0.querySelector('.tp-search').value.trim()); } return; }   /* v.780 — the form holds the list's place until it is used or left */
+      if(TP.newKind && (TP.cat==='org' || DYST_FAM_CATS[TP.cat])){ const p0=tpEl(), r0=p0.querySelector('.tp-results'); if(!r0.querySelector('.tp-nk')){ r0.innerHTML=''; tpNewKindForm(r0, p0.querySelector('.tp-search').value.trim()); } return; }   /* v.780 — the form holds the list's place until it is used or left */
       const p=tpEl(), res=p.querySelector('.tp-results'); res.innerHTML='';
       const raw=p.querySelector('.tp-search').value.trim(), q=raw.toLowerCase();
       if(TP.mode==='obstacle'){
@@ -46679,7 +46747,7 @@ document.addEventListener('DOMContentLoaded', init);
       const mkOpt=(word, subName)=>{ const b=document.createElement('button'); b.className='ec-opt';
         const sn=subName||sub;
         let d=(typeof descFor==='function')?descFor({word, cat, sub}):'';
-        if(subName && TP.cat==='org'){ try{ const _sb=((getCat('org')||{}).subcategories||[]).find(x=>x&&x.customKind&&x.name===subName);
+        if(TP.cat==='org' || DYST_FAM_CATS[TP.cat]){ try{ const _sb=dystCustomFamilyOf(TP.cat, word, (subName && subName!==sub) ? subName : '') || dystCustomFamilyOf(TP.cat, word);
           if(_sb&&_sb.guideline){ const _gen=(typeof descFor==='function')?descFor({word:'\u2063', cat, sub}):''; if(!d || d===_gen) d=_sb.guideline; } }catch(e){} }   /* v.780 — a kind of the writer's own: its family's line, where the app has none of its own for the word */
         b.innerHTML='<span class="ec-w">'+word.replace(/</g,'&lt;')+'</span><span class="ec-sub">'+sub+'</span>'+(d?'<span class="ec-d">'+d.replace(/</g,'&lt;')+'</span>':'');
         b.addEventListener('click', ()=>tpPick(word, false, sn)); return b; };
@@ -46748,21 +46816,39 @@ document.addEventListener('DOMContentLoaded', init);
     /* v.780 [Jeremy] — the new-family form: its name, a line on what it gathers, and the kinds in it. With no kinds
        named, the family is its own one kind — which is how Places, Ideas and Events began. Creating it picks its first
        kind: the writer made it in order to use it. */
+    /* v.781 — worded for the element it is in; one form */
+    const TP_FAM_WORDS={
+      org:     { h:'A new family of groups',    name:'Crews, Vessels, Houses of the Dead', hint:'What it gathers, in a line (optional)', l:'Kinds in it', eg:'Gang, Heist Crew, Pirate Crew', one:'kind' },
+      being:   { h:'A new family of beings',    name:'Starfolk, Clockwork, the Drowned',  hint:'What they are, in a line (optional)',    l:'Types in it', eg:'Star-Walker, Moon Child',       one:'type' },
+      setting: { h:'A new family of places',    name:'Ruins, Sky Realms, Underways',      hint:'What they are, in a line (optional)',    l:'Kinds in it', eg:'Barrow, Fallen Keep, Drowned Chapel', one:'kind' },
+      object:  { h:'A new family of artifacts', name:'Relics, Instruments, Contraband',   hint:'What they are, in a line (optional)',    l:'Kinds in it', eg:'Reliquary, Saint\u2019s Bone',    one:'kind' },
+      event:   { h:'A new family of events',    name:'Omens, Trials, Crossings',          hint:'What they are, in a line (optional)',    l:'Kinds in it', eg:'Eclipse, Blood Moon',            one:'kind' },
+      concept: { h:'A new family of concepts',  name:'Debts, Thresholds, Silences',       hint:'What they are, in a line (optional)',    l:'Kinds in it', eg:'Unpaid Debt, Oath-Debt',         one:'kind' } };
     function tpNewKindForm(res, raw){
       const f=document.createElement('div'); f.className='tp-nk';
       const esc=x=>String(x||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
-      f.innerHTML='<div class="tp-nk-h">A new family of groups</div>'
-        +'<input class="tp-nk-in tp-nk-name" type="text" placeholder="Its name \u2014 Crews, Vessels, Houses of the Dead\u2026" value="'+esc(raw)+'">'
-        +'<input class="tp-nk-in tp-nk-hint" type="text" placeholder="What it gathers, in a line (optional)">'
-        +'<div class="tp-nk-l">Kinds in it</div>'
-        +'<input class="tp-nk-in tp-nk-kinds" type="text" placeholder="With commas \u2014 Gang, Heist Crew, Pirate Crew">'
-        +'<div class="tp-nk-note">Leave it empty and the family is its own one kind.</div>'
+      const W=TP_FAM_WORDS[TP.cat]||TP_FAM_WORDS.org;
+      f.innerHTML='<div class="tp-nk-h">'+W.h+'</div>'
+        +'<input class="tp-nk-in tp-nk-name" type="text" placeholder="Its name \u2014 '+esc(W.name)+'\u2026" value="'+esc(raw)+'">'
+        +'<input class="tp-nk-in tp-nk-hint" type="text" placeholder="'+esc(W.hint)+'">'
+        +'<div class="tp-nk-l">'+W.l+'</div>'
+        +'<input class="tp-nk-in tp-nk-kinds" type="text" placeholder="With commas \u2014 '+esc(W.eg)+'">'
+        +'<div class="tp-nk-note">Leave it empty and the family is its own one '+W.one+'.</div>'
         +'<div class="tp-nk-err" hidden></div>'
         +'<div class="tp-nk-acts"><button type="button" class="tp-nk-cancel">Cancel</button><button type="button" class="tp-nk-go">Create family</button></div>';
       res.appendChild(f);
       const err=f.querySelector('.tp-nk-err');
       const go=()=>{
-        const r=dystAddCustomGroupFamily({ name:f.querySelector('.tp-nk-name').value, hint:f.querySelector('.tp-nk-hint').value, kinds:f.querySelector('.tp-nk-kinds').value });
+        const _in={ name:f.querySelector('.tp-nk-name').value, hint:f.querySelector('.tp-nk-hint').value, kinds:f.querySelector('.tp-nk-kinds').value };
+        if(TP.cat!=='org'){   /* v.781 — two tiers: the family and its words */
+          const r2=dystAddCustomFamily(TP.cat, _in);
+          if(!r2 || !r2.ok){ err.textContent=(r2&&r2.error)||'That did not work.'; err.hidden=false; return; }
+          if(typeof flashStatus==='function') flashStatus('\u201c'+r2.family+'\u201d is a new family in this story');
+          TP.newKind=false; TP.fam=r2.family;
+          tpPick(r2.words[0], false, r2.family);
+          return;
+        }
+        const r=dystAddCustomGroupFamily(_in);
         if(!r || !r.ok){ err.textContent=(r&&r.error)||'That did not work.'; err.hidden=false; return; }
         if(typeof flashStatus==='function') flashStatus('\u201c'+r.family+'\u201d is a new family of groups in this story');
         const k0=r.kinds[0];
@@ -46786,7 +46872,7 @@ document.addEventListener('DOMContentLoaded', init);
       if(TP.onPick){ const cb=TP.onPick; const fam=subName||TP.fam||''; closeTraitPicker(); try{ cb(word, isNew, fam); }catch(e){} return; }   // callback mode (builder word picks) — no element commit
       if(TP.mode==='motivation'){ setMotivationWant(TP.i, word, isNew); closeTraitPicker(); if(window.syncElementViews) window.syncElementViews(); return; }
       if(TP.group){ if(typeof addGroupChar==='function') addGroupChar(TP.group, TP.sub, word); closeTraitPicker(); if(typeof renderNpCard==='function') renderNpCard(); setTrait('@gchar:'+TP.sub+'|'+word); return; }
-      if(TP.thread && TP.cat==='concept'){ if(typeof addThreadConcept==='function') addThreadConcept(TP.thread, word); closeTraitPicker(); if(typeof renderNpCard==='function') renderNpCard(); if(typeof renderConstellation==='function') renderConstellation(); return; }
+      if(TP.thread && TP.cat==='concept'){ if(typeof addThreadConcept==='function') addThreadConcept(TP.thread, word); closeTraitPicker(); try{ if(typeof window.__planThreadCardRefresh==='function'){ const _r=window.__planThreadCardRefresh; window.__planThreadCardRefresh=null; _r(); } }catch(e){} if(typeof renderNpCard==='function') renderNpCard(); if(typeof renderConstellation==='function') renderConstellation(); return; }
       if(isNew && typeof saveCustomWord==='function'){ try{ saveCustomWord(TP.cat, { word, sub:TP.sub, desc:'', g:[] }, 'story'); }catch(e){} }
       if(TP.replace){ const old=TP.replace; if(old && old.toLowerCase()!==word.toLowerCase()) removeTraitWord(TP.i, old); if(!addTraitWord(TP.i, word, TP.sub)) return; closeTraitPicker(); renderNpCard(); setTrait(word); return; }
       if(!addTraitWord(TP.i, word, TP.sub)) return;
@@ -48372,6 +48458,7 @@ document.addEventListener('DOMContentLoaded', init);
     function openThreadStakePicker(tid, x, y){ TP={ i:-1, thread:tid, cat:'stakes', sub:'', mode:'stake' }; tpEl().querySelector('.tp-title').textContent='Thread stake \u2014 what\u2019s at risk'; tpEl().querySelector('.tp-search').placeholder='search stakes or name what\u2019s at risk\u2026'; tpOpen(-1, x, y); }
     function openStoryStakePicker(x, y){ TP={ i:-1, story:true, cat:'stakes', sub:'', mode:'stake' }; tpEl().querySelector('.tp-title').textContent='Story stake \u2014 what\u2019s ultimately at risk'; tpEl().querySelector('.tp-search').placeholder='search stakes or name what\u2019s at risk\u2026'; tpOpen(-1, x, y); }
     function openThreadConceptPicker(tid, x, y){ TP={ i:-1, thread:tid, cat:'concept', sub:traitSubs('concept')[0], mode:'trait' }; tpEl().querySelector('.tp-title').textContent='Thread concept'; tpEl().querySelector('.tp-search').placeholder='search or name a concept\u2026'; tpOpen(-1, x, y); }
+    try{ window.openThreadConceptPicker=openThreadConceptPicker; }catch(e){}   /* v.782 — the Thread card's "+ concept" */
     function openMotivatorPicker(i, x, y){
       const w=state.prompt && state.prompt.words[i]; if(!w) return;
       TP={ i, cat:w.cat, sub:'', mode:'motivator' };
@@ -58022,9 +58109,16 @@ body.eink .pl-filterpick .pf-row.on .pf-box{ background:#000; border-color:#000;
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.703';
+  var APP_VERSION = '2026.07.20.705';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.705', date:'September 23, 2026', notes:[
+      '**A new thread starts with its card.** [Jeremy] Adding a thread column on the Plot grid now opens the thread’s card first, ready for its name. The card sets the thread up: its description, its **point of view**, the **key elements** its cards start with, its **stakes** (every card in the thread carries them unless it names its own), the **concepts driving it**, and its plot shape. Each card can still change any of it.',
+      '**Every thread is equal.** [Jeremy] The first column is no longer “the Main Plot” — its card, the story facts, the wiki and the exports treat it as a thread like the rest, and its stake is its own. The story stake keeps its place on the notepad’s story card and still shows on cards where nothing nearer is set. To say which thread matters most, give it a role in the Thread organizer.'
+    ]},
+    { v:'2026.07.20.704', date:'September 23, 2026', notes:[
+      '**New families in every builder.** [Jeremy] The **＋ New family** that Groups got is now in each builder whose list has families: a Character’s **Type** (beside Humanfolk, Beasts, Undead…), and the **Kind** of a Place, an Artifact, an Event and a Concept. Name the family, give it a line if you like, and list what is in it — or leave that empty and the family is its own one kind. It is chosen for the element you are building, joins the family row from then on, and is kept with the story.'
+    ]},
     { v:'2026.07.20.703', date:'September 23, 2026', notes:[
       '**Families of groups of your own.** [Jeremy] Beside Beings, Places, Things, Ideas, Events and Mixed, the group builder’s **Kind of group** list now has **＋ New family**. Name the family, say in a line what it gathers if you like, and list the kinds in it (or leave that empty and the family is its own one kind), then **Create family**. Its first kind is chosen for the group you are building; the family joins the row from then on, and Bonds lists it in its own right — on *What are you mapping?* and under its kinds in the drawer. Families you make are kept with the story.'
     ]},
@@ -63906,6 +64000,9 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
       name:function(id){ var a=api(); var t=(a&&a.threadById)?a.threadById(id):null; return (t&&t.name)||'unnamed'; },
       create:function(){ var a=api(); return (a&&a.newThread)?a.newThread('unnamed'):null; },
       setup:function(col){ openPlotCardPopup(col); },
+      /* v.782 [Jeremy] — "When adding a new thread column, can we open the Thread card first to name it and describe
+         it … having step 1 set the column is a good idea, like for Arcs." */
+      openOnCreate:true,
       stake:function(id){ var a=api(); return (a&&a.threadStake)?a.threadStake(id):''; },
       /* Removing a THREAD column deletes the thread, everywhere — that is this kind's
          own rule and it predates the table. A kind whose subject is not the grid's to
@@ -65086,7 +65183,7 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
        you can fill in later, an arc is a change that has to be SAID before the column
        means anything. So the kind decides whether making one opens its setup. */
     if(id && fresh && K.openOnCreate){ var nm=''; try{ nm=K.name(id)||''; }catch(e){}
-      setTimeout(function(){ try{ K.setup({ id:id, kind:kind, name:nm }); }catch(e){} }, 30); }
+      setTimeout(function(){ try{ K.setup({ id:id, kind:kind, name:nm, fresh:true }); }catch(e){} }, 30); }
   }
   function addThreadHeadCell(){
     var c=document.createElement('div'); c.className='pl-addthread-cell';
@@ -65571,7 +65668,14 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
   // its Stake, Motivation, Intention, Obstacle, Description and linked elements. The first column's Plot card is the
   // story's MAIN PLOT. Stake reuses the existing store (story stake for the main column, thread stake otherwise) so
   // it's the SAME stake that used to sit in the header; the other fields live in data.plotDefs[col.id]. ----
-  function _isMainCol(col){ var id=(col&&col.id)?col.id:col; var first=(data.plotCols||[])[0]; return !!(first && first.id===id); }
+  /* v.782 [Jeremy] — "make it so that the first thread added doesn't refer to it being the main plot. let's just keep all
+     threads equal weight. the author will have more freedom to set their own value to threads." The first column used to
+     be read as THE story's plot: its card was captioned the overall plot of the story, its stake field wrote the STORY
+     stake, and the story facts, the wiki and the exports called it "the main plot". No column is special now — each
+     thread's card writes its own thread stake, and the story stake keeps its own home (the notepad's story card, and every
+     card's Stakes line still echoes it where nothing nearer is set). The Thread organizer's roles — Main plot, Subplot,
+     Minor thread… — are where a writer says which thread matters most, when they want to. */
+  function _isMainCol(col){ return false; }
   function plotDef(colId){ if(!data.plotDefs) return null; return data.plotDefs[colId]||null; }
   function plotDefEnsure(colId){ data.plotDefs=data.plotDefs||{}; var r=data.plotDefs[colId]; if(!r){ r={motivation:'',intention:'',obstacle:'',description:'',els:[],elNotes:{}}; data.plotDefs[colId]=r; } return r; }
   function plotDefStake(col){ var a=api(); return _isMainCol(col) ? (a?a.storyStake():'') : (a?a.threadStake(col.id):''); }
@@ -65713,10 +65817,10 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     var panel=document.createElement('div'); panel.className='pl-cardpop pl-plotpop';
     var hd=document.createElement('div'); hd.className='pl-cardpop-hd';
     // editable title in the header (rename the plot / thread inline), like the scene card — no separate Name field
-    var ttl=document.createElement('input'); ttl.type='text'; ttl.className='pl-cardpop-titlein pl-plotpop-ttl'; ttl.value=col.name||''; ttl.placeholder='Name this plot / thread…';
+    var ttl=document.createElement('input'); ttl.type='text'; ttl.className='pl-cardpop-titlein pl-plotpop-ttl'; ttl.value=col.name||''; ttl.placeholder='Name this thread…';
     ttl.addEventListener('input', function(){ if(a && a.renameThread) a.renameThread(col.id, ttl.value); col.name=ttl.value; scheduleReplot(); });
     hd.appendChild(ttl); hd.appendChild(_plotKebab(col)); panel.appendChild(hd);
-    var sub=document.createElement('div'); sub.className='pl-cardpop-sub'; sub.textContent=_isMainCol(col)?'The overall plot of your story — feeds the story facts and the wiki’s questions':'The overall plot of this thread';
+    var sub=document.createElement('div'); sub.className='pl-cardpop-sub'; sub.textContent=(col.kind==='arc')?'The overall plot of this thread':'What this thread is \u2014 every card in its column starts from here, and each can change it';
     panel.appendChild(sub);
     var pbody=document.createElement('div'); pbody.className='pl-plotpop-body';
     // Plot shape — an archetypal shape; its stages show beneath as guidance (never a forced structure)
@@ -65729,15 +65833,20 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     var stagesDiv=document.createElement('div'); stagesDiv.className='pl-plotstages'; shapeWrap.appendChild(stagesDiv);
     function renderStages(){ stagesDiv.innerHTML=''; var sh=plotDefField(col.id,'shape'); var stages=(a&&a.plotPhases)?a.plotPhases(sh):[]; if(!stages.length){ return; } stages.forEach(function(st, idx){ var row=document.createElement('div'); row.className='pl-plotstage'; var nn=document.createElement('span'); nn.className='pl-plotstage-n'; nn.textContent=(idx+1); row.appendChild(nn); var t=document.createElement('span'); t.className='pl-plotstage-t'; t.textContent=st; row.appendChild(t); stagesDiv.appendChild(row); }); }
     sel.addEventListener('change', function(){ plotDefFieldSet(col.id,'shape',sel.value); renderStages(); scheduleReplot(); });
-    renderStages(); pbody.appendChild(shapeWrap);
+    renderStages();   /* v.782 — the shape goes last: it is guidance, and naming the thread comes first */
     // Description
     var descWrap=document.createElement('div'); descWrap.className='pl-plotfield';
     var dlb=document.createElement('div'); dlb.className='pl-plotfield-lbl'; dlb.textContent='Description'; descWrap.appendChild(dlb);
-    var dta=document.createElement('textarea'); dta.className='pl-plotfield-ta big'; dta.rows=4; dta.value=plotDefField(col.id,'description')||''; dta.placeholder='Describe the arc of this plot…';
+    var dta=document.createElement('textarea'); dta.className='pl-plotfield-ta big'; dta.rows=4; dta.value=plotDefField(col.id,'description')||''; dta.placeholder=(col.kind==='arc')?'Describe the arc of this plot…':'What this thread is about, where it goes\u2026';
     dta.addEventListener('input', function(){ plotDefFieldSet(col.id,'description',dta.value); }); descWrap.appendChild(dta); pbody.appendChild(descWrap);
+    /* v.782 — WHOSE EYES. A thread's viewpoint is the default for its own cards: the chain is book → thread → section →
+       scene (povResolve), so a section or a scene that names its own viewpoint still wins, and a card set back to what it
+       inherits clears. A book told omniscient, or not told yet, has no viewpoint to give a thread — it says so instead
+       of offering a choice it would ignore. */
+    if(col.kind!=='arc') pbody.appendChild(_threadPovField(col));
     // Key elements — what this plot is about; new cards in this thread inherit these, then add their own
     var elsLbl=document.createElement('div'); elsLbl.className='pl-plotfield-lbl pl-plotfield-lbl-sp'; elsLbl.textContent='Key elements'; pbody.appendChild(elsLbl);
-    var elsHint=document.createElement('div'); elsHint.className='pl-plotfield-hint'; elsHint.textContent='What this plot is about — cards added in this thread start with these linked.'; pbody.appendChild(elsHint);
+    var elsHint=document.createElement('div'); elsHint.className='pl-plotfield-hint'; elsHint.textContent='The elements every card in this thread starts with \u2014 a card can add its own or take one off.'; pbody.appendChild(elsHint);
     var pillsRow=document.createElement('div'); pillsRow.className='pl-cardpop-pills';
     function renderPlotPills(){
       pillsRow.innerHTML='';
@@ -65752,9 +65861,85 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
       pillsRow.appendChild(addb);
     }
     renderPlotPills(); pbody.appendChild(pillsRow);
+    if(col.kind!=='arc'){ pbody.appendChild(_threadStakeField(col)); pbody.appendChild(_threadConceptField(col)); }
+    pbody.appendChild(shapeWrap);
     panel.appendChild(pbody);
     bd.appendChild(panel); wireCardBd(bd); document.body.appendChild(bd);
-    setTimeout(function(){ try{ panel.querySelector('.pl-plotfield-ta').focus(); }catch(e){} }, 30);
+    /* a thread just made opens on its NAME, selected, so typing replaces the placeholder name */
+    setTimeout(function(){ try{ if(col.fresh){ ttl.focus(); ttl.select(); } else panel.querySelector('.pl-plotfield-ta').focus(); }catch(e){} }, 30);
+  }
+  /* ---- v.782 · the thread card's three new fields ---------------------------------------------------------------- */
+  function _threadObj(id){ var a=api(); try{ return (a&&a.threadById)?a.threadById(id):null; }catch(e){ return null; } }
+  function _plotFieldHead(label, hint){
+    var w=document.createElement('div'); w.className='pl-plotfield pl-thfield'; w.style.marginTop='10px';
+    var l=document.createElement('div'); l.className='pl-plotfield-lbl pl-plotfield-lbl-sp'; l.textContent=label; w.appendChild(l);
+    if(hint){ var h=document.createElement('div'); h.className='pl-plotfield-hint'; h.textContent=hint; w.appendChild(h); }
+    return w;
+  }
+  function _threadPovField(col){
+    var w=_plotFieldHead('Point of view', 'Whose eyes this thread is told through \u2014 its cards start there, and a section or scene can name its own.');
+    var row=document.createElement('div'); row.className='pl-cardpop-pills pl-thpov'; w.appendChild(row);
+    var paint=function(){
+      row.innerHTML='';
+      var bk=_povBookMode();
+      if(_povFixed(bk.mode)){
+        var n=document.createElement('div'); n.className='pl-plotfield-hint pl-thpov-note';
+        n.textContent = bk.mode==='omniscient' ? 'This book is told omniscient \u2014 no single pair of eyes, so a thread has none of its own.'
+                      : bk.mode==='objective' ? 'This book is told like a camera \u2014 no one\u2019s eyes, so a thread has none of its own.'
+                      : 'The book\u2019s point of view isn\u2019t set yet \u2014 a thread can have eyes of its own once the book is told through more than one.';
+        row.appendChild(n);
+        if(bk.mode==='unset'){ const mb=document.createElement('button'); mb.type='button'; mb.className='pl-cardpop-linkb pl-thpov-multi'; mb.textContent='Tell this book through several pairs of eyes';
+          mb.title='Sets the book\u2019s point of view to Multiple POVs \u2014 you can change it in Narrative Layers';
+          mb.addEventListener('click', function(e){ e.stopPropagation(); ensurePov().scope='Multiple POVs'; save(); _pvT=null; try{ _pvMemo=null; }catch(er){} scheduleReplot(); paint(); });
+          row.appendChild(mb); }
+        return;
+      }
+      var who=_povThreadGet(col.id);
+      var pill=document.createElement('span'); pill.className='pl-cardpop-pill pl-cpov pl-thpov-pill'+(who?' on':' ask');
+      var eye=document.createElement('span'); eye.className='pl-poveye'; try{ eye.innerHTML=(window.__pov&&window.__pov.eyeSvg)?window.__pov.eyeSvg():''; }catch(e){} pill.appendChild(eye);
+      var nm=document.createElement('span'); nm.className='pl-cpn'; nm.textContent= who ? _povName(who) : (bk.who ? (bk.label+' \u2014 the book\u2019s') : 'Choose whose eyes'); pill.appendChild(nm);
+      pill.title='Choose whose eyes this thread is told through';
+      pill.addEventListener('click', function(e){ e.stopPropagation(); var r=pill.getBoundingClientRect();
+        var items=[]; var bs=_pvBeings(); Object.keys(bs).map(function(k){ return bs[k]; }).sort(function(a2,b2){ return String(a2.label).localeCompare(String(b2.label)); })
+          .forEach(function(b){ items.push({ label:(b.key===who?'\u2713 ':'')+b.label, on:function(){ _povThreadSet(col.id, b.key); paint(); } }); });
+        if(who) items.push({ label:'No viewpoint of its own', on:function(){ _povThreadSet(col.id, ''); paint(); } });
+        if(!items.length) items.push({ label:'No characters in the story yet', on:function(){} });
+        arcMenu(r.left, r.bottom, items); var _am=document.getElementById('arcMenu'); if(_am) _am.style.zIndex='400'; });   /* over the card it opened from */
+      row.appendChild(pill);
+    };
+    paint(); return w;
+  }
+  function _threadStakeField(col){
+    var w=_plotFieldHead('Stakes', 'What\u2019s at risk along this thread \u2014 every card in it carries this unless it names its own.');
+    var row=document.createElement('div'); row.className='pl-cardpop-stakerow pl-thstake'; w.appendChild(row);
+    var paint=function(){
+      row.innerHTML='';
+      var cur=plotDefStake(col);
+      var edit=function(an){ editStake(an, cur, 'What\u2019s at risk along this thread?', function(v){ plotDefStakeSet(col, v); paint(); }); };
+      if(cur) row.appendChild(stakePill(cur, { own:true, kind:'thread', onEdit:edit, onClear:function(){ plotDefStakeSet(col, ''); paint(); } }));
+      else row.appendChild(stakeAdd(edit));
+    };
+    paint(); return w;
+  }
+  function _threadConceptField(col){
+    var w=_plotFieldHead('Concepts driving it', 'The ideas this thread turns on.');
+    var row=document.createElement('div'); row.className='pl-cardpop-pills pl-thconc'; w.appendChild(row);
+    var paint=function(){
+      row.innerHTML='';
+      var t=_threadObj(col.id), cs=(t&&Array.isArray(t.concepts))?t.concepts:[];
+      cs.forEach(function(c){
+        var p=document.createElement('span'); p.className='pl-cardpop-pill pl-thconc-pill'; var sp=document.createElement('span'); sp.className='pl-cpn'; sp.textContent=c; p.appendChild(sp);
+        var x=document.createElement('span'); x.className='pl-cpx'; x.textContent='\u00d7'; x.title='Take it off this thread';
+        x.addEventListener('click', function(e){ e.stopPropagation(); try{ if(typeof removeThreadConcept==='function') removeThreadConcept(col.id, c); }catch(er){} paint(); scheduleReplot(); });
+        p.appendChild(x); row.appendChild(p);
+      });
+      var addb=document.createElement('button'); addb.className='pl-cardpop-linkb'; addb.textContent='+ concept';
+      addb.addEventListener('click', function(e){ e.stopPropagation(); var r=addb.getBoundingClientRect();
+        window.__planThreadCardRefresh=function(){ paint(); scheduleReplot(); };
+        try{ if(typeof window.openThreadConceptPicker==='function') window.openThreadConceptPicker(col.id, r.left, r.bottom + 4); }catch(er){} });
+      row.appendChild(addb);
+    };
+    paint(); return w;
   }
   function openScenePopup(i, col, sid, label){
     closeCardPopup();
@@ -66099,10 +66284,19 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
   function _povSecGet(i){ var fr=(state.frames||[])[i]; var w=fr && fr.pov && fr.pov.who; return (w && _povBeing(w)) ? w : ''; }
   function _povScnGet(sid){ var r=sid && data && data.scenePov && data.scenePov[sid]; var w=r && r.who; return (w && _povBeing(w)) ? w : ''; }
   function _povFixed(mode){ return mode==='unset' || mode==='omniscient' || mode==='objective'; }
+  /* v.782 — a thread's own viewpoint (thread.pov = {who}), read like the others: a key that no longer names a character
+     is ignored rather than obeyed */
+  function _povThreadGet(id){ if(!id) return ''; var t=null; try{ var a=api(); t=(a&&a.threadById)?a.threadById(id):null; }catch(e){}
+    var w=t && t.pov && t.pov.who; return (w && _povBeing(w)) ? w : ''; }
+  function _povThreadSet(id, who){ var t=null; try{ var a=api(); t=(a&&a.threadById)?a.threadById(id):null; }catch(e){} if(!t) return;
+    if(who && _povBeing(who)) t.pov={ who:who }; else delete t.pov;
+    try{ if(typeof scheduleAutosave==='function') scheduleAutosave(); }catch(e){}
+    _pvT=null; try{ _pvMemo=null; }catch(e){} scheduleReplot(); }
   function povResolve(i, col, sid){
     var bk=_povBookMode();
     var out={ mode:bk.mode, book:bk.who, bookLabel:bk.label, who:bk.who, source:'book', inherited:bk.who, departs:false, label:bk.label };
     if(_povFixed(bk.mode)) return out;
+    if(col && col.id && col.kind!=='arc'){ var tw=_povThreadGet(col.id); if(tw){ out.who=tw; out.source='thread'; } }   /* v.782 — book → thread → section → scene */
     var sw=_povSecGet(i); if(sw){ out.who=sw; out.source='section'; }
     if(sid){ out.inherited=out.who; var cw=_povScnGet(sid); if(cw){ out.who=cw; out.source='scene'; } }
     out.label = out.who ? _povName(out.who) : bk.label;
@@ -66136,6 +66330,7 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     var add=function(k){ if(k && !seen[k] && _povBeing(k)){ seen[k]=1; out.push({ key:k, name:_povName(k) }); } };
     bk.nar.forEach(function(b){ add(b.key); });
     if(_povFixed(bk.mode)) return out;
+    try{ (data.plotCols||[]).forEach(function(c){ if(c && c.kind!=='arc') add(_povThreadGet(c.id)); }); }catch(e){}   /* v.782 — a thread's viewpoint is one of the book's */
     (state.frames||[]).forEach(function(fr, i){
       add(_povSecGet(i));
       try{ _pvScenes(i).forEach(function(sc){ add(_povScnGet(sc.sid)); }); }catch(e){}
