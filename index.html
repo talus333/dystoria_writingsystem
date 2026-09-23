@@ -57900,9 +57900,14 @@ body.eink .pl-filterpick .pf-row.on .pf-box{ background:#000; border-color:#000;
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.700';
+  var APP_VERSION = '2026.07.20.701';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.701', date:'September 23, 2026', notes:[
+      '**A cleaner first look at Bonds.** [Jeremy] With no groups yet, Bonds asks *What are you mapping?* in a panel that now fits the screen: the kinds of group as small pills under six headings (People, Places, Things, Ideas, Events, Mixed), what each one maps shown in a line beneath as you point at it, and — when the story already has connections — one press to start from them. It scrolls if the window is short. Before, it was taller than the screen and its top and bottom could not be reached.',
+      '**The group’s title, larger and renamed with one click.** [Jeremy] The name over a Bonds drawing is now the size of the Scenes and Maps title. Click it to rename it right there — Enter keeps it, Esc puts it back — and the group’s element takes the new name too, so Elements and the notepad follow.',
+      '**Notes and Edit on every group in the drawer.** [Jeremy] Each group’s row now has a notepad button (opens that group’s notes) and a pencil (opens the group builder again, to change its name, characteristics or who is in it). They show on the open group and on any row you point at. A name changed in the builder now reaches the Bonds title and the drawer too.'
+    ]},
     { v:'2026.07.20.700', date:'September 23, 2026', notes:[
       '**The Places grid in whole steps.** [Jeremy] Under the grid’s Spacing slider there is now **Steps**: **−** and **+** divide the grid (÷2, ÷3, ÷4 … ÷8) or multiply it (×2, ×3, ×4 … ×8), and the slider still sets the spacing freely. The steps nest — the points you had stay where they were, and a divided grid shows its original points a little stronger than the ones in between — so connections meet exactly and a blueprint lines up. Press the readout to go back to ×1.',
       '**Finer zone icons.** [Jeremy] The four tools at the top of the Zones drawer are drawn smaller in their circles, with a lighter line.'
@@ -78399,6 +78404,17 @@ body:not(.eink) #libExportMenu button:hover{ background:rgba(255,255,255,.08) !i
     m = m || MAIN;
     var host = hostOf(m); if (!host) return;
     ensureCSS();
+    /* v.778 — the builder renames the ELEMENT; the group record it is kept the old name, so the title and the drawer
+       went on showing it. The element is the story's own copy of the name, so the record follows it here. */
+    try{
+      var _s0 = store(), _ch = false;
+      (_s0.groups || []).forEach(function(gp){
+        if (!gp || !gp.el || typeof npFindEl !== 'function') return;
+        var w = npFindEl(gp.el), wn = w && String(w.name || '').trim();
+        if (wn && wn !== gp.name){ gp.name = wn; _ch = true; }
+      });
+      if (_ch) saveStore(_s0);
+    }catch(e){}
     if (window.BONDS) m.ui.kind = lensOf(m);
     host.innerHTML = '';
     host.classList.toggle('bn-mini', !!m.mini);
@@ -79518,6 +79534,15 @@ body:not(.eink) #libExportMenu button:hover{ background:rgba(255,255,255,.08) !i
         m.ui.group = gp.id; m.ui.sel = null; m.ui.kind = lensOfGroup(gp); V.render(m);
       });
       b.addEventListener('dblclick', function(ev){ ev.preventDefault(); renameSet(gp, m); });
+      /* v.778 [Jeremy] — the group's notes and its builder, one press each from its row */
+      var nb = el('span','bn-set-ic bn-set-notes'); nb.setAttribute('role', 'button'); nb.title = 'Open this group\u2019s notes';
+      nb.addEventListener('click', function(ev){ ev.stopPropagation(); ev.preventDefault(); groupNotes(gp); });
+      nb.addEventListener('dblclick', function(ev){ ev.stopPropagation(); ev.preventDefault(); });
+      b.appendChild(nb);
+      var eb = el('span','bn-set-ic bn-set-edit'); eb.setAttribute('role', 'button'); eb.title = 'Edit this group \u2014 its name, its characteristics and who is in it';
+      eb.addEventListener('click', function(ev){ ev.stopPropagation(); ev.preventDefault(); editGroup(gp, m); });
+      eb.addEventListener('dblclick', function(ev){ ev.stopPropagation(); ev.preventDefault(); });
+      b.appendChild(eb);
       var x = el('span','bn-set-x','×');
       x.title = 'Delete this group';
       x.addEventListener('click', function(ev){ ev.stopPropagation(); ev.preventDefault(); askDelete(gp, m); });
@@ -79960,8 +79985,8 @@ body:not(.eink) #libExportMenu button:hover{ background:rgba(255,255,255,.08) !i
     var name = '';
     try{ name = window.prompt('Rename', gp.name); }catch(e){}
     if (name == null) return;
-    gp.name = String(name).trim() || gp.name;
-    saveGroup(gp); V.render(m);
+    if (!String(name).trim()) return;
+    renameGroupTo(gp, name, m);   /* v.778 — the group and the element it is, together */
   }
 
   /* No groups yet — the honest empty page, with the one thing to do on it. Under a
@@ -79972,64 +79997,84 @@ body:not(.eink) #libExportMenu button:hover{ background:rgba(255,255,255,.08) !i
      "What kind of thing are these people?" comes before "what kind of diagram do
      you want" — the second is a drawing decision, and until v.408 it was the first
      thing Bonds asked. [#37 phase 2] */
+  /* v.778 [Jeremy] — "I like the idea of introducing the groups first time you enter and there are no groups set yet,
+     but this pop-up is not working, and is too large. can you reorganize and make it look clean and legible?"
+     Measured before the rewrite: 29 described cards in a four-column grid made the panel 2,194px tall in a 719px
+     drawing, and it was centred — so its top (the question, the explanation) sat 690px ABOVE the window and its foot
+     (the one-click "Start from…") below it, and nothing scrolled: the canvas takes every wheel for its own pan. Two
+     of its three parts could not be reached.
+     Now it fits the room it is in: the question and one line of explanation at the top, the 29 kinds as small pills
+     under six short headings (the kind's own description shows in one line beneath them as you point at one, rather
+     than printed 29 times), and the offer at the foot. The middle scrolls if the window is short, and scrolling it is
+     scrolling — the panel keeps its wheel and its presses to itself. Pressing a kind still opens the builder with that
+     kind chosen, exactly as the cards did. */
+  function frIsolate(box){
+    box.addEventListener('wheel', function(ev){ ev.stopPropagation(); }, { passive:true });
+    box.addEventListener('pointerdown', function(ev){ ev.stopPropagation(); });
+  }
   function firstRunCards(m, canvas){
-    var box = el('div','bn-seed bn-seed-wide');
-    box.appendChild(el('div','bn-seed-t','What are you mapping?'));
-    box.appendChild(el('div','bn-seed-l','A group is a name and the elements in it \u2014 people, places, objects, concepts, events. You can look at any group through any structure that fits it — a family as a tree, and the same family as a web of who trusts whom.'));
-    var grid = el('div','bn-seed-cards');
-    var seedCard = function(t){
-      var b = el('button','bn-seed-card', t.name); b.type='button';
-      b.appendChild(el('i','bn-seed-card-h', t.hint));
-      b.addEventListener('click', function(){
-        m.ui.kind = (TYPE_LENSES[t.id] || [])[0] || m.ui.kind;
-        makeSet(m, t.id);   // the kind travels as an argument now, not as a filter left behind
-      });
-      return b;
+    var box = el('div','bn-seed bn-fr'); box.id = 'bnFirstRun';
+    var head = el('div','bn-fr-head');
+    head.appendChild(el('div','bn-seed-t','What are you mapping?'));
+    head.appendChild(el('div','bn-seed-l bn-fr-lede','A group is a name and the elements in it. Pick the kind you have in mind \u2014 you can look at any group through any structure that fits it later.'));
+    box.appendChild(head);
+    var body = el('div','bn-fr-body');
+    var hint = el('div','bn-fr-hint');
+    var HINT0 = 'Point at a kind to see what it maps.';
+    hint.textContent = HINT0;
+    var say = function(t, where){
+      hint.textContent = '';
+      hint.appendChild(el('b', null, t.name));
+      hint.appendChild(document.createTextNode(' \u2014 ' + (t.hint || '')));
+      if (where) hint.appendChild(el('span','bn-fr-where', where));
     };
-    /* #52 phase 1, the same eleven under the same buckets as the creation step.
-       A cast WITH bindings spreads them across the columns, so the clustering is read
-       off the layout instead of announced in four more header rows. A cast with one
-       kind gets no header here, because its kind is NAMED after it — a "Places" label
-       over a "Places" card would be the redundancy of the flat list dressed as a fix.
-       Phase 3 gives those three real kinds, and they join the section above. */
-    var bks = bucketedSets();
-    var deep = bks.filter(function(bk){ return bk.bands.length > 1 || !!bk.bands[0].name; });
-    deep.forEach(function(bk){
-      var sec = el('div','bn-seed-bkt');
-      sec.appendChild(el('div','bn-seed-bh', bk.name));
-      var cols = el('div','bn-seed-bands');
+    bucketedSets().forEach(function(bk){
+      var row = el('div','bn-fr-row');
+      row.appendChild(el('div','bn-fr-bh', bk.name || 'Other'));
+      var pills = el('div','bn-fr-pills');
       bk.bands.forEach(function(bd){
-        var col = el('div','bn-seed-band');
-        col.appendChild(el('div','bn-seed-bl', bd.name || ''));
-        bd.items.forEach(function(t){ col.appendChild(seedCard(t)); });
-        cols.appendChild(col);
+        var grp = el('div','bn-fr-band'); if (bd.name) grp.title = bd.name;
+        bd.items.forEach(function(t){
+          var p = el('button','bn-fr-pill', t.name); p.type = 'button'; p.dataset.kind = t.id;
+          p.setAttribute('aria-label', t.name + ' \u2014 ' + (t.hint || ''));
+          var where = (bk.name ? bk.name : '') + (bd.name ? ' \u00b7 ' + bd.name : '');
+          p.addEventListener('mouseenter', function(){ say(t, where); });
+          p.addEventListener('focus', function(){ say(t, where); });
+          p.addEventListener('click', function(ev){
+            ev.stopPropagation();
+            m.ui.kind = (TYPE_LENSES[t.id] || [])[0] || m.ui.kind;
+            makeSet(m, t.id);   // the kind travels as an argument, as it did from the cards
+          });
+          grp.appendChild(p);
+        });
+        pills.appendChild(grp);
       });
-      sec.appendChild(cols); grid.appendChild(sec);
+      pills.addEventListener('mouseleave', function(){ hint.textContent = HINT0; });
+      row.appendChild(pills);
+      body.appendChild(row);
     });
-    var flat = bks.filter(function(bk){ return deep.indexOf(bk) < 0; });
-    if (flat.length){
-      var frow = el('div','bn-seed-flat');
-      flat.forEach(function(bk){ bk.bands.forEach(function(bd){
-        bd.items.forEach(function(t){ frow.appendChild(seedCard(t)); }); }); });
-      grid.appendChild(frow);
-    }
-    box.appendChild(grid);
+    box.appendChild(body);
+    box.appendChild(hint);
+    var foot = el('div','bn-fr-foot');
     var g = null;
     try{ g = BONDS.graph({ kind:'free', scope:{ type:'all' }, loose:false }); }catch(e){}
     if (g && g.nodes.length > 1){
-      /* If the story already holds a shape, offering it in one click is the most
-         useful thing on the page — it belongs beside the question, not demoted to a
-         footnote under it. Still an offer: the group is theirs from the moment it
-         exists. */
-      var seed = el('button','bn-seed-go','Start from the ' + g.nodes.length + ' already connected'); seed.type='button';
-      seed.addEventListener('click', function(){
-        var s = store();
-        var gp = { id:freshGroupId(s), name:'Everyone', type:'social', lens:'social',
+      /* the story already holds a shape — one press makes it a group; still only an offer */
+      var seed = el('button','bn-seed-go','Start from the ' + g.nodes.length + ' already connected'); seed.type = 'button';
+      seed.addEventListener('click', function(ev){
+        ev.stopPropagation();
+        var s2 = store();
+        var gp = { id:freshGroupId(s2), name:'Everyone', type:'social', lens:'social',
                    members:g.nodes.map(function(n){ return n.key; }) };
         saveGroup(gp); m.ui.group = gp.id; m.ui.kind = 'social'; V.render(m);
       });
-      box.appendChild(seed);
+      foot.appendChild(seed);
+      foot.appendChild(el('span','bn-fr-or','or pick a kind above'));
+    } else {
+      foot.appendChild(el('span','bn-fr-or','Or press \u201c+ Group\u201d to build one step by step.'));
     }
+    box.appendChild(foot);
+    frIsolate(box);
     canvas.appendChild(box);
   }
 
@@ -80412,16 +80457,92 @@ body:not(.eink) #libExportMenu button:hover{ background:rgba(255,255,255,.08) !i
     });
     return list;
   }
+  /* v.778 [Jeremy] — "make the Title of the group in the Bonds as large as the one in Scenes/Maps, and … rename it
+     easily from the map without having to double click". One click puts the name into editing, in place and at its
+     own size: Enter or clicking away keeps it, Esc puts it back. */
   function activeTitle(m, host){
     var gp = activeGroup(m); if (!gp || m.mini) return;
     var t = el('div','bn-title');
-    t.appendChild(el('div','bn-title-nm', gp.name || 'Unnamed group'));
+    var nm = el('div','bn-title-nm', gp.name || 'Unnamed group');
+    nm.title = 'Click to rename this group';
+    nm.setAttribute('role', 'textbox'); nm.setAttribute('aria-label', 'Group name');
+    t.appendChild(nm);
     var tn = typeName(typeOf(gp)); var sub = el('div','bn-title-type', (tn || 'Group') + ' \u00b7 ' + membersOf(gp).length);
     t.appendChild(sub);
-    t.title = 'The group you are looking at \u2014 double-click to rename';
-    t.addEventListener('dblclick', function(ev){ ev.preventDefault(); renameSet(gp, m); });
+    var was = null;
+    var finish = function(keep){
+      if (was == null) return;
+      var v = String(nm.textContent || '').replace(/\s+/g, ' ').trim(), old = was; was = null;
+      nm.removeAttribute('contenteditable'); nm.classList.remove('editing');
+      if (!keep || !v || v === old){ nm.textContent = old; return; }
+      renameGroupTo(gp, v, m);
+    };
+    nm.addEventListener('pointerdown', function(ev){ ev.stopPropagation(); });
+    nm.addEventListener('click', function(ev){
+      ev.stopPropagation();
+      if (was != null) return;
+      was = gp.name || '';
+      if (!gp.name) nm.textContent = '';
+      nm.setAttribute('contenteditable', 'true'); nm.classList.add('editing');
+      try{ nm.focus(); var r = document.createRange(); r.selectNodeContents(nm); var sl = window.getSelection(); sl.removeAllRanges(); sl.addRange(r); }catch(e){}
+    });
+    nm.addEventListener('keydown', function(ev){
+      if (was == null) return;
+      ev.stopPropagation();
+      if (ev.key === 'Enter'){ ev.preventDefault(); finish(true); nm.blur(); }
+      else if (ev.key === 'Escape'){ ev.preventDefault(); finish(false); nm.blur(); }
+    });
+    nm.addEventListener('blur', function(){ finish(true); });
     host.appendChild(t);
   }
+  /* A group that IS an element (the builder's groups, and every group made here since v.557) carries one name in two
+     places — the group record Bonds draws and the element the rest of the story reads. A rename goes to both, through
+     the app's own element edit, so the Elements list, the notepad and the Story Legend follow it. */
+  function groupElKey(gp){
+    if (!gp) return null;
+    var k = gp.el || (gp.source && gp.source.kind === 'chart' ? gp.source.key : null);
+    try{ if (k && typeof npFindEl === 'function' && npFindEl(k)) return k; }catch(e){}
+    return null;
+  }
+  function renameGroupTo(gp, name, m){
+    var nm = String(name || '').trim(); if (!nm) return;
+    gp.name = nm; saveGroup(gp);
+    var k = groupElKey(gp), w = null;
+    try{ w = k ? npFindEl(k) : null; }catch(e){}
+    if (w && typeof applyElemEdit === 'function'){
+      try{ applyElemEdit(k, -1, { cat:w.cat || 'org', word:w.word, sub:w.sub || '', name:nm }); }catch(e){}
+    }
+    try{ V.render(m); }catch(e){}
+  }
+  /* the element this group is, made if it has none yet (a group started from "already connected" is only a list) —
+     so its builder and its notes have something to open */
+  function ensureGroupEl(gp){
+    var k = groupElKey(gp); if (k) return k;
+    try{ k = (typeof window.dystEnsureGroupElement === 'function') ? window.dystEnsureGroupElement(gp.name || 'Group') : null; }catch(e){ k = null; }
+    if (k){ gp.el = k; saveGroup(gp); }
+    return k;
+  }
+  /* v.778 [Jeremy] — "have an edit button available in the group list so you can access the builder for that group
+     again easily": the same builder, in its edit mode (name, characteristics, who is in it) */
+  function editGroup(gp, m){
+    var k = ensureGroupEl(gp);
+    if (k && typeof window.dystEditElementInBuilder === 'function'){ window.dystEditElementInBuilder(k); return; }
+    renameSet(gp, m);
+  }
+  /* v.778 [Jeremy] — "a shortcut to the notepad of that group in the pill in the group drawer" */
+  function groupNotes(gp){
+    var k = ensureGroupEl(gp); if (!k) return;
+    try{
+      if (typeof window.openElementNotes === 'function'){ window.openElementNotes(k); }
+      else if (typeof window.npSelect === 'function'){ window.npSelect(k); }
+      document.body.classList.add('np-open');
+      var tb = document.getElementById('npTab'); if (tb){ var l = tb.querySelector('.npt-lbl'); if (l) l.textContent = 'Hide'; }
+      if (typeof window.renderNpCard === 'function') window.renderNpCard();
+    }catch(e){}
+  }
+  V.groupTools = { rename: function(id, nm){ var gp = groupById(id); if (gp) renameGroupTo(gp, nm, MAIN); },
+                   edit: function(id){ var gp = groupById(id); if (gp) editGroup(gp, MAIN); },
+                   notes: function(id){ var gp = groupById(id); if (gp) groupNotes(gp); }, elOf: function(id){ return groupElKey(groupById(id)); } };
   function ensureHeadPill(m){
     var bar = document.getElementById('expMapBar'); if (!bar) return;
     var wrapEl = document.getElementById('bnHeadRight');
@@ -82762,6 +82883,38 @@ body:not(.eink) #libExportMenu button:hover{ background:rgba(255,255,255,.08) !i
       '.bn-mini-t{ font-family:var(--serif); font-size:15px; font-weight:600; color:#2b2419;line-height:1.55}',
       '.bn-mini .bn-node{ font-size:12px; padding:5px 11px; }',
       '.bn-mini .bn-card{ position:absolute; right:10px; bottom:10px; width:250px; }',
+      /* v.778 — the first-run panel: fits the drawing, scrolls in the middle, pills not cards */
+      '#planBonds .bn-seed.bn-fr{ top:50%; width:620px; max-width:calc(100% - 48px); max-height:calc(100% - 40px); display:flex; flex-direction:column; box-sizing:border-box; text-align:left; overflow:hidden; }',
+      '.bn-fr-head{ flex:none; text-align:center; }',
+      '.bn-fr-lede{ max-width:470px; margin-left:auto !important; margin-right:auto !important; }',
+      '.bn-fr-body{ flex:1 1 auto; min-height:0; overflow-y:auto; scrollbar-width:thin; margin-top:16px; padding:2px 2px 4px; display:flex; flex-direction:column; gap:10px; }',
+      '.bn-fr-row{ display:grid; grid-template-columns:62px 1fr; gap:10px; align-items:start; }',
+      '.bn-fr-bh{ font-family:var(--sans); font-size:10px; font-weight:700; letter-spacing:.13em; text-transform:uppercase; color:var(--ink-faint,#8f8368); padding-top:6px; }',
+      '.bn-fr-pills{ display:flex; flex-wrap:wrap; gap:6px 14px; }',
+      '.bn-fr-band{ display:flex; flex-wrap:wrap; gap:6px; }',
+      '.bn-fr-pill{ font-family:var(--sans); font-size:12.5px; line-height:1; color:var(--ink,#2b2419); background:#fffdf8; border:1px solid var(--line,rgba(120,92,40,.22)); border-radius:999px; padding:6px 11px; cursor:pointer; white-space:nowrap; transition:border-color .12s, background .12s, color .12s; }',
+      '.bn-fr-pill:hover, .bn-fr-pill:focus-visible{ border-color:var(--gold,#b9822e); color:var(--ink,#2b2419); background:#fff; outline:none; }',
+      '.bn-fr-hint{ flex:none; margin-top:12px; padding:9px 12px; min-height:18px; border-radius:9px; background:rgba(120,92,40,.07); font-family:var(--serif); font-style:italic; font-size:14px; line-height:1.35; color:var(--ink-soft,#655b48); }',
+      '.bn-fr-hint b{ font-family:var(--sans); font-style:normal; font-size:12.5px; font-weight:700; color:var(--ink,#2b2419); }',
+      '.bn-fr-where{ float:right; font-family:var(--sans); font-style:normal; font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-faint,#8f8368); margin-left:10px; line-height:1.9; }',
+      '.bn-fr-foot{ flex:none; margin-top:14px; display:flex; align-items:center; justify-content:center; gap:12px; flex-wrap:wrap; }',
+      '.bn-fr-foot .bn-seed-go{ margin-top:0; }',
+      '.bn-fr-or{ font-family:var(--serif); font-style:italic; font-size:13.5px; color:var(--ink-soft,#655b48); }',
+      'body.eink .bn-fr-pill{ background:#fff; border-color:#000; color:#000; }',
+      'body.eink .bn-fr-hint{ background:none; border:1px solid #000; color:#000; }',
+      /* v.778 — the group's title at the board title's size (Scenes/Maps: 26px), and a click-to-rename face */
+      '#planBonds .bn-title{ top:8px; max-width:52%; }',
+      '#planBonds .bn-title-nm{ font-size:26px; line-height:1.15; font-weight:500; color:var(--charcoal,#2b2926); padding:0 6px; border-radius:6px; cursor:text; outline:none; }',
+      '#planBonds .bn-title-nm:hover{ background:rgba(196,158,74,.12); }',
+      '#planBonds .bn-title-nm.editing{ background:#fff; box-shadow:0 0 0 1.5px var(--gold,#b9822e); text-overflow:clip; }',
+      '#planBonds .bn-title-type{ font-weight:800; letter-spacing:.16em; color:#7a756a; margin-top:2px; }',
+      'body.eink #planBonds .bn-title-nm{ color:#000; }',
+      /* the drawer row's two small doors: notes and edit — shown on the open group, and on any row under the pointer */
+      '.bn-set-ic{ flex:none; width:0; height:14px; overflow:hidden; opacity:0; cursor:pointer; background-color:currentColor; -webkit-mask:var(--bn-ic) center/13px 13px no-repeat; mask:var(--bn-ic) center/13px 13px no-repeat; transition:opacity .12s; }',
+      '.bn-set:hover .bn-set-ic, .bn-set.on .bn-set-ic, .bn-set:focus-visible .bn-set-ic{ width:16px; opacity:.6; }',
+      '.bn-set .bn-set-ic:hover{ opacity:1; }',
+      '.bn-set-notes{ --bn-ic:url("data:image/svg+xml;utf8,<svg xmlns=\'http://www.w3.org/2000/svg\' viewBox=\'0 0 24 24\' fill=\'none\' stroke=\'white\' stroke-width=\'2\' stroke-linecap=\'round\' stroke-linejoin=\'round\'><rect x=\'5\' y=\'3.5\' width=\'14\' height=\'17\' rx=\'2\'/><path d=\'M8.5 8.5h7M8.5 12h7M8.5 15.5h4\'/></svg>"); }',
+      '.bn-set-edit{ --bn-ic:url("data:image/svg+xml;utf8,<svg xmlns=\'http://www.w3.org/2000/svg\' viewBox=\'0 0 24 24\' fill=\'none\' stroke=\'white\' stroke-width=\'2\' stroke-linecap=\'round\' stroke-linejoin=\'round\'><path d=\'M4 20h4L19 9l-4-4L4 16z\'/><path d=\'M13.5 6.5l4 4\'/></svg>"); }',
       /* v.776 — the drawer's tab column: on the drawer's edge while it is open, on the room's edge while it is not */
       '.bn-dtabs{ position:absolute; left:225px; top:14px; z-index:7; display:flex; flex-direction:column; align-items:flex-start; gap:6px; }',
       '.bn-body.dhid .bn-dtabs{ left:0; }',
