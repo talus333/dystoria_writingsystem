@@ -419,7 +419,7 @@ And the standing exclusions:
 `window.__pov` module, ~~the quiet sub-line tag, the departure pill~~ **the POV pill on the POV · Stakes line (§13.2)**,
 the chooser. The POV row unchanged.
 
-**Phase 2 — the marks.** The viewpoint pills on the POV row, the glyph in the Characters list, the
+**Phase 2 — the marks. ✓ SHIPPED v.768 (§14).** The viewpoint pills on the POV row, the glyph in the Characters list, the
 map icon (flag + repointing). Cheap, visible, and the part most likely to make the feature feel real.
 
 **Phase 3 — the Viewpoint group in the grid filter.** The filter itself is its own feature
@@ -571,3 +571,32 @@ and the grid's eye opens the same chooser without opening the card.
 The grid filter's Viewpoint group (phase 3) can read `window.__pov.resolve(i, col, sid)` per scene and
 `window.__pov.cast()` for its list; a card's viewpoint is the union of its section's and its scenes' — the same
 union rule the filter already applies to linked elements.
+
+### 13.5 · v.767 — the inert eye
+
+[Jeremy] *"When the book has no single pair of eyes, can we keep the eye but just not have it open a chooser. And can
+we have the notes for the card that used to be General be Notes · POV · [eye]."* Every card's notes tab now wears
+the eye. In an omniscient or objective book, and in one with no POV set, it is **inert** — no button role, no hover
+ring, and a click on it is a click on the tab. A book with no POV set reads **Notes · 👁 POV** (it read *Notes ·
+General*). Whether the eye is a door is decided by the book, not built into the tab: give the same story a narrator
+and the same eye opens the chooser (t767 #6).
+
+---
+
+## 14 · What building phase 2 found (v.768)
+
+- **The mark is the eye, not the scroll.** §5 chose the scroll before the plot card had an eye; once the POV pill
+  carried one, a second symbol for the same fact would have been two languages. The Characters list, the POV row and
+  the map all use the card's eye.
+- **One source, memoised:** `__pov.viewpoints()` → `{ key: { name, book, n } }` — the book's named narrator(s), plus
+  everyone a section or any of its scenes resolves to, with how many sections are theirs. The map asks once per pawn
+  per render, so it is held for 300ms and dropped whenever a card's viewpoint is set (which also repaints the rail).
+  `isViewpoint` now reads it. In an omniscient/objective/unset book a card's stored viewpoint is ignored, so it marks
+  nobody but a named narrator.
+- **POV row:** a pill per viewpoint under the composed sentence — the book's narrator first (gold edge), then the
+  others with their section count; a click opens the character's card.
+- **Map:** `addRole(isViewpoint, 'eye', …)` above the head; Main Character and Antagonist stay off. The retired
+  scroll's offset (-18) was set for the taller pawn — on the woodcut figure it floated ~20px clear, so the eye sits
+  at -10. **Still to be looked at on a crowded map** (§5's warning stands).
+- **Test lesson:** `parity` run three-way in parallel gave three different signatures (one a different story
+  entirely); run sequentially it was byte-identical. Run parity one at a time.
