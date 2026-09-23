@@ -1,12 +1,12 @@
 # Dystoria — POV on the plot cards
 
 _Design doc. From Jeremy's brainstorm of 2026-09-22 and his answers to §10 the same day.
-Status: **design only** (not built). Current app version **v.764**, `2026.07.20.687`._
+Status: **phase 1 SHIPPED as v.766** (`2026.07.20.689`, 2026-09-23) — **§13 records how the card surface changed in building and one refinement to §3.2; where §4 and §13 disagree, §13 is what shipped.** Phases 2–5 not started._
 
 > **Revised twice after Jeremy's answers** (2026-09-22, and again the same day on the filter's three
 > remaining questions — §12 is now empty). The card carries **one field** — who the viewpoint is —
 > rather than a four-field delta; weight is deferred; the narrator gets a visible mark in three
-> places; thread cards can each carry their own viewpoint; the Plot grid gains a real multi-select
+> places; ~~thread cards can each carry their own viewpoint~~ **a viewpoint belongs to the section or scene, shared by every column — §13.1**; the Plot grid gains a real multi-select
 > filter; and per-card POV feeds Continuity. Everything cut is listed in §8, not deleted, because
 > "start lean and see if we need more later" is a decision about *sequence*, not about what is wrong.
 
@@ -415,9 +415,9 @@ And the standing exclusions:
 
 ## 9 · Phases
 
-**Phase 1 — the field and the tag.** `pov` on the frame and the scene record, `resolve()`, the
-`window.__pov` module, the quiet sub-line tag, the departure pill, the chooser. The POV row
-unchanged. This is the whole of what was asked for on the cards, and it is testable alone.
+**Phase 1 — the field and the tag. ✓ SHIPPED v.766.** `pov` on the frame and the scene record, `resolve()`, the
+`window.__pov` module, ~~the quiet sub-line tag, the departure pill~~ **the POV pill on the POV · Stakes line (§13.2)**,
+the chooser. The POV row unchanged.
 
 **Phase 2 — the marks.** The viewpoint pills on the POV row, the glyph in the Characters list, the
 map icon (flag + repointing). Cheap, visible, and the part most likely to make the feature feel real.
@@ -509,3 +509,65 @@ belong:
 **the map icon at real element density** and **the deterministic pronoun check's false-positive
 rate** (§10, §11). Neither can be settled by argument, and neither should be built past its first
 phase until it has been looked at.
+
+---
+
+## 13 · What building phase 1 found (v.766)
+
+### 13.1 · A viewpoint belongs to the section or the scene, not the column (refines §3.2)
+
+Every grid card is one section **in one column**, but a section's frame is shared by every column and a scene
+is a mark in the prose, shared too. So the viewpoint is stored on what is shared:
+
+```
+section → state.frames[i].pov = { who }     rides with the frame through insert / move / split / merge
+scene   → data.scenePov[sid]  = { who }     keyed by the scene mark's stable sid
+chain   → book → section → scene
+```
+
+Every column's card for §4 shows §4's viewpoint and can change it — Jeremy's *"having the ability to change the
+POV on the cards is still important"* holds on every card — and two cards for the same chapter can never disagree
+about whose eyes it is in. Per-column storage would have been exactly the `col|i` map the file warns about, with
+seven remap paths to keep true. On the frame it moves for free; merge takes the keeper's, split gives both halves
+the same eyes, the grid's undo covers it, and a rename follows it. **A conceptual thread that needs its own eyes**
+(§10 answer 4) is the case this gives up; it is noted, not built, and the scene-level override covers most of it.
+
+**In a Multiple-POVs book a chosen viewpoint is not a departure** — there is nothing to depart from — so it stays
+plain rather than gold. Forty gold pills would say nothing.
+
+### 13.2 · The card surface, as Jeremy reshaped it from screenshots
+
+Built first as §4 designed it (a quiet tag in the sub line, a gold pill beside Write when it departs), then moved
+five times in the same build:
+
+1. *"put the POV into the linked elements instead of the top bar … the first pill after the general notes with
+   the eye icon. that way you can select the pov CHARACTER to make notes"*
+2. *"or maybe having the Eye icon larger on the card in the top row allows you to change to POV"* — the pill
+   splits by where you click: **name** selects, **eye** opens the chooser.
+3. *"don't make the POV pill full width, make it a normal pill size"*
+4. *"Put POV as a title to the left of Stakes, with the pill and then Stakes."* (and *"make the Stakes pill regular
+   size as well"*)
+5. *"remove the general and have the POV act as the general notes, make it default selected. Then in the line
+   where you add linked elements. Have the title 'In Scene' and change +link element to a simple +add element"*
+
+**What shipped:** `POV [👁 Hansel] · STAKES [⚑ …]` on one line; `IN SCENE [elements…] + add element` below. The POV
+pill **is the card's general-notes tab**, selected on open; the eye opens the chooser. Where the book names no pair
+of eyes the tab keeps its place without an eye — *Omniscient*, *Objective*, or *Notes · General* when no POV is set.
+Step 1's "select the POV character to make notes" went with step 5: a linked viewpoint character keeps her own pill
+under In Scene for notes on her. A departure is gold (`#6b5415`); the grid names viewpoints only once there are two,
+and the grid's eye opens the same chooser without opening the card.
+
+### 13.3 · Finds
+
+- **Renames left every plot card behind** (pre-existing). `plotElems`, `plotThreadElems` and `sceneData[*].els` kept
+  a re-keyed element's old key while its stored label kept the card looking right. `__dystMigrateKey` now follows
+  them, plus `fr.pov`, `scenePov` and the v.765 `plotCardFilter`.
+- **`.pl-povpill` was already the Narrative layers' POV row class** (`flex:1 1 100%`) — the card pill is `.pl-cpov`.
+- **`#sky svg{width:100%;height:100%}`** outranks class rules on any SVG in the plan view.
+- The bar badges' `#8a6d1e` measured 4.2:1 on the pill's own wash; the pill uses `#6b5415`.
+
+### 13.4 · Phase 3 note
+
+The grid filter's Viewpoint group (phase 3) can read `window.__pov.resolve(i, col, sid)` per scene and
+`window.__pov.cast()` for its list; a card's viewpoint is the union of its section's and its scenes' — the same
+union rule the filter already applies to linked elements.
