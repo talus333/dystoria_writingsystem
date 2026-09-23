@@ -20943,6 +20943,29 @@ const PAWN_BODIES = { 'Mermaid': makeMermaidPawn, 'Merfolk': makeMermaidPawn, 'M
 
 const PLAIN_PAWNS = true;   // TEMP: every being renders the plain pawn (no type heads / full-body silhouettes) while the icon design is decided — set false to restore
 const SHOW_ROLE_LABELS = false;   // TEMP: hide the NARRATOR / MAIN CHARACTER / ANTAGONIST tags above pawns — set true to restore
+/* v.773 — sit every viewpoint eye a few units clear of the top of its own figure (see the map's addRole). The map
+   can be drawn while it is HIDDEN (behind the plan or the notepad), when nothing has a size to measure; an eye that
+   could not be fitted yet is retried each second, briefly, and fitted the first time its figure has a size. */
+var _povEyeFitQ = false, _povEyeRetry = 0, _povEyeT = null;
+function _povEyeFit(fromRetry){
+  if (!fromRetry) _povEyeRetry = 0;
+  if (_povEyeFitQ) return; _povEyeFitQ = true;
+  requestAnimationFrame(function(){
+    _povEyeFitQ = false; var pending = 0;
+    try{
+      document.querySelectorAll('#skySvg .role-pov:not([data-fit])').forEach(function(eye){
+        var g = eye.parentNode, fig = g && g.querySelector('[data-povfig]'); if (!fig) return;
+        var fr = fig.getBoundingClientRect(), er = eye.getBoundingClientRect(); if (!fr.height || !er.height){ pending++; return; }
+        var ctm = g.getScreenCTM ? g.getScreenCTM() : null, k = ctm ? Math.abs(ctm.a) : 1; if (!k){ pending++; return; }
+        var dy = ((fr.top - 4 * k) - er.bottom) / k;   /* 4 map units of air between the eye and the head */
+        var tf = eye.getAttribute('transform') || '', mm = /translate\(([-\d.]+),([-\d.]+)\)/.exec(tf); if (!mm) return;
+        if (Math.abs(dy) >= 0.5) eye.setAttribute('transform', tf.replace(mm[0], 'translate(' + mm[1] + ',' + (+mm[2] + dy).toFixed(1) + ')'));
+        eye.setAttribute('data-fit', '1');
+      });
+    }catch(e){}
+    if (pending && _povEyeRetry < 30){ _povEyeRetry++; clearTimeout(_povEyeT); _povEyeT = setTimeout(function(){ _povEyeFit(true); }, 1000); }
+  });
+}
 function makeMeeple(nd){
   const NS = 'http://www.w3.org/2000/svg';
   if (window.CHESS_PIECES && typeof window.makeChessPiece === 'function'){ const cp = window.makeChessPiece(nd); if (cp) return cp; }   // beings render as pieces
@@ -22461,7 +22484,12 @@ function renderConstellation(){
          person. The retired `nd.narrator` boolean is no longer the source: `__pov.viewpoints()` is. */
       if (!LUCIDE.eye) LUCIDE.eye = '<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>';
       let _vp = null; try { _vp = (window.__pov && window.__pov.viewpoints) ? window.__pov.viewpoints()[wordKey(nd)] : null; } catch(e){}
-      addRole(!!_vp, 'eye', _vp ? window.__pov.markTitle(_vp) : '', 0, -10);   // just above the head (the old scroll's -18 was set for the taller pawn; measured on the woodcut figure it floated ~20px clear)
+      addRole(!!_vp, 'eye', _vp ? window.__pov.markTitle(_vp) : '', 0, -10);   // a first guess — see _povEyeFit
+      /* v.773 [Jeremy: "place the POV eye on the map character higher so it is above the head"]. One fixed offset
+         cannot fit every figure: v.768 set -10 for the starter's woodcut figure, and on a taller figure style the
+         eye sat ON the head. So the eye is placed from the FIGURE's own drawn box: after the frame paints, each eye
+         is moved to sit a few units clear of the top of its figure, whatever figure that is. */
+      if (_vp){ try { mp.setAttribute('data-povfig', '1'); } catch(e){} _povEyeFit(); }
       const SHOW_ROLE_ICONS = false;   // roles now live in the notepad (expanded role set) — hide the map icons for now
       if (SHOW_ROLE_ICONS){
         addRole(nd.mainChar,   'star',          'Main Character', -17,  -4);   // to the left (protagonist)
@@ -43031,7 +43059,12 @@ function renderNpElements(){
       if (nm == null){ const l = ch.querySelector('.np-label'); nm = ((l ? l.textContent : ch.textContent) || '').toLowerCase(); ch.setAttribute('data-npname', nm); }
       const matches = !q || nm.indexOf(q) >= 0;
       const keep = matches || ch.classList.contains('on');   // keep the open element visible even if it doesn't match
-      ch.style.display = keep ? '' : 'none';
+      /* v.773 [Jeremy: "the search bar in notepad is not working"] — it had been setting `style.display='none'`,
+         which the pill shelf's own `html body #npElements .np-chip{ display:inline-flex !important }` beats: an
+         !important author rule outranks a plain inline style. The typing reached here and did its work, and the
+         pills never went. A class with a rule of higher specificity cannot be out-ranked that way. */
+      ch.style.display = '';
+      ch.classList.toggle('np-searchhide', !keep);
       if (matches) shown++;
     });
     let nr = host.querySelector('.np-noresult');
@@ -57626,6 +57659,24 @@ body.writing.insession:not(.eink):not(.mobile-min) #writeDock.show > #writeMic.a
   body.writing.insession:not(.eink):not(.mobile-min) #writeDock.show{ right:40px; top:12px; }
 }
 </style>
+<style id="dyst-scntabs-css">
+/* v.773 — a closed card's scenes as tabs beside its title, one scene's notes at a time.
+   [Jeremy] "If the title is too long and would go off the right edge, wrap it, and put the scene tabs to the right
+   of the title on the second line" — so the title and the tab row share ONE LINE OF TEXT FLOW rather than a flex
+   row: the title wraps like any sentence and the tabs follow its last word, as one unbreakable group; when even
+   that last line has no room for them, the group drops beneath the title. Never off the right edge. */
+.pl-pcard-hdr{ display:block; margin-bottom:6px; line-height:1.25; }
+.pl-pcard-hdr .pl-pcard-ttl{ display:inline; margin:0 8px 0 0; }
+.pl-pcard-hdr.notitle{ text-align:right; }
+.pl-scntabs{ display:inline-flex; flex-wrap:nowrap; gap:4px; white-space:nowrap; vertical-align:3px; }
+.pl-scntab{ display:inline-flex; align-items:center; justify-content:center; min-width:20px; height:20px; padding:0 5px; box-sizing:border-box; font-family:var(--sans); font-size:10.5px; font-weight:700; line-height:1; color:var(--gold-deep); background:rgba(196,158,74,.12); border:1px solid transparent; border-radius:999px; cursor:pointer; }
+.pl-scntab:hover{ border-color:rgba(196,158,74,.6); }
+.pl-scntab.on{ color:#fff; background:#8a6d1e; border-color:#8a6d1e; }
+.pl-scntab.empty:not(.on){ color:rgba(140,124,94,.55); background:transparent; border-color:rgba(196,158,74,.35); border-style:dashed; }
+.pl-scenerow.pl-scenerow-tab{ flex:1 1 auto; }
+body.eink .pl-scntab{ color:#000; background:#fff; border-color:#000; }
+body.eink .pl-scntab.on{ color:#fff; background:#000; }
+</style>
 <style id="dyst-plot-sechover-css">
 /* v.766 [Jeremy] "for the hover state of the sections in Plot mode, have the background white and make the gold
    thread line as an outline of the box and hide it in the middle of the box so it looks like the line connects to
@@ -57767,9 +57818,15 @@ body.eink .pl-filterpick .pf-row.on .pf-box{ background:#000; border-color:#000;
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.695';
+  var APP_VERSION = '2026.07.20.696';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.696', date:'September 23, 2026', notes:[
+      '**Bonds: select a pill to link it.** [Jeremy] A pill on the Bonds map no longer grows when you point at it — the growing and shrinking pulled the arrows off their pills. Click a pill to select it, and its link and × appear in a row of circles beneath it, like a selected element’s controls on the Map. Drag from the link to another pill to connect them; click open paper to put the selection down.',
+      '**Fixed: the Notepad’s search now filters the element pills.** [Jeremy] Typing in the Notepad’s search box was being overruled by the pill shelf’s own styling, so nothing ever hid. It now narrows the pills to the names that match, as it always meant to.',
+      '**The POV eye sits above the head on the map.** [Jeremy] It is now placed from each character’s own figure, a little clear of the top of the head, rather than at one fixed height that sat on taller figures.',
+      '**Scenes are tabs on a closed card.** [Jeremy] A Plot card with more than one scene no longer stacks them. Its scene numbers sit in a row to the right of the title as tabs, and the card shows one scene’s notes at a time with the whole card to show them in. Click a number to switch; click the notes to open that scene. A scene with nothing in it yet has a dashed tab. The tab you chose stays chosen while you work, and you can still drag a scene by its number to reorder or move it.',
+    ]},
     { v:'2026.07.20.695', date:'September 23, 2026', notes:[
       '**A Perspective check.** In Refine’s Checks drawer, **Perspective check** reads each section against the point of view the book is set in: first-person narration (“I”, “me”, “my” outside dialogue) in a third-person book, a first-person section that never says “I”, and a first-person narrator reporting someone else’s thoughts from the inside — “she realised”, “he wondered”. Findings are pinned beside the sentence and nothing is changed. It needs no AI, so it is instant and works signed out.',
       '**Continuity notices a viewpoint who isn’t there.** The Continuity pass now flags a section — or a scene — told through someone’s eyes who is not on that section’s map: either the viewpoint is wrong, or they need placing there. This part needs no AI, so it still shows if the AI can’t be reached.',
@@ -65164,6 +65221,8 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     (c.els||[]).forEach(function(el){ var rw=document.createElement('div'); _mkElRow(rw, el, (c.elNotes&&c.elNotes[el.nkey])||''); rows.push(rw.firstChild); });
     return rows;
   }
+  /* v.773 — which scene a closed card is showing: view state, in memory only (see plotCell) */
+  var _plotSceneTab={};
   function plotCell(i, col){
     var a=api();
     var cell=document.createElement('div'); cell.className='pl-pcell';
@@ -65179,7 +65238,24 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
       cell.appendChild(add); wireCardDrop(cell, i, col); return cell;
     }
     var card=document.createElement('div'); card.className='pl-pcard pl-tabcard';
-    if(title){ var ttl=document.createElement('div'); ttl.className='pl-pcard-ttl'; ttl.textContent=title; card.appendChild(ttl); }
+    /* v.773 [Jeremy] "Instead of stacking the scenes, can we have the numbers in a row to the right of the title
+       acting as tabs so you can see more of the notes on a closed card for a scene." A card with more than one scene
+       shows ONE scene's notes at a time, the full height of the card, and its scene numbers sit in a row beside
+       the title as tabs. Which tab is showing is LOOKING, not editing: it is held in memory per card (never in the
+       plan, never an undo step, never saved), survives redraws, and starts on scene 1. A tab can still be dragged,
+       exactly as a stacked scene row could. */
+    var _multi0=scenes.length>1, _tabK=col.id+'|'+i;
+    var _tab=_multi0 ? Math.max(0, Math.min(scenes.length-1, (_plotSceneTab[_tabK]|0))) : 0;
+    var _tabsEl=null;
+    if(_multi0){
+      _tabsEl=document.createElement('div'); _tabsEl.className='pl-scntabs'; _tabsEl.setAttribute('role','tablist');
+    }
+    if(title || _tabsEl){
+      var _hdr=document.createElement('div'); _hdr.className='pl-pcard-hdr'+(title?'':' notitle');
+      if(title){ var ttl=document.createElement('div'); ttl.className='pl-pcard-ttl'; ttl.textContent=title; _hdr.appendChild(ttl); }
+      if(_tabsEl) _hdr.appendChild(_tabsEl);
+      card.appendChild(_hdr);
+    }
     if(goalsHere.length){
       var gstrip=document.createElement('div'); gstrip.className='pl-pcard-goals';
       goalsHere.forEach(function(g){ var t=document.createElement('span'); t.className='pl-goaltag'; t.textContent=g.label||'goalpost'; gstrip.appendChild(t); });
@@ -65193,19 +65269,37 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     }catch(e){} }
     var scroll=document.createElement('div'); scroll.className='pl-tabcard-body';
     var multi=scenes.length>1;
-    scenes.forEach(function(sc, idx){
-      var c=_slotRead({i:i, col:col, sid:sc.sid});
-      var block=document.createElement('div'); block.className='pl-scenerow'+(multi?'':' pl-scenerow-solo');
-      var badge=document.createElement('span'); badge.className='pl-scenerow-n'; badge.textContent=(idx+1);
+    /* every scene is still READ, exactly as the stacked card read them — a render that reads fewer cells leaves a
+       different store behind (v.765's phantom-undo rule) — but only the chosen scene is DRAWN */
+    var _reads=scenes.map(function(sc){ return _slotRead({i:i, col:col, sid:sc.sid}); });
+    var drawScene=function(idx){
+      scroll.innerHTML='';
+      var sc=scenes[idx], c=_reads[idx];
+      var block=document.createElement('div'); block.className='pl-scenerow pl-scenerow-solo'+(multi?' pl-scenerow-tab':'');
       var rows=_slotLeadRows(a, i, col, c);
-      if(rows.length){ rows[0].insertBefore(badge, rows[0].firstChild); rows.forEach(function(r){ block.appendChild(r); }); }
-      else { var em=document.createElement('div'); em.className='pl-scenerow-empty'; em.appendChild(badge); var dash=document.createElement('span'); dash.textContent='—'; em.appendChild(dash); block.appendChild(em); }
-      block.title='Scene '+(idx+1)+' — click to open · drag to reorder / move';
+      if(rows.length){ rows.forEach(function(r){ block.appendChild(r); }); }
+      else { var em=document.createElement('div'); em.className='pl-scenerow-empty'; var dash=document.createElement('span'); dash.textContent=multi?'Nothing in scene '+(idx+1)+' yet':'\u2014'; em.appendChild(dash); block.appendChild(em); }
+      block.title=(multi?('Scene '+(idx+1)+' \u2014 '):'')+'click to open'+(multi?'':' \u00b7 drag to reorder / move');
       block.addEventListener('click', function(e){ e.stopPropagation(); openCardPopup(i, col, sc.sid, sc.sid?('Scene '+(idx+1)):null); });
       _wireSlotDrag(block, i, col, sc.sid);
       _wireSlotDrop(block, i, col, sc.sid);
       scroll.appendChild(block);
-    });
+    };
+    if(_tabsEl){
+      scenes.forEach(function(sc, idx){
+        var t=document.createElement('button'); t.type='button'; t.className='pl-scntab'+(idx===_tab?' on':'')+(_slotEmpty(_reads[idx])?' empty':'');
+        t.textContent=String(idx+1); t.setAttribute('role','tab'); t.setAttribute('aria-selected', idx===_tab?'true':'false');
+        t.title='Scene '+(idx+1)+(_slotEmpty(_reads[idx])?' \u2014 nothing written yet':'')+' \u2014 click to show it here \u00b7 drag to reorder / move';
+        t.addEventListener('click', function(e){ e.stopPropagation(); e.preventDefault();
+          _plotSceneTab[_tabK]=idx;
+          Array.prototype.forEach.call(_tabsEl.children, function(x, j){ x.classList.toggle('on', j===idx); x.setAttribute('aria-selected', j===idx?'true':'false'); });
+          drawScene(idx); });
+        _wireSlotDrag(t, i, col, sc.sid);
+        _wireSlotDrop(t, i, col, sc.sid);
+        _tabsEl.appendChild(t);
+      });
+    }
+    drawScene(_tab);
     card.appendChild(scroll);
     void pcardIconRail;
     wireCardDrop(cell, i, col);
@@ -78317,37 +78411,62 @@ body:not(.eink) #libExportMenu button:hover{ background:rgba(255,255,255,.08) !i
       d.dataset.cat = n.cat || 'word';   /* the geometry reads the CAT, not the class list */
       d.style.left = pos[n.key].x + 'px'; d.style.top = pos[n.key].y + 'px';
       d.dataset.key = n.key;
-      /* the Map's own link glyph, and only while the pointer is over the pill —
-         a permanent dot on every element is decoration; a mark that appears when
-         you reach for it is an instruction */
-      var handle = el('i','bn-link');
-      handle.innerHTML = LINK_SVG;
-      handle.title = 'Drag from here onto another element to connect them';
-      handle.addEventListener('pointerdown', function(ev){
-        ev.stopPropagation(); ev.preventDefault();
-        linkFrom(n, d, ev, cam, canvas, svg, world, pos, nodeEls, m, function(){ paint(); });
-      });
-      d.appendChild(handle);
+      /* v.773 [Jeremy] "Instead of growing the pill to show the link icon, can we select the pill and show the link
+         below like we do with elements in the map. The growing of the icon and shrinking messes up the position of
+         the arrow lines coming in and out." The pill is now ALWAYS its own size: the name and nothing else. Every
+         arrow is anchored to its measured width (`centre`, `anchorOn`), and the hover-grown link and × made that
+         width change under the pointer — by ~36px, all of it to the right — so arrows drawn at one width landed on
+         the other. A tap (press and release without moving) SELECTS the pill; its link and × then sit in a row of
+         circles BELOW it, outside the pill, like a selected element's controls on the Map. */
       d.appendChild(el('span','bn-name', n.label));
       /* the name and nothing else — a role printed on every pill is a second
          label competing with the one you are reading [Jeremy, 2026-08-09] */
-      var x = el('span','bn-unpin','×');
-      x.title = activeGroup(m) ? 'Take this out of the group. The element and its connections are untouched.'
-                               : 'Take this off the map. The element and its connections are untouched.';
-      x.addEventListener('pointerdown', function(ev){ ev.stopPropagation(); });
-      /* the same gesture, the honest meaning in each case: on a set it is
-         membership, on a derived map it is a refusal the reader honours */
-      x.addEventListener('click', function(ev){ ev.stopPropagation();
-        if (!removeFromSet(n.key, m)) hide(n.key, m);
-        V.render(m); });
-      d.appendChild(x);
+      if (m.ui && m.ui.selNode === n.key) d.classList.add('bn-selnode');
+      d._bnTap = function(){ if (!m.ui) return; m.ui.selNode = (m.ui.selNode === n.key) ? null : n.key; showSelRow(); };
       world.appendChild(d);
       nodeEls[n.key] = d;
       dragNode(d, n, pos, function(){ paint(); }, m, cam, canvas, svg, world, nodeEls, g);
     });
 
-    function paint(){ drawEdges(svg, world, g, pos, nodeEls, m); }
+    /* v.773 — the selected pill's controls: a row of circles under it, in the world (so it pans and zooms with the
+       pill), placed from the pill's own measured box and re-placed whenever the pill moves */
+    var selRow = null;
+    function placeSelRow(){
+      if (!selRow) return; var k = selRow._key, d0 = nodeEls[k], p0 = pos[k];
+      if (!d0 || !p0){ selRow.remove(); selRow = null; return; }
+      selRow.style.left = (p0.x + d0.offsetWidth / 2) + 'px'; selRow.style.top = (p0.y + d0.offsetHeight + 7) + 'px';
+    }
+    function showSelRow(){
+      Object.keys(nodeEls).forEach(function(k){ nodeEls[k].classList.toggle('bn-selnode', !!(m.ui && m.ui.selNode === k)); });
+      if (selRow){ selRow.remove(); selRow = null; }
+      var k = m.ui && m.ui.selNode, d0 = k && nodeEls[k]; if (!d0) return;
+      var n0 = null; g.nodes.forEach(function(q){ if (q.key === k) n0 = q; }); if (!n0) return;
+      selRow = el('div', 'bn-selrow'); selRow._key = k;
+      var lk = el('button', 'bn-selbtn bn-sellink'); lk.type = 'button'; lk.innerHTML = LINK_SVG;
+      lk.title = 'Drag from here onto another element to connect them';
+      lk.addEventListener('pointerdown', function(ev){ ev.stopPropagation(); ev.preventDefault();
+        linkFrom(n0, d0, ev, cam, canvas, svg, world, pos, nodeEls, m, function(){ paint(); }); });
+      var xb = el('button', 'bn-selbtn bn-selx', '×'); xb.type = 'button';
+      xb.title = activeGroup(m) ? 'Take this out of the group. The element and its connections are untouched.'
+                                : 'Take this off the map. The element and its connections are untouched.';
+      xb.addEventListener('pointerdown', function(ev){ ev.stopPropagation(); });
+      /* the same gesture, the honest meaning in each case: on a set it is
+         membership, on a derived map it is a refusal the reader honours */
+      xb.addEventListener('click', function(ev){ ev.stopPropagation(); m.ui.selNode = null;
+        if (!removeFromSet(k, m)) hide(k, m);
+        V.render(m); });
+      selRow.appendChild(lk); selRow.appendChild(xb);
+      selRow.addEventListener('pointerdown', function(ev){ ev.stopPropagation(); });
+      world.appendChild(selRow); placeSelRow();
+    }
+    /* a tap on open paper puts the selection down */
+    if (!canvas._bnSelOff){ canvas._bnSelOff = 1;
+      canvas.addEventListener('click', function(ev){ var t = ev.target; if (t.closest && t.closest('.bn-node, .bn-selrow, .bn-lab, .bn-card')) return;
+        var mm = canvas._bnModel; if (mm && mm.ui && mm.ui.selNode){ mm.ui.selNode = null; if (mm._showSel) mm._showSel(); } }); }
+    canvas._bnModel = m; m._showSel = showSelRow;
+    function paint(){ drawEdges(svg, world, g, pos, nodeEls, m); placeSelRow(); }
     paint();
+    showSelRow();
     /* the nodes are measured after they are in the DOM, so the first paint of a
        fresh layout is one frame late rather than wrong — and a mount can be
        rendered into a box that has no width yet (the dossier assembles its card
@@ -81780,7 +81899,7 @@ body:not(.eink) #libExportMenu button:hover{ background:rgba(255,255,255,.08) !i
      the commonest thing you want to do should be the easiest thing to do. */
   function dragNode(d, n, pos, after, m, cam, canvas, svg, world, nodeEls, g){
     d.addEventListener('pointerdown', function(ev){
-      if (ev.target.closest && ev.target.closest('.bn-unpin, .bn-link')) return;
+      if (ev.target.closest && ev.target.closest('.bn-unpin, .bn-link, .bn-selrow')) return;
       ev.preventDefault(); ev.stopPropagation();
       var sx = ev.clientX, sy = ev.clientY, ox = pos[n.key].x, oy = pos[n.key].y, moved = false;
       var move = function(e2){
@@ -81802,6 +81921,7 @@ body:not(.eink) #libExportMenu button:hover{ background:rgba(255,255,255,.08) !i
         document.removeEventListener('pointermove', move, true);
         document.removeEventListener('pointerup', up, true);
         if (moved) savePos(n.key, pos[n.key].x, pos[n.key].y, m);
+        else if (d._bnTap) d._bnTap();   /* v.773 — a press that did not move is a tap: select */
       };
       document.addEventListener('pointermove', move, true);
       document.addEventListener('pointerup', up, true);
@@ -82041,8 +82161,16 @@ body:not(.eink) #libExportMenu button:hover{ background:rgba(255,255,255,.08) !i
       '  align-items:center; justify-content:center; margin-left:-4px; border-radius:6px;',
       '  color:#e8b06a; cursor:crosshair; transition:width .12s ease, opacity .12s ease; }',
       '.bn-link svg{ width:11px; height:11px; display:block; pointer-events:none; }',
-      '.bn-node:hover .bn-link{ width:22px; opacity:.95; }',
-      '.bn-node:hover .bn-link:hover{ color:#f5c98a; background:rgba(200,150,60,.22); }',
+      /* v.773 — the pill no longer grows on hover (it held arrows to a width that changed under the pointer);
+         the link and × live in .bn-selrow under a SELECTED pill instead */
+      '.bn-selrow{ position:absolute; z-index:6; display:flex; gap:6px; transform:translateX(-50%); pointer-events:auto; }',
+      '.bn-selbtn{ width:24px; height:24px; box-sizing:border-box; padding:0; border-radius:50%; display:flex; align-items:center; justify-content:center;',
+      '  background:#fbf8f0; border:1px solid rgba(90,80,60,.28); color:#8a6d1e; font:15px/1 sans-serif; cursor:pointer; box-shadow:0 1px 3px rgba(0,0,0,.12); }',
+      '.bn-selbtn svg{ width:12px; height:12px; display:block; pointer-events:none; }',
+      '.bn-selbtn:hover{ border-color:#c49e4a; }',
+      '.bn-sellink{ cursor:crosshair; }',
+      '.bn-selx:hover{ color:#b0402f; border-color:#b0402f; }',
+      '.bn-node.bn-selnode{ filter:brightness(1.18) saturate(1.1); }',
       '.bn-node.bn-drop{ box-shadow:0 0 0 3px rgba(200,150,60,.75); }',
       '.bn-node.bn-linking{ opacity:.55; }',
       '.bn-role{ font-size:11px; letter-spacing:.06em; text-transform:uppercase; opacity:.6; }',
@@ -84238,6 +84366,9 @@ html body #npElements .np-chip .np-label{ font-size:13px !important; line-height
 /* v.519 — the pill shelf starts 8px under the filter row, like the row's own padding (the chips are inline, and their line box adds ~6px of its own) */
 html body:not(.eink) #npElements .np-filters, html body.ember:not(.eink) #npElements .np-filters, html body:not(.ember):not(.eink) #npElements .np-filters{ margin-bottom:2px !important; }
 html body #npElements .np-chip{ vertical-align:top !important; margin-top:0 !important; }
+/* v.773 — the search's hide, and research mode's (which hides the pill rows with an inline display:none that the
+   rule above had been beating too) */
+html body #npElements .np-chip.np-searchhide, html body #npElements .np-chip[style*="display: none"], html body #npElements .np-chip[style*="display:none"]{ display:none !important; }
 
 /* ---------------------------------------------------------------------------
    v.520 — the Notepad's element card: no portrait (the element card has it), an "Open card" button in the title
