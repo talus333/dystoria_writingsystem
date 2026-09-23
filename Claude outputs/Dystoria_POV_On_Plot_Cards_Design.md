@@ -425,7 +425,7 @@ map icon (flag + repointing). Cheap, visible, and the part most likely to make t
 **Phase 3 — the Viewpoint group in the grid filter. ✓ SHIPPED v.769 (§15).** The filter itself is its own feature
 (`Dystoria_Plot_Grid_Filter_Design.md`, v.765). This phase only adds the Viewpoint group to its list.
 
-**Phase 4 — the planner, Explore, and the Craft review fix.** The `pre` line and the limited-scope
+**Phase 4 — the planner, Explore, and the Craft review fix. ✓ SHIPPED v.770 (§16).** The `pre` line and the limited-scope
 constraint; the viewpoint in Explore's focus line; `data.pov` finally reaching the craft metrics.
 
 **Phase 5 — the checks.** The deterministic perspective pass and the deterministic Continuity pass
@@ -615,3 +615,22 @@ and the same eye opens the chooser (t767 #6).
   any other key; a rename follows `pov:` entries in `plotCardFilter`; setting a viewpoint repaints the badge.
 - Same build, [Jeremy]: **✦ Summarize moved from the card header to the bottom-right of the note**, in the element
   card's ✦ Enrich dress, shown only while the POV (general-notes) tab is selected — the note it writes into.
+
+---
+
+## 16 · What building phase 4 found (v.770)
+
+- **One brief, three readers.** `__pov.brief(i, col, sid)` / `briefText` — *HOW THIS BOOK IS TOLD* (the author's own
+  composed sentence), *THIS SECTION'S / SCENE'S VIEWPOINT* (with "the book is X's; this section departs from it" or
+  "one of the book's viewpoints"), and the bound. The planner, Explore and anything later say it the same way.
+- **The bound is emitted only where it is true** — a limited, close, first-person or multiple-viewpoint telling with a
+  known viewpoint, or a departure. An omniscient book is told the telling *may enter any character's mind*; an
+  objective one, *a camera, never inside anyone's head*. A model obeys a false instruction faithfully.
+- **Planner (§7.1):** the brief sits with the book's standing instruction at the head of the prompt, before the story
+  material and the path. No POV lens.
+- **Explore (§7.2):** the card passes its brief through `window.__qaEntryPov`; `openExplore` takes it once and clears
+  it, so Explore opened from anywhere else never inherits a card's eyes. Both the set and single-element prompts carry
+  it as *POINT OF VIEW OF THIS CARD*.
+- **Craft review (§7.5):** `structuralMetrics` adds *Point of view (the author's own)* and either *Viewpoint by
+  section* (Multiple POVs) or *Sections told through other eyes than the book's* (with scene departures); the system
+  prompt measures "consistency of the narrating voice" against them.
