@@ -7062,7 +7062,7 @@ window.openAccount = openAccount;
 CATS.forEach(c => { state.counts[c.id] = 1; enableCat(c.id); });
 state.selection.being = new Set(['Archetype']);
 
-function getCat(id){ return CATS.find(c => c.id === id); }
+function getCat(id){ const c = CATS.find(c => c.id === id); if (id === 'org' && c){ try{ dystSyncCustomGroupKinds(c); }catch(e){} } return c; }   /* v.780 — the story's own kinds of group ride on the pool */
 /* ---- #52 · the group taxonomy, read off the pool itself -----------------------------------
    [Jeremy, 2026-09-03] "remember element groups and bonds are supposed to be in sync."
    They are the same vocabulary seen from two rooms: the `org` pool's subcategories are what the
@@ -7093,6 +7093,71 @@ function dystGroupTaxonomy(cats){
   return out;
 }
 try { window.dystGroupTaxonomy = dystGroupTaxonomy; }catch(e){}
+/* ---- v.780 [Jeremy] — "the ability to create a category under the Kinds of Groups in case an author wants to create a
+   new category of groups". A story's own kinds live on the SESSION (`state.session.customGroupKinds` =
+   [{ name, cast, hint, words[] }]) — per story, like the custom subcategories every other element already has — and are
+   laid onto the org pool as ordinary subcategories marked `customKind`, so everything that reads the pool (the builder's
+   Kind picker, its roll, the taxonomy, Bonds through it) sees them without learning a second list. They are re-laid
+   whenever the story or its list changes (`__ckTag`), so one story's kinds never show in another. A kind in one of the
+   six families sits on a band of its own, "Your own"; a kind in a family the writer named is that family's only band. */
+function dystCustomGroupKinds(){ try{ var s = (typeof state !== 'undefined' && state) ? state.session : null; return (s && Array.isArray(s.customGroupKinds)) ? s.customGroupKinds : []; }catch(e){ return []; } }
+function dystSyncCustomGroupKinds(c){
+  c = c || CATS.find(function(x){ return x.id === 'org'; });
+  if (!c || !Array.isArray(c.subcategories)) return;
+  var ks = dystCustomGroupKinds(), sid = '';
+  try{ sid = (state.session && state.session.id) || ''; }catch(e){}
+  var tag = sid + '|' + ks.map(function(k){ return k ? [k.name, k.cast, k.hint || '', (k.words || []).join(',')].join('/') : ''; }).join(';');
+  if (tag === c.__ckTag) return;
+  for (var i = c.subcategories.length - 1; i >= 0; i--) if (c.subcategories[i] && c.subcategories[i].customKind) c.subcategories.splice(i, 1);
+  var have = {}, casts = {};
+  c.subcategories.forEach(function(sb){ if (sb && sb.name){ have[String(sb.name).toLowerCase()] = 1; if (sb.cast) casts[sb.cast] = 1; } });
+  ks.forEach(function(k){
+    if (!k || !k.name) return; var lk = String(k.name).toLowerCase(); if (have[lk]) return; have[lk] = 1;
+    var ws = (Array.isArray(k.words) && k.words.length) ? k.words.slice() : [k.name];
+    var cast = k.cast || 'Your own';
+    c.subcategories.push({ name:k.name, cast:cast, band:(casts[cast] ? 'Your own' : null), guideline:k.hint || '', words:ws, customKind:true });
+  });
+  c.__ckTag = tag; c.__ckRev = (c.__ckRev || 0) + 1;
+}
+function dystAddCustomGroupKind(k){
+  if (!k || !String(k.name || '').trim()) return { error:'Give the kind a name.' };
+  var name = String(k.name).replace(/\s+/g, ' ').trim(), cast = String(k.cast || '').replace(/\s+/g, ' ').trim();
+  if (!cast) return { error:'Choose a family for it, or name a new one.' };
+  var c = getCat('org'), clash = ((c && c.subcategories) || []).some(function(sb){ return sb && String(sb.name).toLowerCase() === name.toLowerCase(); });
+  if (clash) return { error:'There is already a kind of group called \u201c' + name + '\u201d.' };
+  try{ if (typeof ensureSession === 'function') ensureSession(); }catch(e){}
+  if (!state.session) return { error:'Open a story first.' };
+  var words = String(k.words || '').split(/[,\n]/).map(function(w){ return w.replace(/\s+/g, ' ').trim(); }).filter(Boolean);
+  var seen = {}; words = words.filter(function(w){ var l = w.toLowerCase(); if (seen[l]) return false; seen[l] = 1; return true; });
+  if (!Array.isArray(state.session.customGroupKinds)) state.session.customGroupKinds = [];
+  var rec = { name:name, cast:cast, hint:String(k.hint || '').trim(), words:words.length ? words : [name] };
+  state.session.customGroupKinds.push(rec);
+  try{ if (typeof scheduleAutosave === 'function') scheduleAutosave(); }catch(e){}
+  getCat('org');   /* lay it on the pool now */
+  return { ok:true, kind:rec };
+}
+/* a FAMILY of the writer's own — the level of Beings, Places, Things — with the kinds in it (or itself as its one kind) */
+function dystAddCustomGroupFamily(o){
+  o = o || {};
+  var fam = String(o.name || '').replace(/\s+/g, ' ').trim();
+  if (!fam) return { error:'Give the family a name.' };
+  var c = getCat('org'), subs = (c && c.subcategories) || [];
+  var lc = function(x){ return String(x || '').toLowerCase(); };
+  if (subs.some(function(sb){ return sb && lc(sb.cast) === lc(fam); })) return { error:'There is already a family called \u201c' + fam + '\u201d.' };
+  var kinds = String(o.kinds || '').split(/[,\n]/).map(function(w){ return w.replace(/\s+/g, ' ').trim(); }).filter(Boolean);
+  var seen = {}; kinds = kinds.filter(function(w){ var l = lc(w); if (seen[l]) return false; seen[l] = 1; return true; });
+  if (!kinds.length) kinds = [fam];
+  var clash = kinds.filter(function(k){ return subs.some(function(sb){ return sb && lc(sb.name) === lc(k); }); });
+  if (clash.length) return { error:'There is already a kind of group called \u201c' + clash[0] + '\u201d.' };
+  var made = [];
+  for (var i = 0; i < kinds.length; i++){
+    var r = dystAddCustomGroupKind({ name:kinds[i], cast:fam, hint:o.hint || '', words:kinds[i] });
+    if (!r || !r.ok) return made.length ? { ok:true, family:fam, kinds:made } : r;
+    made.push(r.kind);
+  }
+  return { ok:true, family:fam, kinds:made };
+}
+try { window.dystAddCustomGroupFamily = dystAddCustomGroupFamily; window.dystCustomGroupKinds = dystCustomGroupKinds; window.dystAddCustomGroupKind = dystAddCustomGroupKind; window.dystSyncCustomGroupKinds = dystSyncCustomGroupKinds; }catch(e){}
 /* ===== Custom subcategories — a per-story store so a writer can add their own subcategory (e.g. Object → “Magical Item”)
    and have it appear everywhere subcategories are chosen (add-element window, edit-pencil, and the name popup). ===== */
 function _elnpEsc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
@@ -45844,6 +45909,22 @@ document.addEventListener('DOMContentLoaded', init);
   #traitPicker .tp-pill.on{background:var(--ink); color:var(--paper); border-color:var(--ink)}
   body.eink #traitPicker .tp-pill.on{background:#000; color:#fff}
   #traitPicker .tp-fams{display:none; flex-wrap:wrap; gap:5px; margin:0 0 9px; padding-top:8px; border-top:1px dashed var(--line)}   /* family filter row for Type */
+  /* v.780 — "+ New kind", and the form it opens in the list's place */
+  #traitPicker .tp-newkind{border-style:dashed}
+  #traitPicker .tp-nk{display:flex; flex-direction:column; gap:7px; padding:2px 2px 6px}
+  #traitPicker .tp-nk-h{font-family:var(--sans); font-size:10.5px; font-weight:700; letter-spacing:.14em; text-transform:uppercase; color:var(--ink-faint)}
+  #traitPicker .tp-nk-l{font-family:var(--sans); font-size:10px; font-weight:700; letter-spacing:.12em; text-transform:uppercase; color:var(--ink-faint); margin-top:2px}
+  #traitPicker .tp-nk-in{width:100%; box-sizing:border-box; font-family:var(--serif); font-size:14.5px; padding:6px 10px; border:1px solid var(--line); border-radius:8px; background:#fff; color:var(--ink); outline:none}
+  #traitPicker .tp-nk-in:focus{border-color:var(--gold)}
+  #traitPicker .tp-nk-name{font-size:16px}
+  #traitPicker .tp-nk-fams{display:flex; flex-wrap:wrap; gap:5px}
+  #traitPicker .tp-nk-famnew{border-style:dashed}
+  #traitPicker .tp-nk-note{font-family:var(--serif); font-style:italic; font-size:12.5px; color:var(--ink-faint); margin-top:-3px}
+  #traitPicker .tp-nk-err{font-family:var(--serif); font-style:italic; font-size:13px; color:#a8462f}
+  #traitPicker .tp-nk-acts{display:flex; justify-content:flex-end; gap:8px; margin-top:2px}
+  #traitPicker .tp-nk-acts button{font-family:var(--sans); font-size:11px; font-weight:700; letter-spacing:.1em; text-transform:uppercase; border-radius:999px; padding:7px 14px; cursor:pointer; border:1px solid var(--line); background:transparent; color:var(--ink-soft)}
+  #traitPicker .tp-nk-acts .tp-nk-go{background:var(--charcoal,#2b2926); border-color:var(--charcoal,#2b2926); color:#e6b45c}
+  body.eink #traitPicker .tp-nk-in, body.eink #traitPicker .tp-nk-acts button{background:#fff; color:#000; border-color:#000}
   #traitPicker .tp-pill.tp-fam{font-size:11px; letter-spacing:.04em; color:var(--ink-faint)}
   #traitPicker .tp-pill.tp-fam:hover{color:var(--ink)}
   #traitPicker .tp-pill.tp-fam.on{background:var(--gold); color:#fff; border-color:var(--gold)}
@@ -46380,12 +46461,12 @@ document.addEventListener('DOMContentLoaded', init);
              the same maker with an empty name, and it is the only one that also drops the cast: a
              kind pill has to leave `TP.cast` alone, or choosing Kinship would close the People row
              the writer just opened. */
-          const mk=(name,label,host)=>{ const on = name ? ((TP.fam||'')===name) : (!TP.fam && !TP.cast);
+          const mk=(name,label,host)=>{ const on = name ? ((TP.fam||'')===name) : (!TP.fam && !TP.cast && !TP.newKind);
             const b=document.createElement('span'); b.className='tp-pill tp-fam'+(on?' on':''); b.textContent=label;
-            b.addEventListener('click', ()=>{ TP.fam=name; if(!name) TP.cast=''; tpRenderPills(); tpRender(); }); (host||fams).appendChild(b); return b; };
+            b.addEventListener('click', ()=>{ TP.fam=name; TP.newKind=false; if(!name) TP.cast=''; tpRenderPills(); tpRender(); }); (host||fams).appendChild(b); return b; };
           /* a CAST pill filters the list without naming a single kind — the six words Jeremy named */
-          const mkCast=(name)=>{ const b=document.createElement('span'); b.className='tp-pill tp-fam tp-castp'+(((TP.cast||'')===name)?' on':''); b.textContent=name;
-            b.addEventListener('click', ()=>{ const off=(TP.cast===name); TP.cast=off?'':name; TP.fam=''; tpRenderPills(); tpRender(); }); fams.appendChild(b); return b; };
+          const mkCast=(name)=>{ const b=document.createElement('span'); b.className='tp-pill tp-fam tp-castp'+(((TP.cast||'')===name && !TP.newKind)?' on':''); b.textContent=name;
+            b.addEventListener('click', ()=>{ const off=(TP.cast===name && !TP.newKind); TP.cast=off?'':name; TP.fam=''; TP.newKind=false; tpRenderPills(); tpRender(); }); fams.appendChild(b); return b; };
           const mkFamHd=(label,host)=>{ const h=document.createElement('span'); h.className='tp-famhd'; h.textContent=label; (host||fams).appendChild(h); return h; };
           mk('',allLabel);
           /* v.603 [Jeremy] — "the categories (people, place, things, mixed, etc) are pills that filter
@@ -46406,6 +46487,11 @@ document.addEventListener('DOMContentLoaded', init);
           if(_tax && _tax.length){
             const done=new Set();
             _tax.forEach(ck=>{ mkCast(ck.cast); ck.bands.forEach(bd=> bd.subs.forEach(n=> done.add(n))); });
+            /* v.780 [Jeremy] — "not a category of Kinds, but another kind like Beings, Places, etc": a FAMILY of the
+               writer's own, from the same row that lists the families */
+            if(TP.cat==='org' && TP.sub==='Kind'){ const nb=document.createElement('span'); nb.className='tp-pill tp-fam tp-newkind'+(TP.newKind?' on':''); nb.textContent='\uff0b New family';
+              nb.title='Make a family of groups of your own, beside Beings, Places, Things\u2026 \u2014 it is kept with this story';
+              nb.addEventListener('click', ()=>{ try{ if(typeof hideTip==='function') hideTip(); }catch(e){} TP.newKind=!TP.newKind; tpRenderPills(); tpRender(); }); fams.appendChild(nb); }
             const rest=famGroups.filter(g=>!done.has(g.name));
             if(rest.length) rest.forEach(g=> mk(g.name, g.name));
             /* the chosen cast's own kinds, on their band rows — the second tier, drawn only when a
@@ -46481,6 +46567,7 @@ document.addEventListener('DOMContentLoaded', init);
       return here.length + away.length;
     }
     function tpRender(){
+      if(TP.newKind && TP.cat==='org'){ const p0=tpEl(), r0=p0.querySelector('.tp-results'); if(!r0.querySelector('.tp-nk')){ r0.innerHTML=''; tpNewKindForm(r0, p0.querySelector('.tp-search').value.trim()); } return; }   /* v.780 — the form holds the list's place until it is used or left */
       const p=tpEl(), res=p.querySelector('.tp-results'); res.innerHTML='';
       const raw=p.querySelector('.tp-search').value.trim(), q=raw.toLowerCase();
       if(TP.mode==='obstacle'){
@@ -46591,7 +46678,9 @@ document.addEventListener('DOMContentLoaded', init);
          comes back. **The writer clicked a specific line; that line knows what it is.** */
       const mkOpt=(word, subName)=>{ const b=document.createElement('button'); b.className='ec-opt';
         const sn=subName||sub;
-        const d=(typeof descFor==='function')?descFor({word, cat, sub}):'';
+        let d=(typeof descFor==='function')?descFor({word, cat, sub}):'';
+        if(subName && TP.cat==='org'){ try{ const _sb=((getCat('org')||{}).subcategories||[]).find(x=>x&&x.customKind&&x.name===subName);
+          if(_sb&&_sb.guideline){ const _gen=(typeof descFor==='function')?descFor({word:'\u2063', cat, sub}):''; if(!d || d===_gen) d=_sb.guideline; } }catch(e){} }   /* v.780 — a kind of the writer's own: its family's line, where the app has none of its own for the word */
         b.innerHTML='<span class="ec-w">'+word.replace(/</g,'&lt;')+'</span><span class="ec-sub">'+sub+'</span>'+(d?'<span class="ec-d">'+d.replace(/</g,'&lt;')+'</span>':'');
         b.addEventListener('click', ()=>tpPick(word, false, sn)); return b; };
       // Builder single-pick with an explicit pool override (e.g. Sex / Age) — flat list + search + create-your-own
@@ -46655,6 +46744,35 @@ document.addEventListener('DOMContentLoaded', init);
         b.innerHTML='<span class="ec-w">+ Create “'+raw.replace(/</g,'&lt;')+'”</span><span class="ec-sub">'+sub+'</span>';
         b.addEventListener('click', ()=>tpPick(raw, true)); res.appendChild(b); }
       else if(!matches.length){ const e=document.createElement('div'); e.className='tp-empty'; e.textContent='Nothing here yet — type a name to create one.'; res.appendChild(e); }
+    }
+    /* v.780 [Jeremy] — the new-family form: its name, a line on what it gathers, and the kinds in it. With no kinds
+       named, the family is its own one kind — which is how Places, Ideas and Events began. Creating it picks its first
+       kind: the writer made it in order to use it. */
+    function tpNewKindForm(res, raw){
+      const f=document.createElement('div'); f.className='tp-nk';
+      const esc=x=>String(x||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+      f.innerHTML='<div class="tp-nk-h">A new family of groups</div>'
+        +'<input class="tp-nk-in tp-nk-name" type="text" placeholder="Its name \u2014 Crews, Vessels, Houses of the Dead\u2026" value="'+esc(raw)+'">'
+        +'<input class="tp-nk-in tp-nk-hint" type="text" placeholder="What it gathers, in a line (optional)">'
+        +'<div class="tp-nk-l">Kinds in it</div>'
+        +'<input class="tp-nk-in tp-nk-kinds" type="text" placeholder="With commas \u2014 Gang, Heist Crew, Pirate Crew">'
+        +'<div class="tp-nk-note">Leave it empty and the family is its own one kind.</div>'
+        +'<div class="tp-nk-err" hidden></div>'
+        +'<div class="tp-nk-acts"><button type="button" class="tp-nk-cancel">Cancel</button><button type="button" class="tp-nk-go">Create family</button></div>';
+      res.appendChild(f);
+      const err=f.querySelector('.tp-nk-err');
+      const go=()=>{
+        const r=dystAddCustomGroupFamily({ name:f.querySelector('.tp-nk-name').value, hint:f.querySelector('.tp-nk-hint').value, kinds:f.querySelector('.tp-nk-kinds').value });
+        if(!r || !r.ok){ err.textContent=(r&&r.error)||'That did not work.'; err.hidden=false; return; }
+        if(typeof flashStatus==='function') flashStatus('\u201c'+r.family+'\u201d is a new family of groups in this story');
+        const k0=r.kinds[0];
+        TP.newKind=false; TP.cast=r.family; TP.fam=k0.name;
+        tpPick(k0.words[0], false, k0.name);
+      };
+      f.querySelector('.tp-nk-go').addEventListener('click', ev=>{ ev.stopPropagation(); go(); });
+      f.querySelector('.tp-nk-cancel').addEventListener('click', ev=>{ ev.stopPropagation(); TP.newKind=false; tpRenderPills(); tpRender(); });
+      f.querySelectorAll('.tp-nk-in').forEach(inp=>{ inp.addEventListener('keydown', ev=>{ ev.stopPropagation(); if(ev.key==='Enter'){ ev.preventDefault(); go(); } else if(ev.key==='Escape'){ ev.preventDefault(); TP.newKind=false; tpRenderPills(); tpRender(); } }); inp.addEventListener('input', ()=>{ err.hidden=true; }); });
+      setTimeout(()=>{ try{ const nm=f.querySelector('.tp-nk-name'); nm.focus(); nm.setSelectionRange(nm.value.length, nm.value.length); }catch(e){} }, 0);
     }
     function tpPick(word, isNew, subName){
       if(isNew && TP.mode==='trait' && TP.cat && TP.sub){ try{ customDimWordAdd(TP.cat, TP.sub, word); }catch(e){} }   // v.467 — remember in EVERY mode, in the clean store
@@ -57904,9 +58022,12 @@ body.eink .pl-filterpick .pf-row.on .pf-box{ background:#000; border-color:#000;
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.702';
+  var APP_VERSION = '2026.07.20.703';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.703', date:'September 23, 2026', notes:[
+      '**Families of groups of your own.** [Jeremy] Beside Beings, Places, Things, Ideas, Events and Mixed, the group builder’s **Kind of group** list now has **＋ New family**. Name the family, say in a line what it gathers if you like, and list the kinds in it (or leave that empty and the family is its own one kind), then **Create family**. Its first kind is chosen for the group you are building; the family joins the row from then on, and Bonds lists it in its own right — on *What are you mapping?* and under its kinds in the drawer. Families you make are kept with the story.'
+    ]},
     { v:'2026.07.20.702', date:'September 23, 2026', notes:[
       '**Choosing a kind opens the group builder.** [Jeremy] Pressing a kind in Bonds’ *What are you mapping?* now opens the same group builder as **+ Group**, with that kind already chosen, instead of the older “A new group” window.',
       '**“People” is now “Beings”.** [Jeremy] The first family of group kinds — Kinship, Species, Political, Martial and the rest — is headed **Beings**, since a species or an order is not always made of people. The name changes everywhere the kinds are listed.'
@@ -78412,6 +78533,7 @@ body:not(.eink) #libExportMenu button:hover{ background:rgba(255,255,255,.08) !i
     m = m || MAIN;
     var host = hostOf(m); if (!host) return;
     ensureCSS();
+    syncCustomKinds();   /* v.780 */
     /* v.778 — the builder renames the ELEMENT; the group record it is kept the old name, so the title and the drawer
        went on showing it. The element is the story's own copy of the name, so the record follows it here. */
     try{
@@ -78883,6 +79005,7 @@ body:not(.eink) #libExportMenu button:hover{ background:rgba(255,255,255,.08) !i
      instead — the doc's own verification rule ("assert the tables against each other"
      rather than trusting the edit), enforced at render time rather than in a test. */
   function bucketedSets(){
+    syncCustomKinds();   /* v.780 */
     var byName = {}; SET_CATS.forEach(function(t){ byName[t.name] = t; });
     var seen = {}, out = [];
     var tax = [];
@@ -79060,9 +79183,37 @@ body:not(.eink) #libExportMenu button:hover{ background:rgba(255,255,255,.08) !i
   var CAT_DEFAULT = { family:'kinship', social:'social', faction:'political',
                       concept:'concept', place:'places', causal:'events', thing:'regalia',
                       enmity:'social', free:'' };
+  /* v.780 — the story's own kinds of group (see dystSyncCustomGroupKinds) become Bonds TYPES the same way: an entry in
+     SET_CATS marked `custom`, whose lenses, cast and map capabilities are borrowed from the family it joined — a new
+     Beings kind reads as a web of people, a new Places kind as a blueprint. Re-laid when the pool's list changes. A kind
+     in a family the writer named has no family to borrow from, so it is offered every structure and opens on the web. */
+  var CAST_LEAD = { Beings:'social', Places:'places', Things:'regalia', Ideas:'concept', Events:'events', Mixed:'household' };
+  var _bnCkRev = -1;
+  function syncCustomKinds(){
+    var c = null; try{ c = getCat('org'); }catch(e){}
+    var rev = c ? (c.__ckRev || 0) : 0; if (rev === _bnCkRev) return; _bnCkRev = rev;
+    for (var i = SET_CATS.length - 1; i >= 0; i--){
+      if (!SET_CATS[i].custom) continue;
+      var oid = SET_CATS[i].id; delete TYPE_LENSES[oid]; delete TYPE_CAST[oid]; delete TYPE_CASTS[oid];
+      try{ if (window.DYST_KIND_CAPS && window.DYST_KIND_CAPS[oid] && window.DYST_KIND_CAPS[oid].__ck) delete window.DYST_KIND_CAPS[oid]; }catch(e){}
+      SET_CATS.splice(i, 1);
+    }
+    ((c && c.subcategories) || []).forEach(function(sb){
+      if (!sb || !sb.customKind) return;
+      var id = 'ck:' + String(sb.name).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+      if (SET_CATS.some(function(t){ return t.id === id; })) return;
+      var sibId = CAST_LEAD[sb.cast] || null;
+      SET_CATS.push({ id:id, name:sb.name, hint:sb.guideline || 'A kind of group of your own.', custom:true });
+      TYPE_LENSES[id] = sibId ? (TYPE_LENSES[sibId] || ['social']).slice() : ['social','faction','concept','place','causal','thing'];
+      if (sibId && TYPE_CASTS[sibId]) TYPE_CASTS[id] = TYPE_CASTS[sibId].slice();
+      if (sibId && TYPE_CAST[sibId]) TYPE_CAST[id] = TYPE_CAST[sibId];
+      try{ var caps = window.DYST_KIND_CAPS; if (caps && sibId && caps[sibId] && !caps[id]) caps[id] = Object.assign({}, caps[sibId], { __ck:1 }); }catch(e){}
+    });
+  }
+  V.syncKinds = syncCustomKinds;
   function typeOf(gp){ return (gp && gp.type) || ''; }
   function catOfSet(gp){ return typeOf(gp); }
-  function typeName(id){ var t = SET_CATS.find(function(x){ return x.id === id; }); return t ? t.name : ''; }
+  function typeName(id){ syncCustomKinds(); var t = SET_CATS.find(function(x){ return x.id === id; }); return t ? t.name : ''; }
   function lensOfGroup(gp){
     if (!gp) return 'social';
     if (gp.lens && BONDS.KINDS[gp.lens]) return gp.lens;
@@ -83028,6 +83179,7 @@ body:not(.eink) #libExportMenu button:hover{ background:rgba(255,255,255,.08) !i
      its kind; nothing is rewritten and nothing needs to be. */
   var SUB_WAS = { 'Places':'places', 'Concepts':'concept', 'Events':'events' };
   function typeFromSub(sub){
+    syncCustomKinds();   /* v.780 — a story's own kind maps to its own type */
     var t = SET_CATS.find(function(x){ return x.name === sub; });
     if (t) return t.id;
     return SUB_WAS[sub] || '';
