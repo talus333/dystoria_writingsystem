@@ -3707,6 +3707,12 @@ body.eink .pt-rh-dev{color:#000}
   .draw-thick{width:100%; accent-color:var(--gold)}
   /* v.777 — the grid's Steps: − readout + */
   .gstep-lab{margin-top:8px}
+  #drawGridPanel [hidden]{display:none !important}
+  .gmode-row{display:flex; gap:3px; padding:3px; margin:2px 0 8px; border:1px solid rgba(138,99,32,.25); border-radius:999px}
+  .gmode-btn{flex:1 1 0; min-width:0; height:24px; border:none; border-radius:999px; background:transparent; color:#7a746a; font-family:var(--sans); font-size:11px; font-weight:700; letter-spacing:.05em; cursor:pointer}
+  .gmode-btn:hover{color:var(--charcoal,#2b2926)}
+  .gmode-btn.on{background:var(--charcoal,#2b2926); color:var(--linen,#f5efe2)}
+  body.eink .gmode-row{border-color:#000} body.eink .gmode-btn.on{background:#000; color:#fff}
   .gstep-row{display:flex; align-items:center; justify-content:space-between; gap:6px; margin-top:4px}
   .gstep-btn{flex:none; width:26px; height:24px; border-radius:999px; border:1px solid rgba(138,99,32,.3); background:transparent; color:var(--charcoal,#2b2926); font-family:var(--sans); font-size:14px; line-height:1; cursor:pointer; padding:0; display:flex; align-items:center; justify-content:center}
   .gstep-btn:hover:not(:disabled){border-color:var(--gold); color:var(--gold)}
@@ -15331,8 +15337,23 @@ function gridOn(){ const g = gridState(); return !!(g && g.on); }
    always put its first dot) rather than half of whatever the current step is. At ×1 every number below is the one
    the grid has always used, so an existing map snaps exactly as it did.
    `state.session.grid.step`: 1 = ×1; 2…8 = ×n; −2…−8 = ÷n. */
-function gridStep(){ const g = gridState(); let n = Math.round(+((g && g.step) || 1)); if (!isFinite(n) || n === 0 || n === -1) n = 1; return Math.max(-8, Math.min(8, n)); }
-function gridBase(){ const g = gridState(); return Math.max(8, Math.min(160, (g && g.size) || 44)); }
+/* v.786 [Jeremy] — "the scale multiplier for the grid leaves behind the gridpoints from the default, and the slider adjusts
+   that default. We shouldn't have two grid systems, just one. I'd rather have a toggle for freeform vs scaling, and have
+   scale as default so that the two ways aren't competing with each other."
+   v.777 laid the step ON TOP of the slider: the slider set a base, the step multiplied or divided it, and a divided grid
+   drew the base's points bigger than the rest — so at ÷4 you saw two grids, and the slider quietly moved the one under it.
+   Now there is ONE grid in one of two MODES (`state.session.grid.mode`):
+     · 'scale' (the default) — a fixed unit (GRID_UNIT, the 44 every map has always started at) × or ÷ a whole number.
+       Every point the same; the grids still nest, because they all hang off the unit's own anchor.
+     · 'free' — the slider's spacing, and only that. No step.
+   A grid saved before the toggle existed keeps what it was: stepped → scale; a moved slider and no step → free. */
+var GRID_UNIT = 44;
+function gridMode(){ const g = gridState(); if (!g) return 'scale'; if (g.mode === 'free' || g.mode === 'scale') return g.mode;
+  const st = Math.round(+(g.step || 1)); if (st && st !== 1) return 'scale';
+  return ((+g.size || GRID_UNIT) !== GRID_UNIT) ? 'free' : 'scale'; }
+function gridStepRaw(){ const g = gridState(); let n = Math.round(+((g && g.step) || 1)); if (!isFinite(n) || n === 0 || n === -1) n = 1; return Math.max(-8, Math.min(8, n)); }
+function gridStep(){ return gridMode() === 'free' ? 1 : gridStepRaw(); }
+function gridBase(){ if (gridMode() !== 'free') return GRID_UNIT; const g = gridState(); return Math.max(8, Math.min(160, (g && g.size) || GRID_UNIT)); }
 function gridStepSize(n){ const b = gridBase(); return n >= 1 ? b * n : b / (-n); }
 function gridAnchor(){ return gridBase() / 2; }
 function gridStepLabel(n){ return n >= 1 ? '\u00d7' + n : '\u00f7' + (-n); }
@@ -15348,12 +15369,13 @@ function gridPatternFill(pat){
   const dot = function(cx, cy, r, op){ const c = document.createElementNS(NS, 'circle');
     c.setAttribute('cx', cx.toFixed(2)); c.setAttribute('cy', cy.toFixed(2)); c.setAttribute('r', r.toFixed(2));
     c.setAttribute('fill', '#a49d8e'); c.setAttribute('fill-opacity', op); pat.appendChild(c); };
-  const rBase = Math.max(0.7, Math.min(b, 120) * 0.035);
-  if (n >= 1){ dot(b / 2, b / 2, rBase, '0.3'); return; }
-  const k = -n, rMin = Math.max(0.6, sz * 0.035);
+  /* v.786 — every point alike: a divided grid no longer draws the grid it divided underneath it */
+  const r = Math.max(0.6, Math.min(sz, n >= 1 ? Math.min(b, 120) : b) * 0.035);
+  if (n >= 1){ dot(b / 2, b / 2, n === 1 ? Math.max(0.7, Math.min(b, 120) * 0.035) : r, '0.3'); return; }
+  const k = -n;
   for (let i = 0; i < k; i++) for (let j = 0; j < k; j++){
     const cx = (b / 2 + i * sz) % b, cy = (b / 2 + j * sz) % b;
-    if (i === 0 && j === 0) dot(cx, cy, rBase * 1.3, '0.45'); else dot(cx, cy, rMin, '0.28');
+    dot(cx, cy, r, '0.3');
   }
 }
 function gridPatternUpdate(gs){
@@ -15364,7 +15386,7 @@ function gridPatternUpdate(gs){
 try{ window.__dystGridPattern = gridPatternUpdate; }catch(e){}
 function gridSize(){ return gridStepSize(gridStep()); }
 function snapToGrid(x, y){ if (!gridOn()) return { x: x, y: y }; const s = gridSize(), a = gridAnchor(); return { x: Math.round((x - a) / s) * s + a, y: Math.round((y - a) / s) * s + a }; }
-try{ window.__dystGrid = { step: gridStep, base: gridBase, size: gridSize, anchor: gridAnchor, snap: snapToGrid }; }catch(e){}
+try{ window.__dystGrid = { step: gridStep, base: gridBase, size: gridSize, anchor: gridAnchor, snap: snapToGrid, mode: gridMode, unit: GRID_UNIT }; }catch(e){}
 function snapToBeing(){
   let target = null;
   const beings = state.nodes.map((nd, i) => nd.role === 'being' ? i : -1).filter(i => i >= 0);
@@ -22123,6 +22145,12 @@ function buildDrawSection(root){
     gBtn.classList.toggle('on', gst.on);
     if (typeof renderConstellation === 'function') renderConstellation();
   });
+  /* v.786 — Scale | Freeform. One grid; the toggle says which control drives it, and only that control is shown. */
+  const gModeRow = document.createElement('div'); gModeRow.className = 'gmode-row'; gModeRow.id = 'drawGridMode';
+  const gMk = (m, t, tip) => { const b = document.createElement('button'); b.type = 'button'; b.className = 'gmode-btn'; b.dataset.mode = m; b.textContent = t; b.title = tip; gModeRow.appendChild(b); return b; };
+  const gMScale = gMk('scale', 'Scale', 'Whole steps of one grid \u2014 \u00f78 \u2026 \u00d78. Every point lands on the grid it came from, for joins and blueprints.');
+  const gMFree = gMk('free', 'Freeform', 'Any spacing you like, on a slider');
+  gPanel.appendChild(gModeRow);
   const gLab = document.createElement('div'); gLab.className = 'draw-sublabel'; gLab.textContent = 'Spacing'; gPanel.appendChild(gLab);
   const gSpace = document.createElement('input'); gSpace.type = 'range'; gSpace.className = 'draw-thick'; gSpace.min = '16'; gSpace.max = '120'; gSpace.step = '4';
   gSpace.value = String((gridState() && gridState().size) || 44);
@@ -22130,7 +22158,7 @@ function buildDrawSection(root){
      there is no pattern to move yet (the grid was off, and this press is what turns it on). */
   gSpace.addEventListener('input', ev => { ev.stopPropagation(); const gst = gridState(); if (!gst) return;
     const wasOn = gst.on;
-    gst.size = +gSpace.value; if (!gst.on){ gst.on = true; gBtn.classList.add('on'); }
+    gst.size = +gSpace.value; gst.mode = 'free'; if (!gst.on){ gst.on = true; gBtn.classList.add('on'); }   /* v.786 — the slider is Freeform's control */
     if (state.session){ state.session.grid = gst; scheduleAutosave(); }
     if (!wasOn || !(typeof gridPatternUpdate === 'function' && gridPatternUpdate(gst.size))){
       if (typeof renderConstellation === 'function') renderConstellation();
@@ -22140,17 +22168,24 @@ function buildDrawSection(root){
   gPanel.appendChild(gSpace);
   /* v.777 [Jeremy] — the grid in whole steps as well as freely: − and + walk ÷8 … ÷2, ×1, ×2 … ×8, and the dots you
      already had stay where they were (see gridPatternFill). Pressing the readout goes back to ×1. */
-  const gStepLab = document.createElement('div'); gStepLab.className = 'draw-sublabel gstep-lab'; gStepLab.textContent = 'Steps'; gPanel.appendChild(gStepLab);
+  const gStepLab = document.createElement('div'); gStepLab.className = 'draw-sublabel gstep-lab'; gStepLab.textContent = 'Scale'; gPanel.appendChild(gStepLab);   /* v.786 — "Steps" → Scale, the mode it belongs to */
   const gStepRow = document.createElement('div'); gStepRow.className = 'gstep-row'; gStepRow.id = 'drawGridStep';
   const gDn = document.createElement('button'); gDn.type = 'button'; gDn.className = 'gstep-btn gstep-dn'; gDn.textContent = '\u2212';
   const gVal = document.createElement('button'); gVal.type = 'button'; gVal.className = 'gstep-val';
   const gUp = document.createElement('button'); gUp.type = 'button'; gUp.className = 'gstep-btn gstep-up'; gUp.textContent = '+';
   gStepRow.appendChild(gDn); gStepRow.appendChild(gVal); gStepRow.appendChild(gUp); gPanel.appendChild(gStepRow);
   const gNext = (n, d) => { let m = n + d; if (m === 0 || m === -1) m = d > 0 ? 1 : -2; if (n === -2 && d > 0) m = 1; return m; };
+  const gModeSync = () => {   /* v.786 */
+    const m = gridMode();
+    gMScale.classList.toggle('on', m === 'scale'); gMFree.classList.toggle('on', m === 'free');
+    gLab.hidden = gSpace.hidden = (m !== 'free');
+    gStepLab.hidden = gStepRow.hidden = (m !== 'scale');
+  };
   const gStepSync = () => {
+    gModeSync();
     const n = gridStep(), sz = gridStepSize(n);
     gVal.textContent = gridStepLabel(n);
-    gVal.title = n === 1 ? 'The spacing the slider sets' : ('Every ' + (Math.round(sz * 10) / 10) + ' \u2014 press to go back to \u00d71');
+    gVal.title = n === 1 ? 'The grid\u2019s own spacing' : ('Every ' + (Math.round(sz * 10) / 10) + ' \u2014 press to go back to \u00d71');
     const dn = gNext(n, -1), up = gNext(n, 1);
     gDn.disabled = dn < -8 || gridStepSize(dn) < 4;
     gUp.disabled = up > 8 || gridStepSize(up) > 480;
@@ -22160,7 +22195,7 @@ function buildDrawSection(root){
   const gStepSet = n => {
     const gst = gridState(); if (!gst){ flashStatus('Roll or add an element first to open the map'); return; }
     const wasOn = gst.on;
-    gst.step = n; if (!gst.on){ gst.on = true; gBtn.classList.add('on'); gPanel.hidden = false; }
+    gst.step = n; gst.mode = 'scale'; if (!gst.on){ gst.on = true; gBtn.classList.add('on'); gPanel.hidden = false; }
     if (state.session){ state.session.grid = gst; scheduleAutosave(); }
     gStepSync();
     if (!wasOn || !(typeof gridPatternUpdate === 'function' && gridPatternUpdate())){
@@ -22170,7 +22205,16 @@ function buildDrawSection(root){
   gDn.addEventListener('click', ev => { ev.stopPropagation(); gStepSet(gNext(gridStep(), -1)); });
   gUp.addEventListener('click', ev => { ev.stopPropagation(); gStepSet(gNext(gridStep(), 1)); });
   gVal.addEventListener('click', ev => { ev.stopPropagation(); if (gridStep() !== 1) gStepSet(1); });
-  gSpace.addEventListener('input', () => gStepSync());   /* the free slider moves the base, so the step's limits move with it */
+  gSpace.addEventListener('input', () => gStepSync());
+  /* v.786 — switching mode redraws the one grid in the other mode; nothing of the other mode's setting is thrown away */
+  const gModeSet = m => { const gst = gridState(); if (!gst){ flashStatus('Roll or add an element first to open the map'); return; }
+    const wasOn = gst.on; gst.mode = m; if (!gst.on){ gst.on = true; gBtn.classList.add('on'); gPanel.hidden = false; }
+    if (state.session){ state.session.grid = gst; scheduleAutosave(); }
+    gSpace.value = String(gst.size || GRID_UNIT); gStepSync();
+    /* the tile's own size changes with the mode, and so does the anchor — a full redraw re-seats both */
+    if (typeof renderConstellation === 'function') renderConstellation(); else if (!wasOn) gridPatternUpdate(); };
+  gMScale.addEventListener('click', ev => { ev.stopPropagation(); gModeSet('scale'); });
+  gMFree.addEventListener('click', ev => { ev.stopPropagation(); gModeSet('free'); });
   gBtn.addEventListener('click', () => { try{ gSpace.value = String((gridState() && gridState().size) || 44); }catch(_){} gStepSync(); });
   try{ window.__dystGridStepSync = gStepSync; }catch(_){}
   gStepSync();
@@ -58169,9 +58213,15 @@ body.eink .pl-filterpick .pf-row.on .pf-box{ background:#000; border-color:#000;
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.707';
+  var APP_VERSION = '2026.07.20.709';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.709', date:'September 23, 2026', notes:[
+      '**One grid, Scale or Freeform.** [Jeremy] The Places grid had two systems on top of each other — a divided grid still drew the default grid’s points, and the slider moved that default underneath the steps. Now the grid has a **Scale | Freeform** toggle. **Scale** (the default) is whole steps of one grid, ÷8 … ×8, every point alike, each still landing on the grid it came from. **Freeform** is the slider, and only the slider. Maps saved before keep what they were.'
+    ]},
+    { v:'2026.07.20.708', date:'September 23, 2026', notes:[
+      '**A Conflict card.** [Jeremy] Conflict joins the other narrative layers with a card of its own — press its badge or its sentence. Choose what the story **chiefly runs against** (another, themselves, society, the world — or a finer word such as *against nature*), and, if you like, a different driver **for each Part**. Below it the card reads your stakes back: **what stands in the way** in each of the four lanes, with what threatens each; the stakes **waiting for a threat**; your ⚔ **standing hostilities** from Bonds; the **by axis** view and the **strip** (both still on the row too); and the sentence, notes and ✦ blend every layer card has. A stake threatened by a **Group** now reads as *against society*, not *against the world*.'
+    ]},
     { v:'2026.07.20.707', date:'September 23, 2026', notes:[
       '**Card windows open on top.** [Jeremy] The lists and menus the Narrative Layer and Narrative Element cards open — **+ theme**, **+ motif**, **+ flavor**, **+ era**, **+ plot shape**, the Point of View card’s **+ narrator**, and **Set role** / **type** on the Characters and Threads organizers — opened *behind* their card, so you could not reach them. They open above it now, and **+ narrator** works again: it lists your characters under the button, and the one you choose narrates.'
     ]},
@@ -63277,8 +63327,9 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     return s.charAt(0).toUpperCase()+s.slice(1)+'.';
   }
   // Layer-card descriptions: the generated sentence is the default; an AI-blended one (opt-in) only shows once asked for.
-  function _layerObj(kind){ switch(kind){ case 'genre':return ensureGenre(); case 'pov':return ensurePov(); case 'theme':return ensureTheme(); case 'stakes':return ensureStakes(); case 'plot':return ensurePlotShape(); default:return ensureContext(); } }
-  function _layerAuto(kind){ switch(kind){ case 'genre':return genreSentence(); case 'pov':return povSentence(); case 'theme':return themeSentence(); case 'stakes':return stakesSentence(); case 'plot':return plotSentence(); default:return contextSentence(); } }
+  function ensureConflictLayer(){ try{ if(window.__conflict && window.__conflict.layer) return window.__conflict.layer(); }catch(e){} if(!data.conflict||typeof data.conflict!=='object') data.conflict={}; return data.conflict; }   /* v.785 */
+  function _layerObj(kind){ switch(kind){ case 'conflict':return ensureConflictLayer(); case 'genre':return ensureGenre(); case 'pov':return ensurePov(); case 'theme':return ensureTheme(); case 'stakes':return ensureStakes(); case 'plot':return ensurePlotShape(); default:return ensureContext(); } }
+  function _layerAuto(kind){ switch(kind){ case 'conflict':{ try{ return window.__conflict.sentence(); }catch(e){ return ''; } } case 'genre':return genreSentence(); case 'pov':return povSentence(); case 'theme':return themeSentence(); case 'stakes':return stakesSentence(); case 'plot':return plotSentence(); default:return contextSentence(); } }
   function _layerEff(kind){ var o=_layerObj(kind); return (o.aiDesc&&o.aiDesc.trim())?o.aiDesc.trim():_layerAuto(kind); }
   function effectiveGenreDesc(){ return _layerEff('genre'); }
   function effectivePovDesc(){ return _layerEff('pov'); }
@@ -63286,8 +63337,8 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
   function effectiveContextDesc(){ return _layerEff('context'); }
   function effectiveStakesDesc(){ return _layerEff('stakes'); }
   function effectivePlotDesc(){ return _layerEff('plot'); }
-  var _LAYER_SUBJECT={ genre:'the story’s genre and tone', pov:'the story’s narration and point of view', theme:'the story’s themes and motifs', context:'the story’s world and backdrop', stakes:'what is at stake in the story', plot:'the story’s plot shape and structure' };
-  var _LAYER_NOTEPH={ genre:'How the genres blend, the tone they set, what you’re subverting…', pov:'Voice, distance, what the narrator knows or hides…', theme:'What the story is really about, the questions it asks…', context:'When and where, what’s assumed, what has changed…', stakes:'What’s truly at risk, for whom, and what is lost if it fails…', plot:'The shape of the story, its key turns, what each beat should deliver…' };
+  var _LAYER_SUBJECT={ genre:'the story’s genre and tone', pov:'the story’s narration and point of view', theme:'the story’s themes and motifs', context:'the story’s world and backdrop', stakes:'what is at stake in the story', plot:'the story’s plot shape and structure', conflict:'what stands in the way in the story, and what it chiefly runs against' };
+  var _LAYER_NOTEPH={ genre:'How the genres blend, the tone they set, what you’re subverting…', pov:'Voice, distance, what the narrator knows or hides…', theme:'What the story is really about, the questions it asks…', context:'When and where, what’s assumed, what has changed…', stakes:'What’s truly at risk, for whom, and what is lost if it fails…', plot:'The shape of the story, its key turns, what each beat should deliver…', conflict:'What is in the way, and why it cannot simply be walked around…' };
   async function aiBlendDesc(kind){ var o=_layerObj(kind), auto=_layerAuto(kind), notes=(o.note||'').trim(); if(!notes) return null;
     var sys='You help a novelist keep vivid planning notes. Blend the structured description of '+(_LAYER_SUBJECT[kind]||'the story')+' with the author’s own freeform notes into ONE specific, evocative description of 1–2 sentences. This is meta-description for the author’s planning — never story prose, and never invent plot, characters, or events beyond what is given. Preserve the author’s own terms and emphasis. Return only the description, with no preamble.';
     var pr='Structured description:\n'+auto+'\n\nAuthor’s notes:\n'+notes+'\n\nBlended description:';
@@ -63367,7 +63418,8 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     var out=[];
     defs.forEach(function(d){ try{ if(!d[1]()) return; var eff=(d[2]()||'').trim(); if(!eff) return; var note=((d[3]().note)||'').trim(); var line=d[0]+' — '+eff; if(note) line+=' Notes: '+note; out.push(line); }catch(e){} });
     /* v.668 · #47 — the conflict line, only when something answers (a driver, or a stake with a threat) */
-    try{ var C=window.__conflict; if(C && (C.driver() || C.read().some(function(s){ return !!s.bucket; }))) out.push('Conflict — '+C.sentence()); }catch(e){}
+    /* v.785 — the card's notes and ✦ blend ride along, like every other layer's */
+    try{ if(conflictHasContent()){ var _co=ensureConflictLayer(); var _cl='Conflict — '+_layerEff('conflict'); if(_co.note && String(_co.note).trim()) _cl+=' Notes: '+String(_co.note).trim(); out.push(_cl); } }catch(e){}
     return out;
   }
   try{ window.__dystLayerFacts = layerFactLines; }catch(e){}
@@ -63695,42 +63747,9 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
      words, optional forever. Under it, collapsed, the strip: three lanes × sections, showing which axes
      are live where (a stake whose bearer and threat both stand on the section's board; ⚔ bonds as a
      lighter mark). It shows and does not rank. */
-  var cfStripOpen=false, cfAxesOpen=false, cfAxesExtra=[];   /* v.669 — the by-axis view, and the axes opened with “+ another axis” (view state, this page only) */
-  function conflictRow(){
-    var C=window.__conflict;
-    var row=document.createElement('div'); row.className='pl-nrow pl-nrow-conflict';
-    var lc=document.createElement('div'); lc.className='pl-nlabel';
-    var badge=document.createElement('span'); badge.className='pl-cat '+catClass('stakes'); badge.textContent='Conflict'; badge.title='Conflict \u2014 what the stakes are against, read from their threats; the driver is the one thing you choose.';
-    lc.appendChild(badge);
-    { var _xb=document.createElement('button'); _xb.type='button'; _xb.className='pl-expbtn'; _xb.innerHTML='\u2726'; _xb.title='Explore Conflict \u2014 a Q&A filed into your notes'; _xb.addEventListener('click', function(e){ e.stopPropagation(); qaCatExplore('stakes', 'Conflict'); }); lc.appendChild(_xb); }
-    row.appendChild(lc);
-    var pills=document.createElement('div'); pills.className='pl-pills';
-    if(!C){ row.appendChild(pills); return row; }
-    var line=document.createElement('div'); line.className='pl-cf-line';
-    var sp=document.createElement('span'); sp.className='pl-layerpill pl-cf-sentence'; sp.style.flex='1 1 240px'; sp.style.width='auto';
-    var tx=document.createElement('span'); tx.className='pl-povtext'; tx.textContent=C.sentence(); sp.appendChild(tx);
-    sp.title='Read from the stakes \u2014 name a threat on a stake\u2019s card and this changes';
-    line.appendChild(sp);
-    var d=C.driver();
-    var db=document.createElement('button'); db.type='button'; db.className='pl-cf-ctl pl-cf-driver'+(d?' on':''); db.textContent=d?('chiefly '+d+' \u25be'):'+ driver'; db.title=d?'The axis the story chiefly runs along \u2014 change or clear it':'Choose the axis the story chiefly runs along \u2014 optional';
-    db.addEventListener('click', function(e){ e.stopPropagation();
-      var a=api(); var words=[]; try{ ((a&&a.stakePool)?a.stakePool():[]).forEach(function(o){ if(String(o.sub||'').toLowerCase()==='conflict' && o.word) words.push(o.word); }); }catch(err){}
-      if(d) words=['\u2014 none \u2014'].concat(words);
-      layerPick(db, words, {}, function(v){ C.setDriver((v==='\u2014 none \u2014')?'':v); renderNarrative(); });
-    });
-    line.appendChild(db);
-    var sb=document.createElement('button'); sb.type='button'; sb.className='pl-cf-ctl pl-cf-stripbtn'+(cfStripOpen?' on':''); sb.textContent=(cfStripOpen?'\u25be':'\u25b8')+' strip'; sb.title='Which axes are live in which section \u2014 a picture, not a score';
-    sb.addEventListener('click', function(e){ e.stopPropagation(); cfStripOpen=!cfStripOpen; renderNarrative(); });
-    line.appendChild(sb);
-    /* v.669 · #47 phase 4 — CONFLICT-FIRST authoring (Stakes doc §2.4, the other direction of the one
-       field): the stakes grouped by the axis they run along, each group offering + stake with that axis
-       pre-filled. Only the axes in use are drawn, with one “+ another axis” for the rest — ten mostly
-       empty buckets would be a page nobody asked for. A read, plus a pre-filled creator; no new data. */
-    var ab=document.createElement('button'); ab.type='button'; ab.className='pl-cf-ctl pl-cf-axesbtn'+(cfAxesOpen?' on':''); ab.textContent=(cfAxesOpen?'\u25be':'\u25b8')+' by axis'; ab.title='The stakes grouped by the axis they run along \u2014 and a way to add one along an axis';
-    ab.addEventListener('click', function(e){ e.stopPropagation(); cfAxesOpen=!cfAxesOpen; renderNarrative(); });
-    line.appendChild(ab);
-    pills.appendChild(line);
-    if(cfAxesOpen){
+  /* v.785 — the by-axis view and the section strip, as nodes: the row opens them, the Conflict card always shows them */
+  function cfAxesNode(onChange){
+    var C=window.__conflict; var _done=function(){ try{ onChange(); }catch(e){} try{ if(document.body.classList.contains('plan-view-narrative')) renderNarrative(); }catch(e){} };
       var axes=document.createElement('div'); axes.className='pl-cf-axes';
       var byAxis={}, order=[];
       var put=function(word, s){ if(!byAxis[word]){ byAxis[word]=[]; order.push(word); } if(s) byAxis[word].push(s); };
@@ -63746,7 +63765,7 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
           var a=api(); var made=(a&&a.addLibraryElement)?a.addLibraryElement('stakes', v, 'At Stake', null):null;
           if(made && made.key && window.__stakeData && window.__stakeData.set) window.__stakeData.set(made.key, 'axis', word);
           if(typeof flashStatus==='function') flashStatus('Stake added \u2014 \u201c'+v+'\u201d runs '+word);
-          renderNarrative();
+          _done();
         });
       };
       if(!order.length){ var em=document.createElement('div'); em.className='pl-cf-axes-empty'; em.textContent='No stake runs along an axis yet \u2014 name a threat on a stake, or add one along an axis:'; axes.appendChild(em);
@@ -63773,12 +63792,13 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
       more.addEventListener('click', function(e){ e.stopPropagation();
         var a=api(); var words=[]; try{ ((a&&a.stakePool)?a.stakePool():[]).forEach(function(o){ if(String(o.sub||'').toLowerCase()==='conflict' && o.word && !byAxis[o.word]) words.push(o.word); }); }catch(err){}
         if(!words.length){ if(typeof flashStatus==='function') flashStatus('Every axis is already in use'); return; }
-        layerPick(more, words, {}, function(v){ if(cfAxesExtra.indexOf(v)<0) cfAxesExtra.push(v); renderNarrative(); });
+        layerPick(more, words, {}, function(v){ if(cfAxesExtra.indexOf(v)<0) cfAxesExtra.push(v); _done(); });
       });
       axes.appendChild(more);
-      pills.appendChild(axes);
-    }
-    if(cfStripOpen){
+    return axes;
+  }
+  function cfStripNode(){
+    var C=window.__conflict;
       var L=C.lanes(); var strip=document.createElement('div'); strip.className='pl-cf-strip';
       var hdL=document.createElement('span'); hdL.className='pl-cf-lane'; hdL.textContent=''; strip.appendChild(hdL);
       var hdC=document.createElement('div'); hdC.className='pl-cf-cells'; L.forEach(function(_,i){ var nn=document.createElement('span'); nn.className='pl-cf-num'; nn.textContent=String(i+1); nn.title='Section '+(i+1); hdC.appendChild(nn); }); strip.appendChild(hdC);
@@ -63797,8 +63817,144 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
       });
       var key=document.createElement('div'); key.className='pl-cf-key'; key.textContent='A filled cell is a stake whose bearer and threat both stand in that section; the faint red is a \u2694 bond between two people there. It shows where the pressure is \u2014 it does not grade it.';
       strip.appendChild(key);
-      pills.appendChild(strip);
-    }
+    return strip;
+  }
+  var cfStripOpen=false, cfAxesOpen=false, cfAxesExtra=[];   /* v.669 — the by-axis view, and the axes opened with “+ another axis” (view state, this page only) */
+  /* v.785 [Jeremy] — "There is no conflict card like there is for the other narrative layers. What could that look like?"
+     → "strip and by axis should live in both places for now. Per part is nice". The seventh layer card of the Conflict
+     Axes design (§4), which was never built — the row grew inline controls instead. One authored choice (the driver, and
+     optionally one per Part), everything else a READ of the stakes: the four lanes with what threatens each, the stakes
+     still waiting for a threat, the ⚔ bonds, the by-axis view and the strip (both also still on the row), then the
+     sentence, notes and ✦ blend every layer card has. No conflict dropdown on a stake, no new store. */
+  var CF_LANE_AXIS = { another:'Against Another', themselves:'Against the Self', society:'Against Society', world:'Against Nature' };
+  var CF_LANE_BTN = { another:'Another', themselves:'Themselves', society:'Society', world:'The world' };
+  function conflictHasContent(){
+    var C=window.__conflict; if(!C) return false;
+    try{ var o=ensureConflictLayer(); return !!(C.driver() || C.read().some(function(s){ return !!s.bucket; }) || C.partDrivers().length || (o.note && String(o.note).trim())); }catch(e){ return false; }
+  }
+  function cfAxisWords(bucket){ var C=window.__conflict, a=api(), out=[];
+    try{ ((a&&a.stakePool)?a.stakePool():[]).forEach(function(o){ if(String(o.sub||'').toLowerCase()==='conflict' && o.word && (!bucket || (C && C.bucketOf(o.word)===bucket))) out.push(o.word); }); }catch(e){}
+    return out; }
+  /* re-draw the card once the Stakes Builder it opened has closed */
+  function cfAfterBuilder(done){ try{ var sc=document.getElementById('stakeCreator'); if(!sc) return; var mo=new MutationObserver(function(){ if(!sc.classList.contains('show')){ mo.disconnect(); try{ done(); }catch(e){} } }); mo.observe(sc, { attributes:true, attributeFilter:['class'] }); }catch(e){} }
+  function openConflictCard(){
+    var C=window.__conflict; if(!C) return;
+    var o=ensureConflictLayer();
+    openLayerCard('conflictBd','Conflict','What stands in the way \u2014 read from your stakes. The driver is the one thing you choose.', function(body, render){
+      var lbl=function(t){ var l=document.createElement('div'); l.className='pov-lbl'; l.textContent=t; body.appendChild(l); return l; };
+      var hint=function(t, cls){ var h=document.createElement('div'); h.className='pl-cfc-hint'+(cls?(' '+cls):''); h.textContent=t; return h; };
+      /* DRIVER — four buttons for the lanes, and a finer word inside the chosen one */
+      var d=C.driver(), db=d?C.bucketOf(d):null;
+      lbl('Driver \u2014 what the story chiefly runs against');
+      var seg=document.createElement('div'); seg.className='pov-seg pl-cfc-driver';
+      C.BUCKETS.forEach(function(b){ var bt=document.createElement('button'); bt.type='button'; bt.textContent=CF_LANE_BTN[b]; bt.dataset.lane=b; bt.className=(db===b?'on':'');
+        bt.title=(db===b)?'Clear the driver':('The story chiefly runs '+C.laneLabel[b]);
+        bt.addEventListener('click', function(e){ e.stopPropagation(); C.setDriver(db===b ? '' : C.laneLabel[b]); render(); }); seg.appendChild(bt); });
+      body.appendChild(seg);
+      var fine=document.createElement('div'); fine.className='pov-narr pl-cfc-fine';
+      var dIsLane = !!(d && db && String(d).trim().toLowerCase()===C.laneLabel[db]);
+      if(d && !dIsLane){ var fp=document.createElement('span'); fp.className='pov-npill'; var ft=document.createElement('span'); ft.textContent=d.toLowerCase(); fp.appendChild(ft);
+        var fx=document.createElement('span'); fx.className='pov-nx'; fx.innerHTML='&times;'; fx.title='Back to '+C.laneLabel[db]; fx.addEventListener('click', function(e){ e.stopPropagation(); C.setDriver(C.laneLabel[db]); render(); }); fp.appendChild(fx); fine.appendChild(fp); }
+      var fb=document.createElement('button'); fb.type='button'; fb.className='pov-nadd pl-cfc-exact'; fb.textContent=(d && !dIsLane)?'change':'name it more exactly';
+      fb.title='Against nature, fate, the machine, time\u2026 \u2014 a finer word for the driver';
+      fb.addEventListener('click', function(e){ e.stopPropagation(); layerPick(fb, cfAxisWords(db), {}, function(v){ C.setDriver(v); render(); }); });
+      fine.appendChild(fb); body.appendChild(fine);
+      /* BY PART */
+      lbl('By part \u00b7 optional');
+      var parts=C.parts();
+      if(!parts.length) body.appendChild(hint('Your story has no Parts yet. Divide it into Parts on the Plot grid, and each can run against something of its own.'));
+      parts.forEach(function(p){
+        var r=document.createElement('div'); r.className='cat-org-row pl-cfc-part'; r.dataset.part=p.id;
+        var nm=document.createElement('span'); nm.className='cat-org-nm'; nm.textContent=p.name||'Part'; r.appendChild(nm);
+        var w=C.byPart(p.id);
+        var sel=document.createElement('button'); sel.type='button'; sel.className='cat-org-sel pl-cfc-partsel'+(w?' on':''); sel.textContent=(w?w.toLowerCase():'same as the story')+' \u25be';
+        sel.title='What '+(p.name||'this Part')+' chiefly runs against';
+        sel.addEventListener('click', function(e){ e.stopPropagation(); var rr=sel.getBoundingClientRect();
+          var items=[{ label:(w?'':'\u2713 ')+'Same as the story', on:function(){ C.setByPart(p.id, ''); render(); } }];
+          C.BUCKETS.forEach(function(b){ var lw=C.laneLabel[b]; items.push({ label:((w && w.toLowerCase()===lw)?'\u2713 ':'')+lw.charAt(0).toUpperCase()+lw.slice(1), on:function(){ C.setByPart(p.id, lw); render(); } }); });
+          items.push({ label:'Name it more exactly\u2026', on:function(){ layerPick(sel, cfAxisWords(null), {}, function(v){ C.setByPart(p.id, v); render(); }); } });
+          arcMenu(rr.left, rr.bottom, items); });
+        r.appendChild(sel); body.appendChild(r);
+      });
+      /* WHAT STANDS IN THE WAY — the four lanes, read from the stakes */
+      lbl('What stands in the way');
+      var reads=C.read();
+      C.BUCKETS.forEach(function(b){
+        var ln=document.createElement('div'); ln.className='pl-cfc-lane'; ln.dataset.lane=b;
+        var lh=document.createElement('div'); lh.className='pl-cfc-lanehd'; lh.textContent=CF_LANE_BTN[b]; ln.appendChild(lh);
+        var lr=document.createElement('div'); lr.className='pov-narr pl-cfc-lanerow';
+        var mine=reads.filter(function(x){ return x.bucket===b; });
+        mine.forEach(function(x){
+          var pl=document.createElement('span'); pl.className='pl-cfc-stk'; pl.dataset.key=x.key;
+          var n1=document.createElement('b'); n1.textContent=x.name; pl.appendChild(n1);
+          var bn=C.nameFor(x.bearer); if(bn) pl.appendChild(document.createTextNode(' \u2014 '+bn));
+          var tn=(x.threat && x.threat!==x.bearer)?C.nameFor(x.threat):''; if(tn){ var th=document.createElement('span'); th.className='pl-cfc-threat'; th.textContent=' \u27f5 '+tn; pl.appendChild(th); }
+          else if(x.axis){ var ax=document.createElement('span'); ax.className='pl-cfc-axis'; ax.textContent=' '+x.axis.toLowerCase(); pl.appendChild(ax); }
+          pl.title='Open this stake in the Stakes Builder';
+          pl.addEventListener('click', function(e){ e.stopPropagation(); if(typeof window.openStakeCreator==='function'){ window.openStakeCreator({ edit:x.key }); cfAfterBuilder(render); } });
+          lr.appendChild(pl); });
+        if(!mine.length) lr.appendChild(hint(b==='themselves' ? 'no one yet \u2014 make a character their own threat' : 'nothing yet', 'pl-cfc-empty'));
+        var add=document.createElement('button'); add.type='button'; add.className='pov-nadd pl-cfc-add'; add.textContent='+ stake'; add.title='Build a stake that runs '+C.laneLabel[b];
+        add.addEventListener('click', function(e){ e.stopPropagation(); if(typeof window.openStakeCreator==='function'){ window.openStakeCreator({ axis:CF_LANE_AXIS[b] }); cfAfterBuilder(render); } });
+        lr.appendChild(add); ln.appendChild(lr); body.appendChild(ln);
+      });
+      var waiting=reads.filter(function(x){ return !x.bucket; });
+      if(waiting.length){
+        var wb=document.createElement('div'); wb.className='pl-cfc-waiting';
+        var wh=document.createElement('b'); wh.textContent='Waiting for a threat'; wb.appendChild(wh);
+        waiting.forEach(function(x){ var bn=C.nameFor(x.bearer); var a2=document.createElement('button'); a2.type='button'; a2.className='pl-cfc-wait'; a2.dataset.key=x.key; a2.textContent=x.name+(bn?(' \u2014 '+bn):''); a2.title='Name what takes it';
+          a2.addEventListener('click', function(e){ e.stopPropagation(); if(typeof window.openStakeCreator==='function'){ window.openStakeCreator({ edit:x.key }); cfAfterBuilder(render); } }); wb.appendChild(a2); });
+        body.appendChild(wb);
+      }
+      /* STANDING HOSTILITIES — the ⚔ bonds */
+      var hs=C.hostilities();
+      if(hs.length){ lbl('Standing hostilities \u00b7 from Bonds'); var hr=document.createElement('div'); hr.className='pov-narr pl-cfc-host'; hs.forEach(function(t){ var sp=document.createElement('span'); sp.className='cat-org-sel'; sp.textContent=t; hr.appendChild(sp); }); body.appendChild(hr); }
+      /* BY AXIS and THE STRIP — the same two reads the row opens */
+      lbl('By axis'); var axw=document.createElement('div'); axw.className='pl-cfc-axes'; axw.appendChild(cfAxesNode(function(){ render(); })); body.appendChild(axw);
+      lbl('Across the sections'); var stw=document.createElement('div'); stw.className='pl-cfc-strip'; stw.appendChild(cfStripNode()); body.appendChild(stw);
+      renderLayerDesc(body, 'conflict', o, render);
+    });
+  }
+  try{ window.openConflictCard = openConflictCard; }catch(e){}
+  function conflictRow(){
+    var C=window.__conflict;
+    var row=document.createElement('div'); row.className='pl-nrow pl-nrow-conflict';
+    var lc=document.createElement('div'); lc.className='pl-nlabel';
+    var badge=document.createElement('span'); badge.className='pl-cat '+catClass('stakes'); badge.textContent='Conflict'; badge.title='Conflict \u2014 what the stakes are against, read from their threats; the driver is the one thing you choose.';
+    badge.classList.add('pl-cat-org'); badge.title='Open the Conflict card'; badge.addEventListener('click', function(e){ e.stopPropagation(); openConflictCard(); });   /* v.785 */
+    lc.appendChild(badge);
+    { var _xb=document.createElement('button'); _xb.type='button'; _xb.className='pl-expbtn'; _xb.innerHTML='\u2726'; _xb.title='Explore Conflict \u2014 a Q&A filed into your notes'; _xb.addEventListener('click', function(e){ e.stopPropagation(); qaCatExplore('stakes', 'Conflict'); }); lc.appendChild(_xb); }
+    row.appendChild(lc);
+    var pills=document.createElement('div'); pills.className='pl-pills';
+    if(!C){ row.appendChild(pills); return row; }
+    var line=document.createElement('div'); line.className='pl-cf-line';
+    var sp=document.createElement('span'); sp.className='pl-layerpill pl-cf-sentence'; sp.style.flex='1 1 240px'; sp.style.width='auto';
+    { var _co=ensureConflictLayer(); if(_co.aiDesc && String(_co.aiDesc).trim()){ var _mk=document.createElement('span'); _mk.className='pl-aimark'; _mk.textContent='\u2726'; sp.appendChild(_mk); } }
+    var tx=document.createElement('span'); tx.className='pl-povtext'; tx.textContent=_layerEff('conflict'); sp.appendChild(tx);
+    sp.title='Open the Conflict card \u2014 the driver, each Part, what stands in the way';
+    sp.style.cursor='pointer'; sp.addEventListener('click', function(e){ e.stopPropagation(); openConflictCard(); });   /* v.785 */
+    line.appendChild(sp);
+    var d=C.driver();
+    var db=document.createElement('button'); db.type='button'; db.className='pl-cf-ctl pl-cf-driver'+(d?' on':''); db.textContent=d?('chiefly '+d+' \u25be'):'+ driver'; db.title=d?'The axis the story chiefly runs along \u2014 change or clear it':'Choose the axis the story chiefly runs along \u2014 optional';
+    db.addEventListener('click', function(e){ e.stopPropagation();
+      var a=api(); var words=[]; try{ ((a&&a.stakePool)?a.stakePool():[]).forEach(function(o){ if(String(o.sub||'').toLowerCase()==='conflict' && o.word) words.push(o.word); }); }catch(err){}
+      if(d) words=['\u2014 none \u2014'].concat(words);
+      layerPick(db, words, {}, function(v){ C.setDriver((v==='\u2014 none \u2014')?'':v); renderNarrative(); });
+    });
+    line.appendChild(db);
+    var sb=document.createElement('button'); sb.type='button'; sb.className='pl-cf-ctl pl-cf-stripbtn'+(cfStripOpen?' on':''); sb.textContent=(cfStripOpen?'\u25be':'\u25b8')+' strip'; sb.title='Which axes are live in which section \u2014 a picture, not a score';
+    sb.addEventListener('click', function(e){ e.stopPropagation(); cfStripOpen=!cfStripOpen; renderNarrative(); });
+    line.appendChild(sb);
+    /* v.669 · #47 phase 4 — CONFLICT-FIRST authoring (Stakes doc §2.4, the other direction of the one
+       field): the stakes grouped by the axis they run along, each group offering + stake with that axis
+       pre-filled. Only the axes in use are drawn, with one “+ another axis” for the rest — ten mostly
+       empty buckets would be a page nobody asked for. A read, plus a pre-filled creator; no new data. */
+    var ab=document.createElement('button'); ab.type='button'; ab.className='pl-cf-ctl pl-cf-axesbtn'+(cfAxesOpen?' on':''); ab.textContent=(cfAxesOpen?'\u25be':'\u25b8')+' by axis'; ab.title='The stakes grouped by the axis they run along \u2014 and a way to add one along an axis';
+    ab.addEventListener('click', function(e){ e.stopPropagation(); cfAxesOpen=!cfAxesOpen; renderNarrative(); });
+    line.appendChild(ab);
+    pills.appendChild(line);
+    if(cfAxesOpen) pills.appendChild(cfAxesNode(function(){ renderNarrative(); }));   /* v.785 — the card draws the same node */
+    if(cfStripOpen) pills.appendChild(cfStripNode());   /* v.785 — the card draws the same node */
     row.appendChild(pills);
     return row;
   }
@@ -90247,7 +90403,10 @@ body.eink #evSweep .sw-nav{display:flex; align-items:center; gap:10px; margin:0 
     'against fate'         : 'world',
     'against the divine'   : 'world',
     'against the unknown'  : 'world',
-    'against time'         : 'world'
+    'against time'         : 'world',
+    /* v.785 — the Conflict card's four driver buttons store the lane's own words */
+    'against themselves'   : 'themselves',
+    'against the world'    : 'world'
   };
 
   function axisWords(){
@@ -90280,7 +90439,9 @@ body.eink #evSweep .sw-nav{display:flex; align-items:center; gap:10px; margin:0 
     if(String(r.threat).indexOf('group:') === 0){ cat = 'org'; }
     else { var w = elFor(r.threat); cat = (w && w.cat) || ''; }
     if(!cat) return { axis: '', bucket: null, source: null };
-    return { axis: '', bucket: (cat === 'being' ? 'another' : 'world'), source: 'derived' };
+    /* v.785 — a Group is society (design doc §2: "against a Group → society, the institution, the family"). v.761 gave
+       society a lane of its own for the axis WORDS and left this derivation filing every Group threat under the world. */
+    return { axis: '', bucket: (cat === 'being' ? 'another' : (cat === 'org' ? 'society' : 'world')), source: 'derived' };
   };
 
   /* ---------- the picker menu ---------- */
@@ -91804,7 +91965,7 @@ body.eink .stk-offer-tx,body.eink .stk-offer-btn{color:#000; border-color:#000; 
   function open(opts){
     opts = opts || {};
     try{ if(typeof addsLocked === 'function' && addsLocked()){ flash('End the session to add elements'); return; } }catch(e){}
-    STB = { name:'', desc:'', kind:'', bearer:'', threat:'', axis:'', editKey:null, editIdx:null };
+    STB = { name:'', desc:'', kind:'', bearer:'', threat:'', axis:(opts.axis ? String(opts.axis) : ''), editKey:null, editIdx:null };   /* v.785 — + stake on a Conflict lane */
     if(opts.edit){
       var w = null; try{ w = (typeof npFindEl === 'function') ? npFindEl(opts.edit) : null; }catch(e){}
       if(w){
@@ -91958,6 +92119,27 @@ body.eink .stk-offer-tx,body.eink .stk-offer-btn{color:#000; border-color:#000; 
   function plan(){ return window.__dystPlan || null; }
   function box(){ try{ return (state && state.session && state.session.plan && typeof state.session.plan==='object') ? state.session.plan : null; }catch(e){ return null; } }
   function driver(){ var b=box(); return (b && b.conflict && b.conflict.driver) ? String(b.conflict.driver) : ''; }
+  /* v.785 [Jeremy] — the Conflict CARD. Its layer object is `data.conflict` itself (the Plan closure's `data` IS this box,
+     v.596), so the card's notes and ✦ blend sit beside the driver: { driver, by:{<partId>:<word>}, note, aiDesc }. */
+  function layer(){ var b=box(); if(!b) return {}; if(!b.conflict || typeof b.conflict!=='object') b.conflict={}; return b.conflict; }
+  /* the per-Part driver (design doc §4 — "the concession that makes the whole feature survivable"): keyed by partId,
+     which is stable and index-safe. Empty means "same as the story". */
+  function parts(){ try{ return ((state.session && state.session.parts) || []).filter(function(p){ return p && p.id; }); }catch(e){ return []; } }
+  function byPart(pid){ var l=layer(); return (l.by && l.by[pid]) ? String(l.by[pid]) : ''; }
+  function setByPart(pid, w){
+    var l=layer(); if(!pid) return false; l.by = (l.by && typeof l.by==='object') ? l.by : {};
+    w=String(w||'').trim(); if(w) l.by[pid]=w; else delete l.by[pid];
+    try{ if(typeof scheduleAutosave==='function') scheduleAutosave(700); }catch(e){}
+    return true;
+  }
+  function partDrivers(){ return parts().map(function(p){ return { id:p.id, name:p.name||'', word:byPart(p.id) }; }).filter(function(x){ return !!x.word; }); }
+  /* ⚔ bonds, by name — a standing hostility is not a stake, so it is listed beside the lanes, never counted into them */
+  function hostilities(){
+    var out=[], seen={};
+    try{ var edges=(window.BONDS&&window.BONDS.graph)?((window.BONDS.graph({ kind:'free' })||{}).edges||[]):[];
+      edges.forEach(function(e){ if(!e || !e.mood || !e.mood.conflict) return; var a=nameFor(e.akey), b2=nameFor(e.bkey); if(!a || !b2) return; var t=a+' \u2694 '+b2; if(!seen[t]){ seen[t]=1; out.push(t); } }); }catch(e){}
+    return out;
+  }
   function setDriver(w){
     var b=box(); if(!b) return false;
     b.conflict = b.conflict || {}; b.conflict.driver = String(w||'').trim();
@@ -91996,7 +92178,7 @@ body.eink .stk-offer-tx,body.eink .stk-offer-btn{color:#000; border-color:#000; 
     read().forEach(function(s){
       if(!s.bucket) return;
       if(s.bucket==='themselves'){ var bn=nameFor(s.bearer); if(bn) by.themselves.push(bn+' against themselves'); return; }
-      var tn=s.threat?nameFor(s.threat):''; if(tn) by[s.bucket].push(tn); else if(s.axis) by[s.bucket].push(s.axis);
+      var tn=s.threat?nameFor(s.threat):''; if(tn) by[s.bucket].push(tn); else if(s.axis) by[s.bucket].push(String(s.axis).replace(/^against\s+/i,'').toLowerCase());   /* v.785 — "against nature", not "against Against Nature" */
     });
     BUCKETS.forEach(function(b){ by[b]=uniq(by[b]); });
     return by;
@@ -92004,19 +92186,25 @@ body.eink .stk-offer-tx,body.eink .stk-offer-btn{color:#000; border-color:#000; 
   function sentence(){
     var d=driver(), db=d?bucketOfWord(d):null, by=things();
     var any=BUCKETS.some(function(b){ return by[b].length; });
-    if(!d && !any) return 'Name what threatens a stake, and the conflict reads itself.';
+    /* v.785 — each Part that runs against something of its own says so, after the story's own line */
+    var pd=partDrivers().map(function(x){ return 'in '+(x.name||'a Part')+', '+String(x.word).toLowerCase(); });
+    var pdLine=pd.length ? (pd.join('; ')+'.') : '';
+    pdLine=pdLine ? (pdLine.charAt(0).toUpperCase()+pdLine.slice(1)) : '';
+    if(!d && !any) return pdLine || 'Name what threatens a stake, and the conflict reads itself.';
+    var dIsLane = !!(d && db && String(d).trim().toLowerCase()===LANE_LABEL[db]);   /* "against the world (against the world)" says nothing twice */
+    if(d && db && !dIsLane){ var _dObj=String(d).replace(/^against\s+/i,'').toLowerCase(); if((by[db]||[]).some(function(t){ return String(t).toLowerCase()===_dObj; })) dIsLane=true; }
     var order=BUCKETS.slice().sort(function(a,b){ return by[b].length-by[a].length; });
     if(db) order=[db].concat(BUCKETS.filter(function(b){ return b!==db; }));
     var first=order[0];
     var phrase=function(b){ return b==='themselves' ? join(by[b]) : ('against '+join(by[b])); };
     var lead;
-    if(db) lead = by[first].length ? ('Chiefly '+phrase(first)+(first==='themselves'?'':' ('+d+')')) : ('Chiefly '+d);
+    if(db) lead = by[first].length ? ('Chiefly '+phrase(first)+((first==='themselves'||dIsLane)?'':' ('+d+')')) : ('Chiefly '+d);
     else lead = phrase(first); lead = lead.charAt(0).toUpperCase()+lead.slice(1);
     var rest=[]; order.slice(1).forEach(function(b){ if(by[b].length) rest.push(phrase(b)); });
     var out=lead;
     if(rest.length) out+=' — underneath, '+rest.join(', and ');
     else if(db && !any) out+=' — no stake names a threat yet';
-    return out+'.';
+    return out+'.'+(pdLine?(' '+pdLine):'');
   }
   /* which axes are LIVE in a section: a stake whose bearer stands on that section's board, and whose
      threat (if it names one) stands there too. Read from the board, never stored. */
@@ -92068,7 +92256,7 @@ body.eink .stk-offer-tx,body.eink .stk-offer-btn{color:#000; border-color:#000; 
       if((db==='world' || db==='society') && st.length && st.every(function(s){ return s.bucket==='another'; })){
         out.push({ certain:true, element:null, section:null, text:'\u2691 certain \u2014 the story is declared to run '+d+', but every stake in it is threatened by a person.' });
       }
-      if(db){
+      if(db && !partDrivers().length){   /* v.785 — a Part given its own driver means the drift was meant (design doc §5.2) */
         var parts=(state.session&&state.session.parts)||[];
         if(parts.length>=3){
           var L=lanes(); var byPart={}; parts.forEach(function(pt){ var z={}; BUCKETS.forEach(function(b){ z[b]=0; }); byPart[pt.id]=z; });   /* v.761: four lanes, counted from the list */
@@ -92083,7 +92271,8 @@ body.eink .stk-offer-tx,body.eink .stk-offer-btn{color:#000; border-color:#000; 
     }catch(e){}
     return out;
   }
-  window.__conflict = { BUCKETS:BUCKETS, laneLabel:LANE_LABEL, driver:driver, setDriver:setDriver, bucketOf:bucketOfWord, read:read, things:things, sentence:sentence, lanes:lanes, findings:findings, nameFor:nameFor };
+  window.__conflict = { layer:layer, parts:parts, byPart:byPart, setByPart:setByPart, partDrivers:partDrivers, hostilities:hostilities,   /* v.785 */
+    BUCKETS:BUCKETS, laneLabel:LANE_LABEL, driver:driver, setDriver:setDriver, bucketOf:bucketOfWord, read:read, things:things, sentence:sentence, lanes:lanes, findings:findings, nameFor:nameFor };
 })();
 </script>
 <style id="dyst-topbars-two">
@@ -92740,6 +92929,28 @@ body.ir-session #importReview .ir-block:has(#importOverview){ display:none !impo
   html body:not(.eink) #npFmtBar button[data-fmt="tbl"]{ display:none !important; }
   html body:not(.eink) #npTblChip{ display:none !important; }
 }
+</style>
+<style id="dyst-conflict-card">
+/* v.785 — the Conflict card. Built on the layer card's own parts (.pov-lbl, .pov-seg, .pov-npill, .cat-org-sel); these are
+   only the lanes, the stakes in them and the waiting box. */
+.pl-cfc-fine{ margin-top:6px; }
+.pl-cfc-hint{ font-size:11.5px; color:#a49b8b; font-style:italic; line-height:1.45; padding:2px 0; }
+.pl-cfc-part{ padding:3px 0 !important; }
+.pl-cfc-partsel.on{ color:var(--charcoal); border-color:var(--gold); }
+.pl-cfc-lane{ display:grid; grid-template-columns:96px 1fr; gap:8px; align-items:start; padding:7px 0; border-top:1px solid rgba(120,110,90,.14); }
+.pl-cfc-lanehd{ font-size:12px; font-weight:700; color:#5a5346; padding-top:5px; }
+.pl-cfc-stk{ display:inline-flex; flex-wrap:wrap; align-items:baseline; gap:0 4px; font-size:12px; color:var(--charcoal); background:rgba(255,255,255,.75); border:1px solid var(--line); border-radius:999px; padding:4px 11px; cursor:pointer; }
+.pl-cfc-stk:hover{ border-color:var(--gold); }
+.pl-cfc-threat{ color:#a0463a; }
+.pl-cfc-axis{ color:#8a6a2a; font-style:italic; }
+.pl-cfc-empty{ padding-top:5px; }
+.pl-cfc-waiting{ display:flex; flex-wrap:wrap; align-items:center; gap:6px 8px; margin-top:8px; padding:8px 10px; border:1px dashed rgba(196,158,74,.55); border-radius:10px; font-size:12px; color:#6b675f; }
+.pl-cfc-waiting b{ color:#8a6a2a; }
+.pl-cfc-wait{ font:inherit; font-size:12px; color:#6b675f; background:none; border:none; border-bottom:1px dotted #b6ad9c; padding:0 1px; cursor:pointer; }
+.pl-cfc-wait:hover{ color:var(--charcoal); border-bottom-color:var(--gold); }
+.pl-cfc-axes .pl-cf-axes, .pl-cfc-strip .pl-cf-strip{ margin:4px 0 0; }
+body.ember:not(.eink) .pl-cfc-stk{ background:rgba(255,255,255,.06); }
+body.eink .pl-cfc-stk, body.eink .pl-cfc-waiting{ border-color:#000; background:#fff; }
 </style>
 <style id="dyst-mobile-cardz">
 /* v.698 — the card overlay's place in the stack (every screen), and the phone's notepad drawer header. */
