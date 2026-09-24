@@ -4034,8 +4034,10 @@ body.eink .pt-rh-dev{color:#000}
     border:none; background:transparent; outline:none; color:var(--ink-soft); text-align:center; padding:0;
     position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); width:auto; min-width:0; max-width:calc(100vw - 360px); white-space:nowrap; border-bottom:1px dashed transparent;
   }
-  #storyName:focus{border-bottom-color:var(--line)}
+  #storyName:focus{border-bottom-color:transparent}   /* v.799 [Jeremy] — "the blinking cursor but do not have the underline" */
   #storyName::placeholder{color:#bdbab3; font-style:italic; font-weight:400}
+  #storyName:focus::placeholder{color:transparent !important}   /* v.799 — an untitled story's "Untitled story" clears away while you're in it */
+  html body #storyName#storyName:focus{border-bottom-color:transparent !important; text-decoration:none !important; box-shadow:none !important}
   #shareNote{
     position:absolute; left:50%; transform:translateX(-50%); top:auto; bottom:6px;
     max-width:44%; overflow:hidden; text-overflow:ellipsis;
@@ -5287,15 +5289,21 @@ body.eink #consentBar #cbAccept{background:#000; color:#fff; border-color:#000}
   }
   var STUB = { didn:1, wasn:1, couldn:1, hadn:1, wouldn:1, hasn:1, doesn:1, shouldn:1, aren:1, weren:1, isn:1, haven:1, mustn:1, needn:1 };
   function cleanWord(t){ return String(t || '').replace(/^\s*(the|a|an)\s+/i, '').toUpperCase().replace(/[’']/g, '').replace(/[^A-Z0-9 -]/g, '').replace(/\s+/g, ' ').trim(); }   // "The Witch" → WITCH; a phrase keeps its spaces (the page draws a space as a gap cell)
-  var STOP = { the:1, and:1, of:1, for:1, with:1, from:1, into:1, onto:1, over:1, under:1, that:1, this:1, their:1, his:1, her:1, its:1, are:1, was:1, were:1, has:1, have:1, who:1, what:1, when:1, where:1, how:1, why:1, not:1, but:1, all:1, any:1, per:1, via:1, upon:1, between:1, through:1, about:1, after:1, before:1, against:1, toward:1, towards:1, within:1, without:1 };
+  var STOP = { the:1, and:1, of:1, for:1, with:1, from:1, into:1, onto:1, over:1, under:1, that:1, this:1, their:1, his:1, her:1, its:1, are:1, was:1, were:1, has:1, have:1, who:1, what:1, when:1, where:1, how:1, why:1, not:1, but:1, all:1, any:1, per:1, via:1, upon:1, between:1, through:1, about:1, after:1, before:1, against:1, toward:1, towards:1, within:1, without:1, they:1, them:1, will:1, would:1, could:1, should:1, shall:1, your:1, you:1, ours:1, been:1, does:1, just:1, than:1, then:1, there:1, these:1, those:1, which:1, while:1, whom:1, whose:1, very:1 }   /* v.799: + the pronouns and helpers a theme's question brings */;
   function frames(){ try{ return (state.frames && state.frames.length ? state.frames : (state.session && state.session.frames)) || []; }catch(e){ return []; } }   // the sections live on state.frames (state.session.frames mirrors it once saved)
+  /* v.799 — every element of the story: those on the sections (weighted by how many they're in) AND those only in the story's
+     library (half a section's weight); named by `.name`, `.text` or `.word` (the library's elements carry theirs in .word) */
+  function nameOf(x){ try{ if (window.__dystPlan && typeof __dystPlan.displayName === 'function'){ var d = __dystPlan.displayName(x); if (d) return String(d).trim(); } }catch(e){} return String(x.name || x.text || x.word || '').trim(); }
   function elements(){
     var fr = frames(), m = {};
-    fr.forEach(function(f){ ((f && f.prompt && f.prompt.words) || []).forEach(function(x){
-      if (!x || x.role === 'rel' || !x.cat) return;
-      var nm = String(x.name || x.text || '').trim(); if (!nm || nm === 'undefined') return;
-      var k = x.cat + '|' + nm.toLowerCase(); if (!m[k]) m[k] = { cat: x.cat, name: nm, n: 0 }; m[k].n++;
-    }); });
+    var put = function(x, inc){
+      if (!x || x.role === 'rel' || x.role === 'constraint' || !x.cat) return;
+      var nm = nameOf(x); if (!nm || nm === 'undefined') return;
+      var k = x.cat + '|' + nm.toLowerCase(); if (!m[k]) m[k] = { cat: x.cat, name: nm, n: 0 }; m[k].n = Math.max(m[k].n, 0) + inc;
+    };
+    fr.forEach(function(f){ ((f && f.prompt && f.prompt.words) || []).forEach(function(x){ put(x, 1); }); });
+    try{ if (!fr.length && state.prompt) (state.prompt.words || []).forEach(function(x){ put(x, 1); }); }catch(e){}
+    try{ var lib = state.session && state.session.elemLibrary; if (Array.isArray(lib)) lib.forEach(function(r){ var x = r && r.item; if (!x) return; var k0 = x.cat + '|' + nameOf(x).toLowerCase(); if (m[k0]) return; put(x, .5); }); }catch(e){}
     return Object.keys(m).map(function(k){ return m[k]; });
   }
   /* significance: how much of the story an element is in, weighted by what it is — the cast and the world first, the frame
@@ -45782,6 +45790,17 @@ function init(){
     if (m && m.classList.contains('show') && !m.contains(ev.target) && !(ev.target.closest && ev.target.closest('.lk'))) clearSessSel();
   });
   $('storyName').addEventListener('input', () => { scheduleAutosave(); updateWmTitle(); autosizeStoryName(); });
+  /* v.799 [Jeremy] — clicking into the title: untitled → the word clears, just the cursor; named → the whole name is selected,
+     so typing replaces it. (A literal "Untitled story" saved as the name counts as untitled.) The mouseup that follows a
+     click-to-focus would drop the selection to a caret, so that one mouseup is swallowed. */
+  { const _sn = $('storyName'); if (_sn){
+      _sn.addEventListener('focus', () => {
+        const v = (_sn.value || '').trim();
+        if (!v || /^untitled( story)?$/i.test(v)){ if (_sn.value){ _sn.value = ''; updateWmTitle(); } return; }
+        try{ _sn.select(); }catch(e){} _sn._snSel = true; setTimeout(() => { _sn._snSel = false; }, 400);
+      });
+      _sn.addEventListener('mouseup', e => { if (_sn._snSel){ e.preventDefault(); _sn._snSel = false; } });
+  } }
   window.addEventListener('resize', () => { if(typeof autosizeStoryName==='function') autosizeStoryName(); });
   $('wmTitleBar').addEventListener('input', () => { $('storyName').value = $('wmTitleBar').textContent.replace(/\s+/g, ' ').replace(/^ /, ''); scheduleAutosave(); });
   $('wmTitleBar').addEventListener('keydown', e => { if (e.key === 'Enter'){ e.preventDefault(); $('wmTitleBar').blur(); } });
@@ -58459,9 +58478,13 @@ body.eink .pl-filterpick .pf-row.on .pf-box{ background:#000; border-color:#000;
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.721';
+  var APP_VERSION = '2026.07.20.722';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.722', date:'September 24, 2026', notes:[
+      '**Clicking the story title.** [Jeremy] An untitled story\u2019s \u201cUntitled story\u201d clears away as you click in \u2014 just the cursor, no underline; a named story has its whole name selected, ready to retype.',
+      '**The mark in the \u2630 menu opens a new story\u2019s labyrinth again.** [Jeremy] The labyrinth was only counting elements the old way, so the characters, places and groups of a new story didn\u2019t register and the mark said to write a little first. It now reads every element of the story \u2014 on the sections or only in its library \u2014 so older stories weave a fuller labyrinth too.'
+    ]},
     { v:'2026.07.20.721', date:'September 24, 2026', notes:[
       '**The comment pop-up sits beside the word.** Click a word in a shared story and the pop-up opens to its side, never over it; for a sentence or a paragraph it opens beside the last line.',
       '**A comment points at exactly what was highlighted.** Hover or click a comment and just the words it was left on light up — not their whole paragraph.'
