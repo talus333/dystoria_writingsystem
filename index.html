@@ -32389,6 +32389,70 @@ function extractProseNotes(text){
   s = s.replace(/[ \t]{2,}/g, ' ').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
   return { clean: s, notes: notes };
 }
+/* v.806 [Jeremy] — "anything that is not prose should not show up in the prose sections". A manuscript file often opens with
+   front matter: the title again (often as a markdown `# heading`), a line about the draft ("*Short story — opening. Begun
+   2026-06-01*"), separators, and labelled author notes ("**Premise (author note):** …", "**Direction:** …"). Those are lifted
+   out before the prose is laid into sections: the repeated title (and a section's own repeated heading) is dropped, the draft
+   line and every labelled note go to the story's GENERAL notes under their label, and separators left stranded at the top are
+   dropped. Only labels that are about the writing are taken; a line of dialogue that happens to start with a word and a colon
+   is not one of them. */
+const IMP_NOTE_LABELS = /^\s*(?:>\s*)?(?:\*\*|__|\*|_)?\s*(premise|direction|directions|logline|log-line|synopsis|summary|pitch|outline|concept|themes?|tone|mood|voice|style notes?|story notes?|plot notes?|character notes?|world-?building notes?|background|author'?s?\s+notes?|writer'?s?\s+notes?|notes?\s+to\s+self|draft notes?|revision notes?|intent|goal|goals)\b([^:\n]{0,70}?)\s*:\s*(?:\*\*|__|\*|_)?\s*/i;
+function importLiftFrontMatter(text, titles){
+  const general = [];
+  const norm = t => String(t || '').replace(/[#*_`>~]/g, ' ').replace(/[^\p{L}\p{N}]+/gu, ' ').trim().toLowerCase();
+  const tset = (titles || []).map(norm).filter(Boolean);
+  const isSep = ln => /^\s*(?:-{3,}|\*{3,}|_{3,}|~{1,}|\*\s\*\s\*|#\s*#\s*#)\s*$/.test(ln);
+  const unwrap = t => String(t || '').replace(/^\s*(?:\*\*|__|\*|_)+/, '').replace(/(?:\*\*|__|\*|_)+\s*$/, '').replace(/\*\*|__/g, '').trim();
+  let lines = String(text || '').replace(/\r/g, '').split('\n');
+  const nonEmpty = lines.filter(l => l.trim()).length, blanks = lines.length - nonEmpty;
+  const blankParas = blanks >= Math.max(2, nonEmpty * 0.25);   // blank-line paragraphs → a note may run on to the next blank line
+  const out = []; let front = true, seenProse = false;
+  for (let i = 0; i < lines.length; i++){
+    const ln = lines[i], t = ln.trim();
+    if (!t){ out.push(ln); continue; }
+    // the repeated title (or a section's own heading) — at the top only
+    if (front && tset.length && tset.indexOf(norm(t)) >= 0 && (/^#{1,6}\s/.test(t) || !seenProse)){ continue; }
+    // a labelled author note — anywhere
+    const m = IMP_NOTE_LABELS.exec(t);
+    if (m && (/^\s*(?:\*\*|__)/.test(t) || !seenProse || /author|writer|note/i.test(m[1] + m[2]))){
+      let body = t.slice(m[0].length);
+      if (blankParas){ while (i + 1 < lines.length && lines[i + 1].trim() && !IMP_NOTE_LABELS.test(lines[i + 1].trim()) && !isSep(lines[i + 1])){ i++; body += ' ' + lines[i].trim(); } }
+      const label = (m[1].charAt(0).toUpperCase() + m[1].slice(1).toLowerCase()).replace(/\s+/g, ' ');
+      general.push({ label: label + (m[2] && m[2].trim() ? ' ' + m[2].trim().replace(/\*|_/g, '') : ''), text: unwrap(body).replace(/(\*\*|__|\*|_)(\S(?:[^*_\n]*?\S)?)\1/g, '$2').replace(/\s+/g, ' ').trim() });   // markdown emphasis inside a note is read, not shown
+      continue;
+    }
+    // a line about the draft itself — italic, near the top, naming a date or a draft
+    if (front && /^(?:\*[^*].*\*|_[^_].*_)$/.test(t) && t.length < 320 && /\b(?:\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}\/\d{2,4}|draft|begun|started|revised|revision|version|v\d|word count|words|wip|work in progress|short story|novella|novel|opening|chapter one)\b/i.test(t)){
+      general.push({ label: 'About this draft', text: unwrap(t) }); continue;
+    }
+    if (front && isSep(t)) continue;   // a separator stranded above the prose
+    if (/^#{1,6}\s/.test(t) && front) { out.push(ln); continue; }   // another heading at the top is kept (it may be a chapter title)
+    front = false; seenProse = true; out.push(ln);
+  }
+  // separators left doubled or trailing after the lift
+  let clean = out.join('\n').replace(/\n{3,}/g, '\n\n');
+  clean = clean.replace(/(\n\s*(?:-{3,}|\*{3,}|_{3,}|~+|\* \* \*)\s*\n)(?:\s*(?:-{3,}|\*{3,}|_{3,}|~+|\* \* \*)\s*\n)+/g, '$1').replace(/\n\s*(?:-{3,}|\*{3,}|_{3,}|~+|\* \* \*)\s*$/, '').trim();
+  return { clean: clean, general: general };
+}
+function importFileGeneralNotes(list){
+  if (!list || !list.length) return 0;
+  try{
+    if (typeof ensureSession === 'function' && !state.session) ensureSession();
+    const cur = (typeof npGetNotes === 'function') ? (npGetNotes('general') || '') : '';
+    const add = '<div class="imp-fm-head"><b>From the imported file</b></div>' + list.map(g => '<div><b>' + esc(g.label) + '</b> \u2014 ' + esc(g.text) + '</div>').join('');
+    const next = cur + (cur ? '<div><br></div>' : '') + add;
+    if (typeof npSetNotes === 'function') npSetNotes('general', next);
+    try{ const npd = $('notepad'); if (npd && typeof npActiveKey === 'function' && npActiveKey() === 'general') npd.innerHTML = next; }catch(e){}   // the open General page shows it (and can't write its old text back over it)
+    if (typeof scheduleAutosave === 'function') scheduleAutosave();
+    return list.length;
+  }catch(e){ return 0; }
+}
+/* v.806 [Jeremy] — "after an import land the user in the Elements section" (Plan → Elements) */
+function importLandInElements(){
+  try{ if (typeof goMode === 'function') goMode('notepad'); }catch(e){}
+  const go = () => { try{ if (typeof window.__planSetView === 'function') window.__planSetView('narrative'); }catch(e){} };
+  go(); setTimeout(go, 120); setTimeout(go, 500);
+}
 function npAppendSectionNotes(i, notes){
   if (!notes || !notes.length) return;
   if (typeof ensureSession === 'function' && !state.session) ensureSession();
@@ -32413,6 +32477,8 @@ async function confirmImport(){
   try {
   const ed = $('editor');
   const secs = (IMP.sections && IMP.sections.length) ? IMP.sections : [{ title: IMP.title, body: IMP.prose }];
+  const _genNotes = [];   /* v.806 — front matter and labelled author notes out of the prose, into the general notes */
+  secs.forEach((s0, i0) => { const ex = importLiftFrontMatter(String(s0.body || ''), [s0.title, i0 === 0 ? (IMP.title || ($('importTitle') ? $('importTitle').value : '')) : ''].filter(Boolean)); s0.body = ex.clean; ex.general.forEach(g => _genNotes.push(g)); });
   const _secNotes = secs.map(s => { const ex = extractProseNotes(String(s.body || '')); s.body = ex.clean; return ex.notes; });   // lift authorial notes out of the prose; filed into each section's notepad below
   const appendDivider = (idx, title) => {
     const mark = document.createElement('div'); mark.className = 'sec-mark'; mark.contentEditable = 'false'; mark.innerHTML = '<span class="dia"><span>' + (idx + 1) + '</span></span>';
@@ -32564,6 +32630,7 @@ async function confirmImport(){
   state.session.text = editorText(); state.session.html = editorHTML(); state.session.frames = state.frames; state.session.words = state.prompt.words;
   const _props = applyImportProposals();   // Phase 2: add approved net-new words to the pools
   const _goals = applyImportGoals();       // seed any stated goals
+  const _genFiled = importFileGeneralNotes(_genNotes);   /* v.806 — premise, direction and the draft line → General notes */
   rebuildPools();
   setMode('type'); updateWordCount();
   if (added || asSection || IMP.prose.trim()){ $('skyEmpty').style.display = 'none'; }
@@ -32590,6 +32657,8 @@ async function confirmImport(){
   const secMsg = secs.length > 1 ? (' across ' + secs.length + ' sections') : '';
   const propMsg = ((_props + _pooled) ? (' · +' + (_props + _pooled) + ' pool word' + ((_props + _pooled) === 1 ? '' : 's')) : '') + (_goals ? (' · ' + _goals + ' goal' + (_goals === 1 ? '' : 's')) : '');
   flashStatus((asSection ? ('Added ' + added + ' element' + (added === 1 ? '' : 's') + secMsg) : ('Imported — ' + added + ' element' + (added === 1 ? '' : 's') + secMsg)) + (legendOnly ? (' · ' + legendOnly + ' waiting in the Story Legend') : '') + (_cweb ? (' · ' + _cweb + ' concept link' + (_cweb === 1 ? '' : 's')) : '') + propMsg);
+  if (!(IMP._bg || IMP._sessionImport || IMP.qa)) importLandInElements();   /* v.806 — land in Plan → Elements */
+  if (_genFiled && !(IMP._bg || IMP._sessionImport || IMP.qa)) setTimeout(() => { try{ flashStatus(_genFiled + ' author note' + (_genFiled === 1 ? '' : 's') + ' (premise, direction\u2026) filed in General notes, not the prose'); }catch(e){} }, 2600);
   if (!(IMP._bg || IMP._sessionImport || IMP.qa)) importDoneNotify(added + legendOnly);   // confirm to the writer — but NEVER for an end-of-session scan or an Explore organize (those route themselves)
   } catch (e){ console.warn('import build error:', e); $('importConfirm').disabled = false; flashStatus('Couldn’t build: ' + e.message); }
 }
@@ -32702,6 +32771,7 @@ function confirmNotesImport(){
     if (!(IMP._bg || IMP._sessionImport)) flashStatus('Imported — ' + libbed + ' element' + (libbed === 1 ? '' : 's') + ' in your Story Legend' + (pooled ? (' · ' + pooled + ' pool word' + (pooled === 1 ? '' : 's') + ' filed') : '') + (added ? (' · ' + added + ' on the map') : '') + (_props ? (' · +' + _props + ' pool word' + (_props === 1 ? '' : 's')) : '') + (_goals ? (' · ' + _goals + ' goal' + (_goals === 1 ? '' : 's')) : ''));
     if (!(IMP._bg || IMP._sessionImport) && !_qaFlow && typeof importDoneNotify === 'function') importDoneNotify(libbed + added);   // notepad-shortcut confirmation — skipped for the Explore flow (it just returns you to where you started)
     closeImport();   // LAST — its session-import hook (navigate to Refine / Notes) runs only after the guarded reveals above are safely skipped
+    if (!(IMP._bg || IMP._sessionImport) && !_qaFlow) importLandInElements();   /* v.806 — a notes import lands in Plan → Elements too */
     // Explore → End & organize: no confirmation pop-up. Return to the mode Explore was launched from; the new-story
     // "Find an Idea" pathway lands on the Map with every element placed and in view.
     if (_qaFlow){ try {
@@ -58673,9 +58743,13 @@ body.eink .pl-filterpick .pf-row.on .pf-box{ background:#000; border-color:#000;
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.728';
+  var APP_VERSION = '2026.07.20.729';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.729', date:'September 24, 2026', notes:[
+      '**Imports land on Elements.** [Jeremy] When an import is approved you arrive in Plan \u2192 Elements, where everything it found is laid out.',
+      '**Only prose goes into the prose.** [Jeremy] A file\u2019s front matter no longer lands in your sections: the repeated title (and a section\u2019s repeated heading) is dropped, and the line about the draft plus labelled notes \u2014 Premise, Direction, Logline, Synopsis, author\u2019s notes and the like \u2014 go into General notes under their labels.'
+    ]},
     { v:'2026.07.20.728', date:'September 24, 2026', notes:[
       '**The end-of-session card, simpler.** [Jeremy] It now says where your writing is going \u2014 \u201cAdding to Section 3\u201d (tap the section to change it) \u2014 with just Keep and Discard, and \u201cor make it a new scene\u201d beneath. In the lighter charcoal of the other results windows.',
       '**No tall empty header after a session.** [Jeremy] Discarding a session and then opening Revise, Review or the Wiki left the writing room switched on underneath, which stacked its bars into a band of empty space until you refreshed.',
