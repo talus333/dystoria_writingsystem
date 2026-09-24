@@ -32117,7 +32117,7 @@ function irAppendCards(newEls){
   (newEls || []).forEach(el => wrap.appendChild(irBuildCard(el)));
 }
 function irBuildCard(el){
-  {
+  { el.sys = false; el.poolOnly = false;   /* v.807 [Jeremy] — "just store everything in the story only": the pool-word / all-stories choice is gone */
     const hasTraits = (el.cat === 'being' || el.cat === 'object' || el.cat === 'setting');   // beings get traits; objects/settings get characteristics
     if (hasTraits) el.traits = el.traits || [];
     const d = document.createElement('div'); d.className = 'ir-el' + (el.include ? '' : ' off') + (el.sys ? ' sys' : '');
@@ -32291,6 +32291,19 @@ function applyImportGoals(){
 }
 // add every approved proposal to the pools (story- or system-scoped), tagged with the story's genres for future generation
 function applyImportProposals(){
+  /* v.807 [Jeremy] — "store everything in the story only, but later add a feature import Elements into the Dystoria pool for that
+     user". The words the reader proposed for the pools are no longer added to any pool at import; they are kept with the story
+     (state.session.importPoolCandidates) for that later feature, and nothing is asked about them now. */
+  try{
+    if (IMP.proposals && IMP.proposals.length && typeof state !== 'undefined' && state.session){
+      const had = state.session.importPoolCandidates || [], seen = {};
+      had.forEach(p => { seen[(p.cat + '|' + p.word).toLowerCase()] = 1; });
+      IMP.proposals.forEach(p => { if (!p || !p.word) return; const k = (p.cat + '|' + p.word).toLowerCase(); if (seen[k]) return; seen[k] = 1; had.push({ cat: p.cat, word: p.word, why: p.why || p.reason || '' }); });
+      state.session.importPoolCandidates = had;
+    }
+  }catch(e){}
+  return 0;
+  // (v.806 and before: every accepted proposal was saved into the story's or the system's word pool here)
   if (!IMP.proposals || !IMP.proposals.length || typeof saveCustomWord !== 'function') return 0;
   let n = 0;
   IMP.proposals.forEach(p => {
@@ -58743,9 +58756,14 @@ body.eink .pl-filterpick .pf-row.on .pf-box{ background:#000; border-color:#000;
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.729';
+  var APP_VERSION = '2026.07.20.730';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.730', date:'September 24, 2026', notes:[
+      '**One card, its own connections.** [Jeremy] Reviewing an import card by card, each card now shows only the connections that involve that element, folded behind See connections \u2014 open it for the list, titled Connections related to that element.',
+      '**The start-of-session card in charcoal.** [Jeremy] \u201cWhere do you want to write?\u201d now wears the same lighter charcoal as the end-of-session card.',
+      '**Imports stay in the story.** [Jeremy] No more pool-word or all-stories choices on the review cards, and no word-pool page: everything an import finds belongs to this story. The new words it noticed are kept with the story for a later way to add them to your own Dystoria pool.'
+    ]},
     { v:'2026.07.20.729', date:'September 24, 2026', notes:[
       '**Imports land on Elements.** [Jeremy] When an import is approved you arrive in Plan \u2192 Elements, where everything it found is laid out.',
       '**Only prose goes into the prose.** [Jeremy] A file\u2019s front matter no longer lands in your sections: the repeated title (and a section\u2019s repeated heading) is dropped, and the line about the draft plus labelled notes \u2014 Premise, Direction, Logline, Synopsis, author\u2019s notes and the like \u2014 go into General notes under their labels.'
@@ -71525,7 +71543,7 @@ body.ember:not(.eink) #importProposals .ipps-btn.on{ background:var(--gold-honey
     try{ if(IMP.goals && IMP.goals.length) P.push({ kind:'goals' }); }catch(e){}
     if(layers.length) P.push({ kind:'layers', nodes:layers });
     try{ if(IMP.threads && IMP.threads.length) P.push({ kind:'threads' }); }catch(e){}   /* v.719 */
-    try{ if(IMP.proposals && IMP.proposals.length) P.push({ kind:'pool' }); }catch(e){}
+    /* v.807 — no Concept Word Pool page: new words are kept with the story for a later "add to my Dystoria pool" */
     if(!P.length) P.push({ kind:'empty' });
     return P;
   }
@@ -71631,6 +71649,40 @@ body.ember:not(.eink) #importProposals .ipps-btn.on{ background:var(--gold-honey
   wrap('importShow', function(view){ if(view==='review'){ D.idx = 0; render(); } });
   wrap('openSuggestReview', function(){ D.idx = 0; render(); });
   /* the importer shows only the found dimensions — the add-row is “+ add a dimension”, like the creator */
+  /* v.807 [Jeremy] — "it lists all the connections and it makes for a long list. can we have those behind a 'See Connections'
+     and click that it shows the list under a title of Connections related to [Element]." Each card shows only ITS connections
+     (either end naming it), folded behind a button with their count; nothing shows on a card with none, or on a page that isn't
+     an element. The rows are v.706's own — include, retype and the no-match flag all unchanged. */
+  function relsFocus(){
+    var host = $id('importRels'); if(!host) return;
+    var cards = Array.prototype.filter.call(($id('importElements')||{children:[]}).children, function(n){ return n.classList && n.classList.contains('ir-el') && !n.classList.contains('irdk-off'); });
+    var nm = cards.length === 1 ? ((cards[0].querySelector('.ir-name') || {}).value || '').trim() : '';
+    var rows = host.querySelectorAll('.irr-row'), lc = nm.toLowerCase(), n = 0;
+    Array.prototype.forEach.call(rows, function(r){ var ends = r.querySelectorAll('.irr-end'); var mine = !!lc && Array.prototype.some.call(ends, function(e){ return String(e.textContent || '').trim().toLowerCase() === lc; }); r.classList.toggle('irc-other', !mine); if(mine) n++; });
+    host.classList.add('irc-mode');
+    host.classList.toggle('irc-none', !n);
+    if(host.getAttribute('data-for') !== lc){ host.classList.remove('irc-open'); host.setAttribute('data-for', lc); }
+    var bar = host.querySelector('.irc-bar');
+    if(!bar){ bar = document.createElement('div'); bar.className = 'irc-bar';
+      bar.innerHTML = '<button type="button" class="irc-btn"></button><div class="irc-title"></div>';
+      bar.querySelector('.irc-btn').addEventListener('click', function(){ host.classList.toggle('irc-open'); relsFocus(); });
+      host.insertBefore(bar, host.firstChild); }
+    var open = host.classList.contains('irc-open');
+    bar.querySelector('.irc-btn').textContent = (open ? 'Hide connections' : 'See connections') + ' (' + n + ')';
+    bar.querySelector('.irc-btn').setAttribute('aria-expanded', open ? 'true' : 'false');
+    bar.querySelector('.irc-title').textContent = 'Connections related to ' + (nm || 'this element');
+  }
+  wrap('renderImportRels', function(){ relsFocus(); });
+  wrap('renderImportReview', function(){ relsFocus(); });
+  wrap('irAppendCards', function(){ relsFocus(); });
+  try{ var _rt = $id('irdkTitle'); }catch(e){}
+  (function watchDeck(){
+    var tt = $id('irdkTitle');
+    if(!tt){ setTimeout(watchDeck, 400); return; }
+    try{ new MutationObserver(function(){ relsFocus(); }).observe(tt, { childList:true, characterData:true, subtree:true }); }catch(e){}
+    var c = $id('irdkCount'); if(c){ try{ new MutationObserver(function(){ relsFocus(); }).observe(c, { childList:true, characterData:true, subtree:true }); }catch(e){} }
+  })();
+  window.__impRelsFocus = relsFocus;
   wrap('buildTraitArea', function(d){
     var b = d && d.querySelector ? d.querySelector('.ir-ta-ok') : null; if(b) b.textContent = '+ add a dimension';
     var v = d && d.querySelector ? d.querySelector('.ir-ta-val') : null; if(v) v.placeholder = 'name it…';
@@ -98156,5 +98208,38 @@ html body #recapCard#recapCard .rc-nppill b{ color:#d9cfbb !important; }
 html body #recapCard#recapCard #recapClose{ background:linear-gradient(180deg, #ffb44f, #f08c1f) !important; color:#2b2926 !important; border:none !important; }
 html body #recapCard#recapCard .rc-wikilink, html body #recapCard#recapCard .rc-foot-btn, html body #recapCard#recapCard .rc-route-move, html body #recapCard#recapCard .rc-suggest-btn{ color:#f3c77e !important; border-color:rgba(255,205,116,.32) !important; background:transparent !important; }
 html body #recapCard#recapCard .rc-goal{ color:#e0a94e !important; }
+</style>
+<style id="dyst-import-rels-fold">
+/* v.807 — the review card: its own connections behind "See connections", and no pool-word / all-stories row */
+#importRels.irc-mode > .irr-head{ display:none !important; }
+#importRels.irc-mode .irr-row.irc-other{ display:none !important; }
+#importRels.irc-mode:not(.irc-open) .irr-row{ display:none !important; }
+#importRels.irc-mode.irc-none{ display:none !important; }
+#importRels .irc-bar{ display:flex; flex-direction:column; align-items:flex-start; gap:10px; margin:4px 0 8px; }
+#importRels .irc-btn{ font-family:var(--sans, system-ui, sans-serif); font-size:10.5px; font-weight:700; letter-spacing:.14em; text-transform:uppercase; padding:7px 14px; border-radius:999px; cursor:pointer; background:transparent; color:#b07a24; border:1px solid rgba(176,122,36,.45); }
+#importRels .irc-btn:hover{ background:rgba(250,154,49,.08); }
+#importRels .irc-title{ display:none; font-family:var(--serif, Georgia, serif); font-size:16px; color:#3a3126; }
+#importRels.irc-open .irc-title{ display:block; }
+html body #importCard#importCard.ic-reviewing #importRels .irc-btn{ color:#f3c77e; border-color:rgba(255,205,116,.38); }
+html body #importCard#importCard.ic-reviewing #importRels .irc-btn:hover{ background:rgba(255,205,116,.08); }
+html body #importCard#importCard.ic-reviewing #importRels .irc-title{ color:#f2e7cf; }
+#importCard .ir-el .ir-scope-row{ display:none !important; }
+</style>
+<style id="dyst-continue-charcoal">
+/* v.807 [Jeremy] — "Where do you want to write?" in the end-of-session card's lighter charcoal (v.805): #34312d, cream type, gold
+   primary, quiet outlines. Ids doubled to outrank the dialog-family parchment passes. */
+html body #continueHint#continueHint .ch-card{ background:#34312d !important; color:#ece6d9 !important; border:1px solid rgba(255,205,116,.16) !important; border-top:1px solid rgba(255,205,116,.16) !important; box-shadow:0 28px 80px rgba(0,0,0,.45) !important; }
+html body #continueHint#continueHint .ch-card::before, html body #continueHint#continueHint .ch-card::after{ display:none !important; }
+html body #continueHint#continueHint .ch-title{ color:#f2e7cf !important; }
+html body #continueHint#continueHint .ch-body{ color:#cfc5b1 !important; }
+html body #continueHint#continueHint .ch-body b{ color:#f3c77e !important; }
+html body #continueHint#continueHint .ch-ok{ background:linear-gradient(180deg, #ffb44f, #f08c1f) !important; color:#2b2926 !important; border:none !important; box-shadow:0 6px 18px rgba(250,154,49,.26) !important; font-weight:700 !important; }
+html body #continueHint#continueHint .ch-ok:hover{ filter:brightness(1.06); }
+html body #continueHint#continueHint .ch-other, html body #continueHint#continueHint .ch-new{ background:transparent !important; color:#e9dcc2 !important; border:1px solid rgba(255,255,255,.22) !important; }
+html body #continueHint#continueHint .ch-other:hover, html body #continueHint#continueHint .ch-other.open, html body #continueHint#continueHint .ch-new:hover{ color:#f3c77e !important; border-color:rgba(255,205,116,.55) !important; background:rgba(255,205,116,.06) !important; }
+html body #continueHint#continueHint .ch-list{ background:#2b2926 !important; border-color:rgba(255,255,255,.12) !important; }
+html body #continueHint#continueHint .ch-sec{ color:#ece6d9 !important; border-bottom-color:rgba(255,255,255,.08) !important; }
+html body #continueHint#continueHint .ch-sec:hover{ background:rgba(255,205,116,.08) !important; }
+html body #continueHint#continueHint .ch-sec-w, html body #continueHint#continueHint .ch-list-none{ color:#a89f8e !important; }
 </style>
 </body></html>
