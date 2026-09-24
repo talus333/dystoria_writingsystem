@@ -29393,7 +29393,7 @@ function pubBuildGuestUI(errOnly){
       if(!n||!n.closest||!n.closest('#readBody .rd-prose')) return; var t=(sel.toString()||'').replace(/\s+/g,' ').trim();
       var pop=$('gcPop'); if(pop&&pop.classList.contains('show')&&_pubAnchor&&_pubAnchor.key===t.slice(0,600)) return;
       pubGuestSelect({ target:n, _pubClick:true }); }, 650); }); } }
-  if(rb&&!rb._pubScroll){ rb._pubScroll=1; rb.addEventListener('scroll',pubOnReadScroll); }
+  if(rb&&!rb._pubScroll){ rb._pubScroll=1; rb.addEventListener('scroll',pubOnReadScroll); rb.addEventListener('scroll', function(){ if(rb._pubFollowT) return; rb._pubFollowT=requestAnimationFrame(function(){ rb._pubFollowT=0; _pubFollowPop(); }); }, { passive:true }); }
   const impRow=$('gcImpRow'); if(impRow&&!impRow._w){ impRow._w=1; Array.prototype.forEach.call(impRow.querySelectorAll('.gcimp-btn'), function(b){ b.addEventListener('click', function(e){ e.stopPropagation(); pubImpMark(b.getAttribute('data-imp')); }); }); }
   const post=$('gcPost'); if(post&&!post._w){ post._w=1; post.addEventListener('click',pubPostComment); }
   const acc=$('gcAccount'); if(acc&&!acc._w){ acc._w=1; acc.addEventListener('click',()=>{ if($('authCard')) $('authCard').classList.add('show'); }); }
@@ -29510,29 +29510,64 @@ function pubShowCommentPop(rect, text, rects){
   if(impRow) Array.prototype.forEach.call(impRow.querySelectorAll('.gcimp-btn'), function(b){ b.classList.toggle('on', !!_pubImpMine[anchor+IMP_SEP+b.getAttribute('data-imp')]); });
   const title=$('gcpTitle'); if(title) title.textContent=_pubImpAllow.impressions?'How did this land?':'Add a comment';
   const orLbl=pop.querySelector('.gcimp-or'); if(orLbl) orLbl.style.display=(_pubImpAllow.impressions&&_pubImpAllow.comments)?'':'none';
-  /* v.800 [Jeremy] — "a comments drawer that opens at the bottom, full width … always opens in the same place, is predictable and
-     won't cover the section you've highlighted." The pop-up is a drawer docked to the foot of the page; the passage is scrolled
-     clear of it (and the page gains room at its foot while it's open, so even the last lines can rise above it). */
+  /* v.801 [Jeremy] — "i don't like it on the bottom, can we roll it back to the small pop up window but have it open in the right
+     gutter, in line with the hilighted section." The v.800 drawer is gone; the card opens just right of the story's column, its
+     top level with the first line of the highlight, and follows the passage as the page scrolls. Where the window is too narrow
+     for a gutter it slides left only as far as it can without covering the highlighted lines; failing that (a phone) it goes
+     below or above the passage as v.798 did. Kept from v.800: picking another passage re-aims it (a typed draft survives),
+     Esc or a click on nothing closes it, the cookie bar steps aside, and no keyboard springs up on a touch screen. */
   const wasOpen=pop.classList.contains('show');
-  pop.style.left=''; pop.style.top=''; pop.style.maxHeight=''; pop.style.overflowY='';
-  pop.classList.add('gc-drawer'); pop.classList.toggle('gc-one', !(_pubImpAllow.impressions&&_pubImpAllow.comments));
-  pop.classList.add('show'); pop.setAttribute('data-side','drawer'); pop.setAttribute('role','dialog'); pop.setAttribute('aria-label', (title&&title.textContent)||'Mark this passage');
+  pop.classList.remove('gc-drawer', 'gc-one');
+  pop.style.maxHeight=''; pop.style.overflowY='';
+  pop.classList.add('show'); pop.setAttribute('role','dialog'); pop.setAttribute('aria-label', (title&&title.textContent)||'Mark this passage');
   document.body.classList.add('gc-open');
-  _pubDrawerClear(rect, rects);
+  _pubPositionPop(rect, rects, true);
   const t=$('gcText'); if(t){ if(!(wasOpen && t.value.trim())) t.value='';   // a draft survives re-picking the passage
     if(!(typeof _pubTouch==='function' && _pubTouch())) setTimeout(()=>{ try{ t.focus({ preventScroll:true }); }catch(_){} },0); }   // no keyboard springing up over the page on a phone
 }
-/* scroll the reading column so the highlighted passage sits above the drawer: its last line clear of the drawer's top edge,
-   and never pushed up under the head bar (a passage taller than the room keeps its start in view) */
-function _pubDrawerClear(rect, rects){
-  try{ const pop=$('gcPop'), rb=$('readBody'); if(!pop||!rb) return;
-    const H=pop.offsetHeight||0; document.documentElement.style.setProperty('--gcH', H+'px');
-    const vh=window.innerHeight, room=vh-H-24;
-    const head=(document.querySelector('#readMode .rd-head')||{getBoundingClientRect:()=>({bottom:56})}).getBoundingClientRect().bottom+12;
-    let bottom=rect.bottom; if(rects&&rects.length){ for(let i=rects.length-1;i>=0;i--){ if(rects[i].width>0.5){ bottom=Math.max(bottom, rects[i].bottom); break; } } }
-    if(bottom<=room) return;
-    let d=bottom-room; if(rect.top-d<head) d=Math.max(0, rect.top-head);
-    if(d>0) rb.scrollTop=rb.scrollTop+Math.ceil(d);
+function _pubHeadBottom(){ try{ var h=document.querySelector('#readMode .rd-head'); return (h ? h.getBoundingClientRect().bottom : 56) + 10; }catch(e){ return 66; } }
+/* the right gutter: just past the story column, top level with the highlight's first line */
+function _pubGutterPlace(pw, ph, rect, rects){
+  var vw=window.innerWidth, vh=window.innerHeight, M=12, G=28, head=_pubHeadBottom();
+  var list=Array.prototype.filter.call(rects||[], function(q){ return q.width>0.5 && q.height>0.5; }); var F=list[0]||rect;
+  var top=Math.min(Math.max(head, F.top-12), vh-ph-M);
+  var prose=document.querySelector('#readBody .rd-prose'), pr=prose?prose.getBoundingClientRect():null;
+  if(pr && vw>=700){
+    var left=pr.right+G; if(left+pw<=vw-M) return { left:left, top:top, side:'gutter' };
+    left=Math.max(M, vw-pw-M);   // not a full gutter: as far right as it goes, if that keeps it off the highlighted lines
+    var hit=list.concat([rect]).some(function(q){ return left<q.right && left+pw>q.left && top<q.bottom && top+ph>q.top; });
+    if(!hit) return { left:left, top:top, side:'gutter' };
+  }
+  return _pubPlacePop(pw, ph, rect, rects);
+}
+function _pubPositionPop(rect, rects, opening){
+  const pop=$('gcPop'); if(!pop) return;
+  const pw=pop.offsetWidth||300, ph=pop.offsetHeight||230, vh=window.innerHeight;
+  let at=_pubGutterPlace(pw, ph, rect, rects);
+  if(opening && at.side==='gutter'){   /* a passage low on the page would push the card up out of line with it: lift the passage instead */
+    const F=(Array.prototype.find.call(rects||[], q=>q.width>0.5)||rect), want=F.top-12, room=vh-ph-12;
+    if(want>room){ const rb=$('readBody'); const d=Math.min(Math.ceil(want-room), Math.max(0, Math.floor(F.top-_pubHeadBottom()-12)));
+      if(rb && d>0){ const b0=rb.scrollTop; rb.scrollTop=b0+d; const got=rb.scrollTop-b0;
+        if(got>0){ const sh=q=>({ left:q.left, right:q.right, width:q.width, height:q.height, top:q.top-got, bottom:q.bottom-got });
+          rect=sh(rect); rects=Array.prototype.map.call(rects||[], sh); at=_pubGutterPlace(pw, ph, rect, rects); } } } }
+  if(opening && /line$/.test(at.side)){   /* a phone: no room beside, below or above — scroll the passage up so it fits under it (v.798) */
+    let L=null; if(rects&&rects.length){ for(let i=rects.length-1;i>=0;i--){ if(rects[i].width>0.5){ L=rects[i]; break; } } } L=L||rect;
+    const d=Math.round(rect.bottom+18+ph-vh);
+    if(d>0 && rect.top-d>=64){ const sc=[$('readBody'), document.scrollingElement].find(x=>x && x.scrollHeight>x.clientHeight+2);
+      if(sc){ const b0=sc.scrollTop; sc.scrollTop=b0+d; const got=sc.scrollTop-b0;
+        if(got>0){ const sh=q=>({ left:q.left, right:q.right, width:q.width, height:q.height, top:q.top-got, bottom:q.bottom-got });
+          rect=sh(rect); rects=Array.prototype.map.call(rects||[], sh); L=sh(L); at=_pubGutterPlace(pw, ph, rect, rects); } } }
+    if(/line$/.test(at.side)){ const up=L.top-18, dn=vh-L.bottom-18;
+      if(Math.max(up, dn)>=160){ const room=Math.floor(Math.max(up, dn)); pop.style.maxHeight=room+'px'; pop.style.overflowY='auto';
+        at={ left:at.left, top:(dn>=up ? L.bottom+8 : Math.max(10, L.top-8-Math.min(ph, room))), side:(dn>=up?'below':'above') }; } } }
+  pop.style.left=Math.round(at.left)+'px'; pop.style.top=Math.round(at.top)+'px'; pop.setAttribute('data-side', at.side);
+}
+/* the card follows its passage as the story scrolls (the held highlight is the passage) */
+function _pubFollowPop(){
+  try{ const pop=$('gcPop'); if(!pop||!pop.classList.contains('show')) return;
+    const h=window.CSS && CSS.highlights && CSS.highlights.get('imp-sel'); const r=h && Array.from(h)[0]; if(!r) return;
+    const side=pop.getAttribute('data-side'); if(side && side!=='gutter') return;   // below/above placements stay put
+    _pubPositionPop(r.getBoundingClientRect(), r.getClientRects(), false);
   }catch(e){} }
 function pubHideCommentPop(){
   if(typeof pubCommentErr==='function') pubCommentErr('');
@@ -58493,9 +58528,12 @@ body.eink .pl-filterpick .pf-row.on .pf-box{ background:#000; border-color:#000;
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.723';
+  var APP_VERSION = '2026.07.20.724';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.724', date:'September 24, 2026', notes:[
+      '**Reader comments open in the right gutter.** [Jeremy] The bottom drawer is gone; the small How did this land? card is back, opening just to the right of the story, level with the passage you highlighted, and it follows that passage as you scroll.'
+    ]},
     { v:'2026.07.20.723', date:'September 24, 2026', notes:[
       '**Reader comments open in a drawer.** [Jeremy] On a shared story, highlighting a passage opens How did this land? and the comment box in a full-width drawer at the foot of the page \u2014 the same place every time \u2014 and the passage scrolls clear above it. Click another passage and the drawer follows it; click a space or press Esc to close it.'
     ]},
@@ -97698,30 +97736,8 @@ html body.guest #readBody .rd-prose{ touch-action:manipulation; }
   #pubWelcome .pw-card{ padding:22px 20px 18px; }
 }
 @media (max-width:400px){ html body.guest #readMode .rd-guest-brand .rd-brand-word{ display:none; } }
-/* v.800 [Jeremy] — the comments DRAWER: docked full width to the foot of the page, the same place every time */
-html body.guest #readMode #gcPop.gc-drawer{ display:grid !important; position:fixed !important; left:0 !important; right:0 !important; bottom:0 !important; top:auto !important; width:auto !important; max-width:none !important;
-  box-sizing:border-box; padding:14px max(24px, calc((100vw - 1080px) / 2)) 16px !important; margin:0 !important;
-  grid-template-columns:minmax(0, 1fr); grid-template-areas:"head" "note" "imp" "com"; align-items:start;   /* the feelings on one line, the comment under them [Jeremy] */
-  border:none !important; border-top:1px solid var(--line) !important; border-radius:16px 16px 0 0 !important; box-shadow:0 -10px 34px rgba(0,0,0,.16) !important;
-  max-height:72vh; overflow-y:auto; transform:translateY(0); transition:transform .22s cubic-bezier(.2,.7,.2,1); }
-html body.guest #readMode #gcPop.gc-drawer:not(.show){ transform:translateY(105%); visibility:hidden; pointer-events:none; transition:transform .18s ease-in, visibility 0s .18s; }
-html body.guest #readMode #gcPop.gc-drawer .gcp-head{ grid-area:head; margin-bottom:2px; }
-html body.guest #readMode #gcPop.gc-drawer #gcAnchorNote{ grid-area:note; margin-bottom:10px; font-size:12.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-html body.guest #readMode #gcPop.gc-drawer #gcImpRow{ grid-area:imp; margin:0; }
-html body.guest #readMode #gcPop.gc-drawer .gcimp-q{ display:none; }
-html body.guest #readMode #gcPop.gc-drawer .gcimp-btns{ flex-direction:row; flex-wrap:wrap; gap:8px; }
-html body.guest #readMode #gcPop.gc-drawer .gcimp-btns{ flex-wrap:nowrap; }
-html body.guest #readMode #gcPop.gc-drawer .gcimp-btn{ width:auto; flex:1 1 0; min-width:0; justify-content:center; white-space:nowrap; }
-html body.guest #readMode #gcPop.gc-drawer #gcCommentZone{ grid-area:com; margin-top:14px; padding-top:14px; border-top:1px solid var(--line); display:grid; grid-template-columns:minmax(0, 1fr) auto; grid-template-areas:"name name" "text text" "fine post" "err err"; column-gap:14px; align-items:center; }
-html body.guest #readMode #gcPop.gc-drawer .gcimp-or{ display:none !important; }
-html body.guest #readMode #gcPop.gc-drawer #gcName{ grid-area:name; }
-html body.guest #readMode #gcPop.gc-drawer #gcText{ grid-area:text; min-height:58px; }
-html body.guest #readMode #gcPop.gc-drawer #gcPost{ grid-area:post; width:auto; padding:8px 22px; margin-top:8px; }
-html body.guest #readMode #gcPop.gc-drawer .gc-fine{ grid-area:fine; margin-top:8px; }
-html body.guest #readMode #gcPop.gc-drawer #gcErr{ grid-area:err; }
-html body.guest #readMode #gcPop.gc-drawer.gc-one #gcCommentZone{ border-top:none; margin-top:0; padding-top:0; }
-/* room at the page's foot while it's open, so the last lines can rise above it */
-html body.guest.gc-open #readBody{ padding-bottom:calc(var(--gcH, 240px) + 48px) !important; }
+/* v.801 — the v.800 bottom drawer is rolled back to the small card, which opens in the right gutter [Jeremy] */
+html body.guest #gcPop .gcimp-q{ display:none; }   /* the card's title already asks "How did this land?" — once is enough */
 html body.guest.gc-open #consentBar{ visibility:hidden !important; }   /* the cookie bar steps aside while the drawer is open, and comes back when it closes */
 @media (max-width:760px){
   html body.guest #readMode #gcPop.gc-drawer{ padding:12px 14px 14px !important; border-radius:14px 14px 0 0 !important; }
