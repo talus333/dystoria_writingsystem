@@ -5588,11 +5588,11 @@ body.eink #consentBar #cbAccept{background:#000; color:#fff; border-color:#000}
     </div>
     <div id="gcCommentZone">
       <div class="gcimp-or"><span>or leave a comment</span></div>
-      <input id="gcName" placeholder="Your name" maxlength="24" autocomplete="off">
+      <input id="gcName" placeholder="Your name (optional)" maxlength="40" autocomplete="off">
       <textarea id="gcText" placeholder="Leave a comment… (⌘↵ to post)" rows="3"></textarea>
       <button id="gcPost">Post comment</button>
       <div id="gcErr"></div>
-      <div class="gc-fine">Posting publicly with this link. <a id="gcAccount">Create an account</a> to comment under your name.</div>
+      <div class="gc-fine">Only the author sees your comments. Your name is remembered on this device — <a id="gcAccount">create an account</a> to keep your comments on any device.</div>
     </div>
   </div>
   <button id="readTop" title="Back to the top">↑ Top</button>
@@ -29609,14 +29609,10 @@ function _pubSignedIn(){ return !!(cloud.user && !cloud.user.is_anonymous); }
 function pubSyncNameField(){
   const nm=$('gcName'); if(!nm) return;
   const fine=$('gcPop')?$('gcPop').querySelector('.gc-fine'):null;
-  if(_pubSignedIn()){
-    nm.disabled=false; nm.readOnly=false; nm.placeholder='Your name';
-    if(!nm.value || nm.value==='Anonymous') nm.value=(cloud.username||myDisplayName()||'').trim();
-    if(fine) fine.style.display='none';
-  } else {
-    nm.value='Anonymous'; nm.disabled=true; nm.placeholder='Anonymous';
-    if(fine) fine.style.display='';
-  }
+  /* v.809 — #14: a reader names themselves with or without an account (remembered on this device); blank posts as Anonymous */
+  nm.disabled=false; nm.readOnly=false; nm.placeholder='Your name (optional)';
+  if(!nm.value || nm.value==='Anonymous') nm.value=(_pubGN() || (_pubSignedIn() ? (cloud.username||myDisplayName()||'') : '')).trim();
+  if(fine) fine.style.display=_pubSignedIn()?'none':'';
 }
 // in the guest reader: hide the "Comment as yourself" pill once signed in; refresh the name field;
 // hide "Try Dystoria" only for established accounts (keep it for a brand-new / story-less account)
@@ -29646,8 +29642,9 @@ async function pubPostComment(){
   try{
     await pubEnsureAnon();   // best-effort: attaches an author id when anonymous sign-in is enabled, but the
                             // add_public_comment RPC is granted to the anon role, so posting works without it
-    let name='Anonymous';   // not signed in → hard-locked to anonymous
-    if(_pubSignedIn()){ name=($('gcName')&&$('gcName').value||'').trim() || (cloud.username||myDisplayName()||'').trim() || 'Reader'; _pubSetGN(name); }
+    /* v.809 — #14: the typed name, account or not (control characters stripped, 40 characters); blank → Anonymous */
+    let name=(($('gcName')&&$('gcName').value)||'').replace(/[\u0000-\u001f\u007f]/g,'').trim().slice(0,40);
+    if(name) _pubSetGN(name); else name=_pubSignedIn() ? ((cloud.username||myDisplayName()||'').trim() || 'Reader') : 'Anonymous';
     var _ver=(_pubPubVersion||null);
     let resC=await supa.rpc('add_public_comment_v',{tok:_pubToken,a_name:name,a_anchor:anchorKey,a_section:0,a_body:body,a_version:_ver});
     if(resC && resC.error){ resC=await supa.rpc('add_public_comment',{tok:_pubToken,a_name:name,a_anchor:anchorKey,a_section:0,a_body:body}); }   // fall back if the version-binding migration isn't in yet
@@ -29735,6 +29732,7 @@ function pubMakeCommentItem(c, opts){
   const who=document.createElement('span'); who.textContent=(opts.owner?'✦ ':'')+(c.author_name||'Guest')+' · '+(typeof _pubTime==='function'?_pubTime(c.created_at):''); au.appendChild(who);
   if(opts.owner){ const acts=document.createElement('span'); acts.className='np-acts'; const x=document.createElement('span'); x.className='np-x'; x.textContent='×'; x.title='Remove this reader comment'; x.addEventListener('click',ev=>{ ev.stopPropagation(); pubDeleteComment(c.id); }); acts.appendChild(x); au.appendChild(acts); }
   it.appendChild(au);
+  try{ if(typeof rdrDecorate==='function') rdrDecorate(it, c, opts); }catch(e){}   /* v.809 — #14: the thread under the comment */
   if(c.anchor_key && !orphan){
     if(opts.owner) it.addEventListener('click',()=>pubOwnerScrollTo(c.anchor_key)); else { it.style.cursor='pointer'; it.addEventListener('click',()=>pubFlashPassage(container||$('readBody'), c.anchor_key)); }
     it.addEventListener('mouseenter',()=>pubHoverHighlight(container,c.anchor_key,true));
@@ -38446,7 +38444,7 @@ function renderNotes(){
   if ($('editMode')) $('editMode').classList.add('show-notes');
   // comments: active (anchor present) vs archived (orphaned)
   const activeC = [], archC = [];
-  comments.forEach(c => { if (c.anchor_key && typeof pubAnchorPresent === 'function' && !pubAnchorPresent(eb, c.anchor_key)) archC.push(c); else activeC.push(c); });
+  comments.forEach(c => { if ((c.anchor_key && typeof pubAnchorPresent === 'function' && !pubAnchorPresent(eb, c.anchor_key)) || (typeof rdrIsResolved === 'function' && rdrIsResolved(c))) archC.push(c); else activeC.push(c); });   /* v.809 — resolved → Archived */
   // notes: active (original highlight still present) vs changed (span exists but highlight edited away)
   const activeNotes = [], changedNotes = [];
   allNotes.forEach(n => { if (pubAnchorMostlyPresent(eb, noteAnchorOf(n))) activeNotes.push(n); else changedNotes.push(n); });   // archive only when most of the highlight is gone
@@ -58845,9 +58843,13 @@ body.eink .pl-filterpick .pf-row.on .pf-box{ background:#000; border-color:#000;
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.731';
+  var APP_VERSION = '2026.07.20.732';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.732', date:'September 24, 2026', notes:[
+      '**Reader feedback, in one place.** Everything readers leave on your shared link now gathers in a Reader feedback card \u2014 newest first, Open and Resolved. Reply to a reader (they see it under their comment and can answer back), resolve what you have dealt with, jump to the passage, or delete. A gold count on the Revise pill and on Share tells you when something new arrives.',
+      '**Readers can sign their name.** Someone reading your link can now put their name on a comment without making an account; it is remembered on their device.'
+    ]},
     { v:'2026.07.20.731', date:'September 24, 2026', notes:[
       '**Imports keep your story in one piece.** [Jeremy] The importer no longer breaks prose into sections the text never had. A new section starts only where the file itself marks one \u2014 a chapter or section heading on its own line, or a scene-break line (***, ---, #). A story with neither comes in as one section, with no made-up title, and a heading now opens its own section instead of trailing at the end of the one before.'
     ]},
@@ -98334,4 +98336,330 @@ html body #continueHint#continueHint .ch-sec{ color:#ece6d9 !important; border-b
 html body #continueHint#continueHint .ch-sec:hover{ background:rgba(255,205,116,.08) !important; }
 html body #continueHint#continueHint .ch-sec-w, html body #continueHint#continueHint .ch-list-none{ color:#a89f8e !important; }
 </style>
+<style id="dyst-reader-loop">
+/* v.809 — #14 the beta-reader loop: the badge, the Reader feedback card (the lighter charcoal family), the threads */
+.mode-pills button[data-mode="edit"], #padTools #editBtn, #shareBtn{ position:relative; overflow:visible !important; }
+.rdr-badge{ position:absolute; top:-5px; right:-7px; min-width:16px; height:16px; padding:0 4px; border-radius:9px; background:linear-gradient(180deg,#ffb44f,#f08c1f); color:#2b2926; font:700 10px/16px system-ui,-apple-system,sans-serif; letter-spacing:0; text-align:center; box-shadow:0 0 0 2px #2b2926; cursor:pointer; z-index:3; pointer-events:auto; }
+#rdrPanel{ position:fixed; inset:0; z-index:9800; display:none; align-items:flex-start; justify-content:center; padding:7vh 16px 16px; background:rgba(20,18,16,.55); }
+#rdrPanel.show{ display:flex; }
+#rdrPanel .rdr-card{ width:min(640px,100%); max-height:84vh; display:flex; flex-direction:column; background:#34312d; color:#ece6d9; border:1px solid rgba(255,205,116,.16); border-radius:16px; box-shadow:0 28px 80px rgba(0,0,0,.45); overflow:hidden; font-family:'Cormorant Garamond',Georgia,serif; }
+#rdrPanel .rdr-head{ display:flex; align-items:center; justify-content:space-between; padding:18px 22px 6px; }
+#rdrPanel .rdr-title{ font-size:24px; color:#f2e7cf; letter-spacing:.01em; }
+#rdrPanel .rdr-x{ width:30px; height:30px; border-radius:50%; border:1px solid rgba(255,255,255,.18); background:transparent; color:#cfc5b1; font-size:18px; line-height:26px; cursor:pointer; }
+#rdrPanel .rdr-x:hover{ color:#f3c77e; border-color:rgba(255,205,116,.5); }
+#rdrPanel .rdr-sub{ padding:0 22px 10px; font-size:14px; color:#a89f8e; font-style:italic; }
+#rdrPanel .rdr-tabs{ display:flex; gap:6px; padding:0 22px 12px; border-bottom:1px solid rgba(255,255,255,.08); }
+#rdrPanel .rdr-tab{ border:1px solid rgba(255,255,255,.2); background:transparent; color:#e9dcc2; border-radius:999px; padding:4px 14px; font:600 11px/1.6 system-ui,-apple-system,sans-serif; letter-spacing:.08em; text-transform:uppercase; cursor:pointer; }
+#rdrPanel .rdr-tab.on{ background:linear-gradient(180deg,#ffb44f,#f08c1f); color:#2b2926; border-color:transparent; }
+#rdrPanel .rdr-list{ overflow:auto; padding:6px 22px 20px; }
+#rdrPanel .rdr-empty{ padding:28px 6px; text-align:center; color:#a89f8e; font-style:italic; font-size:17px; line-height:1.5; }
+#rdrPanel .rdr-th{ padding:14px 0 12px; border-bottom:1px solid rgba(255,255,255,.08); }
+#rdrPanel .rdr-th.rdr-flash{ animation:rdrFlash 1.6s ease-out; }
+@keyframes rdrFlash{ 0%{ background:rgba(255,205,116,.16); } 100%{ background:transparent; } }
+#rdrPanel .rdr-q{ font-style:italic; color:#cfc5b1; font-size:15px; margin-bottom:4px; }
+#rdrPanel .rdr-q.rdr-link{ cursor:pointer; }
+#rdrPanel .rdr-q.rdr-link:hover{ color:#f3c77e; }
+#rdrPanel .rdr-b{ font-size:18px; line-height:1.45; color:#f2e7cf; white-space:pre-wrap; }
+#rdrPanel .rdr-meta{ margin-top:5px; font:12px/1.5 system-ui,-apple-system,sans-serif; color:#a89f8e; }
+#rdrPanel .rdr-who{ color:#e9dcc2; font-weight:600; }
+#rdrPanel .rdr-noacct{ margin-left:6px; padding:0 6px; border:1px solid rgba(255,255,255,.16); border-radius:999px; font-size:10.5px; }
+#rdrPanel .rdr-new{ margin-left:6px; padding:0 7px; border-radius:999px; background:rgba(255,180,79,.18); color:#f3c77e; font-weight:700; font-size:10.5px; letter-spacing:.06em; text-transform:uppercase; }
+.rdr-reps{ margin:8px 0 2px 14px; padding-left:12px; border-left:2px solid rgba(255,205,116,.28); }
+.rdr-rep{ margin:6px 0; font-size:15.5px; line-height:1.42; white-space:pre-wrap; }
+.rdr-rep .rdr-rw{ font:600 11.5px/1.4 system-ui,-apple-system,sans-serif; letter-spacing:.02em; margin-right:6px; }
+.rdr-rep .rdr-rt{ font:11px/1.4 system-ui,-apple-system,sans-serif; opacity:.7; margin-left:6px; white-space:nowrap; }
+#rdrPanel .rdr-rep{ color:#e2d8c6; } #rdrPanel .rdr-rep.rdr-by-author .rdr-rw{ color:#f3c77e; } #rdrPanel .rdr-rep.rdr-by-reader .rdr-rw{ color:#e9dcc2; }
+#rdrPanel .rdr-acts{ display:flex; flex-wrap:wrap; gap:6px; margin-top:9px; }
+#rdrPanel .rdr-act{ border:1px solid rgba(255,255,255,.2); background:transparent; color:#e9dcc2; border-radius:999px; padding:3px 12px; font:600 11px/1.6 system-ui,-apple-system,sans-serif; letter-spacing:.06em; cursor:pointer; }
+#rdrPanel .rdr-act:hover{ color:#f3c77e; border-color:rgba(255,205,116,.55); }
+#rdrPanel .rdr-act.rdr-primary{ background:linear-gradient(180deg,#ffb44f,#f08c1f); color:#2b2926; border-color:transparent; }
+#rdrPanel .rdr-act.rdr-danger:hover{ color:#f0a58a; border-color:rgba(240,165,138,.55); }
+.rdr-box{ margin-top:9px; }
+.rdr-box textarea{ width:100%; box-sizing:border-box; min-height:64px; resize:vertical; border-radius:10px; padding:8px 10px; font:16px/1.4 'Cormorant Garamond',Georgia,serif; }
+#rdrPanel .rdr-box textarea{ background:#2b2926; color:#f2e7cf; border:1px solid rgba(255,255,255,.16); }
+#rdrPanel .rdr-box textarea:focus{ outline:none; border-color:rgba(255,205,116,.55); }
+.rdr-box .rdr-box-row{ display:flex; gap:6px; margin-top:6px; }
+.rdr-err{ display:none; margin-top:6px; font:12px/1.45 system-ui,-apple-system,sans-serif; color:#f0a58a; }
+/* in the margins (Revise's notes, the reader's list) the thread takes the item's own colours */
+.np-item .rdr-reps{ margin:6px 0 4px 2px; padding-left:9px; }
+.np-item .rdr-rep{ font-size:13.5px; }
+.np-item .rdr-rep.rdr-by-author .rdr-rw{ color:#b08a2e; }
+.np-item .rdr-rlink{ margin-left:8px; font:600 10.5px/1.4 system-ui,-apple-system,sans-serif; letter-spacing:.06em; text-transform:uppercase; color:#b08a2e; cursor:pointer; }
+.np-item .rdr-rlink:hover{ text-decoration:underline; }
+.np-item .rdr-box textarea{ font-size:14px; min-height:52px; background:#fffdf7; border:1px solid rgba(0,0,0,.14); color:inherit; }
+.np-item .rdr-box button{ border:1px solid rgba(0,0,0,.16); background:transparent; border-radius:999px; padding:2px 11px; font:600 11px/1.6 system-ui,-apple-system,sans-serif; cursor:pointer; color:inherit; }
+.np-item .rdr-box button.rdr-send{ background:linear-gradient(180deg,#ffb44f,#f08c1f); color:#2b2926; border-color:transparent; }
+.np-item.rdr-fresh{ box-shadow:inset 3px 0 0 #f08c1f; }
+.np-item .rdr-resolved-tag{ margin-left:6px; font:600 10px/1.4 system-ui,-apple-system,sans-serif; letter-spacing:.06em; text-transform:uppercase; opacity:.7; }
+.gc-newrep{ display:block; margin:5px 0 0; font:600 11px/1.4 system-ui,-apple-system,sans-serif; letter-spacing:.03em; color:#b08a2e; cursor:pointer; text-transform:none; }
+.gc-newrep:hover{ text-decoration:underline; }
+.sp-rdr{ margin-top:10px; width:100%; }
+</style>
+<script id="dyst-reader-loop-js">
+/* v.809 — ROADMAP #14, THE BETA-READER LOOP [Jeremy: "let's do the first three one after the other"].
+   The shared link could collect comments, but the author only ever met them one at a time in Revise's margin, for the
+   passage on screen — no list, no way to answer, no sign that anything had arrived. This closes the loop:
+   · READER FEEDBACK — every reader comment on the story in one lighter-charcoal card, newest activity first, Open | Resolved.
+     Each thread: the passage (click → Revise, lit), the comment, who (a named reader with no account is marked so) and when,
+     the replies, and Reply · Resolve/Reopen · Go to passage · Delete.
+   · REPLIES, both ways — `story_comments.replies` (jsonb) through the `add_comment_reply` RPC of migration 10. The author
+     replies from the card or from the margin; the reader sees the reply under their own comment (a realtime UPDATE of their
+     own row, the only row they can read) with "The author replied — show", and can answer back. No migration yet → the
+     author is told exactly which file to run, and nothing is lost.
+   · RESOLVE — the author's own bookkeeping, so it lives in the story (`session.readerResolved[id] = when`) and needs no
+     migration. A reader who answers after that reopens it. A resolved comment leaves the margin for the Archived fold.
+   · UNREAD — anything a reader did since the author last opened the card (`session.readerSeenAt`) and not resolved: a gold
+     count on every Revise mode pill and on Share; a click opens the card. The comments are now loaded (and watched live)
+     whenever the author has a cloud story open, not only inside Revise.
+   · A NAME WITHOUT AN ACCOUNT — the reader's name field is always editable and remembered on the device.
+   The server half (the spam guard: a per-link flood limit that holds even with no session, a daily ceiling, names clamped,
+   the old add_public_comment made a shim; the replies column and RPC; `author_account`) is `reader_loop_migration_10.sql`. */
+(function(){
+  'use strict';
+  var W = { sid:null };
+  var P = { filter:'open', focus:null, newIds:{}, openBox:null };
+  function S(){ try{ return state.session; }catch(e){ return null; } }
+  function esc(x){ return String(x == null ? '' : x).replace(/[&<>"]/g, function(ch){ return { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[ch]; }); }
+  function ms(iso){ var n = Date.parse(iso || ''); return isNaN(n) ? 0 : n; }
+  function reps(c){ return (c && Array.isArray(c.replies)) ? c.replies.filter(function(r){ return r && r.body; }) : []; }
+  function lastReader(c){ var m = ms(c.created_at); reps(c).forEach(function(r){ if (r.by !== 'author') m = Math.max(m, ms(r.at)); }); return m; }
+  function lastAuthor(c){ var m = 0; reps(c).forEach(function(r){ if (r.by === 'author') m = Math.max(m, ms(r.at)); }); return m; }
+  function lastAny(c){ return Math.max(lastReader(c), lastAuthor(c)); }
+  function resolvedMap(){ var s = S(); return (s && s.readerResolved) || {}; }
+  function isResolved(c){ var r = c && resolvedMap()[c.id]; return !!r && ms(r) >= lastReader(c); }
+  function seenAt(){ var s = S(); return ms(s && s.readerSeenAt); }
+  function isUnread(c){ return !isResolved(c) && lastReader(c) > seenAt(); }
+  function when(iso){ try{ return (typeof _pubTime === 'function') ? _pubTime(iso) : new Date(iso).toLocaleString(); }catch(e){ return ''; } }
+  function guest(){ try{ return !!_pubGuest; }catch(e){ return false; } }
+  function ownerList(){
+    var s = S(); if (!s || !s.cloudId || guest()) return [];
+    var cs = []; try{ cs = (typeof pubOwnerComments === 'function') ? pubOwnerComments() : []; }catch(e){}
+    return cs.filter(function(c){ return !c.story_id || c.story_id === s.cloudId; });
+  }
+  function authorName(){ try{ return ((cloud && cloud.username) || (typeof myDisplayName === 'function' ? myDisplayName() : '') || 'Author').trim(); }catch(e){ return 'Author'; } }
+  window.rdrIsResolved = isResolved;
+  window.rdrUnreadCount = function(){ return ownerList().filter(isUnread).length; };
+
+  /* ---------- the badge ---------- */
+  function badge(){
+    var n = guest() ? 0 : window.rdrUnreadCount();
+    var ts = Array.prototype.slice.call(document.querySelectorAll('.mode-pills button[data-mode="edit"], #padTools #editBtn'));
+    var sb = document.getElementById('shareBtn'); if (sb) ts.push(sb);
+    ts.forEach(function(b){
+      var x = b.querySelector(':scope > .rdr-badge');
+      if (!n){ if (x) x.remove(); return; }
+      if (!x){ x = document.createElement('span'); x.className = 'rdr-badge';
+        x.addEventListener('click', function(ev){ ev.stopPropagation(); ev.preventDefault(); setTimeout(function(){ window.rdrOpen(); }, 0); }); b.appendChild(x); }
+      x.textContent = n > 9 ? '9+' : String(n);
+      x.title = n + ' new from your readers — open Reader feedback';
+    });
+    var spb = document.getElementById('spRdr'); if (spb) spb.textContent = 'Reader feedback' + (n ? ' · ' + n + ' new' : '');
+  }
+  window.rdrBadge = badge;
+
+  /* ---------- sending a reply (author or reader) ---------- */
+  async function sendReply(c, body, name, errEl, btn){
+    body = String(body || '').trim();
+    var show = function(m){ if (errEl){ errEl.textContent = m || ''; errEl.style.display = m ? 'block' : 'none'; } };
+    if (!body){ show('Write something first.'); return false; }
+    if (typeof supa === 'undefined' || !supa){ show('Replies need the cloud — sign in first.'); return false; }
+    show(''); if (btn){ btn.disabled = true; btn.dataset.l = btn.dataset.l || btn.textContent; btn.textContent = 'Sending…'; }
+    try{
+      var r = await supa.rpc('add_comment_reply', { cid: c.id, a_body: body, a_name: String(name || '').slice(0, 40) });
+      if (r && r.error){
+        var m = String(r.error.message || r.error);
+        show(/does not exist|could not find the function|schema cache/i.test(m)
+          ? 'Replies need a one-time database update — run reader_loop_migration_10.sql in Supabase (it is in your repo folder). Your reply is still in the box.'
+          : 'Couldn’t send: ' + m);
+        return false;
+      }
+      var d = r && r.data;
+      c.replies = Array.isArray(d) ? d : reps(c).concat([{ by: guest() ? 'reader' : 'author', name: name, body: body, at: new Date().toISOString() }]);
+      try{ var i = _pubComments.findIndex(function(x){ return x.id === c.id; }); if (i >= 0 && _pubComments[i] !== c) _pubComments[i].replies = c.replies; }catch(e){}
+      return true;
+    }catch(e){ show('Couldn’t send: ' + ((e && e.message) || e)); return false; }
+    finally{ if (btn){ btn.disabled = false; btn.textContent = btn.dataset.l || 'Send'; } }
+  }
+
+  /* ---------- the thread under a comment, in the margins (owner: Revise notes · reader: their list) ---------- */
+  window.rdrDecorate = function(it, c, opts){
+    opts = opts || {};
+    var rs = reps(c), au = it.querySelector('.np-au');
+    if (rs.length){
+      var box = document.createElement('div'); box.className = 'rdr-reps';
+      rs.forEach(function(r){ var d = document.createElement('div'); d.className = 'rdr-rep rdr-by-' + (r.by === 'author' ? 'author' : 'reader');
+        d.innerHTML = '<span class="rdr-rw">' + esc(r.by === 'author' ? (opts.owner ? 'You' : 'Author') : (opts.owner ? (r.name || 'Reader') : 'You')) + '</span>' + esc(r.body) + '<span class="rdr-rt">' + esc(when(r.at)) + '</span>'; box.appendChild(d); });
+      it.insertBefore(box, au || null);
+    }
+    if (!au) return;
+    if (opts.owner){
+      if (isResolved(c)){ var tg = document.createElement('span'); tg.className = 'rdr-resolved-tag'; tg.textContent = '✓ resolved'; au.firstChild && au.firstChild.after ? au.firstChild.after(tg) : au.appendChild(tg); }
+      var rl = document.createElement('span'); rl.className = 'rdr-rlink'; rl.textContent = 'Reply'; rl.title = 'Answer this reader';
+      rl.addEventListener('click', function(ev){ ev.stopPropagation(); window.rdrOpen(c.id, true); });
+      var acts = au.querySelector('.np-acts'); if (acts) au.insertBefore(rl, acts); else au.appendChild(rl);
+      if (isUnread(c)) it.classList.add('rdr-fresh');
+      return;
+    }
+    // the reader: they can answer on their own thread (their anonymous session wrote it), once the author has spoken
+    var mine = false; try{ mine = !!(cloud.user && c.author_id && c.author_id === cloud.user.id); }catch(e){}
+    if (lastAuthor(c) > guestSeen()) it.classList.add('rdr-fresh');
+    if (!mine || !lastAuthor(c)) return;
+    var rr = document.createElement('span'); rr.className = 'rdr-rlink'; rr.textContent = 'Reply';
+    au.appendChild(rr);
+    rr.addEventListener('click', function(ev){ ev.stopPropagation();
+      if (it.querySelector('.rdr-box')) return;
+      var bx = document.createElement('div'); bx.className = 'rdr-box';
+      bx.innerHTML = '<textarea placeholder="Answer the author…" maxlength="2000"></textarea><div class="rdr-box-row"><button type="button" class="rdr-send">Send</button><button type="button" class="rdr-cancel">Cancel</button></div><div class="rdr-err"></div>';
+      bx.addEventListener('click', function(e2){ e2.stopPropagation(); });
+      it.appendChild(bx); var ta = bx.querySelector('textarea'); try{ ta.focus(); }catch(e){}
+      bx.querySelector('.rdr-cancel').addEventListener('click', function(){ bx.remove(); });
+      bx.querySelector('.rdr-send').addEventListener('click', async function(){
+        var nm = ''; try{ nm = (typeof _pubGN === 'function' ? _pubGN() : '') || 'Reader'; }catch(e){}
+        var ok = await sendReply(c, ta.value, nm, bx.querySelector('.rdr-err'), this);
+        if (ok){ setGuestSeen(); if (typeof pubRenderGuestComments === 'function') pubRenderGuestComments(); }
+      });
+    });
+  };
+
+  /* ---------- the reader's "the author replied" ---------- */
+  function guestKey(){ try{ return 'dystoria.rdrSeen.' + (_pubToken || ''); }catch(e){ return 'dystoria.rdrSeen.'; } }
+  function guestSeen(){ try{ return +(localStorage.getItem(guestKey()) || 0); }catch(e){ return 0; } }
+  function setGuestSeen(){ try{ localStorage.setItem(guestKey(), String(Date.now())); }catch(e){} }
+  function guestNotice(){
+    if (!guest()) return;
+    var head = document.querySelector('#guestComments .np-head'); if (!head) return;
+    var old = head.querySelector('.gc-newrep'); if (old) old.remove();
+    var cs = []; try{ cs = (_pubComments || []).filter(function(c){ return !c.hidden && lastAuthor(c) > guestSeen(); }); }catch(e){}
+    if (!cs.length) return;
+    cs.sort(function(a, b){ return lastAuthor(b) - lastAuthor(a); });
+    var sp = document.createElement('span'); sp.className = 'gc-newrep';
+    sp.textContent = 'The author replied' + (cs.length > 1 ? ' (' + cs.length + ')' : '') + ' — show';
+    sp.addEventListener('click', function(ev){ ev.stopPropagation(); var c = cs[0]; setGuestSeen();
+      try{ if (c.anchor_key && typeof pubFlashPassage === 'function') pubFlashPassage(document.getElementById('readBody'), c.anchor_key); }catch(e){}
+      try{ if (_pubCommentsCollapsed && typeof pubToggleComments === 'function') pubToggleComments(); }catch(e){}
+      setTimeout(function(){ if (typeof pubRenderGuestComments === 'function') pubRenderGuestComments(); }, 450); });
+    head.appendChild(sp);
+  }
+
+  /* ---------- the Reader feedback card ---------- */
+  function ensurePanel(){
+    var el = document.getElementById('rdrPanel'); if (el) return el;
+    el = document.createElement('div'); el.id = 'rdrPanel';
+    el.innerHTML = '<div class="rdr-card" role="dialog" aria-label="Reader feedback"><div class="rdr-head"><div class="rdr-title">Reader feedback</div><button type="button" class="rdr-x" title="Close">×</button></div>'
+      + '<div class="rdr-sub">What readers of your shared link have left — only you see it.</div><div class="rdr-tabs"></div><div class="rdr-list"></div></div>';
+    document.body.appendChild(el);
+    el.addEventListener('mousedown', function(e){ if (e.target === el) window.rdrClose(); });
+    el.querySelector('.rdr-x').addEventListener('click', function(){ window.rdrClose(); });
+    document.addEventListener('keydown', function(e){ if (e.key === 'Escape' && el.classList.contains('show')) window.rdrClose(); });
+    return el;
+  }
+  window.rdrClose = function(){ var el = document.getElementById('rdrPanel'); if (el) el.classList.remove('show'); P.openBox = null; };
+  window.rdrOpen = function(focusId, reply){
+    var s = S(); if (!s) return;
+    var el = ensurePanel();
+    P.focus = focusId || null; P.openBox = reply && focusId ? focusId : null; P.filter = 'open';
+    var all = ownerList();
+    if (focusId){ var fc = all.find(function(x){ return x.id === focusId; }); if (fc && isResolved(fc)) P.filter = 'resolved'; }
+    P.newIds = {}; all.forEach(function(c){ if (isUnread(c)) P.newIds[c.id] = 1; });
+    el.classList.add('show');
+    s.readerSeenAt = new Date().toISOString(); try{ if (typeof scheduleAutosave === 'function') scheduleAutosave(); }catch(e){}
+    render(); badge();
+    try{ if (s.cloudId && !guest() && typeof pubLoadComments === 'function' && typeof cloudReady === 'function' && cloudReady()) pubLoadComments(s.cloudId); }catch(e){}
+  };
+  function setResolved(c, on){
+    var s = S(); if (!s) return;
+    s.readerResolved = s.readerResolved || {};
+    if (on) s.readerResolved[c.id] = new Date().toISOString(); else delete s.readerResolved[c.id];
+    try{ if (typeof scheduleAutosave === 'function') scheduleAutosave(); }catch(e){}
+    render(); badge();
+    try{ if (document.getElementById('editMode') && document.getElementById('editMode').classList.contains('show') && typeof renderNotes === 'function') renderNotes(); }catch(e){}
+    if (typeof flashStatus === 'function') flashStatus(on ? 'Resolved — it moves to Resolved (and out of the margin)' : 'Reopened');
+  }
+  function goTo(c){
+    window.rdrClose();
+    try{ if (typeof goMode === 'function') goMode('edit'); }catch(e){}
+    setTimeout(function(){ try{ if (typeof pubOwnerScrollTo === 'function') pubOwnerScrollTo(c.anchor_key); }catch(e){} }, 450);
+  }
+  function render(){
+    var el = document.getElementById('rdrPanel'); if (!el || !el.classList.contains('show')) return;
+    var all = ownerList();
+    var open = all.filter(function(c){ return !isResolved(c); }), done = all.filter(isResolved);
+    var tabs = el.querySelector('.rdr-tabs');
+    tabs.innerHTML = '<button type="button" class="rdr-tab' + (P.filter === 'open' ? ' on' : '') + '" data-f="open">Open · ' + open.length + '</button>'
+      + '<button type="button" class="rdr-tab' + (P.filter === 'resolved' ? ' on' : '') + '" data-f="resolved">Resolved · ' + done.length + '</button>';
+    tabs.querySelectorAll('.rdr-tab').forEach(function(b){ b.addEventListener('click', function(){ P.filter = b.dataset.f; P.focus = null; render(); }); });
+    var list = el.querySelector('.rdr-list'); list.innerHTML = '';
+    var s = S();
+    if (!(s && s.cloudId)){ list.innerHTML = '<div class="rdr-empty">Reader feedback needs the story in the cloud — sign in, then share a reader link from Review → Share.</div>'; return; }
+    var cs = (P.filter === 'open' ? open : done).slice().sort(function(a, b){ return lastAny(b) - lastAny(a); });
+    if (!cs.length){ list.innerHTML = '<div class="rdr-empty">' + (all.length ? (P.filter === 'open' ? 'Nothing open — every comment is resolved.' : 'Nothing resolved yet.') : 'Nothing from readers yet. Share a reader link from Review → Share, and what they leave appears here.') + '</div>'; return; }
+    cs.forEach(function(c){
+      var th = document.createElement('div'); th.className = 'rdr-th'; th.dataset.id = c.id;
+      var h = '';
+      h += c.anchor_key ? '<div class="rdr-q rdr-link" title="Go to this passage in Revise">“' + esc(String(c.anchor_key).slice(0, 140)) + (String(c.anchor_key).length > 140 ? '…' : '') + '”</div>' : '<div class="rdr-q">On the whole story</div>';
+      h += '<div class="rdr-b">' + esc(c.body) + '</div>';
+      h += '<div class="rdr-meta"><span class="rdr-who">' + esc(c.author_name || 'Guest') + '</span>'
+        + (c.author_account === false && !/^(anonymous|guest)$/i.test(c.author_name || '') ? '<span class="rdr-noacct" title="Named without an account">no account</span>' : '')
+        + ' · ' + esc(when(c.created_at)) + (P.newIds[c.id] ? '<span class="rdr-new">new</span>' : '') + '</div>';
+      var rs = reps(c);
+      if (rs.length){ h += '<div class="rdr-reps">' + rs.map(function(r){ return '<div class="rdr-rep rdr-by-' + (r.by === 'author' ? 'author' : 'reader') + '"><span class="rdr-rw">' + esc(r.by === 'author' ? 'You' : (r.name || c.author_name || 'Reader')) + '</span>' + esc(r.body) + '<span class="rdr-rt">' + esc(when(r.at)) + '</span></div>'; }).join('') + '</div>'; }
+      h += '<div class="rdr-acts"><button type="button" class="rdr-act rdr-primary" data-a="reply">Reply</button>'
+        + '<button type="button" class="rdr-act" data-a="res">' + (isResolved(c) ? 'Reopen' : '✓ Resolve') + '</button>'
+        + (c.anchor_key ? '<button type="button" class="rdr-act" data-a="go">Go to passage</button>' : '')
+        + '<button type="button" class="rdr-act rdr-danger" data-a="del">Delete</button></div>';
+      th.innerHTML = h; list.appendChild(th);
+      var q = th.querySelector('.rdr-q.rdr-link'); if (q) q.addEventListener('click', function(){ goTo(c); });
+      th.querySelector('[data-a="res"]').addEventListener('click', function(){ setResolved(c, !isResolved(c)); });
+      var gb = th.querySelector('[data-a="go"]'); if (gb) gb.addEventListener('click', function(){ goTo(c); });
+      th.querySelector('[data-a="del"]').addEventListener('click', async function(){
+        var ok = true; try{ if (typeof siteConfirm === 'function') ok = await siteConfirm('Delete this reader comment and its replies? This cannot be undone.', 'Delete'); }catch(e){}
+        if (ok && typeof pubDeleteComment === 'function'){ await pubDeleteComment(c.id); render(); badge(); }
+      });
+      th.querySelector('[data-a="reply"]').addEventListener('click', function(){ openBox(th, c); });
+      if (P.openBox === c.id) openBox(th, c);
+      if (P.focus === c.id){ setTimeout(function(){ try{ th.scrollIntoView({ block:'center' }); th.classList.add('rdr-flash'); }catch(e){} }, 30); }
+    });
+  }
+  function openBox(th, c){
+    if (th.querySelector('.rdr-box')){ var t0 = th.querySelector('.rdr-box textarea'); if (t0) t0.focus(); return; }
+    P.openBox = c.id;
+    var bx = document.createElement('div'); bx.className = 'rdr-box';
+    bx.innerHTML = '<textarea placeholder="Reply to ' + esc(c.author_name || 'this reader') + ' — they see it under their comment…" maxlength="2000"></textarea><div class="rdr-box-row"><button type="button" class="rdr-act rdr-primary rdr-send">Send reply</button><button type="button" class="rdr-act rdr-cancel">Cancel</button></div><div class="rdr-err"></div>';
+    th.appendChild(bx); var ta = bx.querySelector('textarea'); try{ ta.focus(); }catch(e){}
+    ta.addEventListener('keydown', function(e){ if ((e.metaKey || e.ctrlKey) && e.key === 'Enter'){ e.preventDefault(); bx.querySelector('.rdr-send').click(); } });
+    bx.querySelector('.rdr-cancel').addEventListener('click', function(){ P.openBox = null; bx.remove(); });
+    bx.querySelector('.rdr-send').addEventListener('click', async function(){
+      var ok = await sendReply(c, ta.value, authorName(), bx.querySelector('.rdr-err'), this);
+      if (ok){ P.openBox = null; P.focus = c.id; render(); badge(); try{ if (typeof renderNotes === 'function' && document.getElementById('editMode').classList.contains('show')) renderNotes(); }catch(e){} if (typeof flashStatus === 'function') flashStatus('Reply sent — your reader sees it under their comment'); }
+    });
+  }
+
+  /* ---------- wiring: the owner's feed stays live for the open story; renders refresh the card + badge ---------- */
+  var _ro = window.pubRenderOwnerComments;
+  if (typeof _ro === 'function') window.pubRenderOwnerComments = function(){ try{ _ro.apply(this, arguments); }catch(e){} render(); badge(); };
+  var _leave = window.pubOwnerLeave;
+  if (typeof _leave === 'function') window.pubOwnerLeave = function(){ if (W.sid) return; return _leave.apply(this, arguments); };   // Revise closing no longer drops the live feed
+  var _rg = window.pubRenderGuestComments;
+  if (typeof _rg === 'function') window.pubRenderGuestComments = function(){ var r; try{ r = _rg.apply(this, arguments); }catch(e){} try{ guestNotice(); }catch(e){} return r; };
+  function watch(){
+    try{
+      if (guest()) return;
+      var s = S();
+      var sid = (s && s.cloudId && typeof cloudReady === 'function' && cloudReady() && typeof amOwner === 'function' && amOwner()) ? s.cloudId : null;
+      if (sid !== W.sid){ W.sid = sid; if (sid && typeof pubLoadComments === 'function'){ pubLoadComments(sid); if (typeof pubSubscribe === 'function') pubSubscribe(sid); } }
+      badge();
+    }catch(e){}
+  }
+  window.rdrWatch = watch;
+  setInterval(watch, 3000); setTimeout(watch, 1200);
+  // Share: a way in from the share card too
+  function wireShare(){
+    var on = document.getElementById('spOn'); if (!on || document.getElementById('spRdr')) return;
+    var b = document.createElement('button'); b.type = 'button'; b.id = 'spRdr'; b.className = 'sp-ghost sp-rdr'; b.textContent = 'Reader feedback';
+    b.addEventListener('click', function(e){ e.stopPropagation(); var p = document.getElementById('sharePop'); if (p) p.classList.remove('show'); window.rdrOpen(); });
+    on.appendChild(b); badge();
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', wireShare); else wireShare();
+})();
+</script>
 </body></html>
