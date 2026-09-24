@@ -26765,14 +26765,15 @@ function showRecap(){
     /* v.454 — the '＋ New section' option moved out of the select: New Scene is its own named route/button */ }
   if (wrote){   // Add-to-section (chosen via #rcSecSelect) or Discard. The session becomes a Notepad pill either way.
     h += '<div class="rc-route" id="rcRoute">';
-    h += '<div class="rc-route-q">Where does this go?</div>';
-    h += '<div class="rc-secpick"><select id="rcSecSelect" class="rc-secsel">' + _secOpts + '</select></div>';
+    /* v.805 [Jeremy] — "we just say 'Adding to Section 3' and the Keep and Discard as the two buttons below that." The section
+       was chosen when the session began, so it is stated, not asked; it stays changeable (the name is a quiet menu), and a new
+       scene is a small link under the two buttons rather than a third. The destination box under Discard is gone. */
+    h += '<div class="rc-route-q rc-adding">Adding to <span class="rc-secwrap" title="Change where this goes"><select id="rcSecSelect" class="rc-secsel">' + _secOpts + '</select></span></div>';
     h += '<div class="rc-route-btns">'
-       + '<button type="button" class="rc-route-btn rc-route-prose" data-route="append">→ Add to section</button>'
-       + '<button type="button" class="rc-route-btn rc-route-newscene" data-route="newscene" id="rcNewScene" title="Your writing becomes a new scene — a fresh section right after this one, named after the session">⊞ New scene</button>'
-       + '<button type="button" class="rc-route-btn rc-route-discardpill" data-route="discard" title="Discard — kept in your Notepad, out of the story">✕ Discard</button>'
+       + '<button type="button" class="rc-route-btn rc-route-prose" data-route="append">Keep</button>'
+       + '<button type="button" class="rc-route-btn rc-route-discardpill" data-route="discard" title="Discard — kept in your Notepad, out of the story">Discard</button>'
        + '</div>';
-    h += '<div class="rc-route-dest" id="rcProseDest"></div>';
+    h += '<button type="button" class="rc-route-btn rc-route-newscene rc-newscene-link" data-route="newscene" id="rcNewScene" title="Your writing becomes a new scene — a fresh section right after this one, named after the session">or make it a new scene</button>';
     h += '<div class="rc-nppill">Whichever you choose, this session is kept as a pill in your <b>Notepad</b> — nothing is lost.</div>';   // v.454 (#2) — the notice was only a hover tooltip before
     h += '</div>';
   }
@@ -26786,6 +26787,7 @@ function showRecap(){
       _ft.innerHTML = 'Feedback ' + ((typeof aiAvailable==='function' && !aiAvailable()) ? '' : '✦ ') + '<b>' + (turningOn ? 'on' : 'off') + '</b>';
       if (turningOn){ const ai = $('rcAi'); if (ai && !ai.dataset.ran){ ai.dataset.ran = '1'; state._reviewPromise = runSessionSummary(state._reviewWoven || []); } }
     }); }
+  { const _sel = $('rcSecSelect'); if (_sel){ const fit = () => { try{ const t = _sel.options[_sel.selectedIndex] ? _sel.options[_sel.selectedIndex].text : ''; const m = document.createElement('span'); m.style.cssText = 'position:absolute;visibility:hidden;white-space:pre;font:' + getComputedStyle(_sel).font; m.textContent = t; document.body.appendChild(m); _sel.style.width = (m.offsetWidth + 26) + 'px'; m.remove(); }catch(e){} }; _sel.addEventListener('change', fit); requestAnimationFrame(fit); } }   /* v.805 — the section name reads as words, sized to itself */
   // Spell out exactly WHERE the writing will land, kept in sync with the section picker.
   { const _sel = $('rcSecSelect'); const _dest = $('rcProseDest');
     if (_dest){
@@ -35381,6 +35383,13 @@ try {
 function goMode(target){
   try { dystSyncModeTips(); }catch(e){}   /* v.594 — covers any bar built after boot */
   if (target === 'write'){ enterWriteFullscreen(); return; }   // never land in the old non-full-screen write view
+  /* v.805 [Jeremy] — "when you exit a writing session, the header bar at the top expands to show a lot of empty space. it goes
+     away after you refresh." Discard (and any session end that stays in the writing room) leaves body.writing on, between
+     sessions. Going to Revise, Review or the Wiki from there opened the panel with the room still on underneath — the room's
+     54px header and its 64px mode heads stacked into a tall empty band. Leaving the room first puts the app's own bars back. */
+  if ((target === 'edit' || target === 'read' || target === 'wiki') && document.body.classList.contains('writing') && !document.body.classList.contains('insession')){
+    try{ setWriting(false); }catch(e){}
+  }
   track('mode_opened', { mode: target });   // notepad(Map) / write / edit(Refine) / read / wiki
   // Persist the mode IMMEDIATELY (not only on unload) so a refresh reliably lands back in it. Written to the
   // same 'dystoria.uiMode' key that openSession's boot-mode restore reads, mapped to its vocabulary (map/write/refine/read/wiki).
@@ -37004,12 +37013,15 @@ function buildModeSecNav(mode){
   syncModeSecNav(mode);
 }
 /* ---- Refine find & replace: search the whole story and make quick replacements ---- */
-var _fr = { term:'', ci:true, matches:[], idx:-1 };
+var _fr = { term:'', ci:true, whole:true, matches:[], idx:-1 };   /* v.805 — whole words by default */
+function _frIsW(c){ try{ return !!c && /[\p{L}\p{N}_'’-]/u.test(c); }catch(e){ return !!c && /[A-Za-z0-9_'’-]/.test(c); } }
 function frTextNodes(root){ var nodes=[]; if(!root) return nodes; var w=document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null); var n; while((n=w.nextNode())){ if(n.nodeValue) nodes.push(n); } return nodes; }
 function frCollect(){
   var body=$('editBody'); _fr.matches=[]; if(!body||!_fr.term) return;
   var tl=_fr.ci?_fr.term.toLowerCase():_fr.term; var L=_fr.term.length;
-  frTextNodes(body).forEach(function(node){ var hay=_fr.ci?node.nodeValue.toLowerCase():node.nodeValue; var from=0, pos; while((pos=hay.indexOf(tl, from))>=0){ _fr.matches.push({node:node, start:pos, end:pos+L}); from=pos+L; } });
+  frTextNodes(body).forEach(function(node){ var raw=node.nodeValue, hay=_fr.ci?raw.toLowerCase():raw; var from=0, pos; while((pos=hay.indexOf(tl, from))>=0){
+      if(!_fr.whole || !((_frIsW(tl.charAt(0)) && _frIsW(raw.charAt(pos-1))) || (_frIsW(tl.charAt(L-1)) && _frIsW(raw.charAt(pos+L))))) _fr.matches.push({node:node, start:pos, end:pos+L});   /* v.805 — "Xandri" is not found inside "Alexandria" */
+      from=pos+L; } });
 }
 function frCount(){ var c=$('edFindCount'); if(c) c.textContent = _fr.matches.length ? ((_fr.idx+1)+' / '+_fr.matches.length) : (_fr.term?'0 / 0':''); }
 function frShow(i){
@@ -37039,8 +37051,9 @@ function frReplaceAll(rep){
   var body=$('editBody'); if(!body) return;
   var inp=$('edFindInput'); if(inp && inp.value!==_fr.term){ _fr.term=inp.value; _fr.active=true; }
   if(!_fr.term){ if(typeof flashStatus==='function') flashStatus('Type something to find first'); return; }
-  var re=new RegExp(_fr.term.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'), _fr.ci?'gi':'g'); var count=0;
-  frTextNodes(body).forEach(function(node){ if(re.test(node.nodeValue)){ re.lastIndex=0; node.nodeValue=node.nodeValue.replace(re, function(){ count++; return rep; }); } re.lastIndex=0; });
+  /* v.805 — the same matches Find shows (whole words by default), replaced from the last to the first so offsets hold */
+  frCollect(); var count=0;
+  for(var qi=_fr.matches.length-1; qi>=0; qi--){ var mm=_fr.matches[qi], vv=mm.node.nodeValue; mm.node.nodeValue=vv.slice(0,mm.start)+rep+vv.slice(mm.end); count++; }
   if(count) frCommit();
   frCollect(); _fr.idx=-1; frCount(); if(typeof flashStatus==='function') flashStatus(count ? ('Replaced '+count+(count===1?' match':' matches')) : 'No matches to replace');
 }
@@ -37051,7 +37064,7 @@ function buildEdFindPanel(){
   p.innerHTML='<button class="efp-x" id="edFindClose" title="Close (Esc)">×</button>'
    +'<div class="efp-row"><input type="text" id="edFindInput" placeholder="Find…" autocomplete="off"><button id="edFindGo" class="efp-go" title="Search (Enter)">Find</button><span class="efp-count" id="edFindCount"></span></div>'
    +'<div class="efp-row"><input type="text" id="edReplaceInput" placeholder="Replace with…" autocomplete="off"></div>'
-   +'<div class="efp-act"><label class="efp-opts"><input type="checkbox" id="edFindCase"> Match case</label>'
+   +'<div class="efp-act"><label class="efp-opts"><input type="checkbox" id="edFindCase"> Match case</label><label class="efp-opts" title="Only whole words — a name is not found inside a longer word"><input type="checkbox" id="edFindWhole" checked> Whole words</label>'
    +'<span class="efp-nav"><button id="edFindPrev" title="Previous (⇧⏎)">↑</button><button id="edFindNext" title="Next (⏎)">↓</button></span></div>'
    +'<div class="efp-act" style="margin-top:9px"><button id="edReplaceOne">Replace</button><button id="edReplaceAll">Replace all</button></div>';
   host.appendChild(p);
@@ -37059,6 +37072,7 @@ function buildEdFindPanel(){
   // typing does NOT search — it only clears any stale results until the user runs a search
   fi.addEventListener('input', function(){ _fr.matches=[]; _fr.idx=-1; _fr.active=false; frCount(); });
   cc.addEventListener('change', function(){ _fr.ci=!cc.checked; if(_fr.active) frRun(); });
+  { var cw=$('edFindWhole'); if(cw) cw.addEventListener('change', function(){ _fr.whole=!!cw.checked; if(_fr.active) frRun(); }); }
   fi.addEventListener('keydown', function(e){
     if(e.key==='Enter'){ e.preventDefault();
       if(_fr.active && _fr.term===fi.value && _fr.matches.length) frShow(_fr.idx + (e.shiftKey?-1:1));   // same query → step through matches
@@ -58659,9 +58673,15 @@ body.eink .pl-filterpick .pf-row.on .pf-box{ background:#000; border-color:#000;
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.727';
+  var APP_VERSION = '2026.07.20.728';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.728', date:'September 24, 2026', notes:[
+      '**The end-of-session card, simpler.** [Jeremy] It now says where your writing is going \u2014 \u201cAdding to Section 3\u201d (tap the section to change it) \u2014 with just Keep and Discard, and \u201cor make it a new scene\u201d beneath. In the lighter charcoal of the other results windows.',
+      '**No tall empty header after a session.** [Jeremy] Discarding a session and then opening Revise, Review or the Wiki left the writing room switched on underneath, which stacked its bars into a band of empty space until you refreshed.',
+      '**A linked name opens every time.** [Jeremy] After changing an element in its builder, clicking its underlined name on the page could do nothing; it now finds the element again.',
+      '**Names aren\u2019t found inside other words.** [Jeremy] A character called Xandri is no longer linked inside \u201cAlexandria\u201d, and Find & Replace now matches whole words by default (a Whole words box can turn that off) \u2014 so replacing a name can\u2019t change the letters of another word.'
+    ]},
     { v:'2026.07.20.727', date:'September 24, 2026', notes:[
       '**The Owner role.** [Jeremy] The owner account has no AI limits \u2014 no per-minute rate, no daily cap, no daily token budget or wiki ceiling, and it isn\u2019t held by the site-wide daily backstop. Its calls are still logged, so the spend stays visible. Your account card shows the role: Owner \u00b7 No AI limits.'
     ]},
@@ -73503,12 +73523,18 @@ body.ai-capped .pt-grouphd.ai-grouphd-empty{ display:none !important; }
         return NodeFilter.FILTER_ACCEPT; } });
       var nodes=[], n; while(n=tw.nextNode()) nodes.push(n);
       var made=0;
+      /* v.805 [Jeremy] — "it should not catch words from the elements within other words" (Xandri inside Alexandria). The
+         boundary was only checked inside one text node, so a word split across two nodes (a suggestion, a formatting span, an
+         earlier mention) let a name match from the middle of it. Now the letters on either side are read across the node's
+         neighbours in the same paragraph. */
+      var blockOf=function(n){ var e=n.parentElement; return e && e.closest ? e.closest('p,li,blockquote,h1,h2,h3,h4,h5,h6,div') : null; };
+      var edgeChar=function(i, dir){ var j=i+dir, b=blockOf(nodes[i]); while(j>=0 && j<nodes.length && blockOf(nodes[j])===b){ var v=nodes[j].nodeValue||''; if(v.length) return dir<0 ? v.charAt(v.length-1) : v.charAt(0); j+=dir; } return ''; };
       for(var i=0;i<nodes.length && made<CAP;i++){
         var tn=nodes[i], txt=tn.nodeValue||''; if(txt.length<3) continue;
         re.lastIndex=0; var m, parts=[], last=0;
         while((m=re.exec(txt)) && made<CAP){
           var s0=m.index, e0=s0+m[0].length;
-          if(isW(txt[s0-1])||isW(txt[e0])) continue;             // word boundary by hand — names carry spaces
+          if(isW(s0>0 ? txt[s0-1] : edgeChar(i,-1)) || isW(e0<txt.length ? txt[e0] : edgeChar(i,1))) continue;   // word boundary by hand — names carry spaces; across split nodes too (v.805)
           var r=byLc[m[0].toLowerCase()]; if(!r) continue;
           parts.push(txt.slice(last,s0)); parts.push({txt:m[0], r:r}); last=e0; made++;
         }
@@ -73527,6 +73553,11 @@ body.ai-capped .pt-grouphd.ai-grouphd-empty{ display:none !important; }
           var t=ev.target && ev.target.closest ? ev.target.closest('.el-mention') : null; if(!t) return;
           ev.stopPropagation();
           var k=t.getAttribute('data-el-key');
+          /* v.805 [Jeremy] — "once you exit and try to click on the word again, it no longer opens the editor". The link carries
+             the element's key, and a key is built from what the element IS (its type word): an edit in its builder can change
+             it, while the page's links still hold the old one, so the next click found nothing and did nothing. A key that no
+             longer resolves is looked up again by the linked words, and the link is re-pointed. */
+          try{ if(typeof npFindEl==='function' && !npFindEl(k)){ var lc=String(t.textContent||'').trim().toLowerCase(), hit=null; terms().some(function(r){ if(r.lc===lc){ hit=r; return true; } return false; }); if(hit){ k=hit.key; Array.prototype.forEach.call((t.closest('.rd-prose, #readBody')||document).querySelectorAll('.el-mention[data-el-key]'), function(x){ if(String(x.textContent||'').trim().toLowerCase()===lc) x.setAttribute('data-el-key', k); }); } } }catch(e){}
           try{ if(typeof openElementDossier==='function') openElementDossier(k); }catch(e){}
         });
       }
@@ -98009,5 +98040,47 @@ html body #importCard#importCard.ic-working #impWork{ display:flex; position:fix
 @media (prefers-reduced-motion: reduce){ #impWork .iw-mark, #impWork .iw-bar::after, #impWork .iw-names span{ animation:none; } }
 @media (max-width:600px){ html body #importCard#importCard.ic-stage{ padding:14px 10px 20px !important; } html body #importCard#importCard.ic-reviewing .ic-stagemark{ width:30px; height:30px; margin-bottom:6px; } html body #importCard#importCard.ic-stage > .ic-head{ margin-bottom:10px !important; } html body #importCard#importCard.ic-stage > .ic-head #importHeadTitle{ font-size:19px !important; } html body #importCard#importCard.ic-stage > .ic-head #importClose{ top:10px !important; right:12px !important; }
   html body #importCard#importCard{ padding:18px 16px 16px !important; } html body #importCard#importCard .ic-segbtn{ padding:0 10px; font-size:10px; } html body #importCard#importCard.ic-reviewing #importReview{ padding:16px 14px; border-radius:14px; } }
+</style>
+<style id="dyst-recap-charcoal">
+/* v.805 [Jeremy] — the end-of-session card in the lighter charcoal of the other results windows (the import review's sheet):
+   #34312d, cream type, gold labels; Keep is the gold primary, Discard a quiet outline. Ids doubled to outrank v.740's parchment. */
+html body #recapCard#recapCard{ background:#34312d !important; border:1px solid rgba(255,205,116,.16) !important; color:#ece6d9 !important; box-shadow:0 28px 80px rgba(0,0,0,.45) !important; }
+html body #recapCard#recapCard h3{ color:#f2e7cf !important; }
+html body #recapCard#recapCard h3::before{ color:#fa9a31 !important; opacity:1 !important; }
+html body #recapCard#recapCard #recapBody{ color:#ece6d9; }
+html body #recapCard#recapCard .rc-title{ color:#f2e7cf !important; border-bottom:1px solid rgba(255,205,116,.22) !important; background:transparent !important; }
+html body #recapCard#recapCard .rc-title::placeholder{ color:#9c9382 !important; }
+html body #recapCard#recapCard .rc-fbtog{ color:#cfc5b1 !important; border-color:rgba(255,205,116,.28) !important; background:transparent !important; }
+html body #recapCard#recapCard .rc-fbtog b{ color:#fa9a31 !important; }
+html body #recapCard#recapCard .rc-fbtog:hover{ border-color:#fa9a31 !important; color:#f2e7cf !important; }
+html body #recapCard#recapCard .rc-wc, html body #recapCard#recapCard .rc-ai-text, html body #recapCard#recapCard .rc-quiet, html body #recapCard#recapCard .rc-updated{ color:#d9cfbb !important; }
+html body #recapCard#recapCard .rc-wc .rc-num, html body #recapCard#recapCard .rc-num{ color:#f3c77e !important; }
+html body #recapCard#recapCard .rc-ai{ border-top-color:rgba(255,255,255,.12) !important; }
+html body #recapCard#recapCard .rc-ai-lbl{ color:#e0a94e !important; }
+html body #recapCard#recapCard .fbv-chip{ background:rgba(255,240,214,.05) !important; color:#d9cfbb !important; border-color:rgba(255,205,116,.22) !important; }
+html body #recapCard#recapCard .fbv-chip.on{ background:rgba(255,205,116,.14) !important; color:#f3c77e !important; border-color:rgba(255,205,116,.45) !important; }
+html body #recapCard#recapCard .rc-route{ border-top:1px solid rgba(255,255,255,.10) !important; margin-top:16px !important; padding-top:16px !important; }
+html body #recapCard#recapCard .rc-adding{ font-family:var(--serif, Georgia, serif) !important; font-size:18px !important; font-weight:400 !important; letter-spacing:0 !important; text-transform:none !important; color:#d9cfbb !important; text-align:center; margin:2px 0 14px !important; }
+html body #recapCard#recapCard .rc-secwrap{ position:relative; display:inline-block; }
+html body #recapCard#recapCard .rc-secwrap::after{ content:'\25BE'; position:absolute; right:4px; top:50%; transform:translateY(-50%); font-size:11px; color:#fa9a31; pointer-events:none; }
+html body #recapCard#recapCard .rc-secsel{ -webkit-appearance:none; appearance:none; background:transparent !important; border:none !important; border-bottom:1px dotted rgba(250,154,49,.6) !important; border-radius:0 !important;
+  font-family:var(--serif, Georgia, serif) !important; font-size:18px !important; color:#f3c77e !important; padding:0 18px 1px 2px !important; cursor:pointer; max-width:340px; text-overflow:ellipsis; }
+html body #recapCard#recapCard .rc-secsel:focus{ outline:none; border-bottom-color:#fa9a31 !important; }
+html body #recapCard#recapCard .rc-secsel option{ background:#2b2926; color:#ece6d9; font-size:14px; }
+html body #recapCard#recapCard .rc-route-btns{ display:flex !important; flex-wrap:nowrap !important; gap:10px !important; justify-content:center !important; margin-top:0 !important; }
+html body #recapCard#recapCard .rc-route-btn{ font-family:var(--sans, system-ui, sans-serif) !important; font-size:11px !important; font-weight:700 !important; letter-spacing:.14em !important; text-transform:uppercase !important; border-radius:999px !important; padding:11px 28px !important; min-width:120px; cursor:pointer; }
+html body #recapCard#recapCard .rc-route-btn.rc-route-prose{ background:linear-gradient(180deg, #ffb44f, #f08c1f) !important; color:#2b2926 !important; border:none !important; box-shadow:0 6px 18px rgba(250,154,49,.28) !important; }
+html body #recapCard#recapCard .rc-route-btn.rc-route-prose:hover{ filter:brightness(1.06); }
+html body #recapCard#recapCard .rc-route-btn.rc-route-discardpill{ background:transparent !important; color:#cfc5b1 !important; border:1px solid rgba(255,255,255,.22) !important; }
+html body #recapCard#recapCard .rc-route-btn.rc-route-discardpill:hover{ color:#f0a58a !important; border-color:rgba(240,165,138,.55) !important; background:rgba(240,165,138,.06) !important; }
+html body #recapCard#recapCard .rc-newscene-link{ display:block !important; margin:12px auto 0 !important; background:none !important; border:none !important; box-shadow:none !important; padding:2px 6px !important; min-width:0 !important;
+  font-family:var(--serif, Georgia, serif) !important; font-style:italic !important; font-size:14px !important; font-weight:400 !important; letter-spacing:0 !important; text-transform:none !important; color:#c9a468 !important; }
+html body #recapCard#recapCard .rc-newscene-link:hover{ color:#f3c77e !important; text-decoration:underline; text-underline-offset:3px; }
+html body #recapCard#recapCard .rc-route-dest{ display:none !important; }
+html body #recapCard#recapCard .rc-nppill{ color:#9c9382 !important; margin-top:14px !important; }
+html body #recapCard#recapCard .rc-nppill b{ color:#d9cfbb !important; }
+html body #recapCard#recapCard #recapClose{ background:linear-gradient(180deg, #ffb44f, #f08c1f) !important; color:#2b2926 !important; border:none !important; }
+html body #recapCard#recapCard .rc-wikilink, html body #recapCard#recapCard .rc-foot-btn, html body #recapCard#recapCard .rc-route-move, html body #recapCard#recapCard .rc-suggest-btn{ color:#f3c77e !important; border-color:rgba(255,205,116,.32) !important; background:transparent !important; }
+html body #recapCard#recapCard .rc-goal{ color:#e0a94e !important; }
 </style>
 </body></html>
