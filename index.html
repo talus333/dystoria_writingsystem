@@ -31252,28 +31252,116 @@ function validImportSub(cat, sub){
   if (cat === 'being') return names.includes('Archetype') ? 'Archetype' : (names[0] || '');
   return names[0] || '';
 }
-/* split the original prose at the AI's section openings (verbatim first words), preserving paragraphs */
-function splitProseBySections(prose, sections){
-  const one = t => [{ title: (sections && sections[0] && sections[0].title) || '', body: String(prose || '').trim() }];
-  if (!sections || sections.length < 2) return one();
-  const lower = prose.toLowerCase();
-  const marks = [];
-  sections.forEach(sec => {
-    const op = String((sec && sec.opening) || '').trim().toLowerCase().replace(/\s+/g, ' ').slice(0, 28);
+/* v.808 — [Jeremy] "the importer broke the prose into sections even though the imported text did not have sections … make sure
+   that the importer does not add sections where there isn't a clear delineation and title or a dividing line for scene breaks".
+   The AI proposes sections; the TEXT decides. A proposed section is kept only when the source shows a division exactly there:
+     • a HEADING line of its own at the opening or just above it — a markdown `#` header, *Chapter/Part/Book/Act… N*, Prologue /
+       Epilogue / Interlude, a bare numeral (`IV`, `3.`), a whole-line bold title, or a short Title Case / ALL CAPS line; or
+     • a SCENE-BREAK line just above it (`***`, `* * *`, `---`, `#`, `~`, `◇` — the same set appendImportProse reads).
+   Anything else — an opening mid-paragraph, or after an ordinary paragraph — is not a division, and the AI's section is folded into
+   the one before it (its title kept as an ALIAS, so elements the AI placed "in" it still land in the right section). A cut made at a
+   heading starts AT the heading, so the heading opens its own section (where importLiftFrontMatter lifts it as the title) instead of
+   trailing at the end of the previous one, which it used to. The heading as written is the title; a section cut at a scene break
+   keeps the AI's title. When the AI finds fewer than two sections but the text plainly has chapter headings (markdown or
+   Chapter/Part/Prologue… lines, two or more), those are used. A story that is one piece is one section, with no invented title. */
+const IMP_SEC_NUMWORD = '(?:\\d{1,3}|[ivxlcdm]{1,7}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty[\\w-]*|thirty[\\w-]*|forty[\\w-]*|fifty[\\w-]*|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|last|final)';
+const IMP_SEC_KEYED = new RegExp('^(?:chapter|part|book|act|canto|volume|section|episode)\\s+' + IMP_SEC_NUMWORD + '\\b', 'i');
+function importHeadingOf(line, weakOk){
+  let t = String(line || '').trim();
+  if (!t || t.length > 90 || isImportSceneBreak(t)) return null;
+  const clean = x => String(x || '').replace(/^#{1,6}\s+/, '').replace(/\s+#+\s*$/, '').replace(/^(?:\*\*|__)(.+)(?:\*\*|__)$/, '$1').replace(/^[*_](.+)[*_]$/, '$1').trim();
+  const md = /^#{1,6}\s+\S/.test(t);
+  if (md) return { title: clean(t), strong: true, numeral: false };
+  const inner = clean(t), words = inner.split(/\s+/).filter(Boolean);
+  if (!inner || words.length > 12) return null;
+  if (/^(?:[ivxlcdm]{1,7}|\d{1,3})\.?$/i.test(inner)) return { title: inner.replace(/\.$/, ''), strong: true, numeral: true };
+  if (IMP_SEC_KEYED.test(inner) && !/[,;]$/.test(inner)) return { title: inner.replace(/[.:]$/, ''), strong: true, numeral: false };
+  if (/^(?:prologue|epilogue|interlude|afterword|foreword|preface)\b/i.test(inner) && words.length <= 8 && !/[.,;!?"”]$/.test(inner)) return { title: inner.replace(/:$/, ''), strong: true, numeral: false };
+  if (!weakOk) return null;
+  const bold = /^(?:\*\*|__).+(?:\*\*|__)$/.test(t);
+  if (words.length > 10 || /[.,;:!"'”’…]$/.test(inner) || !/^[\p{Lu}\p{N}"'“‘]/u.test(inner)) return null;
+  const letters = inner.replace(/[^\p{L}]/gu, '');
+  const allCaps = letters.length >= 3 && letters === letters.toUpperCase();
+  const titleCase = words.filter(w => w.replace(/[^\p{L}]/gu, '').length >= 4).every(w => /^["'“‘(]?\p{Lu}/u.test(w));
+  if (bold || allCaps || titleCase) return { title: inner, strong: false, numeral: false };
+  return null;
+}
+function splitProseBySections(prose, sections, storyTitle){
+  prose = String(prose || '');
+  const norm = x => String(x || '').toLowerCase().replace(/[‘’]/g, "'").replace(/[“”]/g, '"').replace(/[–—]/g, '-');
+  const normTitle = x => String(x || '').replace(/[^\p{L}\p{N}]+/gu, ' ').trim().toLowerCase();
+  const stT = normTitle(storyTitle);
+  const aiTitles = (sections || []).map(sec => String((sec && sec.title) || '').trim()).filter(Boolean);
+  // a whitespace-collapsed copy of the prose, mapped back to real offsets, so an opening copied across a line break still matches
+  let N = '', pos = [], inWs = false;
+  for (let i = 0; i < prose.length; i++){
+    const c = prose[i];
+    if (/\s/.test(c)){ if (!inWs && N.length){ N += ' '; pos.push(i); } inWs = true; }
+    else { N += norm(c); pos.push(i); inWs = false; }
+  }
+  const lineStart = i => prose.lastIndexOf('\n', i - 1) + 1;
+  const lineEnd = i => { const e = prose.indexOf('\n', i); return e < 0 ? prose.length : e; };
+  const prevLine = i => {   // the nearest non-blank line above the line holding i
+    let e = lineStart(i) - 1;
+    while (e >= 0){ const st = lineStart(e); const ln = prose.slice(st, e); if (ln.trim()) return { start: st, text: ln }; e = st - 1; }
+    return null;
+  };
+  const isStory = h => h && stT && normTitle(h.title) === stT;
+  const cuts = [];   // { at, title, aiTitle }
+  let from = 0;
+  (sections || []).forEach(sec => {
+    const op = norm(String((sec && sec.opening) || '')).replace(/\s+/g, ' ').trim().slice(0, 40);
     if (!op) return;
-    const idx = lower.indexOf(op);
-    if (idx >= 0) marks.push({ title: (sec.title || ''), idx });
+    let k = N.indexOf(op, from); if (k < 0) k = N.indexOf(op);
+    if (k < 0) return;
+    from = k + 1;
+    const idx = pos[k], ls = lineStart(idx), aiT = String(sec.title || '').trim();
+    if (prose.slice(ls, idx).trim()) return;                        // the opening falls mid-line — not a division
+    const here = importHeadingOf(prose.slice(ls, lineEnd(ls)), true);
+    if (here && !isStory(here)){ cuts.push({ at: ls, title: here.numeral ? (aiT || here.title) : here.title, aiTitle: aiT }); return; }
+    const pl = prevLine(idx);
+    if (!pl){ cuts.push({ at: 0, title: aiT, aiTitle: aiT, top: true }); return; }
+    if (isImportSceneBreak(pl.text)){ cuts.push({ at: ls, title: aiT, aiTitle: aiT, brk: true }); return; }
+    const above = importHeadingOf(pl.text, true);
+    if (above && !isStory(above)){ const pp = prevLine(pl.start); if (!pp || !importHeadingOf(pp.text, false) || isStory(importHeadingOf(pp.text, false))) cuts.push({ at: pl.start, title: above.numeral ? (aiT || above.title) : above.title, aiTitle: aiT }); else cuts.push({ at: pp.start, title: importHeadingOf(pp.text, false).title + ': ' + above.title, aiTitle: aiT }); return; }
+    // not a division: the AI's section rides with whatever section holds this point (resolved below)
   });
-  marks.sort((a, b) => a.idx - b.idx);
+  // the AI found at most one section: fall back to the text's own chapter headings, the strong kind only, when there are two or more
+  if (new Set(cuts.map(c => c.at)).size < 2){
+    const heads = []; let at = 0;
+    prose.split('\n').forEach(ln => { const h = importHeadingOf(ln, false); if (h && !isStory(h)) heads.push({ at, title: h.title }); at += ln.length + 1; });
+    if (heads.length >= 2){ cuts.length = 0; heads.forEach(h => cuts.push({ at: h.at, title: h.title, aiTitle: '' })); }
+  }
+  cuts.sort((a, b) => a.at - b.at);
   const uniq = [];
-  marks.forEach(m => { if (!uniq.length || m.idx > uniq[uniq.length - 1].idx + 8) uniq.push(m); });
-  if (uniq.length < 2) return one();
+  cuts.forEach(c => { if (!uniq.length || c.at > uniq[uniq.length - 1].at + 8) uniq.push(c); else if (c.aiTitle) (uniq[uniq.length - 1].also = uniq[uniq.length - 1].also || []).push(c.aiTitle); });
   const out = [];
   for (let i = 0; i < uniq.length; i++){
-    const start = uniq[i].idx, end = (i + 1 < uniq.length) ? uniq[i + 1].idx : prose.length;
-    out.push({ title: uniq[i].title, body: prose.slice(start, end).trim() });
+    const start = uniq[i].at, end = (i + 1 < uniq.length) ? uniq[i + 1].at : prose.length;
+    const al = [uniq[i].aiTitle].concat(uniq[i].also || []).filter(t => t && t !== uniq[i].title);
+    out.push({ title: uniq[i].title || '', body: prose.slice(start, end).trim(), aliases: al });
   }
-  if (uniq[0].idx > 0){ const pre = prose.slice(0, uniq[0].idx).trim(); if (pre) out[0].body = pre + '\n\n' + out[0].body; }
+  if (!out.length){
+    // ONE section — titled only if the text opens on a heading of its own (not the story's title)
+    let t0 = ''; const fl = prose.split('\n').find(l => l.trim()); const h0 = fl ? importHeadingOf(fl, false) : null;
+    if (h0 && !isStory(h0) && !h0.numeral) t0 = h0.title;
+    return [{ title: t0, body: prose.trim(), aliases: aiTitles.filter(t => t !== t0) }];
+  }
+  if (uniq[0].at > 0){ const pre = prose.slice(0, uniq[0].at).trim(); if (pre) out[0].body = pre + '\n\n' + out[0].body; }
+  if (out.length === 1 && uniq[0].top && !uniq[0].brk){
+    // the only cut is the top of the story with no heading — the AI's title there was invented
+    const fl = prose.split('\n').find(l => l.trim()); const h0 = fl ? importHeadingOf(fl, false) : null;
+    out[0].title = (h0 && !isStory(h0) && !h0.numeral) ? h0.title : '';
+  }
+  // every AI title that did not become a cut: an alias of the section holding its opening (or of the first, when it was not found)
+  const used = {}; out.forEach(o => { used[o.title] = 1; o.aliases.forEach(a => { used[a] = 1; }); });
+  (sections || []).forEach(sec => {
+    const t = String((sec && sec.title) || '').trim(); if (!t || used[t]) return; used[t] = 1;
+    const op = norm(String(sec.opening || '')).replace(/\s+/g, ' ').trim().slice(0, 40);
+    const k = op ? N.indexOf(op) : -1; const idx = k >= 0 ? pos[k] : 0;
+    let si = 0; for (let i = 0; i < uniq.length; i++){ if (uniq[i].at <= idx) si = i; }
+    out[si].aliases.push(t);
+  });
   return out;
 }
 /* append a body of prose as paragraph <div>s into the editor; returns the blocks created */
@@ -31774,7 +31862,7 @@ async function extractImport(){
     user = 'Notes:\n\n' + prose.slice(0, 300000) + '\n\nReturn the JSON.';
   } else {
     sys = 'You analyze a story for a worldbuilding app and return ONLY valid minified JSON — no prose, no code fences. Schema: {"title":string,"overview":string,"sections":[{"title":string,"opening":string}],"elements":[{"type":' + typeUnion + ',"name":string,"summary":string,"sub":string,"section":string,"sections":[string],"traits":[{"sub":string,"value":string}],"motivation":{"wants":[string],"stakes":[string],"obstacles":[string],"motivator":string},"stake":{"bearer":string,"threat":string,"axis":string}}],"relationships":[{"from":string,"to":string,"type":string}],"proposals":[{"cat":string,"word":string,"common":boolean}],"goals":[{"word":string,"note":string}],"threads":[{"name":string,"elements":[string]}]}.' +
-    'sections = split the story into its parts by chapter/section titles, headers, or clear scene breaks; title = a short section title; opening = the first ~8 words of that section copied EXACTLY/verbatim from the text. If the story is one continuous piece, return a single section. ' +
+    'sections = split the story ONLY where the text itself marks a division: a heading line of its own (a chapter/part/section title, a markdown # header, a numeral) or a scene-break line (***, * * *, ---, #). NEVER split continuous prose by topic, mood or time jump \u2014 a story with no such marks is ONE section. title = the heading exactly as written if there is one, else a short title; opening = the first ~8 words of that section copied EXACTLY/verbatim from the text. ' +
     'Extract the story elements — characters, places, objects, events, and in-world concepts/terms — and only the narrative frame (genre, context, concepts/themes, stakes, plot) that the text makes unmistakably clear. ' + narrThreshold + typeGuide + sectionGuideProse + 'summary = ONE short sentence grounded only in the text. ' +
     'For beings, places and things: ' + traitInfo + '. Do NOT fill sub for beings. ' + motGuide + stakeGuide + threadGuide +
     'For any non-being type that has one: sub = single best subcategory from: ' + nonBeingSubInfo + (narrSubInfo ? ('; ' + narrSubInfo) : '') + '. ' +
@@ -31936,7 +32024,7 @@ async function extractImport(){
     const seenT = {}; IMP.sections = [];
     secsRaw.forEach(s => { const t = String((s && s.title) || '').trim(); if (!t) return; const k = t.toLowerCase(); if (seenT[k]) return; seenT[k] = 1; IMP.sections.push({ title: t }); });
   } else {
-    IMP.sections = splitProseBySections(IMP.prose, secsRaw);
+    IMP.sections = splitProseBySections(IMP.prose, secsRaw, IMP.title || gotTitle);
   }
   // Phase 2 — net-new pool VOCABULARY the source uses: keep only words that fit a real category and aren't already in the pools.
   { const seenP = {}; IMP.proposals = [];
@@ -32530,6 +32618,7 @@ async function confirmImport(){
   const _firstSec = el => { for (let i = 0; i < _bodies.length; i++){ if (_inSec(el, i)) return i; } return 0; };
   // Prefer the AI's stated section for each element (more intentional); fall back to first textual mention.
   const _titleIdx = {}; secs.forEach((s, i) => { const t = String(s.title || '').trim().toLowerCase(); if (t && !(t in _titleIdx)) _titleIdx[t] = i; });
+  secs.forEach((s, i) => { (s.aliases || []).forEach(a => { const t = String(a || '').trim().toLowerCase(); if (t && !(t in _titleIdx)) _titleIdx[t] = i; }); });   /* v.808 — a folded AI section's title */
   /* v.713 — `_sectionOf` lived here: defined once, referenced nowhere, and reading the singular. The other
      half of "fields written that nothing reads", removed rather than left to mislead the next reader. */
   let _pooled = 0;
@@ -58756,9 +58845,12 @@ body.eink .pl-filterpick .pf-row.on .pf-box{ background:#000; border-color:#000;
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.730';
+  var APP_VERSION = '2026.07.20.731';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.731', date:'September 24, 2026', notes:[
+      '**Imports keep your story in one piece.** [Jeremy] The importer no longer breaks prose into sections the text never had. A new section starts only where the file itself marks one \u2014 a chapter or section heading on its own line, or a scene-break line (***, ---, #). A story with neither comes in as one section, with no made-up title, and a heading now opens its own section instead of trailing at the end of the one before.'
+    ]},
     { v:'2026.07.20.730', date:'September 24, 2026', notes:[
       '**One card, its own connections.** [Jeremy] Reviewing an import card by card, each card now shows only the connections that involve that element, folded behind See connections \u2014 open it for the list, titled Connections related to that element.',
       '**The start-of-session card in charcoal.** [Jeremy] \u201cWhere do you want to write?\u201d now wears the same lighter charcoal as the end-of-session card.',
