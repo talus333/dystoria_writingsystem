@@ -29294,6 +29294,35 @@ async function pubBootGuest(tok){
   await pubLoadComments(story.id); pubSubscribe(story.id); pubSubscribeStory(_pubToken);
   try{ pubImpPaintReader(); }catch(e){}   // restore my earlier impression highlights on this link
   requestAnimationFrame(()=>{ $('readBody').scrollTop=0; });
+  try{ pubWelcomeOnce(); }catch(e){}   // v.797
+}
+/* v.797 [Jeremy] — "the instructions for this as a one time pop-up when they open the link, welcoming them to the story and
+   appreciating them for taking the time to read and share their feedback." Once per link, per browser. */
+function _pubTouch(){ try{ return !!(window.matchMedia && window.matchMedia('(pointer:coarse)').matches); }catch(e){ return false; } }
+function pubWelcomeOnce(){
+  var key='dystoria.readerWelcome.'+String(_pubToken||'');
+  try{ if(localStorage.getItem(key)) return; }catch(e){}
+  var old=document.getElementById('pubWelcome'); if(old) old.remove();
+  var title=((_pubStory&&_pubStory.doc&&_pubStory.doc.name)||'this story').trim(), by=((_pubStory&&_pubStory.author)||'').trim();
+  var imp=!!(_pubImpAllow&&_pubImpAllow.impressions), com=!(_pubImpAllow&&_pubImpAllow.comments===false);
+  var w=document.createElement('div'); w.id='pubWelcome'; w.setAttribute('role','dialog'); w.setAttribute('aria-modal','true');
+  var then = imp && com ? 'Then mark how the passage landed, leave a comment, or both — the author sees it privately.'
+           : imp ? 'Then mark how the passage landed — the author sees it privately.'
+           : 'Then leave a comment — the author sees it privately.';
+  w.innerHTML='<div class="pw-card"><div class="pw-kicker">Welcome</div><h2></h2><p class="pw-thanks"></p>'
+    +(_pubTouch()
+      ? '<ul class="pw-how"><li><b>Tap</b><span>a word to highlight it</span></li><li><b>Twice</b><span>for the whole sentence</span></li><li><b>Three times</b><span>for the paragraph</span></li><li><b>Or hold</b><span>and drag the handles across any passage</span></li></ul>'
+      : '<ul class="pw-how"><li><b>Click</b><span>a word to highlight it</span></li><li><b>Twice</b><span>for the whole sentence</span></li><li><b>Three times</b><span>for the paragraph</span></li><li><b>Or drag</b><span>across any passage</span></li></ul>')
+    +'<p class="pw-then"></p><button type="button" class="pw-go">Start reading</button></div>';
+  w.querySelector('h2').textContent=title;
+  w.querySelector('.pw-thanks').textContent='Thank you for taking the time to read'+(by?(' '+by+'’s story'):' this story')+' and share how it lands. Every note helps the writing.';
+  w.querySelector('.pw-then').textContent=then;
+  var done=function(){ try{ localStorage.setItem(key, '1'); }catch(e){} w.remove(); };
+  w.querySelector('.pw-go').addEventListener('click', function(e){ e.stopPropagation(); done(); });
+  w.addEventListener('click', function(e){ if(e.target===w) done(); });
+  document.addEventListener('keydown', function _k(e){ if(e.key==='Escape' && document.getElementById('pubWelcome')){ done(); document.removeEventListener('keydown', _k); } });
+  document.body.appendChild(w);
+  setTimeout(function(){ try{ w.querySelector('.pw-go').focus(); }catch(e){} }, 30);
 }
 // Sanitize story HTML from ANOTHER user (public share) before it touches innerHTML — a whitelist pass in an
 // inert <template> (no scripts run / images load during parse) that drops every tag/attribute except plain
@@ -29344,7 +29373,15 @@ function pubBuildGuestUI(errOnly){
   if(sb&&!sb._w){ sb._w=1; sb.addEventListener('click',()=>{ if($('authCard')) $('authCard').classList.add('show'); }); }
   if(errOnly){ const gc=$('guestComments'); if(gc) gc.style.display='none'; return; }
   const rb=$('readBody');
-  if(rb&&!rb._pubSel){ rb._pubSel=1; rb.addEventListener('mouseup',pubGuestSelect); }
+  if(rb&&!rb._pubSel){ rb._pubSel=1; rb.addEventListener('mouseup',pubGuestSelect);
+    /* v.797 — clicks: one the word, two the sentence, three the paragraph (the browser's own multi-click selection is stopped) */
+    rb.addEventListener('mousedown', function(e){ _pubDown={ x:e.clientX, y:e.clientY }; if(e.detail>1 && e.target && e.target.closest && e.target.closest('.rd-prose')) e.preventDefault(); });
+    rb.addEventListener('click', pubClickSelect);
+    if(_pubTouch()){ var _selT=0; document.addEventListener('selectionchange', function(){ clearTimeout(_selT); _selT=setTimeout(function(){
+      var sel=window.getSelection(); if(!sel||sel.isCollapsed||!sel.rangeCount) return; var n=sel.anchorNode; n=n&&(n.nodeType===1?n:n.parentElement);
+      if(!n||!n.closest||!n.closest('#readBody .rd-prose')) return; var t=(sel.toString()||'').replace(/\s+/g,' ').trim();
+      var pop=$('gcPop'); if(pop&&pop.classList.contains('show')&&_pubAnchor&&_pubAnchor.key===t.slice(0,600)) return;
+      pubGuestSelect({ target:n, _pubClick:true }); }, 650); }); } }
   if(rb&&!rb._pubScroll){ rb._pubScroll=1; rb.addEventListener('scroll',pubOnReadScroll); }
   const impRow=$('gcImpRow'); if(impRow&&!impRow._w){ impRow._w=1; Array.prototype.forEach.call(impRow.querySelectorAll('.gcimp-btn'), function(b){ b.addEventListener('click', function(e){ e.stopPropagation(); pubImpMark(b.getAttribute('data-imp')); }); }); }
   const post=$('gcPost'); if(post&&!post._w){ post._w=1; post.addEventListener('click',pubPostComment); }
@@ -29357,9 +29394,64 @@ function pubBuildGuestUI(errOnly){
   if(!document._pubPopDismiss){ document._pubPopDismiss=1; document.addEventListener('mousedown',e=>{ const p=$('gcPop'); if(p&&p.classList.contains('show')&&!p.contains(e.target)) pubHideCommentPop(); }); }
   pubRefreshGuestAuth();
 }
+/* v.797 [Jeremy] — "if you click on a word it hilights it, if you click twice it hilights the sentence and if you click thrice it
+   gets the whole paragraph. then show the impressions and commentary pop-up. They should also be able to drag a hilight easily."
+   A CLICK is read here (by its count, `e.detail`); a DRAG is left to the browser and then snapped out to whole words, so a
+   highlight dragged from the middle of a word still takes the word. The browser's own double/triple-click selection is
+   stopped on mousedown so it cannot fight the one made here. */
+var _pubDown=null;
+function _pubWordChar(c){ return !!c && /[\p{L}\p{N}'’\-]/u.test(c); }
+function _pubBlockOf(node){ var el=node&&(node.nodeType===1?node:node.parentElement); if(!el||!el.closest) return null; var p=el.closest('.rd-prose'); if(!p) return null;
+  var b=el.closest('p, li, blockquote, h1, h2, h3, h4, h5, h6, div'); while(b && b!==p && !p.contains(b)) b=null; return (b && p.contains(b) && b!==p) ? b : p; }
+function _pubTextNodes(root){ var out=[], w=document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null), n; while((n=w.nextNode())){ if(n.parentElement && n.parentElement.closest('.sess-foot, .sess-focus, .pub-copyright')) continue; out.push(n); } return out; }
+/* a range from character offsets across a block's text nodes */
+function _pubRangeAt(block, a, z){ var ns=_pubTextNodes(block), pos=0, r=document.createRange(), sa=false;
+  for(var i=0;i<ns.length;i++){ var L=ns[i].nodeValue.length;
+    if(!sa && a<=pos+L){ r.setStart(ns[i], Math.max(0, a-pos)); sa=true; }
+    if(sa && z<=pos+L){ r.setEnd(ns[i], Math.max(0, z-pos)); return r; }
+    pos+=L; }
+  if(sa && ns.length){ var last=ns[ns.length-1]; r.setEnd(last, last.nodeValue.length); return r; } return null; }
+function _pubOffsetIn(block, node, off){ var ns=_pubTextNodes(block), pos=0; for(var i=0;i<ns.length;i++){ if(ns[i]===node) return pos+off; pos+=ns[i].nodeValue.length; } return -1; }
+function _pubCaret(x, y){ try{ if(document.caretPositionFromPoint){ var p=document.caretPositionFromPoint(x, y); if(p) return { node:p.offsetNode, off:p.offset }; }
+    if(document.caretRangeFromPoint){ var r=document.caretRangeFromPoint(x, y); if(r) return { node:r.startContainer, off:r.startOffset }; } }catch(e){} return null; }
+function pubClickSelect(e){
+  if(!_pubGuest || e.button!==0) return;
+  if(e.target&&e.target.closest&&(e.target.closest('#gcPop')||e.target.closest('a,button,input,textarea'))) return;
+  if(_pubDown && (Math.abs(e.clientX-_pubDown.x)>4 || Math.abs(e.clientY-_pubDown.y)>4)) return;   // a drag — handled on mouseup
+  var c=_pubCaret(e.clientX, e.clientY); if(!c || !c.node || c.node.nodeType!==3) return;
+  var block=_pubBlockOf(c.node); if(!block) return;
+  var text=_pubTextNodes(block).map(function(n){ return n.nodeValue; }).join(''); var at=_pubOffsetIn(block, c.node, c.off); if(at<0) return;
+  var a, z, n=Math.min(3, e.detail||1);
+  if(n===1){ /* which letter is actually under the pointer? a click on a space or a mark selects nothing */
+    var hit=-1; [at, at-1].forEach(function(k){ if(hit>=0 || k<0 || k>=text.length) return; var rr=_pubRangeAt(block, k, k+1); if(!rr) return;
+      Array.prototype.some.call(rr.getClientRects(), function(q){ return e.clientX>=q.left-0.5 && e.clientX<=q.right+0.5 && e.clientY>=q.top-1 && e.clientY<=q.bottom+1; }) && (hit=k); });
+    if(hit>=0){ if(!_pubWordChar(text.charAt(hit))) return; at=hit; } }
+  if(n===1){ a=at; z=at; if(!_pubWordChar(text.charAt(a)) && _pubWordChar(text.charAt(a-1))) a--, z--;
+    if(!_pubWordChar(text.charAt(a))) return;   // a click on a space or a mark selects nothing
+    while(a>0 && _pubWordChar(text.charAt(a-1))) a--; while(z<text.length && _pubWordChar(text.charAt(z))) z++;
+    while(z>a && /['’\-]/.test(text.charAt(z-1))) z--; while(a<z && /['’\-]/.test(text.charAt(a))) a++; }
+  else if(n===2){ var re=/[.!?…]+["'”’)\]]*(\s+|$)/g, m, st=0, en=text.length;
+    while((m=re.exec(text))){ var endAt=m.index+m[0].length; if(endAt<=at){ st=endAt; } else { en=m.index+m[0].replace(/\s+$/,'').length; break; } }
+    a=st; z=en; while(a<z && /\s/.test(text.charAt(a))) a++; }
+  else { a=0; z=text.length; while(a<z && /\s/.test(text.charAt(a))) a++; while(z>a && /\s/.test(text.charAt(z-1))) z--; }
+  if(z<=a) return;
+  var r=_pubRangeAt(block, a, z); if(!r) return;
+  var sel=window.getSelection(); sel.removeAllRanges(); sel.addRange(r);
+  pubGuestSelect({ target:e.target, _pubClick:true });
+}
+function _pubSnapToWords(){
+  try{ var sel=window.getSelection(); if(!sel||sel.isCollapsed||!sel.rangeCount) return; var r=sel.getRangeAt(0);
+    var s0=r.startContainer, e0=r.endContainer, so=r.startOffset, eo=r.endOffset;
+    if(s0.nodeType===3){ var t=s0.nodeValue; while(so>0 && _pubWordChar(t.charAt(so-1)) && _pubWordChar(t.charAt(so))) so--; }
+    if(e0.nodeType===3){ var u=e0.nodeValue; while(eo<u.length && _pubWordChar(u.charAt(eo)) && _pubWordChar(u.charAt(eo-1))) eo++; }
+    if(so!==r.startOffset || eo!==r.endOffset){ var nr=document.createRange(); nr.setStart(s0, so); nr.setEnd(e0, eo); sel.removeAllRanges(); sel.addRange(nr); }
+  }catch(e){}
+}
 // Highlight a passage in the story → the comment tools pop up beside the selection.
 function pubGuestSelect(e){
   if(e&&e.target&&e.target.closest&&e.target.closest('#gcPop')) return;
+  if(e && !e._pubClick && e.type==='mouseup'){ if(_pubDown && Math.abs(e.clientX-_pubDown.x)<=4 && Math.abs(e.clientY-_pubDown.y)<=4) return;   /* v.797 — a click is the click handler's */
+    _pubSnapToWords(); }
   const sel=window.getSelection(); if(!sel||sel.isCollapsed) return;
   const text=(sel.toString()||'').replace(/\s+/g,' ').trim(); if(text.length<2) return;
   const range=sel.getRangeAt(0);
@@ -53354,6 +53446,7 @@ body.eink #mobileNotice .mn-card{border:2px solid #000}
   function isMobile(){ try{ return window.matchMedia && window.matchMedia('(max-width:768px)').matches; }catch(e){ return false; } }
   function show(){
     if(!isMobile()) return;
+    if(/^#\/read\//.test(location.hash||'') || (document.body && document.body.classList.contains('guest'))) return;   // v.797 — a shared-story reader gets its own welcome, not the app's
     try{ if(localStorage.getItem('dystoria.mobileNoticeSeen')==='1') return; }catch(e){}
     if(document.getElementById('landingFrame') || document.getElementById('labFrame')){ setTimeout(show, 1200); return; }   // wait until the marketing landing (its own welcome) or the story labyrinth (v.677) is dismissed
     if(document.getElementById('mobileNotice')) return;
@@ -58313,9 +58406,13 @@ body.eink .pl-filterpick .pf-row.on .pf-box{ background:#000; border-color:#000;
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.719';
+  var APP_VERSION = '2026.07.20.720';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.720', date:'September 24, 2026', notes:[
+      '**A shared story reads as a clean manuscript.** [Jeremy] The public reading link no longer shows the app’s mode medallions, and its Comment as yourself / Try Dystoria buttons sit in a proper bar at the top instead of half off the page.',
+      '**Click to highlight, for readers.** [Jeremy] On a shared story a reader clicks a word to highlight it, twice for the sentence, three times for the paragraph — or drags across any passage (it snaps to whole words) — and the impressions and comment pop-up opens on it. A one-time welcome thanks them for reading and shows how.'
+    ]},
     { v:'2026.07.20.719', date:'September 23, 2026', notes:[
       '**A Stakes card.** [Jeremy] The Stakes badge opens an overview like the other story elements have: the story’s stake at the top (✎ to edit it in the builder), a tally, and every stake grouped by **kind of conflict**, **who could lose it** or **threat** — each with who could lose it ⟵ what threatens it, and a strip of the sections it is in play in. Click a stake to edit it.',
       '**The Conflict card counts, the Stakes card lists.** What stands in the way on the Conflict card is now a count per lane; each opens the Stakes card at that lane.'
@@ -97456,4 +97553,52 @@ body:not(.eink) .tp-grouphd-axis{ margin-top:8px; }
 })();
 
 </script>
+<style id="dyst-guest-reader">
+/* v.797 [Jeremy] — the shared link is "a clean public-facing manuscript". The reader's head bar is the app's Review head, and
+   the desktop top-bar passes (v.670–v.726) folded it to 0px high and pinned its mode medallions to the app header — which a
+   guest does not have. So the medallions floated ghosted over the page and the head's own buttons rode 15px above the top edge.
+   For a guest the head is its own bar again: the mark at the left, "Comment as yourself" / "Try Dystoria" at the right, no modes.
+   (The ids are doubled to outrank the `html body:not(…):not(…) #readMode .rd-head` passes without touching them.) */
+html body.guest #readMode#readMode .rd-head{ position:relative !important; display:flex !important; align-items:center !important; justify-content:space-between !important;
+  height:56px !important; min-height:56px !important; max-height:56px !important; padding:0 22px !important; margin:0 !important; overflow:visible !important;
+  background:var(--charcoal, #2b2926) !important; border-bottom:1px solid rgba(255,255,255,.10) !important; box-shadow:none !important; flex:none !important; z-index:5 !important; }
+html body.guest #readMode#readMode .rd-head .mode-pills{ display:none !important; }
+html body.guest #readMode#readMode .rd-head .rd-guest-brand{ display:inline-flex !important; position:static !important; transform:none !important; margin:0 !important; height:auto !important; }
+html body.guest #readMode#readMode .rd-head .rd-guide{ display:none !important; }
+html body.guest #readMode#readMode .rd-head .rd-head-actions{ position:static !important; transform:none !important; margin:0 !important; display:flex !important; align-items:center !important; gap:10px !important; flex:none !important; width:auto !important; }
+html body.guest #readMode#readMode .rd-head .rd-head-actions > *:not(.gb-btn):not(#gbSignin):not(#gbTry){ display:none !important; }
+/* the page: nothing of the app's chrome shows through behind the manuscript */
+html body.guest #deskbar, html body.guest #padTools, html body.guest header, html body.guest #storyName{ display:none !important; }
+/* the reader's own selection reads as a highlight, not the system blue */
+html body.guest #readBody .rd-prose ::selection{ background:rgba(250,154,49,.28); }
+/* the one-time welcome */
+#pubWelcome{ position:fixed; inset:0; z-index:calc(var(--z-guest, 9000) + 60); display:flex; align-items:center; justify-content:center; padding:18px; background:rgba(20,17,13,.42); }
+#pubWelcome[hidden]{ display:none; }
+#pubWelcome .pw-card{ width:min(460px, 100%); background:#fbf8f1; color:#2b2926; border-radius:16px; box-shadow:0 30px 80px rgba(0,0,0,.35); padding:26px 28px 22px; }
+#pubWelcome .pw-kicker{ font-family:var(--sans); font-size:10.5px; font-weight:800; letter-spacing:.12em; text-transform:uppercase; color:#b9822e; }
+#pubWelcome h2{ font-family:var(--serif); font-weight:500; font-size:26px; line-height:1.2; margin:6px 0 8px; }
+#pubWelcome .pw-thanks{ font-family:var(--serif); font-size:16px; line-height:1.5; color:#4a4238; margin:0 0 16px; }
+#pubWelcome .pw-how{ list-style:none; margin:0 0 16px; padding:0; display:grid; gap:8px; }
+#pubWelcome .pw-how li{ display:flex; gap:12px; align-items:baseline; font-size:13.5px; color:#3a3126; line-height:1.4; }
+#pubWelcome .pw-how b{ flex:0 0 96px; font-size:10.5px; font-weight:800; letter-spacing:.08em; text-transform:uppercase; color:#8a6a2a; }
+#pubWelcome .pw-then{ font-size:13px; color:#6b5f4c; line-height:1.5; margin:0 0 18px; }
+#pubWelcome .pw-go{ display:block; width:100%; border:none; border-radius:999px; padding:11px 16px; background:#2b2926; color:#f5efe2; font:inherit; font-size:13px; font-weight:700; letter-spacing:.06em; cursor:pointer; }
+#pubWelcome .pw-go:hover{ background:#3a342e; }
+/* phones: one line — the mark, a smaller wordmark, two short buttons; taps don't double-tap-zoom the page */
+html body.guest #readMode#readMode .rd-head .rd-head-actions{ flex-wrap:nowrap !important; }
+html body.guest #readMode#readMode .rd-head{ flex-direction:row !important; flex-wrap:nowrap !important; align-content:center !important; }
+html body.guest #readBody .rd-prose{ touch-action:manipulation; }
+@media (max-width:600px){
+  html body.guest #readMode#readMode .rd-head{ padding:0 12px !important; }
+  html body.guest #readMode .rd-guest-brand .rd-brand-beta{ display:none; }
+  html body.guest #readMode#readMode .rd-head .rd-head-actions{ gap:6px !important; }
+  html body.guest #readMode .rd-guest-brand svg{ width:26px; height:26px; }
+  html body.guest #readMode .rd-guest-brand .rd-brand-word{ font-size:24px; margin-left:8px; }
+  html body.guest #readMode#readMode .rd-head .gb-btn{ padding:6px 10px !important; }
+  html body.guest #readMode#readMode #gbSignin{ font-size:0 !important; }
+  html body.guest #readMode#readMode #gbSignin::after{ content:'Sign in'; font-size:10.5px; }
+  #pubWelcome .pw-card{ padding:22px 20px 18px; }
+}
+@media (max-width:400px){ html body.guest #readMode .rd-guest-brand .rd-brand-word{ display:none; } }
+</style>
 </body></html>
