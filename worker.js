@@ -11,7 +11,15 @@ const SUPABASE_ANON_KEY = 'sb_publishable_bb709imkZ55IGfwcAqVGgQ_vTLHGodY';
 // Admin accounts: the only users allowed the paid Claude model + the per-model testing toggles.
 // Everyone else runs the free chain only (enforced server-side in runFrontier — can't be bypassed by the client).
 const ADMIN_EMAILS = ['jeremyplante7@gmail.com'];
-function isAdminEmail(e) { return ADMIN_EMAILS.includes(String(e || '').toLowerCase()); }
+function isAdminEmail(e) { return ADMIN_EMAILS.includes(String(e || '').toLowerCase()) || isOwnerEmail(e); }
+// v.804 [Jeremy] — the OWNER role: "remove the AI quota for my jeremyplante7@gmail.com account. Make it a special role: Owner
+// and remove the quotas". An owner has everything an admin has (Claude, the model toggles) and NO AI limits: no per-minute
+// rate, no daily call caps (in-memory or KV), no daily token budget or per-feature ceiling, and is neither blocked by nor
+// counted toward the site-wide daily backstop. Their calls are still metered into public.ai_usage (as plan 'pro', the
+// column's check constraint allows only free/pro), so the spend stays visible. Checked against the VERIFIED Supabase email,
+// never anything the client sends.
+const OWNER_EMAILS = ['jeremyplante7@gmail.com'];
+function isOwnerEmail(e) { return OWNER_EMAILS.includes(String(e || '').toLowerCase()); }
 // Set true ONCE you turn on "Confirm email" in Supabase → Auth → Providers → Email. Until then, leave false
 // so brand-new signups can use the AI before they click the confirmation link.
 const REQUIRE_CONFIRMED_EMAIL = false;
@@ -579,10 +587,11 @@ async function handleAI(request, env, ctx) {
   const token = (request.headers.get('authorization') || '').replace(/^Bearer\s+/i, '').trim();
   const user = await verifyUser(token);
   if (!user) return new Response(JSON.stringify({ error: 'Sign in to use the AI features' }), { status: 401, headers });
-  const admin = isAdminEmail(user.email);
+  const owner = isOwnerEmail(user.email);                     // v.804 — the Owner role: no AI quotas at all
+  const admin = owner || isAdminEmail(user.email);
   const plan = admin ? 'pro' : await planOf(env, user.id);   // entitlement from the subscriptions table; admin is treated as Pro
   const paid = admin || plan === 'pro';                       // may use the paid Claude model + gets the higher quotas
-  if (!rateOk(user.id, image ? (paid ? 30 : 12) : (paid ? 120 : 45))) return new Response(JSON.stringify({ error: 'Too many AI requests — give it a moment' }), { status: 429, headers });
+  if (!owner && !rateOk(user.id, image ? (paid ? 30 : 12) : (paid ? 120 : 45))) return new Response(JSON.stringify({ error: 'Too many AI requests — give it a moment' }), { status: 429, headers });
   // --- metering (see migration 6). `feature` is the registry name the client sends;
   // sanitized here because it lands in a database column AND keys the per-feature ceiling below.
   const _t0 = Date.now();
@@ -594,12 +603,12 @@ async function handleAI(request, env, ctx) {
   // Images keep a tight call cap of their own: vision replies routinely report no usage at all, so
   // their token counts are estimated from text length and badly understate the real cost.
   const _dailyCap = image ? (paid ? 1500 : 400) : (paid ? 12000 : 3000);
-  if (!dailyOk(user.id, _dailyCap)) return new Response(JSON.stringify({ error: 'You’ve hit today’s AI limit — it resets tomorrow. Reach out if you need more.', limit: 'day' }), { status: 429, headers });
+  if (!owner && !dailyOk(user.id, _dailyCap)) return new Response(JSON.stringify({ error: 'You’ve hit today’s AI limit — it resets tomorrow. Reach out if you need more.', limit: 'day' }), { status: 429, headers });
   // Cross-isolate per-user cap (KV) — closes the "each Cloudflare isolate hands out a fresh in-memory quota" gap.
-  if (!(await dailyOkKV(env, user.id, _dailyCap))) return new Response(JSON.stringify({ error: 'You’ve hit today’s AI limit — it resets tomorrow. Reach out if you need more.', limit: 'day' }), { status: 429, headers });
+  if (!owner && !(await dailyOkKV(env, user.id, _dailyCap))) return new Response(JSON.stringify({ error: 'You’ve hit today’s AI limit — it resets tomorrow. Reach out if you need more.', limit: 'day' }), { status: 429, headers });
   // #31 — the daily TOKEN budget, and the one named ceiling. This is the limit a writer will
   // actually meet; the call caps above only catch a bug.
-  const _bud = await tokenBudgetOk(env, user.id, _feature, paid);
+  const _bud = owner ? { ok: true } : await tokenBudgetOk(env, user.id, _feature, paid);
   if (!_bud.ok) {
     if (_bud.scope === 'feature') {
       // A feature ceiling is NOT the day being over — everything else still works, and saying
@@ -618,7 +627,7 @@ async function handleAI(request, env, ctx) {
     }), { status: 429, headers });
   }
   // Global backstop across every account — a coarse ceiling so a mass-signup attack can't run up the bill.
-  if (!(await globalDailyOk(env))) return new Response(JSON.stringify({ error: 'Dystoria’s AI is at today’s capacity — please try again later.', limit: 'global' }), { status: 503, headers });
+  if (!owner && !(await globalDailyOk(env))) return new Response(JSON.stringify({ error: 'Dystoria’s AI is at today’s capacity — please try again later.', limit: 'global' }), { status: 503, headers });
 
   const maxTokens = Math.min(Math.max(parseInt(body.max_tokens, 10) || 600, 64), body.kind === 'import' ? 8192 : 4096);   // import returns a big element list → allow a larger JSON reply
   const model = body.model || (image ? VISION_MODEL : MODEL);
@@ -634,7 +643,7 @@ async function handleAI(request, env, ctx) {
       // Charge the budget from the same numbers the meter records — including failures, which
       // burn provider tokens too, and would otherwise make an error loop free. `burned` is what
       // the providers that produced nothing reported before the chain gave up.
-      tokenSpend(env, ctx, user.id, _feature, Math.max(u.in + u.out, (res && res.burned) || 0));
+      if (!owner) tokenSpend(env, ctx, user.id, _feature, Math.max(u.in + u.out, (res && res.burned) || 0));   // an owner has no budget to charge
     } catch (e) {}
   };
   // Providers the user opted out of (may-train-on-free-prose toggles). Sanitized; only ever narrows the chain.

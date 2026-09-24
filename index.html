@@ -27948,6 +27948,7 @@ function updateAccountUI(){
     const pu = $('profUser'); if (pu && document.activeElement !== pu) pu.value = cloud.username || '';
     $('authTitle').textContent = 'Your account';
     if (typeof billingConfigured === 'function' && billingConfigured()){ billingStyles(); refreshPlanUI(); refreshPlanAndUI(); }   // show cached badge now, then refresh from the row
+    else if (typeof aiIsOwner === 'function' && aiIsOwner()) refreshPlanUI();   /* v.804 — the Owner badge shows even before billing is set up */
   } else {
     if (av) av.style.display = 'none';
     if (fm) fm.style.display = 'block';
@@ -42182,6 +42183,15 @@ async function loadUserPlan(){
 }
 function refreshPlanUI(){
   const row = $('planRow'); if (!row) return;
+  if (cloud && cloud.user && typeof aiIsOwner === 'function' && aiIsOwner()){   /* v.804 — the Owner role, whatever the billing set-up */
+    try{ billingStyles(); }catch(e){}
+    row.style.display = 'flex';
+    const b = $('planBadge'), n = $('planNote'), a = $('planAction');
+    b.textContent = 'Owner'; b.classList.add('pro'); b.classList.add('owner');
+    n.textContent = 'No AI limits'; a.style.display = 'none'; a.onclick = null;
+    return;
+  }
+  { const a0 = $('planAction'); if (a0) a0.style.display = ''; const b0 = $('planBadge'); if (b0) b0.classList.remove('owner'); }
   if (!billingConfigured() || !(cloud && cloud.user)){ row.style.display = 'none'; return; }
   row.style.display = 'flex';
   const badge = $('planBadge'), note = $('planNote'), act = $('planAction');
@@ -42364,7 +42374,12 @@ async function aiCall(system, prompt, opts){
 // Admin gate: only these accounts see the per-model toggles + may use the paid Claude model. The worker enforces this
 // independently (it re-checks the verified email), so hiding the UI here is convenience, not the security boundary.
 const ADMIN_EMAILS = ['jeremyplante7@gmail.com'];
-function aiIsAdmin(){ try { return !!(typeof cloud !== 'undefined' && cloud.user && ADMIN_EMAILS.includes(String(cloud.user.email || '').toLowerCase())); } catch(e){ return false; } }
+/* v.804 [Jeremy] — the OWNER role: an admin with no AI quotas. worker.js holds the same list and is what lifts the limits
+   (checked against the verified email); here it only names the role in the account card and keeps the app from ever
+   putting an owner into its "out of AI for today" state. */
+const OWNER_EMAILS = ['jeremyplante7@gmail.com'];
+function aiIsOwner(){ try { return !!(typeof cloud !== 'undefined' && cloud.user && OWNER_EMAILS.includes(String(cloud.user.email || '').toLowerCase())); } catch(e){ return false; } }
+function aiIsAdmin(){ try { return aiIsOwner() || !!(typeof cloud !== 'undefined' && cloud.user && ADMIN_EMAILS.includes(String(cloud.user.email || '').toLowerCase())); } catch(e){ return false; } }
 // Friendly label for the model that served the last call.
 function aiViaLabel(v){ const M = { 'claude': 'Claude', 'perplexity-sonar': 'Perplexity', 'gemini-grounded': 'Gemini (grounded)', 'gemini-2.5-pro': 'Gemini Pro', 'gemini-2.5-flash': 'Gemini Flash', 'cerebras': 'Cerebras','groq-llama-70b': 'Groq', 'mistral-large': 'Mistral', 'openrouter-free': 'OpenRouter', 'workers-ai': 'Workers AI' }; return M[v] || v || ''; }
 // Testing panel: per-model toggles for the worker's fallback chain. Off = skipped (in this browser only).
@@ -42522,6 +42537,7 @@ function aiFeatureCapNotice(msg){
 try{ window.aiFeatureCapNotice = aiFeatureCapNotice; }catch(e){}
 let _aiDailyNoticed = false;
 function aiDailyNotice(){
+  if (typeof aiIsOwner === 'function' && aiIsOwner()) return;   /* v.804 — an owner has no daily AI limit; a provider running dry is not the owner's cap */
   try{ window.__aiLimited = true; }catch(e){}   // mirror for feature gating (e.g. the inline "Break it down" button hides once we're out of AI for the day)
   if (_aiDailyNoticed) return; _aiDailyNoticed = true;
   const canUpgrade = (typeof subsVisible === 'function' && subsVisible() && typeof aiPlan === 'function' && aiPlan() !== 'pro');
@@ -58643,9 +58659,12 @@ body.eink .pl-filterpick .pf-row.on .pf-box{ background:#000; border-color:#000;
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.726';
+  var APP_VERSION = '2026.07.20.727';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.727', date:'September 24, 2026', notes:[
+      '**The Owner role.** [Jeremy] The owner account has no AI limits \u2014 no per-minute rate, no daily cap, no daily token budget or wiki ceiling, and it isn\u2019t held by the site-wide daily backstop. Its calls are still logged, so the spend stays visible. Your account card shows the role: Owner \u00b7 No AI limits.'
+    ]},
     { v:'2026.07.20.726', date:'September 24, 2026', notes:[
       '**The importer, in charcoal.** [Jeremy] The Import window is charcoal now, with clear light type (a loaded file\u2019s text was nearly invisible), and Story prose | Notes & worldbuilding is a pill toggle like the ones in the bar under the modes.',
       '**Read & Structure opens the charcoal page.** [Jeremy] While your source is read, the whole screen is the refresh page \u2014 the logo at its centre, the step it\u2019s on (part by part for a long work) and a gold progress bar, with what it has found so far appearing beneath. When it finishes, the results appear on that same page, in charcoal a shade lighter.',
@@ -72923,6 +72942,7 @@ body.ai-capped .pt-grouphd.ai-grouphd-empty{ display:none !important; }
   var _noticedDay = null;
   try {
     window.aiDailyNotice = function(){
+      try { if (typeof aiIsOwner === 'function' && aiIsOwner()) return; } catch(e){}   /* v.804 — an owner has no daily AI limit */
       try { window.__aiLimited = true; } catch(e){}      // the accessor re-syncs state
       var d = utcDay();
       if (_noticedDay === d) return;                     // once a day, not once a page-load
