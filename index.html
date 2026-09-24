@@ -5518,9 +5518,10 @@ body.eink #consentBar #cbAccept{background:#000; color:#fff; border-color:#000}
 <div id="drawerBackdrop"></div>
 <div id="importBackdrop"></div>
 <div id="importCard">
+  <div class="ic-stagemark" aria-hidden="true"></div>
   <div class="ic-head"><span id="importHeadTitle">Import a story</span><button id="importClose" title="Close">×</button></div>
   <div id="importEntry">
-    <div class="ic-kind"><label><input type="radio" name="impkind" value="prose" checked> Story prose</label><label><input type="radio" name="impkind" value="notes"> Notes &amp; worldbuilding</label></div>
+    <div class="ic-kind ic-seg" role="radiogroup" aria-label="What are you importing?"><label class="ic-segbtn on"><input type="radio" name="impkind" value="prose" checked><span>Story prose</span></label><label class="ic-segbtn"><input type="radio" name="impkind" value="notes"><span>Notes &amp; worldbuilding</span></label></div>
     <input id="importTitle" placeholder="Story title (optional)">
     <textarea id="importText" rows="9" placeholder="Paste your story’s prose here…"></textarea>
     <div class="ic-row"><label class="ic-file" for="importFile">⇪ Load file · .txt · .md · .docx</label><input type="file" id="importFile" accept=".txt,.md,.markdown,.docx,text/plain,text/markdown,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden><span id="importStatus"></span></div>
@@ -5533,10 +5534,26 @@ body.eink #consentBar #cbAccept{background:#000; color:#fff; border-color:#000}
   </div>
   <div id="importReview" style="display:none">
     <div class="ir-block"><div class="ir-lbl">Story summary</div><textarea id="importOverview" rows="3" placeholder="story summary"></textarea></div>
+    <div id="irSumStep">
+      <div class="irs-lbl">Found in your source</div>
+      <div class="irs-found" id="irsFound"></div>
+      <div class="irs-names" id="irsNames"></div>
+    </div>
     <div class="ir-lbl">Elements found — uncheck to skip · edit names &amp; summaries · ✦ already in the library</div>
     <div id="importElements"></div>
     <button id="importAddEl" class="ir-addel" type="button">+ add element</button>
     <div class="ic-actions"><button id="importBack" class="ghost">Back</button><button id="importConfirm">Confirm &amp; build story</button></div>
+    <div id="irSumActs">
+      <p class="irs-note">Approving isn’t final — every element can be renamed, changed or removed in the story as you go.</p>
+      <div class="irs-btns"><button type="button" id="irsBack" class="irs-ghost">← Source</button><button type="button" id="irsReview" class="irs-ghost">Review each</button><button type="button" id="irsApprove">Approve all</button></div>
+    </div>
+  </div>
+  <div id="impWork" aria-live="polite">
+    <div class="iw-mark" aria-hidden="true"></div>
+    <div class="iw-line" id="iwLine">Reading your prose</div>
+    <div class="iw-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i id="iwFill"></i></div>
+    <div class="iw-sub" id="iwSub"></div>
+    <div class="iw-found" id="iwFound"></div>
   </div>
 </div>
 <div id="wikiPanel">
@@ -31381,14 +31398,91 @@ function seedRelBondsHere(rels){
    and it still does that there. It is not what an import is for. An import returns what your text said, and when
    your text said nothing about who knows whom, the honest result is no bonds. */
 function seedImportBonds(rels){ return seedRelBonds(rels); }
+/* v.803 [Jeremy] — the import as one charcoal stage. `impStage('working')` turns the card into the full-screen charcoal page (the
+   refresh page's own logo at its centre, the step being done under it, a progress bar); `impStage('review')` keeps that page and
+   floats the review deck on it; `impStage(null)` is the ordinary (charcoal) dialog again. The bar's progress is real: each part
+   of the source is one slot, filled as its reply lands, and eased toward the slot's end while the reply is awaited. */
+var IMPW = { t:0, frac:0 };
+function impStage(mode){
+  const c = $('importCard'); if (!c) return;
+  c.classList.toggle('ic-stage', !!mode); c.classList.toggle('ic-working', mode === 'working'); c.classList.toggle('ic-reviewing', mode === 'review');
+  document.body.classList.toggle('imp-staged', !!mode);
+  if (mode !== 'working'){ clearTimeout(IMPW.t); IMPW.t = 0; }
+}
+function impWorkBar(frac, secs){
+  const f = $('iwFill'); if (!f) return; frac = Math.max(0, Math.min(1, frac)); IMPW.frac = frac;
+  f.style.transition = 'transform ' + (secs || .45) + 's ' + (secs && secs > 2 ? 'cubic-bezier(.1,.6,.2,1)' : 'ease-out');
+  f.style.transform = 'scaleX(' + frac.toFixed(4) + ')';
+  const bar = f.parentNode; if (bar) bar.setAttribute('aria-valuenow', String(Math.round(frac * 100)));
+}
+function impWorkSay(line, sub){ const l = $('iwLine'), u = $('iwSub'); if (l && line != null) l.textContent = line; if (u && sub != null) u.textContent = sub; }
+function impWorkFound(){
+  const box = $('iwFound'); if (!box) return;
+  const els = (IMP.elements || []).filter(e => e && e.name), rels = (IMP.relationships || []).length;
+  if (!els.length){ box.innerHTML = ''; return; }
+  const by = {}; els.forEach(e => { by[e.cat] = (by[e.cat] || 0) + 1; });
+  const WORD = { being:['character','characters'], setting:['place','places'], org:['group','groups'], object:['object','objects'], event:['event','events'], stakes:['stake','stakes'], concept:['concept','concepts'], theme:['theme','themes'], plot:['plot','plots'], genre:['genre','genres'], period:['period','periods'] };
+  const parts = Object.keys(by).sort((a, b) => by[b] - by[a]).slice(0, 4).map(k => by[k] + ' ' + ((WORD[k] || [k, k + 's'])[by[k] === 1 ? 0 : 1]));
+  const names = els.slice(-9).map(e => '<span>' + esc(e.name) + '</span>').join('');
+  box.innerHTML = '<div class="iw-count">' + (IMPW.done ? 'Found' : 'Found so far') + ' · ' + parts.join(' · ') + (rels ? ' · ' + rels + ' connection' + (rels === 1 ? '' : 's') : '') + '</div><div class="iw-names">' + names + '</div>';
+}
+function impWorkStart(prose, total, notes){
+  const card = $('importCard'); if (!card || !card.classList.contains('show')) return false;   // a background (session) scan keeps its own pill
+  impStage('working'); IMPW.done = false; const box = $('iwFound'); if (box) box.innerHTML = '';
+  const words = (String(prose).match(/\S+/g) || []).length;
+  impWorkSay('Reading your ' + (notes ? 'notes' : 'prose') + (total > 1 ? ' — part 1 of ' + total : ''), words.toLocaleString() + ' words' + (total > 1 ? ' · ' + total + ' parts' : ''));
+  impWorkBar(0, .01); requestAnimationFrame(() => impWorkBar(.03, .6));
+  return true;
+}
+function impWorkPart(ci, total, notes){
+  if (!document.body.classList.contains('imp-staged')) return;
+  impWorkSay('Reading your ' + (notes ? 'notes' : 'prose') + (total > 1 ? ' — part ' + (ci + 1) + ' of ' + total : ''), null);
+  const from = Math.max(IMPW.frac, ci / total), to = (ci + .9) / total;   // eased toward the slot's end while the reply is awaited
+  impWorkBar(from, .3); clearTimeout(IMPW.t); IMPW.t = setTimeout(() => impWorkBar(to, 38), 320);
+}
+function impWorkPartDone(ci, total){
+  if (!document.body.classList.contains('imp-staged')) return;
+  clearTimeout(IMPW.t); IMPW.done = (ci + 1 >= total); impWorkBar((ci + 1) / total * .97, .5); impWorkFound();
+  if (ci + 1 < total) impWorkSay(null, null); else impWorkSay('Laying out what was found', null);
+}
+/* the review's first step is the summary: what was found, the story's summary, and Approve all | Review each. Review each walks
+   the cards; the deck's Back returns here. */
+function impReviewStep(step){
+  const c = $('importCard'); if (!c) return;
+  c.classList.toggle('ir-step-sum', step === 'sum'); c.classList.toggle('ir-step-deck', step === 'deck');
+  const h = $('importHeadTitle');
+  if (step === 'sum'){
+    if (h) h.textContent = IMP.mode === 'suggest' ? 'Found in your writing' : 'What was found';
+    const els = (IMP.elements || []).filter(e => e && e.name && e.include !== false), rels = (IMP.relationships || []).filter(r => r && r.include !== false).length;
+    const by = {}; els.forEach(e => { by[e.cat] = (by[e.cat] || 0) + 1; });
+    const WORD = { being:['character','characters'], setting:['place','places'], org:['group','groups'], object:['object','objects'], event:['event','events'], stakes:['stake','stakes'], concept:['concept','concepts'], theme:['theme','themes'], plot:['plot','plots'], genre:['genre','genres'], period:['period','periods'], context:['context','contexts'] };
+    const parts = Object.keys(by).sort((a, b) => by[b] - by[a]).map(k => '<span><b>' + by[k] + '</b> ' + ((WORD[k] || [k, k + 's'])[by[k] === 1 ? 0 : 1]) + '</span>');
+    if (rels) parts.push('<span><b>' + rels + '</b> connection' + (rels === 1 ? '' : 's') + '</span>');
+    const f = $('irsFound'); if (f) f.innerHTML = parts.length ? parts.join('') : '<span>Nothing found yet</span>';
+    const n = $('irsNames'); if (n) n.innerHTML = els.slice(0, 24).map(e => '<span class="irs-name"><i style="background:' + (typeof catColor === 'function' ? catColor(e.cat) : '#999') + '"></i>' + esc(e.name) + '</span>').join('') + (els.length > 24 ? '<span class="irs-more">+ ' + (els.length - 24) + ' more</span>' : '');
+    const ap = $('irsApprove'), cf = $('importConfirm'); if (ap && cf) ap.disabled = !!cf.disabled;
+  } else {
+    if (h) h.textContent = IMP.mode === 'suggest' ? 'Found in your writing' : 'Review the story’s elements';
+    /* the deck decides which page shows; the storylines list is redrawn after the deck at the end of a read and was left
+       showing under every card (so on v.802 too) — one more pass of the deck's render puts it back on its own page */
+    try{ if (typeof renderImportProposals === 'function') renderImportProposals(); }catch(e){}
+  }
+}
 function importShow(view){
   $('importEntry').style.display = view === 'entry' ? 'block' : 'none';
   $('importReview').style.display = view === 'review' ? 'block' : 'none';
   $('importHeadTitle').textContent = view === 'review' ? 'Review the story’s elements' : 'Import a story';
+  const c = $('importCard');
+  if (view === 'review'){
+    impReviewStep((typeof IMP !== 'undefined' && IMP._sessionImport) ? 'deck' : 'sum');   /* the end-of-session review (v.686) goes straight to its cards: it has no summary to show */
+    if (c && c.classList.contains('ic-working')){ impWorkBar(1, .35); impWorkSay('Ready to review', null); clearTimeout(IMPW.t); IMPW.t = setTimeout(() => impStage('review'), 520); }
+    else impStage('review');
+  } else impStage(null);
 }
 function importApplyKind(){
   const k = (document.querySelector('input[name=impkind]:checked') || {}).value || 'prose';
   IMP.kind = k; const notes = k === 'notes';
+  document.querySelectorAll('#importCard .ic-segbtn').forEach(l => { const i = l.querySelector('input'); l.classList.toggle('on', !!(i && i.checked)); });   /* v.803 */
   const tx = $('importText'); if (tx) tx.placeholder = notes ? 'Paste your notes, character sheets or worldbuilding here\u2026' : 'Paste your story\u2019s prose here\u2026';
   const go = $('importGo'); if (go) go.textContent = 'Read & Structure \u2192';
   const sfx = $('importDestSuffix'); if (sfx) sfx.textContent = notes ? '' : ' as a new section';
@@ -31403,6 +31497,16 @@ function importConfigForMode(){
   $('importCard').classList.toggle('suggest', suggest);
   $('importConfirm').textContent = suggest ? 'Add to story' : (IMP.kind === 'notes' ? 'Add notes to story' : 'Confirm & build story');
 }
+(function(){   /* v.803 — the summary step's buttons, and the deck's Back returning to it */
+  const w = () => {
+    const ap = $('irsApprove'), rv = $('irsReview'), bk = $('irsBack'), back = $('importBack');
+    if (ap) ap.addEventListener('click', () => { const cf = $('importConfirm'); if (cf && !cf.disabled) cf.click(); });
+    if (rv) rv.addEventListener('click', () => { impReviewStep('deck'); try{ const p = $('irdkPrev'); for (let i = 0; i < 400 && p && !p.disabled; i++) p.click(); }catch(e){} const r = $('importReview'); if (r) r.scrollTop = 0; const c = $('importCard'); if (c) c.scrollTop = 0; });
+    if (bk) bk.addEventListener('click', () => importShow('entry'));
+    if (back) back.addEventListener('click', e => { const c = $('importCard'); if (c && c.classList.contains('ir-step-deck')){ e.stopImmediatePropagation(); e.preventDefault(); impReviewStep('sum'); } }, true);
+  };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', w); else w();
+})();
 function openSuggestReview(){
   if (!state._missed || !state._missed.length) return;
   IMP.mode = 'suggest';
@@ -31411,6 +31515,7 @@ function openSuggestReview(){
   $('importHeadTitle').textContent = 'Found in your writing';
   renderImportReview();
   $('importEntry').style.display = 'none'; $('importReview').style.display = 'block';
+  try{ impStage('review'); impReviewStep('sum'); }catch(e){}   /* v.803 */
   $('importConfirm').disabled = false;
   $('importBackdrop').classList.add('show'); $('importCard').classList.add('show');
 }
@@ -31484,7 +31589,7 @@ function openImport(){
   $('importBackdrop').classList.add('show'); $('importCard').classList.add('show');
   setTimeout(() => $('importText').focus(), 60);
 }
-function closeImport(){ $('importCard').classList.remove('show'); $('importBackdrop').classList.remove('show');
+function closeImport(){ $('importCard').classList.remove('show'); $('importBackdrop').classList.remove('show'); try{ impStage(null); }catch(e){}
   // R37 session-import hook: whether the writer approved (confirm calls closeImport) or dismissed the review,
   // run the pending navigation once so the session sorting always completes to Refine / Notes.
   if (typeof IMP !== 'undefined' && IMP._afterConfirm){ const _cb = IMP._afterConfirm; IMP._afterConfirm = null; IMP._sessionImport = false; try { _cb(); } catch(e){} }
@@ -31562,6 +31667,7 @@ async function extractImport(){
   if (!prose){ $('importStatus').textContent = 'Paste some prose first.'; return; }
   IMP.mode = 'new'; IMP.prose = prose; IMP.title = $('importTitle').value.trim();
   $('importGo').disabled = true; $('importStatus').innerHTML = '<span class="spin"></span>Reading &amp; ingesting…';
+  const _impStaged = impWorkStart(prose, importChunks(prose, 45000).length, (document.querySelector('input[name=impkind]:checked') || {}).value === 'notes');   /* v.803 — the charcoal page */
   /* v.704 — `organization` was the one extracted type with no subcategory guidance, so the model never named a
      kind, `validImportSub` fell through to `names[0]`, and EVERY imported group arrived as **Kinship** — armies,
      guilds and churches alike. The names are served from the same source the review dropdown reads, so the two can
@@ -31689,6 +31795,7 @@ async function extractImport(){
   const setConfirmProgress = done => { if (!confirmBtn) return; if (done < total){ confirmBtn.disabled = true; confirmBtn.textContent = 'Reading ' + done + '/' + total + '… (you can review now)'; } else { confirmBtn.disabled = false; confirmBtn.textContent = confirmLabel; } };
   for (let ci = 0; ci < total; ci++){
     $('importStatus').innerHTML = '<span class="spin"></span>Reading' + (total > 1 ? (' part ' + (ci + 1) + ' of ' + total) : ' &amp; ingesting') + '… <span style="opacity:.7">merging repeated elements</span>';
+    impWorkPart(ci, total, notesMode);
     const uc = (notesMode ? 'Notes' : 'Story') + (total > 1 ? (' (part ' + (ci + 1) + ' of ' + total + ' — extract only what THIS part establishes)') : '') + ':\n\n' + chunks[ci] + '\n\nReturn the JSON.';
     let normC = null;
     for (let attempt = 0; attempt < 2 && !normC; attempt++){
@@ -31704,7 +31811,7 @@ async function extractImport(){
         var _sysCk = (ci === 0 || notesMode) ? sys : (sys + ' THE NARRATIVE FRAME HAS ALREADY BEEN READ from the opening of this work. Return NO genre, context, concepts/themes, stakes or plot elements for this part \u2014 those types must be ABSENT from your elements array. Extract only the characters, places, objects, events, in-world terms and organizations THIS part establishes.');
         const out = await aiCall(_sysCk, uc, { feature:'import', maxTokens: 8000, json: true, kind: 'import' });   // dedicated large-context import model
         normC = normalizeExtract(parseJsonLoose(out));
-      } catch (e){ if (!gotAny){ $('importGo').disabled = false; $('importStatus').textContent = aiErrMsg(e); if (IMP._sessionImport) throw e; return; }   /* v.737: a session scan reports the reason on its pill */ flashStatus(aiErrMsg(e)); break; }   // after at least one good part, a failed part just stops early — keep what we have
+      } catch (e){ if (!gotAny){ impStage(null); $('importGo').disabled = false; $('importStatus').textContent = aiErrMsg(e); if (IMP._sessionImport) throw e; return; }   /* v.737: a session scan reports the reason on its pill */ flashStatus(aiErrMsg(e)); break; }   // after at least one good part, a failed part just stops early — keep what we have
     }
     if (!normC) { setConfirmProgress(ci + 1); continue; }   // a part failed to parse — keep what the other parts gave
     (normC.relationships || []).forEach(r => { if (!r || !r.from || !r.to) return; const k = (String(r.from) + '|' + String(r.to)).toLowerCase(); if (seenR[k]) return; seenR[k] = 1; IMP.relationships.push(r); });
@@ -31812,6 +31919,7 @@ async function extractImport(){
     IMP.genres = IMP.elements.filter(e => e.cat === 'genre').map(e => e.name);   // tag imported words for future generation bias
     if (newEls.length && !gotAny){ gotAny = true; if (gotTitle && !IMP.title) IMP.title = String(gotTitle).slice(0, 80); }   // defer the review until every part is merged, so each element shows with ALL its details
     setConfirmProgress(ci + 1);
+    impWorkPartDone(ci, total);
   }
   IMP.overview = $('importOverview') ? ($('importOverview').value.trim() || overview || '') : (overview || '');
   // all parts ingested + merged → NOW reveal the complete, de-duplicated list (each element carries every section's detail)
@@ -31876,7 +31984,7 @@ async function extractImport(){
     if (!notesMode) IMP.threads = IMP.threads.slice(0, 2);
   }
   $('importGo').disabled = false;
-  if (!IMP.elements.length){ $('importStatus').textContent = 'Couldn’t read the structure — try again, or shorten the text.'; return; }
+  if (!IMP.elements.length){ impStage(null); $('importStatus').textContent = 'Couldn’t read the structure — try again, or shorten the text.'; return; }
   if (typeof renderImportProposals === 'function') renderImportProposals();
   if (typeof renderImportThreads === 'function') try{ renderImportThreads(); }catch(e){}   /* v.719 */
   if (typeof renderImportRels === 'function') try{ renderImportRels(); }catch(e){}   /* v.706 — chunks arrive one at a time and each brings more connections */
@@ -58535,9 +58643,14 @@ body.eink .pl-filterpick .pf-row.on .pf-box{ background:#000; border-color:#000;
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.725';
+  var APP_VERSION = '2026.07.20.726';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.726', date:'September 24, 2026', notes:[
+      '**The importer, in charcoal.** [Jeremy] The Import window is charcoal now, with clear light type (a loaded file\u2019s text was nearly invisible), and Story prose | Notes & worldbuilding is a pill toggle like the ones in the bar under the modes.',
+      '**Read & Structure opens the charcoal page.** [Jeremy] While your source is read, the whole screen is the refresh page \u2014 the logo at its centre, the step it\u2019s on (part by part for a long work) and a gold progress bar, with what it has found so far appearing beneath. When it finishes, the results appear on that same page, in charcoal a shade lighter.',
+      '**Approve all, or review each.** [Jeremy] The results open on a summary first \u2014 the story\u2019s summary and everything that was found \u2014 with Approve all (nothing is final: every element can be changed in the story as you go) or Review each, which walks the cards one by one.'
+    ]},
     { v:'2026.07.20.725', date:'September 24, 2026', notes:[
       '**The refresh screen stays charcoal the whole way.** [Jeremy] Refreshing while in Revise, Review or the Wiki let that page show through the loading screen for a moment before the charcoal came back and wiped up. The charcoal now covers everything from the first moment until it wipes away.'
     ]},
@@ -97755,5 +97868,126 @@ html body.guest.gc-open #consentBar{ visibility:hidden !important; }   /* the co
   html body.guest #readMode #gcPop.gc-drawer .gcimp-btn{ flex:1 1 0; padding:8px 6px; font-size:12.5px; }
   html body.guest #readMode #gcPop.gc-drawer #gcText{ min-height:44px; }
 }
+</style>
+<style id="dyst-import-charcoal">
+/* v.803 [Jeremy] — the importer in charcoal: "the text is very faint … make this importer window look more beautiful, making it the
+   charcoal theme, and have the prose and notes/worldbuilding as a toggle pill like the ones in the sub-mode bar". Then the work and
+   the review on one full-screen charcoal page, the refresh page's own logo at its centre. (Ids doubled to outrank the ember and
+   dialog-family passes, v.495–v.790, without editing them.) */
+:root{ --dyst-mark:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 366 366'%3E%3Cg fill='%23fa9a31' transform='translate(54.5,358.05) scale(0.03504,-0.03504)'%3E%3Cpath d='M3440 9900 c0 -5 33 -32 73 -59 89 -60 145 -118 192 -196 84 -140 99 -301 38 -420 -34 -67 -73 -109 -241 -264 -159 -145 -242 -267 -282 -414 -9 -32 -19 -58 -23 -57 -3 1 -36 14 -71 30 -87 40 -134 49 -242 50 -316 1 -608 -206 -896 -634 -147 -220 -204 -398 -178 -562 15 -98 35 -154 81 -224 112 -173 324 -296 587 -340 l74 -12 -33 -20 c-47 -29 -177 -128 -250 -193 -35 -30 -66 -55 -69 -55 -3 0 -20 24 -38 54 -40 67 -156 193 -234 252 -79 61 -206 127 -303 157 -234 73 -469 59 -674 -41 -98 -48 -238 -183 -299 -288 -135 -233 -155 -543 -52 -803 11 -30 19 -54 18 -55 -2 -1 -30 -7 -63 -14 -33 -6 -98 -30 -144 -53 -354 -174 -446 -686 -176 -978 l56 -60 -31 -66 c-46 -96 -63 -190 -57 -310 15 -285 189 -540 460 -673 81 -39 111 -50 195 -72 l43 -11 -26 -31 c-93 -110 -136 -313 -102 -474 59 -277 285 -551 647 -787 187 -121 352 -196 588 -268 159 -48 274 -94 387 -154 189 -102 372 -149 575 -148 288 1 526 94 690 270 213 228 240 562 69 850 -49 82 -199 230 -299 295 -47 30 -179 106 -295 168 -408 219 -603 363 -803 590 -491 560 -603 1346 -285 1985 179 358 475 651 825 814 489 229 1061 225 1533 -10 294 -147 554 -411 704 -715 176 -357 215 -787 106 -1173 -151 -537 -503 -879 -1015 -988 -133 -28 -430 -25 -571 5 -408 87 -771 347 -972 697 -274 475 -199 1054 183 1419 420 401 1085 419 1479 42 93 -90 149 -169 206 -287 75 -159 90 -235 90 -439 -1 -164 -3 -180 -29 -260 -74 -225 -205 -383 -391 -471 -128 -61 -189 -74 -355 -73 -135 0 -152 2 -237 31 -397 132 -596 555 -420 887 116 218 396 324 602 227 86 -41 139 -91 177 -169 29 -59 33 -76 33 -147 0 -63 -5 -89 -22 -121 -47 -89 -129 -143 -215 -144 -71 0 -120 24 -182 92 -54 58 -57 60 -79 46 -32 -22 -35 -91 -6 -158 27 -64 111 -142 176 -164 75 -26 168 -31 241 -12 291 74 419 420 270 726 -48 99 -160 206 -268 258 -415 199 -911 -39 -1032 -496 -28 -109 -28 -297 1 -407 159 -602 878 -904 1456 -613 360 182 582 594 562 1042 -26 570 -424 1030 -997 1153 -134 28 -440 26 -579 -5 -563 -126 -988 -561 -1087 -1113 -20 -114 -23 -341 -5 -454 76 -480 373 -898 825 -1164 500 -294 1085 -328 1581 -90 164 78 276 159 421 303 307 307 476 682 548 1217 30 218 87 332 208 410 77 49 153 74 321 105 150 27 243 57 321 105 162 100 290 274 346 469 29 102 37 290 17 385 -39 181 -126 337 -266 475 -242 240 -580 370 -960 370 l-129 0 33 83 c104 254 51 482 -160 692 -224 223 -545 351 -968 387 -272 22 -531 -27 -680 -129 -22 -15 -34 -30 -29 -35 5 -5 80 -4 180 2 253 17 499 -3 719 -59 278 -71 531 -218 651 -377 74 -98 96 -159 97 -265 0 -79 -3 -91 -38 -161 -47 -97 -115 -161 -196 -185 -122 -37 -419 -14 -685 53 -230 57 -495 165 -629 255 -282 189 -392 502 -279 793 43 110 93 177 262 351 86 88 170 183 188 212 133 209 101 485 -77 662 -71 70 -161 125 -245 147 -59 16 -166 19 -166 4z m-382 -1550 c74 -37 119 -86 127 -137 12 -80 44 -202 68 -262 41 -101 87 -169 181 -268 190 -200 465 -336 903 -448 299 -76 466 -81 758 -20 230 48 384 62 525 46 271 -29 484 -122 660 -288 290 -273 348 -615 148 -868 -77 -97 -181 -159 -318 -189 -221 -49 -285 -67 -343 -96 -76 -37 -169 -117 -208 -178 l-27 -43 -16 73 c-167 748 -759 1303 -1511 1417 -327 49 -644 30 -985 -61 -109 -29 -122 -30 -235 -24 -310 18 -506 81 -632 206 -121 119 -134 299 -37 492 98 195 318 465 454 558 127 86 219 118 346 119 71 1 88 -3 142 -29z m-1533 -1575 c143 -37 289 -131 379 -244 49 -60 116 -176 116 -200 0 -5 -25 -45 -56 -88 -199 -276 -325 -597 -365 -925 -21 -179 -1 -557 37 -681 4 -12 -25 2 -88 44 -369 243 -776 323 -1036 204 -29 -13 -59 -22 -66 -19 -19 7 -60 67 -88 129 -20 44 -23 66 -23 181 0 130 0 130 37 205 44 90 119 168 196 204 77 37 163 42 317 20 97 -14 130 -16 150 -7 14 6 25 17 25 24 0 7 -35 47 -78 90 -138 137 -192 257 -200 449 -6 143 12 236 68 347 78 155 224 258 405 286 53 8 208 -3 270 -19z m-489 -2105 c156 -37 337 -128 476 -238 112 -89 206 -203 371 -449 163 -243 210 -356 211 -498 0 -92 -24 -158 -77 -213 -46 -48 -95 -74 -242 -127 -208 -74 -306 -140 -368 -246 -35 -60 -59 -159 -55 -225 1 -30 0 -54 -3 -54 -16 0 -207 212 -238 263 -72 121 -86 170 -86 298 0 113 1 116 39 195 33 67 56 96 156 194 157 153 186 205 143 252 -23 26 -36 23 -132 -24 -84 -42 -87 -43 -186 -43 -85 1 -110 5 -163 27 -192 80 -331 223 -387 401 -73 228 16 421 224 488 77 25 213 24 317 -1z m1367 -1263 c172 -140 266 -200 612 -396 287 -162 413 -268 484 -409 77 -154 60 -325 -46 -442 -121 -134 -308 -198 -549 -187 -153 7 -252 35 -444 129 -80 38 -188 83 -240 100 -336 104 -414 138 -501 216 -159 142 -152 346 16 473 29 22 114 66 189 99 158 68 230 114 286 179 57 66 83 138 84 238 1 46 2 83 4 83 1 0 48 -37 105 -83z'%3E%3C/path%3E%3Cpath d='M6494 5490 c-61 -13 -160 -57 -228 -103 -175 -118 -314 -331 -481 -742 -144 -353 -226 -524 -327 -678 -193 -295 -482 -539 -788 -666 -206 -86 -367 -119 -622 -129 -147 -6 -180 -10 -194 -24 -32 -32 -21 -69 54 -181 114 -174 171 -340 192 -560 28 -283 -35 -541 -182 -754 -57 -83 -181 -213 -372 -388 -139 -128 -203 -217 -241 -337 -30 -94 -34 -225 -10 -327 59 -247 313 -479 565 -516 31 -4 51 -2 63 7 18 13 10 21 -93 108 -134 112 -207 197 -262 306 -55 111 -68 200 -44 304 25 114 79 195 215 325 312 299 377 372 450 509 17 33 33 61 34 63 2 1 29 -22 61 -51 115 -108 260 -160 446 -160 196 0 381 63 555 189 91 65 103 76 312 268 203 187 285 247 433 318 69 33 152 74 185 91 356 182 578 572 552 973 -6 85 -26 196 -46 248 -9 24 -8 25 50 30 178 16 333 169 412 407 118 353 84 858 -79 1170 -78 150 -205 257 -349 295 -62 16 -192 18 -261 5z m244 -246 c63 -31 117 -90 159 -175 145 -294 169 -719 57 -1016 -62 -167 -176 -273 -294 -273 -44 0 -47 2 -101 68 -97 118 -250 218 -407 263 -95 28 -241 35 -320 16 -44 -10 -62 -11 -58 -3 351 827 478 1029 706 1123 81 33 188 32 258 -3z m-593 -1358 c207 -98 345 -342 345 -610 0 -420 -289 -749 -697 -794 -83 -10 -208 -3 -278 13 -169 41 -326 168 -405 328 -48 98 -70 192 -70 308 0 102 -4 95 130 202 99 78 229 206 372 367 162 182 257 233 430 227 86 -4 104 -8 173 -41z m-1302 -870 c24 -311 215 -576 498 -694 73 -30 201 -61 256 -63 l28 0 -29 -22 c-16 -12 -108 -85 -205 -162 -213 -170 -250 -196 -344 -240 -182 -87 -392 -100 -533 -34 -68 32 -138 101 -165 161 -21 48 -24 73 -30 278 -9 284 -38 449 -108 619 -17 41 -31 78 -31 82 0 5 23 9 51 9 134 0 405 62 540 124 30 13 57 25 60 25 3 1 9 -37 12 -83z'%3E%3C/path%3E%3C/g%3E%3C/svg%3E"); }
+html body #importCard#importCard{ background:#2b2926 !important; color:#ece6d9 !important; border:1px solid rgba(255,205,116,.16) !important; box-shadow:0 30px 80px rgba(0,0,0,.5) !important; width:560px; padding:22px 26px 20px !important; }
+html body #importCard#importCard .ic-head span, html body #importCard#importCard #importHeadTitle{ color:#f2e7cf !important; }
+html body #importCard#importCard #importClose{ color:#a39a88 !important; }
+html body #importCard#importCard #importClose:hover{ color:#fa9a31 !important; }
+/* the kind toggle — the sub-mode bar's pill group */
+html body #importCard#importCard .ic-seg{ display:inline-flex !important; gap:0 !important; padding:2px; margin:2px 0 16px !important; border-radius:999px; background:rgba(255,240,214,.05); border:1px solid rgba(255,205,116,.18); }
+html body #importCard#importCard .ic-segbtn{ position:relative; display:inline-flex; align-items:center; height:28px; padding:0 14px; border-radius:999px; cursor:pointer;
+  font-family:var(--sans, "Avenir Next", system-ui, sans-serif); font-size:10.5px; font-weight:600; letter-spacing:.11em; text-transform:uppercase; color:#fa9a31; transition:background .15s, color .15s; }
+html body #importCard#importCard .ic-segbtn:hover{ background:rgba(255,205,116,.06); }
+html body #importCard#importCard .ic-segbtn.on, html body #importCard#importCard .ic-segbtn:has(input:checked){ background:rgba(255,205,116,.12); color:#f3c77e; }
+html body #importCard#importCard .ic-segbtn input{ position:absolute; opacity:0; width:1px; height:1px; margin:0; pointer-events:none; }
+html body #importCard#importCard .ic-segbtn:has(input:focus-visible){ box-shadow:0 0 0 2px rgba(250,154,49,.45); }
+/* the fields: light type on a darker well — never faint */
+html body #importCard#importCard #importTitle{ color:#f2e7cf !important; font-size:19px !important; border-bottom:1px solid rgba(255,205,116,.22) !important; background:transparent !important; }
+html body #importCard#importCard #importText, html body #importCard#importCard #importOverview{ color:#ece6d9 !important; background:#221f1c !important; border:1px solid rgba(255,255,255,.10) !important; border-radius:10px !important; font-style:normal !important; }
+html body #importCard#importCard #importText:focus, html body #importCard#importCard #importOverview:focus, html body #importCard#importCard #importTitle:focus{ border-color:rgba(250,154,49,.55) !important; box-shadow:0 0 0 3px rgba(250,154,49,.12) !important; outline:none !important; }
+html body #importCard#importCard #importText::placeholder, html body #importCard#importCard #importTitle::placeholder, html body #importCard#importCard #importOverview::placeholder{ color:#857d6f !important; font-style:italic; }
+html body #importCard#importCard .ic-file{ background:rgba(255,255,255,.04) !important; border:1px solid rgba(255,205,116,.26) !important; color:#d9cfbb !important; border-radius:999px !important; }
+html body #importCard#importCard .ic-file:hover{ border-color:#fa9a31 !important; color:#f2e7cf !important; }
+html body #importCard#importCard #importStatus{ color:#b9ae98 !important; }
+html body #importCard#importCard #importDestRow{ color:#cfc5b1 !important; }
+html body #importCard#importCard #importDestRow b{ color:#f3c77e !important; font-weight:600; }
+html body #importCard#importCard input[type=radio], html body #importCard#importCard input[type=checkbox]{ accent-color:#fa9a31; }
+html body #importCard#importCard .ic-note{ color:#9c9382 !important; }
+/* the stage: the whole screen, charcoal, the refresh page's logo */
+html body #importCard#importCard.ic-stage{ left:0 !important; top:0 !important; right:0 !important; bottom:0 !important; width:auto !important; max-width:none !important; height:auto !important; max-height:none !important;
+  transform:none !important; border:none !important; border-radius:0 !important; box-shadow:none !important; padding:34px 20px 48px !important; overflow-y:auto !important; z-index:2147482000 !important; }
+body.imp-staged #importBackdrop{ background:#2b2926 !important; }
+html body #importCard#importCard.ic-stage > .ic-head{ max-width:680px; margin:0 auto 18px !important; justify-content:center; position:relative; }
+html body #importCard#importCard.ic-stage > .ic-head #importHeadTitle{ font-size:24px !important; letter-spacing:.02em; }
+html body #importCard#importCard.ic-stage > .ic-head #importClose{ position:fixed !important; top:18px !important; right:24px !important; left:auto !important; font-size:26px !important; z-index:5; }
+.ic-stagemark{ display:none; }
+html body #importCard#importCard.ic-reviewing .ic-stagemark{ display:block; width:46px; height:46px; margin:0 auto 12px; background:var(--dyst-mark) center/contain no-repeat; filter:drop-shadow(0 0 8px rgba(250,154,49,.25)); }
+html body #importCard#importCard.ic-working > .ic-head, html body #importCard#importCard.ic-working #importEntry{ visibility:hidden; }
+/* the review deck: charcoal too, a shade lighter than the page — the sheet #34312d, each card #3c3833, the wells #262320 [Jeremy] */
+html body #importCard#importCard.ic-reviewing #importReview{ max-width:680px; margin:0 auto; background:#34312d; color:#ece6d9; border-radius:18px; padding:22px 26px 20px; border:1px solid rgba(255,205,116,.12); box-shadow:0 28px 80px rgba(0,0,0,.45); }
+html body #importCard#importCard.ic-reviewing #importReview .ir-lbl, html body #importCard#importCard.ic-reviewing #importReview .irdk-pagehead, html body #importCard#importCard.ic-reviewing #importReview .irr-head, html body #importCard#importCard.ic-reviewing #importReview .ipp-head, html body #importCard#importCard.ic-reviewing #importReview .irdk-notelab, html body #importCard#importCard.ic-reviewing #importReview .ir-block .ir-lbl{ color:#e0a94e !important; }
+html body #importCard#importCard.ic-reviewing #importReview #irdkTitle{ color:#f2e7cf !important; }
+html body #importCard#importCard.ic-reviewing #importReview #irdkCount{ color:#c9a468 !important; }
+html body #importCard#importCard.ic-reviewing #importReview .irdk-arrow{ background:transparent !important; color:#f3c77e !important; border:1px solid rgba(255,205,116,.35) !important; }
+html body #importCard#importCard.ic-reviewing #importReview .irdk-arrow:hover:not(:disabled){ background:rgba(255,205,116,.10) !important; }
+html body #importCard#importCard.ic-reviewing #importReview .irdk-arrow:disabled{ opacity:.3 !important; }
+html body #importCard#importCard.ic-reviewing #importReview .ir-el{ background:#3c3833 !important; border:1px solid rgba(255,205,116,.18) !important; box-shadow:0 10px 26px rgba(0,0,0,.28) !important; color:#ece6d9 !important; }
+html body #importCard#importCard.ic-reviewing #importReview .ir-el.off{ opacity:.55; }
+html body #importCard#importCard.ic-reviewing #importReview .ir-el *:not(.ir-dot):not(.ir-exists):not(.ir-instory):not(.irdk-arrow){ color:inherit; }
+html body #importCard#importCard.ic-reviewing #importReview input:not([type=checkbox]):not([type=radio]), html body #importCard#importCard.ic-reviewing #importReview select, html body #importCard#importCard.ic-reviewing #importReview textarea{ background:#262320 !important; color:#ece6d9 !important; border:1px solid rgba(255,255,255,.12) !important; box-shadow:none !important; }
+html body #importCard#importCard.ic-reviewing #importReview input:not([type=checkbox]):not([type=radio]):focus, html body #importCard#importCard.ic-reviewing #importReview select:focus, html body #importCard#importCard.ic-reviewing #importReview textarea:focus{ border-color:rgba(250,154,49,.55) !important; box-shadow:0 0 0 3px rgba(250,154,49,.12) !important; outline:none !important; }
+html body #importCard#importCard.ic-reviewing #importReview input::placeholder, html body #importCard#importCard.ic-reviewing #importReview textarea::placeholder{ color:#857d6f !important; }
+html body #importCard#importCard.ic-reviewing #importReview select option{ background:#2b2926; color:#ece6d9; }
+html body #importCard#importCard.ic-reviewing #importReview .ir-name{ background:transparent !important; border:none !important; border-bottom:1px solid rgba(255,205,116,.22) !important; color:#f2e7cf !important; }
+html body #importCard#importCard.ic-reviewing #importReview .ir-type, html body #importCard#importCard.ic-reviewing #importReview .ir-sub, html body #importCard#importCard.ic-reviewing #importReview .ir-pool-sub, html body #importCard#importCard.ic-reviewing #importReview .ir-ta-sub{ color:#e9d5ae !important; }
+html body #importCard#importCard.ic-reviewing #importReview .ir-sum, html body #importCard#importCard.ic-reviewing #importReview .ir-note, html body #importCard#importCard.ic-reviewing #importReview #importOverview{ color:#ece6d9 !important; }
+html body #importCard#importCard.ic-reviewing #importReview .ir-no-traits, html body #importCard#importCard.ic-reviewing #importReview .ir-genhint, html body #importCard#importCard.ic-reviewing #importReview .irdk-none, html body #importCard#importCard.ic-reviewing #importReview #irdkHint{ color:#a89f8e !important; }
+html body #importCard#importCard.ic-reviewing #importReview .ir-scope, html body #importCard#importCard.ic-reviewing #importReview .ir-scope-row, html body #importCard#importCard.ic-reviewing #importReview .ir-poolonly{ color:#cfc5b1 !important; border-color:rgba(255,255,255,.10) !important; }
+html body #importCard#importCard.ic-reviewing #importReview .ir-trait-pill, html body #importCard#importCard.ic-reviewing #importReview .ir-mot-pill, html body #importCard#importCard.ic-reviewing #importReview .ir-stk-pill, html body #importCard#importCard.ic-reviewing #importReview .ir-th-chip, html body #importCard#importCard.ic-reviewing #importReview .ipp-word{ background:rgba(255,205,116,.10) !important; color:#f2e7cf !important; border:1px solid rgba(255,205,116,.26) !important; }
+html body #importCard#importCard.ic-reviewing #importReview .ir-trait-sub, html body #importCard#importCard.ic-reviewing #importReview .ir-catname, html body #importCard#importCard.ic-reviewing #importReview .ir-th-name{ color:#e0a94e !important; }
+html body #importCard#importCard.ic-reviewing #importReview .ir-trait-rm, html body #importCard#importCard.ic-reviewing #importReview .ir-mot-rm, html body #importCard#importCard.ic-reviewing #importReview .ir-stk-rm, html body #importCard#importCard.ic-reviewing #importReview .irdk-goal-rm{ color:#c9bfae !important; }
+html body #importCard#importCard.ic-reviewing #importReview .ir-ta-ok, html body #importCard#importCard.ic-reviewing #importReview .ir-trait-add-btn, html body #importCard#importCard.ic-reviewing #importReview .ir-gen, html body #importCard#importCard.ic-reviewing #importReview .ipps-btn, html body #importCard#importCard.ic-reviewing #importReview #importAddEl, html body #importCard#importCard.ic-reviewing #importReview .ir-addel{ background:transparent !important; color:#f3c77e !important; border:1px dashed rgba(255,205,116,.42) !important; }
+html body #importCard#importCard.ic-reviewing #importReview .ir-ta-ok:hover, html body #importCard#importCard.ic-reviewing #importReview .ir-trait-add-btn:hover, html body #importCard#importCard.ic-reviewing #importReview .ir-gen:hover, html body #importCard#importCard.ic-reviewing #importReview #importAddEl:hover{ background:rgba(255,205,116,.08) !important; }
+html body #importCard#importCard.ic-reviewing #importReview .ir-exists, html body #importCard#importCard.ic-reviewing #importReview .ir-instory{ background:rgba(255,205,116,.12) !important; color:#f3c77e !important; border-color:rgba(255,205,116,.3) !important; }
+html body #importCard#importCard.ic-reviewing #importReview #importRels, html body #importCard#importCard.ic-reviewing #importReview #importProposals, html body #importCard#importCard.ic-reviewing #importReview #importThreads, html body #importCard#importCard.ic-reviewing #importReview #irGoalsPage{ border-color:rgba(255,255,255,.10) !important; color:#ece6d9 !important; background:transparent !important; }
+html body #importCard#importCard.ic-reviewing #importReview .irr-row, html body #importCard#importCard.ic-reviewing #importReview .ipp-row, html body #importCard#importCard.ic-reviewing #importReview .ir-th-row, html body #importCard#importCard.ic-reviewing #importReview .irdk-goal{ color:#ece6d9 !important; border-color:rgba(255,255,255,.08) !important; background:transparent !important; }
+html body #importCard#importCard.ic-reviewing #importReview .irr-end{ color:#f2e7cf !important; }
+html body #importCard#importCard.ic-reviewing #importReview .irr-arr{ color:#c9a468 !important; }
+html body #importCard#importCard.ic-reviewing #importReview .irr-no{ color:#f0a58a !important; }
+html body #importCard#importCard.ic-reviewing #importReview .ipp-cat, html body #importCard#importCard.ic-reviewing #importReview .ipp-scope, html body #importCard#importCard.ic-reviewing #importReview .ir-th-mem{ color:#cfc5b1 !important; }
+html body #importCard#importCard.ic-reviewing #importReview #importBack{ background:transparent !important; color:#d9cfbb !important; border:1px solid rgba(255,255,255,.22) !important; }
+html body #importCard#importCard.ic-reviewing #importReview #importBack:hover{ border-color:rgba(255,205,116,.5) !important; color:#f2e7cf !important; }
+html body #importCard#importCard.ic-reviewing #importReview hr, html body #importCard#importCard.ic-reviewing #importReview .ir-block{ border-color:rgba(255,255,255,.10) !important; }
+html body #importCard#importCard.ic-reviewing #importReview input[type=checkbox], html body #importCard#importCard.ic-reviewing #importReview input[type=radio]{ accent-color:#fa9a31; }
+/* v.803 — the review's first step: the summary, then Approve all | Review each */
+#irSumStep, #irSumActs{ display:none; }
+html body #importCard#importCard.ir-step-sum #irSumStep, html body #importCard#importCard.ir-step-sum #irSumActs{ display:block; }
+html body #importCard#importCard.ir-step-sum #irDeckNav, html body #importCard#importCard.ir-step-sum #importElements, html body #importCard#importCard.ir-step-sum #importRels,
+html body #importCard#importCard.ir-step-sum #importProposals, html body #importCard#importCard.ir-step-sum #importThreads, html body #importCard#importCard.ir-step-sum #irGoalsPage,
+html body #importCard#importCard.ir-step-sum #irLayersHead, html body #importCard#importCard.ir-step-sum #importAddEl, html body #importCard#importCard.ir-step-sum #irdkHint,
+html body #importCard#importCard.ir-step-sum #importReview > .ir-lbl, html body #importCard#importCard.ir-step-sum #importReview > .ic-actions{ display:none !important; }
+html body #importCard#importCard.ir-step-deck #importReview > .ir-block{ display:none !important; }
+#irSumStep .irs-lbl{ margin:18px 0 10px; font-family:var(--sans, system-ui, sans-serif); font-size:11px; font-weight:700; letter-spacing:.16em; text-transform:uppercase; color:#e0a94e; }
+#irSumStep .irs-found{ display:flex; flex-wrap:wrap; justify-content:center; gap:8px 22px; font-family:var(--sans, system-ui, sans-serif); font-size:12px; letter-spacing:.06em; color:#cfc5b1; margin:4px 0 14px; }
+#irSumStep .irs-found b{ font-family:var(--serif, Georgia, serif); font-size:22px; font-weight:500; color:#f3c77e; letter-spacing:0; margin-right:3px; }
+#irSumStep .irs-names{ display:flex; flex-wrap:wrap; justify-content:center; gap:7px; margin:0 0 20px; }
+#irSumStep .irs-name{ display:inline-flex; align-items:center; gap:7px; padding:4px 11px; border-radius:999px; background:rgba(255,240,214,.06); border:1px solid rgba(255,205,116,.16); font-family:var(--serif, Georgia, serif); font-size:15px; color:#f2e7cf; }
+#irSumStep .irs-name i{ width:8px; height:8px; border-radius:50%; display:inline-block; }
+#irSumStep .irs-more{ align-self:center; font-family:var(--serif, Georgia, serif); font-style:italic; color:#a89f8e; font-size:14px; }
+#irSumActs .irs-note{ margin:16px 0 14px; text-align:center; font-family:var(--serif, Georgia, serif); font-style:italic; font-size:14px; color:#a89f8e; }
+#irSumActs .irs-btns{ display:flex; justify-content:center; align-items:center; gap:10px; flex-wrap:wrap; }
+#irSumActs button{ font-family:var(--sans, system-ui, sans-serif); font-size:11px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; border-radius:999px; padding:11px 22px; cursor:pointer; }
+#irSumActs #irsApprove{ background:linear-gradient(180deg, #ffb44f, #f08c1f); color:#2b2926; border:none; box-shadow:0 6px 18px rgba(250,154,49,.28); }
+#irSumActs #irsApprove:hover{ filter:brightness(1.06); }
+#irSumActs #irsApprove:disabled{ opacity:.5; cursor:default; }
+#irSumActs .irs-ghost{ background:transparent; color:#f3c77e; border:1px solid rgba(255,205,116,.38); }
+#irSumActs .irs-ghost:hover{ background:rgba(255,205,116,.08); }
+#irSumActs #irsBack{ border-color:transparent; color:#a89f8e; padding-left:8px; padding-right:8px; }
+/* the working page */
+#impWork{ display:none; }
+html body #importCard#importCard.ic-working #impWork{ display:flex; position:fixed; inset:0; flex-direction:column; align-items:center; justify-content:center; background:#2b2926; z-index:3; padding:0 24px; text-align:center; animation:iwIn .35s ease-out both; }
+@keyframes iwIn{ from{ opacity:0 } to{ opacity:1 } }
+#impWork .iw-mark{ width:84px; height:84px; background:var(--dyst-mark) center/contain no-repeat; filter:drop-shadow(0 0 10px rgba(250,154,49,.28)); margin-bottom:30px; animation:iwBreath 3.2s ease-in-out infinite; }
+@keyframes iwBreath{ 0%,100%{ transform:scale(1); opacity:1 } 50%{ transform:scale(1.035); opacity:.86 } }
+#impWork .iw-line{ font-family:var(--serif, Georgia, serif); font-size:21px; color:#f2e7cf; letter-spacing:.01em; min-height:28px; }
+#impWork .iw-bar{ position:relative; width:min(340px, 76vw); height:3px; margin:18px 0 14px; border-radius:3px; background:rgba(255,240,214,.10); overflow:hidden; }
+#impWork .iw-bar i{ position:absolute; inset:0; background:linear-gradient(90deg, #b8741f, #fa9a31 70%, #ffd08a); transform-origin:0 50%; transform:scaleX(0); box-shadow:0 0 12px rgba(250,154,49,.55); border-radius:3px; }
+#impWork .iw-bar::after{ content:''; position:absolute; top:0; bottom:0; width:60px; left:-60px; background:linear-gradient(90deg, transparent, rgba(255,236,200,.55), transparent); animation:iwSheen 1.9s ease-in-out infinite; }
+@keyframes iwSheen{ from{ transform:translateX(0) } to{ transform:translateX(calc(min(340px, 76vw) + 120px)) } }
+#impWork .iw-sub{ font-family:var(--sans, system-ui, sans-serif); font-size:10.5px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:#9c9382; min-height:14px; }
+#impWork .iw-found{ margin-top:26px; max-width:560px; min-height:48px; }
+#impWork .iw-count{ font-family:var(--sans, system-ui, sans-serif); font-size:11px; letter-spacing:.08em; color:#c9a468; margin-bottom:10px; }
+#impWork .iw-names{ display:flex; flex-wrap:wrap; justify-content:center; gap:6px 16px; font-family:var(--serif, Georgia, serif); font-style:italic; font-size:16px; color:#d9cfbb; }
+#impWork .iw-names span{ animation:iwName .6s ease-out both; }
+@keyframes iwName{ from{ opacity:0; transform:translateY(4px) } to{ opacity:1; transform:none } }
+@media (prefers-reduced-motion: reduce){ #impWork .iw-mark, #impWork .iw-bar::after, #impWork .iw-names span{ animation:none; } }
+@media (max-width:600px){ html body #importCard#importCard.ic-stage{ padding:14px 10px 20px !important; } html body #importCard#importCard.ic-reviewing .ic-stagemark{ width:30px; height:30px; margin-bottom:6px; } html body #importCard#importCard.ic-stage > .ic-head{ margin-bottom:10px !important; } html body #importCard#importCard.ic-stage > .ic-head #importHeadTitle{ font-size:19px !important; } html body #importCard#importCard.ic-stage > .ic-head #importClose{ top:10px !important; right:12px !important; }
+  html body #importCard#importCard{ padding:18px 16px 16px !important; } html body #importCard#importCard .ic-segbtn{ padding:0 10px; font-size:10px; } html body #importCard#importCard.ic-reviewing #importReview{ padding:16px 14px; border-radius:14px; } }
 </style>
 </body></html>
