@@ -4455,6 +4455,7 @@ body.eink .pt-rh-dev{color:#000}
     #guestComments{top:auto; left:0; right:0; bottom:0; width:100%; max-height:30vh; background:var(--bg2); border-left:none; border-top:1px solid var(--line); box-shadow:0 -4px 18px rgba(0,0,0,.10); pointer-events:auto}
     #guestComments .np-head{background:var(--bg2); border-bottom:1px solid var(--line)}
     #gcList{background:var(--bg2); padding:8px 14px}   /* one comment, scrolls if long */
+    body.ember:not(.eink) #guestComments{top:auto}   /* v.798 — the ember top offset outranked the dock, hanging the sheet over the story's first lines */
   }
   #gcPop{display:none; position:fixed; z-index:calc(var(--z-guest) + 2); width:300px; box-sizing:border-box; background:#fff; border:1px solid var(--line); border-radius:12px; box-shadow:0 12px 34px rgba(0,0,0,.24); padding:12px 14px}
   #gcPop.show{display:block}
@@ -4493,6 +4494,8 @@ body.eink .pt-rh-dev{color:#000}
   ::highlight(imp-fallback){background:rgba(232,196,40,.3)}
   /* reader: hold the exact selected passage while the feeling popup is open */
   ::highlight(imp-sel){background:rgba(43,38,32,.16); border-radius:3px}
+  ::highlight(pub-hl-range){background-color:rgba(74,134,184,.26)}
+  ::highlight(pub-hl-flash){background-color:rgba(250,154,49,.42)}
   #impLegend{position:fixed; right:18px; bottom:18px; z-index:130; max-width:280px; background:var(--paper); border:1px solid var(--line); border-radius:12px; box-shadow:0 14px 40px rgba(0,0,0,.22); padding:11px 13px; font-family:var(--sans)}
   #impLegend .impl-h{font-size:11px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; color:var(--ink); margin-bottom:8px}
   #impLegend .impl-legend{display:flex; flex-direction:column; gap:5px}
@@ -29460,9 +29463,26 @@ function pubGuestSelect(e){
   _pubAnchor={key:text.slice(0,600)};   // keep the WHOLE selection (was 80) so the mark covers what you highlighted
   $('readBody').querySelectorAll('.pub-anchored').forEach(x=>x.classList.remove('pub-anchored'));
   try{ _impHoldSelection(range.cloneRange()); }catch(_e){}   // hold the EXACT selected passage, not the whole block
-  pubShowCommentPop(range.getBoundingClientRect(), text);
+  pubShowCommentPop(range.getBoundingClientRect(), text, range.getClientRects());
 }
-function pubShowCommentPop(rect, text){
+/* v.798 [Jeremy] — "it should not cover the single word you are selecting … make the window pop up to the side of the word."
+   Placed beside the LAST line of the selection (the word itself, for one word): to its right, else to its left; on a screen too
+   narrow for either, below the whole selection, else above it, else just under its last line. Beside a line it can never cover
+   that line, so a single word is never under it; a long passage may be partly covered, which Jeremy allowed. */
+function _pubPlacePop(pw, ph, rect, rects){
+  var vw=window.innerWidth, vh=window.innerHeight, G=14, M=10;
+  var L=null; if(rects && rects.length){ for(var i=rects.length-1;i>=0;i--){ if(rects[i].width>0.5 && rects[i].height>0.5){ L=rects[i]; break; } } }
+  if(!L) L=rect;
+  var top=Math.min(Math.max(M, L.top+L.height/2-38), vh-ph-M);
+  if(L.right+G+pw <= vw-M) return { left:L.right+G, top:top, side:'right' };
+  if(L.left-G-pw >= M) return { left:L.left-G-pw, top:top, side:'left' };
+  var left=Math.min(Math.max(M,(rect.left+rect.right)/2-pw/2), vw-pw-M);
+  if(rect.bottom+8+ph <= vh-M) return { left:left, top:rect.bottom+8, side:'below' };
+  if(rect.top-8-ph >= M) return { left:left, top:rect.top-8-ph, side:'above' };
+  if(L.bottom+8+ph <= vh-M) return { left:left, top:L.bottom+8, side:'under-line' };
+  return { left:left, top:Math.max(M, L.top-8-ph), side:'over-line' };
+}
+function pubShowCommentPop(rect, text, rects){
   const pop=$('gcPop'); if(!pop) return;
   const note=$('gcAnchorNote'); if(note) note.innerHTML='On: <i>“'+_pubEsc(text.slice(0,70))+(text.length>70?'…':'')+'”</i>';
   pubSyncNameField();
@@ -29474,11 +29494,22 @@ function pubShowCommentPop(rect, text){
   if(impRow) Array.prototype.forEach.call(impRow.querySelectorAll('.gcimp-btn'), function(b){ b.classList.toggle('on', !!_pubImpMine[anchor+IMP_SEP+b.getAttribute('data-imp')]); });
   const title=$('gcpTitle'); if(title) title.textContent=_pubImpAllow.impressions?'How did this land?':'Add a comment';
   const orLbl=pop.querySelector('.gcimp-or'); if(orLbl) orLbl.style.display=(_pubImpAllow.impressions&&_pubImpAllow.comments)?'':'none';
+  pop.style.maxHeight=''; pop.style.overflowY='';
   pop.classList.add('show');
   const pw=pop.offsetWidth||300, ph=pop.offsetHeight||230, vw=window.innerWidth, vh=window.innerHeight;
-  let left=Math.min(Math.max(10,(rect.left+rect.right)/2-pw/2), vw-pw-10);
-  let top=rect.bottom+8; if(top+ph>vh-10) top=Math.max(10, rect.top-ph-8);
-  pop.style.left=left+'px'; pop.style.top=top+'px';
+  let at=_pubPlacePop(pw, ph, rect, rects);
+  if(/line$/.test(at.side)){   /* a phone: no room beside, below or above — scroll the passage up so the pop-up fits under it rather than on it */
+    let L=null; if(rects&&rects.length){ for(let i=rects.length-1;i>=0;i--){ if(rects[i].width>0.5){ L=rects[i]; break; } } } L=L||rect;
+    const d=Math.round(rect.bottom+18+ph-vh);
+    if(d>0 && rect.top-d>=64){ const sc=[$('readBody'), document.scrollingElement].find(x=>x && x.scrollHeight>x.clientHeight+2);
+      if(sc){ const b0=sc.scrollTop; sc.scrollTop=b0+d; const got=sc.scrollTop-b0;
+        if(got>0){ const sh=q=>({ left:q.left, right:q.right, width:q.width, height:q.height, top:q.top-got, bottom:q.bottom-got });
+          rect=sh(rect); rects=Array.prototype.map.call(rects||[], sh); L=sh(L); at=_pubPlacePop(pw, ph, rect, rects); } } }
+    if(/line$/.test(at.side)){   /* still no room (a short story, or near the end): the pop-up takes the larger of the two gaps and scrolls inside it */
+      const up=L.top-18, dn=vh-L.bottom-18;
+      if(Math.max(up, dn)>=160){ const room=Math.floor(Math.max(up, dn)); pop.style.maxHeight=room+'px'; pop.style.overflowY='auto';
+        at={ left:at.left, top:(dn>=up ? L.bottom+8 : Math.max(10, L.top-8-Math.min(ph, room))), side:(dn>=up?'below':'above') }; } } }
+  pop.style.left=Math.round(at.left)+'px'; pop.style.top=Math.round(at.top)+'px'; pop.setAttribute('data-side', at.side);
   const t=$('gcText'); if(t){ t.value=''; setTimeout(()=>{ try{ t.focus(); }catch(_){} },0); }
 }
 function pubHideCommentPop(){
@@ -29620,7 +29651,7 @@ function pubMakeCommentItem(c, opts){
   if(opts.owner){ const acts=document.createElement('span'); acts.className='np-acts'; const x=document.createElement('span'); x.className='np-x'; x.textContent='×'; x.title='Remove this reader comment'; x.addEventListener('click',ev=>{ ev.stopPropagation(); pubDeleteComment(c.id); }); acts.appendChild(x); au.appendChild(acts); }
   it.appendChild(au);
   if(c.anchor_key && !orphan){
-    if(opts.owner) it.addEventListener('click',()=>pubOwnerScrollTo(c.anchor_key)); else it.style.cursor='pointer';
+    if(opts.owner) it.addEventListener('click',()=>pubOwnerScrollTo(c.anchor_key)); else { it.style.cursor='pointer'; it.addEventListener('click',()=>pubFlashPassage(container||$('readBody'), c.anchor_key)); }
     it.addEventListener('mouseenter',()=>pubHoverHighlight(container,c.anchor_key,true));
     it.addEventListener('mouseleave',()=>pubHoverHighlight(container,c.anchor_key,false));
   }
@@ -29705,7 +29736,30 @@ function pubBlockFor(container, key){
   }
   return null;
 }
-function pubHoverHighlight(container, key, on){ try{ (container||document).querySelectorAll('.pub-hl').forEach(function(x){ x.classList.remove('pub-hl'); }); }catch(e){}   /* clear any stale highlight first so it can never get stuck when the comment list re-renders mid-hover */ if(on){ const b=pubBlockFor(container,key); if(b) b.classList.add('pub-hl'); } }
+/* v.798 [Jeremy] — "it doesn't hilight the specific sentence that you had hilighted, it does the whole paragraph. it should point
+   exactly to the section that was hilighted". A comment's anchor_key IS the highlighted text, so it is found as a text range
+   (the same index the impressions paint uses) and lit with ::highlight(pub-hl-range) — the words, not their paragraph. The
+   paragraph tint is only the fallback for a browser without CSS highlights, or a passage that can no longer be found exactly. */
+function pubRangeFor(container, key){
+  try{ var host=(container && container.querySelector && (container.querySelector('.rd-prose')||container))||container; if(!host||!key) return null;
+    var idx=_impBuildIndex(host), K=String(key).replace(/\s+/g,' ').trim(); if(!K) return null;
+    if(K.length>=4) return _impFindRange(idx, K);
+    var re=new RegExp('(^|[^\\p{L}\\p{N}])'+K.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'(?![\\p{L}\\p{N}])','u'), m=re.exec(idx.norm); if(!m) return null;
+    var a=m.index+m[1].length, s0=idx.map[a], e0=idx.map[a+K.length-1]; if(!s0||!e0) return null;
+    var r=document.createRange(); r.setStart(s0[0], s0[1]); r.setEnd(e0[0], e0[1]+1); return r;
+  }catch(e){ return null; } }
+function _pubHlSet(name, r){ try{ if(!(window.CSS && CSS.highlights && typeof window.Highlight!=='undefined')) return false; if(!r){ CSS.highlights.delete(name); return true; } var h=new Highlight(r); try{ h.priority=5; }catch(e){} CSS.highlights.set(name, h); return true; }catch(e){ return false; } }
+function pubHoverHighlight(container, key, on){ try{ (container||document).querySelectorAll('.pub-hl').forEach(function(x){ x.classList.remove('pub-hl'); }); }catch(e){}   /* clear any stale highlight first so it can never get stuck when the comment list re-renders mid-hover */
+  _pubHlSet('pub-hl-range', null);
+  if(on){ var r=pubRangeFor(container, key); if(r && _pubHlSet('pub-hl-range', r)) return; const b=pubBlockFor(container,key); if(b) b.classList.add('pub-hl'); } }
+/* a click on a comment takes you to its passage and flashes exactly those words */
+function pubFlashPassage(container, key){
+  var r=pubRangeFor(container, key);
+  if(r){ var el=r.startContainer; el=(el.nodeType===1?el:el.parentElement); if(el && el.scrollIntoView) el.scrollIntoView({ block:'center', behavior:'smooth' });
+    if(_pubHlSet('pub-hl-flash', r)){ clearTimeout(pubFlashPassage._t); pubFlashPassage._t=setTimeout(function(){ _pubHlSet('pub-hl-flash', null); }, 1600); return true; } }
+  var m=pubBlockFor(container, key); if(!m) return false;
+  m.scrollIntoView({block:'center',behavior:'smooth'}); m.classList.add('oc-flash'); setTimeout(()=>m.classList.remove('oc-flash'),1200); return true;
+}
 // orphan test: is the highlighted snippet still present ANYWHERE in the prose?
 // searches the whole normalised prose text so block boundaries/nesting never cause a false "edited" flag
 function pubAnchorPresent(container, key){
@@ -29737,8 +29791,7 @@ function pubAnchorMostlyPresent(container, key){
 }
 function pubOwnerScrollTo(key){
   const body=$('editBody'); if(!body||!key) return;
-  const m=pubBlockFor(body, key);
-  if(m){ m.scrollIntoView({block:'center',behavior:'smooth'}); m.classList.add('oc-flash'); setTimeout(()=>m.classList.remove('oc-flash'),1200); }
+  pubFlashPassage(body, key);   // v.798 — the exact words, not their paragraph
 }
 /* ===== Reader Impression (#33) — wordless liked / didn't-like / confused feedback on shared links =====
    Readers mark a passage with a feeling (no account, no text box); the author sees an aggregate heat-map in Revise:
@@ -58406,9 +58459,13 @@ body.eink .pl-filterpick .pf-row.on .pf-box{ background:#000; border-color:#000;
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.720';
+  var APP_VERSION = '2026.07.20.721';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.721', date:'September 24, 2026', notes:[
+      '**The comment pop-up sits beside the word.** Click a word in a shared story and the pop-up opens to its side, never over it; for a sentence or a paragraph it opens beside the last line.',
+      '**A comment points at exactly what was highlighted.** Hover or click a comment and just the words it was left on light up — not their whole paragraph.'
+    ]},
     { v:'2026.07.20.720', date:'September 24, 2026', notes:[
       '**A shared story reads as a clean manuscript.** [Jeremy] The public reading link no longer shows the app’s mode medallions, and its Comment as yourself / Try Dystoria buttons sit in a proper bar at the top instead of half off the page.',
       '**Click to highlight, for readers.** [Jeremy] On a shared story a reader clicks a word to highlight it, twice for the sentence, three times for the paragraph — or drags across any passage (it snaps to whole words) — and the impressions and comment pop-up opens on it. A one-time welcome thanks them for reading and shows how.'
