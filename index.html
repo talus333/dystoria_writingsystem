@@ -34369,7 +34369,13 @@ async function runWikiAll(opts){
   }
   // Incremental whenever a COMPLETE wiki already exists and the change is bounded: send the wiki + only what changed.
   // (With a per-section record we can update even for in-place edits; a huge addition still triggers a full chunked rebuild.)
-  const incremental = !_rebuild && !!prevDoc && prevDoc.length < 12000 && !wikiIncomplete && changedChars < 18000 && (!!_prevSecSigs || !!_prevSecLens || changedChars > 0);   // guard: the update re-emits the whole doc in one pass, so cap the size to avoid truncation (bigger wikis use the safe chunked rebuild). Regenerate forces the full chunked rebuild so the AI can restructure freely.
+  /* v.817 [Jeremy] — "when you update the wiki when it has already had an ai pass, it doesn't verify and update what exists but does a
+     full new pass and adds the sections to the bottom". It did: the update re-emitted the WHOLE wiki in one reply, so it was allowed
+     only under 12,000 characters — and a wiki built in cycles is longer than that almost at once, so every Update after the first
+     was a full rebuild. Now an existing, complete wiki is always UPDATED IN PLACE (wikiUpdateInPlace): only the entries whose
+     element changed are revised, new elements get a new entry in their own section, the framing sections are revised, and
+     everything else stays exactly as it was, in its place. Regenerate still rebuilds from scratch. */
+  const incremental = !_rebuild && !!prevDoc && !wikiIncomplete && typeof wikiUpdateInPlace === 'function';   // guard: the update re-emits the whole doc in one pass, so cap the size to avoid truncation (bigger wikis use the safe chunked rebuild). Regenerate forces the full chunked rebuild so the AI can restructure freely.
   const _gc = (typeof goalContext === 'function') ? (goalContext() || '') : '';
   const _pf = (typeof getProfileContext === 'function') ? getProfileContext() : '';
   const _rb = (typeof getReadBooksContext === 'function') ? getReadBooksContext() : '';
@@ -34423,7 +34429,7 @@ async function runWikiAll(opts){
         + '\n\nWrite the wiki document:';
     }
     const out = incremental
-      ? await aiCall(sys, prompt, { feature:'wiki_build', maxTokens: 4096 })
+      ? await wikiUpdateInPlace(prevDoc, used, unused, npAll, { _pf: _pf, _gc: _gc, _rb: _rb }, changedProse, body)   /* v.817 — revise in place */
       : await buildWikiChunked(used, unused, npAll, { _pf: _pf, _gc: _gc, _rb: _rb }, body);   // full rebuild: read the whole story in cycles so a long story isn't cut off by the 4096-token output cap
     /* ---- v.443 · what came back has to be checked before it replaces what we had ----
 
@@ -34458,6 +34464,7 @@ async function runWikiAll(opts){
       return;
     }
     state.session.wikiDoc = _doc; state.session.wikiProseLen = prose.length; state.session.wikiSecLens = _secLenNow; state.session.wikiSecSigs = _secSigNow; state.session.wikiSig = wikiSig(); scheduleAutosave(500);
+    try{ if (typeof wikiElSigsNow === 'function') state.session.wikiElSigs = wikiElSigsNow(used); }catch(e){}   /* v.817 — what each entry was written from */
     try { const _r2 = wikiReadingOf(state.session.wikiDoc); if (_r2) state.session.wikiReading = _r2; } catch(e){}
     try { const qm = out.match(/##\s*Questions[^\n]*\n([\s\S]*?)(?:\n##\s|$)/i); if (qm && typeof captureElementQuestions === 'function'){ const qtext = qm[1].replace(/^\s*[-*]\s+/gm, '').trim(); captureElementQuestions(qtext); state.session.wikiQuestions = qtext; } } catch(e){}
     try{ wikiMirrorSave(state.session); }catch(e){}   // second home for the wiki — a sync may replace the story doc, but it must never cost the writer a rebuild
@@ -34467,7 +34474,7 @@ async function runWikiAll(opts){
     if (_wdd) _wdd.step(.94, 'Arranging the wiki', null, .98);
     try { await wikiRunStructureAI(); } catch(e){ console.warn('structure pass:', e); }
     renderWiki();
-    if (_wdd){ var _nE = (String(state.session.wikiDoc || '').match(/^#{3,4}\s/gm) || []).length; _wdd.finish(incremental ? 'Your wiki is up to date' : 'Your wiki is built', _nE ? (_nE + ' entr' + (_nE === 1 ? 'y' : 'ies')) : ''); }
+    if (_wdd){ var _nE = (String(state.session.wikiDoc || '').match(/^#{3,4}\s/gm) || []).length; var _lu = window.__wikiLastUpdate || null; _wdd.finish(incremental ? 'Your wiki is up to date' : 'Your wiki is built', (incremental && _lu) ? (_lu.revised + ' revised \u00b7 ' + _lu.added + ' added \u00b7 the rest kept as it was') : (_nE ? (_nE + ' entr' + (_nE === 1 ? 'y' : 'ies')) : '')); }
     if (typeof updateWikiBtnState === 'function') updateWikiBtnState();   // up to date now → hide the button until prose/notes change
     flashStatus(incremental ? 'Wiki updated with new writing' : 'Wiki built');
   } catch (e){
@@ -58878,9 +58885,16 @@ body.eink .pl-filterpick .pf-row.on .pf-box{ background:#000; border-color:#000;
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.739';
+  var APP_VERSION = '2026.07.20.741';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.741', date:'September 25, 2026', notes:[
+      '**Writing together, section by section.** When you share a story with a co-author, only the section that changed travels between you now, not the whole book \u2014 so a long book keeps syncing live. The section your co-author is writing in is held for you, with their name at its head, and opens the moment they pause; every other section is yours to write at the same time.'
+    ]},
+    { v:'2026.07.20.740', date:'September 25, 2026', notes:[
+      '**Update Wiki revises what is there.** [Jeremy] Updating a wiki that already exists no longer rebuilds it: only the entries whose element changed are revised (kept where still true, corrected where the writing now says otherwise), a new element gets its entry in its own section, the overview, frame and questions are revised, and everything else stays exactly where it was. Regenerate still builds from scratch.',
+      '**The account page keeps its header.** [Jeremy] Your account\u2019s title bar now stays at the top while the page scrolls, like the Library.'
+    ]},
     { v:'2026.07.20.739', date:'September 24, 2026', notes:[
       '**Update Wiki reads on the charcoal page.** [Jeremy] Updating or building the wiki now opens the charcoal reading page \u2014 what it is doing, how much it is reading, the sections and elements it is working through, and a progress bar that follows each part of a full build. Keep working (or Esc) closes it and the wiki carries on.'
     ]},
@@ -99162,6 +99176,382 @@ html body:not(.eink) #deskbar #padTools > button.active:not(#writeBtn):hover .mp
       window.__dystSignOutConfirmed = true; var bx = document.getElementById('authSignOut'); if (bx) bx.click(); });
     try{ bd.querySelector('.so-no').focus(); }catch(e){}
   };
+})();
+</script>
+<style id="dyst-account-sticky">
+/* v.817 [Jeremy] — "the header of Your Account should be frozen and not scroll with the rest of the account page, like the library":
+   the title bar stays at the top while the page scrolls under it — full-bleed charcoal behind it (the page's own top colour), its
+   gold hairline beneath. */
+html body #profileCard .pf-head{ position:sticky; top:0; z-index:6; padding-top:22px !important; margin-top:-22px; background:#261d14; box-shadow:0 0 0 100vmax #261d14; clip-path:inset(0 -100vmax 0 -100vmax); }
+html body.eink #profileCard .pf-head{ background:#fff; box-shadow:0 0 0 100vmax #fff; }
+/* v.817 — on a phone the Review bar has one row for the switch, find, share and Export (t681): Share keeps its pill but drops
+   the word there, as the v.813 pill otherwise pushed Export off the row. */
+@media (max-width:768px){
+  html body #rdSubbar #shareBtn#shareBtn .sh-lbl{ display:none; }
+  html body #rdSubbar #shareBtn#shareBtn{ padding:0 8px !important; gap:0; }
+}
+</style>
+<script id="dyst-wiki-inplace-js">
+/* v.817 — THE WIKI UPDATES IN PLACE. [Jeremy: "make sure it revises the existing sections instead of recreating."]
+   The wiki document is `## Overview`, `## Frame`, one `## <Category>` per kind of element holding `### Name` entries (Characters may
+   hold `### Group` headings with `#### Name` entries), `## Questions the story raises`, `## Suggested Reading List`. An update:
+     1 · parses that document into its blocks, in order;
+     2 · finds which elements CHANGED — each entry's source (facts, excerpts, notes) is hashed and kept in `session.wikiElSigs`; a
+         different hash means that element's material moved. (A wiki built before v.817 has no hashes yet: then an element counts
+         as changed when the rewritten sections name it.) An element with no entry at all is NEW;
+     3 · revises exactly those entries, in batches, giving the model each CURRENT entry and asking it to keep what is still true,
+         fold in what is new and correct only what the writing now contradicts — and puts each revised entry back where the old
+         one stood; a new element's entry goes at the end of its own category section (made, before Questions, if the story has
+         none yet);
+     4 · revises Overview, Frame and Questions the same way (current text in, same headings out; a section the reply omits is kept);
+     5 · leaves every other block — untouched entries, the Reading List, anything the writer's wiki holds that it does not
+         recognise — byte for byte where it was.
+   Nothing is ever appended at the bottom and nothing is regenerated that did not change. */
+(function(){
+  'use strict';
+  var FRAMING = /^(overview|frame|questions?\b|suggested reading)/i;
+  var LABEL = { being: 'Characters', setting: 'Places', object: 'Artifacts', event: 'Events' };
+  function heading(el){ return el.name ? (el.name + ' (' + el.word + ')') : el.word; }
+  function key(h){ return String(h || '').replace(/[*_`]/g, '').replace(/\s*\([^)]*\)\s*$/, '').replace(/^the\s+/i, '').trim().toLowerCase(); }
+  function facts(u){
+    var el = u.el; var f = [el.word + (el.name ? (' “' + el.name + '”') : '') + ' — ' + (typeof wikiCatName === 'function' ? wikiCatName(el.cat) : el.cat) + (el.sub ? (' · ' + el.sub) : '')];
+    if (el.attrs && el.attrs.length) f.push('traits: ' + el.attrs.map(function(a){ return a.word; }).join(', '));
+    try{ var rels = wikiRelations(el); if (rels.length) f.push('relationships: ' + rels.join('; ')); }catch(e){}
+    return f.join('\n') + (u.qs && u.qs.length ? ('\nexcerpts: ' + u.qs.slice(0, 8).map(function(q){ return '“' + q + '”'; }).join(' ')) : '') + (u.notes ? ('\nnotes: ' + u.notes) : '');
+  }
+  function hash(t){ try{ return (typeof wikiSecHash === 'function') ? wikiSecHash(t) : String(t.length); }catch(e){ return String(t.length); } }
+  window.wikiElSigsNow = function(used){ var o = {}; (used || []).forEach(function(u){ o[key(heading(u.el))] = hash(facts(u)); }); return o; };
+  /* blocks: each heading line with the body under it, in order */
+  function parse(doc){
+    var lines = String(doc || '').replace(/\r/g, '').split('\n'), out = [], cur = { lvl: 0, head: '', body: [] };
+    lines.forEach(function(ln){ var m = /^(#{2,4})\s+(.*)$/.exec(ln);
+      if (m){ out.push(cur); cur = { lvl: m[1].length, head: ln, title: m[2].trim(), body: [] }; } else cur.body.push(ln); });
+    out.push(cur);
+    var sect = '';
+    out.forEach(function(b, i){ if (b.lvl === 2) sect = b.title; b.sect = sect;
+      b.framing = FRAMING.test(sect);
+      var next = out[i + 1]; var empty = !b.body.join('').trim();
+      b.entry = !b.framing && (b.lvl === 4 || (b.lvl === 3 && !(empty && next && next.lvl === 4)));
+      if (b.entry) b.k = key(b.title); });
+    return out;
+  }
+  function join(blocks){ return blocks.map(function(b){ return (b.lvl ? b.head + '\n' : '') + b.body.join('\n'); }).join('\n').replace(/\n{3,}/g, '\n\n').trim(); }
+  function entriesFrom(text){ var map = {}, parts = String(text || '').split(/^(?=#{3,4}\s)/m);
+    parts.forEach(function(p){ var m = /^(#{3,4})\s+([^\n]+)\n?([\s\S]*)$/.exec(p.trim()); if (m && m[3].trim()) map[key(m[2])] = { title: m[2].trim(), body: m[3].trim() }; });
+    return map; }
+  function sectionFrom(src, name){ var m = String(src || '').match(new RegExp('##\\s*' + name + '[^\\n]*\\n([\\s\\S]*?)(?:\\n##\\s|$)', 'i')); return m ? m[1].trim() : ''; }
+  var SYS_E = 'You REVISE entries in an existing story wiki. For EACH element under ELEMENTS you get its CURRENT ENTRY (empty for an element the wiki has not covered yet) and its up-to-date facts, excerpts and notes. Return ONE markdown entry per element, headed EXACTLY with the heading given (the same "###" or "####" level, the same name). Keep everything in the current entry that is still true, in its own wording wherever possible; fold in what the new material adds; change or remove only what the writing now contradicts. Describe what the prose is DOING with the element — patterns, recurring associations, connections to other elements and threads, emerging meaning — in the same voice and at about the same length as the current entry. Use ONLY the material given. Never mention the author, writer or reader; refer to story parts as "Section N". Output the entries and nothing else.';
+  var SYS_F = 'You REVISE the framing sections of an existing story wiki after the story changed. You get the CURRENT "## Overview", "## Frame" and "## Questions the story raises" sections, the entries that were revised or added, and the writing that changed. Return those three sections with exactly those headings. Keep what is still true, in its own wording wherever possible; fold in what the new material adds; change only what it contradicts. Overview: 4–7 sentences on the patterns and threads tying the story together, not a plot recap. Questions: open questions, no answers or critique. Use ONLY the material given; never mention the author, writer or reader; refer to story parts as "Section N". Output the three sections and nothing else.';
+  window.wikiUpdateInPlace = async function(prevDoc, used, unused, npAll, ctx, changedProse, body){
+    var dd = window.__wikiDD || null;
+    var pre = (ctx._pf ? ctx._pf + '\n\n' : '') + (ctx._gc ? ctx._gc + '\n\n' : '') + (ctx._rb ? ctx._rb + '\n\n' : '');
+    var blocks = parse(prevDoc);
+    var byKey = {}; blocks.forEach(function(b){ if (b.entry && b.k && !byKey[b.k]) byKey[b.k] = b; });
+    var sigs = (state.session && state.session.wikiElSigs) || null;
+    var changedLc = String(changedProse || '').toLowerCase();
+    var todo = [], added = [];
+    used.forEach(function(u){
+      var k = key(heading(u.el)), b = byKey[k];
+      if (!b){ added.push(u); return; }
+      var changed = sigs ? (sigs[k] !== hash(facts(u)))
+        : !!changedLc && [u.el.name, u.el.word].filter(Boolean).some(function(n){ try{ return textHasWord(changedLc, String(n).toLowerCase()); }catch(e){ return changedLc.indexOf(String(n).toLowerCase()) >= 0; } });
+      if (changed) todo.push({ u: u, b: b });
+    });
+    var work = todo.concat(added.map(function(u){ return { u: u, b: null }; }));
+    var BATCH = 6, done = 0, capped = '';
+    for (var i = 0; i < work.length; i += BATCH){
+      if (capped) break;
+      var batch = work.slice(i, i + BATCH);
+      if (body) body.innerHTML = '<div class="wk-doc-empty"><span class="spin"></span> Revising the entries that changed (' + Math.min(done + batch.length, work.length) + '/' + work.length + ')…</div>';
+      try{ if (dd) dd.step(.06 + .66 * (done / Math.max(1, work.length)), 'Revising what changed', (done + batch.length) + ' of ' + work.length + ' entr' + (work.length === 1 ? 'y' : 'ies') + ' · ' + batch.map(function(x){ return x.u.el.name || x.u.el.word; }).join(', '), .06 + .66 * ((done + batch.length) / Math.max(1, work.length))); }catch(e){}
+      var prompt = pre + 'ELEMENTS:\n\n' + batch.map(function(x){
+        var lvl = x.b ? ('#'.repeat(x.b.lvl)) : '###';
+        var h = x.b ? x.b.title : heading(x.u.el);
+        return lvl + ' ' + h + '\nCURRENT ENTRY:\n' + (x.b ? x.b.body.join('\n').trim() : '(none yet — a new element)') + '\nUP-TO-DATE MATERIAL:\n' + facts(x.u);
+      }).join('\n\n') + (changedProse ? ('\n\nTHE WRITING THAT CHANGED (for context):\n' + String(changedProse).slice(0, 6000)) : '') + '\n\nThe revised entries:';
+      try{
+        var out = await aiCall(SYS_E, prompt, { feature:'wiki_build', maxTokens: 4096 });
+        var got = entriesFrom(out);
+        batch.forEach(function(x){ var k = key(x.b ? x.b.title : heading(x.u.el)); var e = got[k] || got[key(heading(x.u.el))]; if (!e) return;
+          if (x.b){ x.b.body = [e.body, '']; }
+          else x.fresh = e; });
+      }catch(e){ if (e && e.limit === 'feature') capped = e.message || 'Building the wiki has used its share of today’s AI budget.'; }
+      done += batch.length;
+    }
+    /* new elements: at the end of their own category section, at that section's entry level */
+    work.filter(function(x){ return !x.b && x.fresh; }).forEach(function(x){
+      var label = LABEL[x.u.el.cat] || (typeof wikiCatName === 'function' ? wikiCatName(x.u.el.cat) : x.u.el.cat);
+      var si = -1; blocks.forEach(function(b, i){ if (b.lvl === 2 && key(b.title) === key(label)) si = i; });
+      if (si < 0){
+        var qi = blocks.findIndex(function(b){ return b.lvl === 2 && /^questions/i.test(b.title); }); if (qi < 0) qi = blocks.length;
+        blocks.splice(qi, 0, { lvl: 2, head: '## ' + label, title: label, body: [''], sect: label });
+        si = qi;
+      }
+      var end = si + 1; while (end < blocks.length && blocks[end].lvl !== 2) end++;
+      var usesSub = blocks.slice(si + 1, end).some(function(b){ return b.lvl === 4; });
+      var lvl = usesSub ? 4 : 3;
+      if (usesSub && !blocks.slice(si + 1, end).some(function(b){ return b.lvl === 3 && /^others$/i.test(b.title); })){
+        blocks.splice(end, 0, { lvl: 3, head: '### Others', title: 'Others', body: [''] }); end++;
+      }
+      blocks.splice(end, 0, { lvl: lvl, head: '#'.repeat(lvl) + ' ' + heading(x.u.el), title: heading(x.u.el), body: [x.fresh.body, ''] });
+    });
+    /* the framing sections, revised from their current text */
+    if (!capped && (work.length || changedProse)){
+      try{ if (dd) dd.step(.78, 'Revising the overview and questions', null, .93); }catch(e){}
+      if (body) body.innerHTML = '<div class="wk-doc-empty"><span class="spin"></span> Revising the overview, frame and questions…</div>';
+      var cur = {}; blocks.forEach(function(b){ if (b.lvl === 2 && FRAMING.test(b.title) && !/reading/i.test(b.title)) cur[b.title] = b; });
+      var names = Object.keys(cur);
+      if (names.length){
+        try{
+          var revised = work.filter(function(x){ return x.b || x.fresh; }).map(function(x){ return (x.b ? x.b.head + '\n' + x.b.body.join('\n') : heading(x.u.el) + '\n' + x.fresh.body); }).join('\n\n');
+          var unusedNames = (unused || []).map(function(e){ return e.name ? (e.word + ' “' + e.name + '”') : e.word; });
+          var fo = await aiCall(SYS_F, pre + names.map(function(n){ return '## ' + n + '\n' + cur[n].body.join('\n').trim(); }).join('\n\n')
+            + (revised ? ('\n\nENTRIES REVISED OR ADDED:\n\n' + revised.slice(0, 9000)) : '')
+            + (unusedNames.length ? ('\n\nELEMENTS NOT YET IN THE STORY: ' + unusedNames.join(', ')) : '')
+            + (changedProse ? ('\n\nTHE WRITING THAT CHANGED:\n' + String(changedProse).slice(0, 6000)) : '')
+            + '\n\nThe revised sections:', { feature:'wiki_build', maxTokens: 2500 });
+          names.forEach(function(n){ var nm = /^overview/i.test(n) ? 'Overview' : (/^frame/i.test(n) ? 'Frame' : 'Questions'); var t = sectionFrom(fo, nm); if (t) cur[n].body = ['', t, '']; });
+        }catch(e){ if (e && e.limit === 'feature') capped = e.message || capped; }
+      }
+    }
+    var doc = join(blocks);
+    if (capped){ try{ if (typeof flashStatus === 'function') flashStatus(capped); }catch(e){} }
+    window.__wikiLastUpdate = { revised: todo.length, added: added.length };
+    return doc;
+  };
+})();
+</script>
+<style id="dyst-coauthor-sections">
+/* v.818 — a section another writer is writing in: held (not editable here), their colour down its edge, their name at its head */
+#editor .peer-held{ box-shadow:inset 3px 0 0 var(--peer-c, #c98a3e); padding-left:10px !important; cursor:not-allowed; opacity:.92; }
+#editor .peer-held-first::before{ content:attr(data-peer-note); display:block; margin:0 0 4px -10px; padding:1px 8px; width:max-content; max-width:100%; border-radius:999px; background:var(--peer-c, #c98a3e); color:#fff; font:600 10.5px/1.6 system-ui,-apple-system,sans-serif; letter-spacing:.04em; }
+</style>
+<script id="dyst-coauthor-sections-js">
+/* v.818 — CO-AUTHOR PHASE B: WRITE TOGETHER, BY SECTION.
+   BEFORE: every autosave broadcast the WHOLE story (`liveDocStr`, all prose and all maps) to the story's channel. On Supabase Free a
+   broadcast carries at most 256 KB, so a long book silently stopped syncing; and each copy counted against egress — a 300 KB book
+   sent every couple of seconds while two people type is gigabytes an hour. Two people in the same section overwrote each other
+   whenever one went idle, and a timed sprint held the WHOLE page for everyone else.
+   NOW, on the same channel (`story-<cloudId>`), three small events replace it:
+     · `sec`  {f, html, nf}   — the prose of ONE section, sent when that section's content changes (at most once a second each);
+     · `keys` {k, v | i, v}   — the plan's parts that live sync always carried (title, section title, plot gaps, deaths…), each only
+                                 when it changed; the maps go one section's frame at a time (`k:'frame', i`);
+     · `refetch`              — for anything too big for one message (a structural change on a long book, or a single section
+                                 over 200 KB): the others re-read the story from the cloud, which every autosave keeps current.
+   A change to the book's SHAPE (a section added, removed or re-titled) still sends the legacy whole `doc` when it fits — its
+   receiver has always understood it — and `refetch` when it does not. Incoming prose is scrubbed of anything that can run (scripts, frames, on* handlers, javascript: URLs) and keeps everything the editor writes.
+   THE SECTION HOLD. Presence now carries `edit`: the section my caret is in, while I have typed in the last 15 seconds. Everyone
+   else sees that section held — not editable, the writer's colour down its edge, "Mara is writing here" at its head — and it opens
+   the moment they pause. A sprint holds only its own section now, not the page. If two people start in the same section at the
+   same moment, the one with the greater id yields, the same tie-break the sprint lock uses. A section that arrives while I am
+   typing in it waits until I pause (never pulled from under the cursor), as the whole document did before. */
+(function(){
+  'use strict';
+  var MAX = 200000;                       // a message must stay under Free's 256 KB broadcast ceiling
+  var HOLD_MS = 15000;
+  var sent = { sec:{}, keys:{}, frames:{}, skel:'' }, pend = {}, lastSecAt = {}, secTimer = 0;
+  function h(t){ var x = 0; t = String(t || ''); for (var i = 0; i < t.length; i++){ x = ((x << 5) - x + t.charCodeAt(i)) | 0; } return x + ':' + t.length; }
+  function ed(){ return document.getElementById('editor'); }
+  function isDiv(n){ return n.nodeType === 1 && (n.tagName === 'H3' || (n.classList && n.classList.contains('sec-mark'))); }
+  function nodesOf(f){ return (typeof editorNodeFrames === 'function' ? editorNodeFrames() : []).filter(function(o){ return o.frame === f && !isDiv(o.node); }).map(function(o){ return o.node; }); }
+  function esc(t){ return String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+  function clean(n){
+    if (n.nodeType !== 1) return n.nodeType === 3 ? esc(n.textContent) : '';
+    var c = n.cloneNode(true);
+    [c].concat(Array.prototype.slice.call(c.querySelectorAll('*'))).forEach(function(x){
+      if (!x.classList) return;
+      x.classList.remove('pub-hl', 'pub-anchored', 'oc-flash', 'nt-hl', 'peer-held', 'peer-held-first');
+      if (x.getAttribute('data-peerheld')){ x.removeAttribute('data-peerheld'); x.removeAttribute('data-peer-note'); if (x.getAttribute('data-peerce') !== null){ var v = x.getAttribute('data-peerce'); x.removeAttribute('data-peerce'); if (v === '') x.removeAttribute('contenteditable'); else x.setAttribute('contenteditable', v); } x.style && x.style.removeProperty('--peer-c'); }
+      if (x.getAttribute('class') === '') x.removeAttribute('class');
+      if (x.getAttribute('style') === '') x.removeAttribute('style');
+    });
+    c.querySelectorAll('.sess-foot, .sess-focus').forEach(function(x){ x.remove(); });
+    return c.outerHTML;
+  }
+  /* incoming prose from another device: everything the editor writes survives (notes' data-*, scene ids, locked sessions), but
+     nothing that can run — no script/iframe/object/embed/style/link/meta/base/form, no on* attribute, no javascript: URL */
+  function scrub(html){
+    var t = document.createElement('template'); t.innerHTML = String(html || '');
+    t.content.querySelectorAll('script,iframe,object,embed,style,link,meta,base,form,input,button,textarea,select').forEach(function(x){ x.remove(); });
+    t.content.querySelectorAll('*').forEach(function(x){ Array.prototype.slice.call(x.attributes).forEach(function(a){ var n = a.name.toLowerCase(), v = String(a.value || '').replace(/\s+/g, '').toLowerCase();
+      if (n.indexOf('on') === 0 || ((n === 'src' || n === 'href' || n === 'xlink:href' || n === 'action') && (v.indexOf('javascript:') === 0 || v.indexOf('vbscript:') === 0 || (v.indexOf('data:') === 0 && v.indexOf('data:image/') !== 0)))) x.removeAttribute(a.name); }); });
+    return t.innerHTML;
+  }
+  function secHTML(f){ return nodesOf(f).map(clean).join(''); }
+  function frames(){ var s = {}; (typeof editorNodeFrames === 'function' ? editorNodeFrames() : []).forEach(function(o){ s[o.frame] = 1; }); return Object.keys(s).map(Number); }
+  function skeleton(){ var e = ed(); if (!e) return ''; return Array.prototype.map.call(e.querySelectorAll(':scope > h3[data-frame]'), function(x){ return x.dataset.frame + '=' + x.textContent; }).join('|') + '#' + ((state.frames || []).length); }
+  function send(event, payload){ try{ live.channel.send({ type:'broadcast', event: event, payload: payload }); }catch(e){} }
+  function me(){ try{ return cloud.user && cloud.user.id; }catch(e){ return ''; } }
+  function caretFrame(){
+    try{ var sel = window.getSelection && window.getSelection(); var n = sel && sel.anchorNode; var e = ed(); if (!n || !e || !e.contains(n)) return null;
+      while (n && n.parentNode !== e) n = n.parentNode; if (!n) return null;
+      var hit = (editorNodeFrames() || []).find(function(o){ return o.node === n; }); return hit ? hit.frame : null; }catch(e){ return null; }
+  }
+  function myEdit(){ if (!(state.lastWriteAt && Date.now() - state.lastWriteAt < HOLD_MS)) return null; var f = caretFrame(); return f == null ? null : f; }
+  window.liveMyEditFrame = myEdit;
+  window.__liveSync = { sent: function(){ return { sec: Object.assign({}, sent.sec), skel: sent.skel }; }, secHash: function(f){ return h(secHTML(f)); }, skeleton: function(){ return skeleton(); } };   // for the harness
+  /* ---- sending ---- */
+  function broadcast(force){
+    if (!live.on || !live.channel || live.applying) return;
+    var sk = skeleton();
+    if (sent.skel && sk !== sent.skel){
+      // the book's shape changed: the legacy whole document when it fits, else everyone re-reads from the cloud
+      var whole = (typeof liveDocStr === 'function') ? liveDocStr() : '';
+      if (whole && whole.length < MAX){ live.lastDoc = whole; send('doc', { doc: whole }); }
+      else send('refetch', { at: Date.now() });
+      sent.skel = sk; sent.sec = {}; frames().forEach(function(f){ sent.sec[f] = h(secHTML(f)); });
+      sendKeys(true); return;
+    }
+    sent.skel = sk;
+    var now = Date.now(), nf = (state.frames || []).length || 1, later = false;
+    frames().forEach(function(f){
+      var html = secHTML(f), x = h(html);
+      if (!force && sent.sec[f] === x) return;
+      if (!force && lastSecAt[f] && now - lastSecAt[f] < 1000){ later = true; return; }
+      sent.sec[f] = x; lastSecAt[f] = now;
+      if (html.length < MAX) send('sec', { f: f, html: html, nf: nf });
+      else send('refetch', { at: now, f: f });
+    });
+    if (later){ clearTimeout(secTimer); secTimer = setTimeout(function(){ broadcast(false); }, 1050); }
+    sendKeys(force);
+  }
+  var KEYS = ['name', 'section', 'plotGaps', 'deaths', 'deathLog', 'ruinsLog'];
+  function sendKeys(force){
+    var sess = state.session; if (!sess) return;
+    KEYS.forEach(function(k){ var v = (k === 'name') ? (document.getElementById('storyName') || {}).value || sess.name : (k === 'section' ? ((document.getElementById('sectionTitle') || {}).value || sess.section) : sess[k]);
+      var j = JSON.stringify(v == null ? null : v); if (!force && sent.keys[k] === j) return; sent.keys[k] = j; if (j.length < MAX) send('keys', { k: k, v: v == null ? null : v }); });
+    (state.frames || []).forEach(function(fr, i){ var j = JSON.stringify(fr); var x = h(j); if (!force && sent.frames[i] === x) return; sent.frames[i] = x;
+      if (j.length < MAX) send('keys', { k: 'frame', i: i, v: fr, nf: state.frames.length }); else send('refetch', { at: Date.now(), frame: i }); });
+  }
+  /* ---- receiving ---- */
+  function persist(){
+    try{ var sess = state.session; if (!sess) return;
+      sess.html = editorHTML(); sess.text = editorText(); sess.frames = state.frames; sess.updated = new Date().toISOString();
+      var list = loadSessions(), i = list.findIndex(function(x){ return x.id === sess.id; }); if (i >= 0) list[i] = sess; else list.unshift(sess); persistSessions(list);
+    }catch(e){}
+  }
+  function applySec(f, html){
+    var e = ed(); if (!e) return;
+    if (myEdit() === f || (document.activeElement === e && caretFrame() === f && state.lastWriteAt && Date.now() - state.lastWriteAt < 4000)){ pend[f] = html; return; }   // never from under the cursor
+    html = scrub(html);
+    var old = nodesOf(f), anchor;
+    if (old.length) anchor = old[0];
+    else { var h3 = e.querySelector(':scope > h3[data-frame="' + f + '"]'); if (h3) anchor = h3.nextSibling; else if (f === 0) anchor = e.firstChild; else return; }
+    var tmp = document.createElement('div'); tmp.innerHTML = html; var frag = document.createDocumentFragment(); while (tmp.firstChild) frag.appendChild(tmp.firstChild);
+    live.applying = true;
+    try{ e.insertBefore(frag, anchor || null); old.forEach(function(n){ n.remove(); });
+      sent.sec[f] = h(secHTML(f));
+      try{ normalizeLocks(); }catch(x){} try{ paintSectionFocus(); }catch(x){} try{ updateWordCount(); }catch(x){}
+      persist(); holds(); }catch(x){ console.warn('live sec apply', x); }
+    live.applying = false;
+  }
+  function applyKeys(p){
+    live.applying = true;
+    try{
+      var sess = state.session;
+      if (p.k === 'frame'){
+        if (p.nf && state.frames && state.frames.length !== p.nf){ refetch(); return; }
+        if (!state.frames) state.frames = [];
+        state.frames[p.i] = p.v; sent.frames[p.i] = h(JSON.stringify(p.v));
+        if (p.i === (state.frameIdx || 0) && p.v && p.v.prompt){ state.prompt = p.v.prompt; state.selNode = null; state.linkFrom = null; if (sess) sess.words = state.prompt.words; }
+        try{ refreshSky(); }catch(e){} try{ renderTimeline(); }catch(e){}
+      } else if (p.k === 'name'){ var sn = document.getElementById('storyName'); if (sn && sn.value !== p.v && document.activeElement !== sn){ sn.value = p.v || ''; try{ autosizeStoryName(); }catch(e){} } if (sess) sess.name = p.v || sess.name; }
+      else if (p.k === 'section'){ var st = document.getElementById('sectionTitle'); if (st && st.value !== p.v && document.activeElement !== st) st.value = p.v || ''; if (sess) sess.section = p.v || ''; }
+      else if (KEYS.indexOf(p.k) >= 0 && sess){ sess[p.k] = p.v;
+        if (p.k === 'plotGaps') state.plotGaps = p.v || {}; if (p.k === 'deaths'){ state.deaths = p.v || 0; try{ updateDeaths(); }catch(e){} } if (p.k === 'deathLog') state.deathLog = p.v || []; if (p.k === 'ruinsLog') state.ruinsLog = p.v || []; }
+      sent.keys[p.k] = JSON.stringify(p.v == null ? null : p.v);
+      persist();
+    }catch(e){ console.warn('live keys apply', e); }
+    finally{ live.applying = false; }
+  }
+  var refT = 0;
+  function refetch(){
+    clearTimeout(refT);
+    refT = setTimeout(async function(){   // give the sender's autosave a moment to land
+      try{ if (!supa || !live.cloudId) return;
+        var r = await supa.from('stories').select('doc').eq('id', live.cloudId).single();
+        var d = r && r.data && r.data.doc; if (!d) return;
+        if (typeof liveApplyRemote === 'function') liveApplyRemote(JSON.stringify(d));
+        sent.skel = skeleton(); sent.sec = {}; frames().forEach(function(f){ sent.sec[f] = h(secHTML(f)); });
+        holds();
+      }catch(e){ console.warn('live refetch', e); }
+    }, 2500);
+  }
+  window.liveRefetch = refetch;
+  /* ---- the section hold ---- */
+  function hue(id){ try{ return livePeerHue(id); }catch(e){ return 30; } }
+  function holds(){
+    var e = ed(); if (!e) return;
+    Array.prototype.forEach.call(e.querySelectorAll('[data-peerheld]'), function(x){
+      x.classList.remove('peer-held', 'peer-held-first'); x.removeAttribute('data-peer-note'); x.style.removeProperty('--peer-c');
+      var v = x.getAttribute('data-peerce'); x.removeAttribute('data-peerce'); x.removeAttribute('data-peerheld');
+      if (v === '' || v === null) x.removeAttribute('contenteditable'); else x.setAttribute('contenteditable', v);
+    });
+    if (!live.on) return;
+    var mine = myEdit(), my = me();
+    (live.peers || []).forEach(function(p){
+      if (!p || p.edit == null || p.id === my) return;
+      if (mine === p.edit && my > p.id) {}          // both here at once: the greater id yields (this device is held)
+      else if (mine === p.edit) return;            // … and the other yields to me
+      var ns = nodesOf(p.edit).filter(function(n){ return n.nodeType === 1; });
+      ns.forEach(function(n, i){
+        n.setAttribute('data-peerheld', '1'); n.setAttribute('data-peerce', n.getAttribute('contenteditable') == null ? '' : n.getAttribute('contenteditable'));
+        n.setAttribute('contenteditable', 'false'); n.classList.add('peer-held'); n.style.setProperty('--peer-c', 'hsl(' + hue(p.id) + ',42%,42%)');
+        if (i === 0){ n.classList.add('peer-held-first'); n.setAttribute('data-peer-note', (p.name || 'Another writer') + ' is writing here'); }
+      });
+    });
+  }
+  window.liveSectionHolds = holds;
+  /* the hold is a view of someone else's work, never part of the prose: the saved HTML must not carry it */
+  var _eh = window.editorHTML;
+  if (typeof _eh === 'function') window.editorHTML = function(){
+    var html = _eh.apply(this, arguments); if (String(html).indexOf('data-peerheld') < 0) return html;
+    var t = document.createElement('template'); t.innerHTML = html;
+    Array.prototype.forEach.call(t.content.querySelectorAll('[data-peerheld]'), function(x){
+      x.classList.remove('peer-held', 'peer-held-first'); if (x.getAttribute('class') === '') x.removeAttribute('class');
+      x.removeAttribute('data-peer-note'); x.style.removeProperty('--peer-c'); if (x.getAttribute('style') === '') x.removeAttribute('style');
+      var v = x.getAttribute('data-peerce'); x.removeAttribute('data-peerce'); x.removeAttribute('data-peerheld');
+      if (v === '' || v === null) x.removeAttribute('contenteditable'); else x.setAttribute('contenteditable', v); });
+    return t.innerHTML;
+  };
+  /* ---- wiring: the same channel, the new events; presence carries `edit` ---- */
+  window.liveBroadcast = broadcast;
+  var _track = window.liveTrack;
+  window.liveTrack = function(){
+    if (!live.channel || !live.on || !cloud.user) return;
+    try{ live._lastAct = liveMyAction(); live._lastEdit = myEdit();
+      live.channel.track({ id: cloud.user.id, name: myDisplayName(), frame: (state.frameIdx || 0), writing: liveAmSprinting(), act: live._lastAct, edit: live._lastEdit }); }catch(e){ try{ _track && _track(); }catch(x){} }
+  };
+  setInterval(function(){ try{
+    if (!live.on) return;
+    var ed2 = myEdit(); if (ed2 !== live._lastEdit) window.liveTrack();
+    Object.keys(pend).forEach(function(f){ f = +f; if (myEdit() !== f){ var ht = pend[f]; delete pend[f]; applySec(f, ht); } });
+  }catch(e){} }, 1000);
+  var _refresh = window.liveRefreshPeers;
+  window.liveRefreshPeers = function(){ var r = _refresh && _refresh.apply(this, arguments); try{ holds(); }catch(e){} return r; };
+  /* a sprint holds its own section now, not the page */
+  window.liveSprintingPeerOnFrame = function(){ return null; };
+  window.liveJoin = function(sess){
+    liveLeave();
+    if (!supa || !cloud.user || !sess || !sess.cloudId) return;
+    live.cloudId = sess.cloudId; sent = { sec:{}, keys:{}, frames:{}, skel:'' }; pend = {};
+    live.channel = supa.channel('story-' + sess.cloudId, { config: { presence: { key: cloud.user.id }, broadcast: { self: false } } });
+    live.channel
+      .on('presence', { event: 'sync' }, function(){ window.liveRefreshPeers(); })
+      .on('presence', { event: 'join' }, function(){ window.liveRefreshPeers(); var f = myEdit(); if (f != null){ delete sent.sec[f]; broadcast(false); } })
+      .on('broadcast', { event: 'doc' }, function(m){ var p = m && m.payload; if (p && typeof p.doc === 'string'){ liveApplyRemote(p.doc); sent.skel = skeleton(); sent.sec = {}; frames().forEach(function(f){ sent.sec[f] = h(secHTML(f)); }); holds(); } })
+      .on('broadcast', { event: 'sec' }, function(m){ var p = m && m.payload; if (!p || typeof p.html !== 'string') return; if (p.nf && state.frames && state.frames.length !== p.nf){ refetch(); return; } applySec(+p.f, p.html); })
+      .on('broadcast', { event: 'keys' }, function(m){ var p = m && m.payload; if (p && p.k) applyKeys(p); })
+      .on('broadcast', { event: 'refetch' }, function(){ refetch(); })
+      .subscribe(function(status){
+        if (status === 'SUBSCRIBED'){ live.on = true; live.lastDoc = (typeof liveDocStr === 'function') ? liveDocStr() : '';
+          sent.skel = skeleton(); frames().forEach(function(f){ sent.sec[f] = h(secHTML(f)); }); sendKeysBaseline(); window.liveTrack(); }
+      });
+  };
+  function sendKeysBaseline(){ var sess = state.session; if (!sess) return; KEYS.forEach(function(k){ var v = (k === 'name') ? (document.getElementById('storyName') || {}).value || sess.name : (k === 'section' ? ((document.getElementById('sectionTitle') || {}).value || sess.section) : sess[k]); sent.keys[k] = JSON.stringify(v == null ? null : v); });
+    (state.frames || []).forEach(function(fr, i){ sent.frames[i] = h(JSON.stringify(fr)); }); }
+  /* an already-open story rejoins on the new wiring */
+  setTimeout(function(){ try{ if (live.on && state.session && state.session.cloudId) window.liveJoin(state.session); }catch(e){} }, 0);
 })();
 </script>
 </body></html>
