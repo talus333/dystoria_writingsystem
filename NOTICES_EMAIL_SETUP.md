@@ -1,13 +1,15 @@
 # Email notices — step by step
 
-From v.823, Dystoria can email a writer when a writing partner's messages have waited for them. It sends one email per person at most every six hours, and only when they haven't been in the app. From v.824 the same function also sends co-author invitations.
+The `notices` function sends two kinds of email:
+- **Co-author invitations** (v.824). When a story's owner ticks "Email the invitation", the person invited gets an email whose button opens the invitation. Replies go to the owner. The app asks the function to run straight away, so it arrives in seconds.
+- **Messages that waited** (v.823). When a writing partner's messages have gone unread while you were away, one email goes out, at most every six hours.
 
 Three pieces, all in the Supabase dashboard:
 - an email sender (Resend);
 - the `notices` Edge Function;
 - a timer that runs it every 15 minutes.
 
-**Before you start:** migrations 12, 13 and 14 must already have been run.
+**Before you start:** migrations 12, 13, 14 and 15 must already have been run.
 
 ## 1 · An email sender (Resend)
 If you set up Resend for the comment digest, reuse that key.
@@ -39,12 +41,24 @@ select cron.schedule('dystoria-notices', '*/15 * * * *', $$
 ```
 
 ## 4 · Test it
+**An invitation:**
+1. In a story's People panel, invite an address you can read, with **Email the invitation** ticked.
+2. The email should arrive within seconds, with the story's title and an **Open the invitation** button.
+3. Its panel row then reads "emailed just now".
+
+**A waiting message:**
 1. From a second account that is your writing partner, send yourself a message and don't open it.
 2. Wait 15 minutes, and stay out of the app for 10 of them.
-3. **Edge Functions → notices → Invoke.** The response says `messages: 1/1 emailed`.
+3. **Edge Functions → notices → Invoke.** The response says `invites: 0/0 emailed` and `messages: 1/1 emailed`.
    - Without `RESEND_API_KEY` it answers `(dry run)`, logs who it would email, and marks nothing, so the real run still sends later.
 
-## What stops an email
+## What stops an invitation email
+- The invitation is revoked, accepted, declined or expired.
+- It has already been emailed three times.
+- The last email went out less than 10 minutes ago.
+- The owner has asked for 40 or more invitation emails today.
+
+## What stops a message email
 - The message has been read.
 - It's under 15 minutes old.
 - The writer was in the app in the last 10 minutes.

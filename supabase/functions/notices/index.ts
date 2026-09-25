@@ -1,12 +1,18 @@
 // ============================================================
 //  DYSTORIA — email notices  (Supabase Edge Function, Deno)            v.823
-//  Runs every 15 minutes. Today it sends one kind of email:
+//  Runs every 15 minutes (and at once when the app asks — see below). Two kinds of email:
+//    · "Jeremy invited you to co-write “Servant”" (v.824) — a co-author invitation the
+//      owner asked to have emailed; the button opens the invitation link. Replies go to
+//      the person who invited them.
 //    · "Mara sent you 3 messages" — messages from a writing partner that have waited
 //      15+ minutes unread while you weren't in the app. At most one such email per
 //      person every 6 hours; each message is emailed about once. People can turn these
 //      off in Dystoria → Writing partners → ⚙.
 //  The selection lives in the database (notice_batch_messages / notice_mark_messages,
-//  migration 14), so this file only formats and sends.
+//  migration 14; notice_batch_invites / notice_mark_invites, migration 15), so this file
+//  only formats and sends. Running it twice sends nothing twice.
+//  The app calls it with {"kind":"invites"} right after an invitation is asked for, so the
+//  email leaves in seconds; the 15-minute schedule is the safety net.
 //
 //  Deploy:   Dashboard → Edge Functions → Create "notices" → paste this file → Deploy
 //            (or: supabase functions deploy notices --no-verify-jwt)
@@ -27,12 +33,14 @@ const APP_URL = (Deno.env.get("APP_URL") ?? "https://dystoria.net").replace(/\/+
 const admin = createClient(SUPABASE_URL, SERVICE_KEY);
 const esc = (s: string) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
-async function sendEmail(to: string, subject: string, html: string): Promise<boolean> {
+async function sendEmail(to: string, subject: string, html: string, replyTo?: string): Promise<boolean> {
   if (!RESEND_API_KEY) { console.log(`[dry-run] would email ${to}: ${subject}`); return false; }
+  const payload: Record<string, unknown> = { from: FROM, to, subject, html };
+  if (replyTo) payload.reply_to = replyTo;
   const res = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: { "Authorization": `Bearer ${RESEND_API_KEY}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ from: FROM, to, subject, html }),
+    body: JSON.stringify(payload),
   });
   if (!res.ok) { console.error("resend error", to, await res.text()); return false; }
   return true;
@@ -74,7 +82,44 @@ async function messageNotices(): Promise<string> {
   return `messages: ${sent}/${rows.length} emailed${RESEND_API_KEY ? "" : " (dry run)"}`;
 }
 
-Deno.serve(async () => {
-  const out = [await messageNotices()];
-  return new Response(out.join("\n"));
+type InviteRow = { id: string; email: string; token: string; role: string; title: string; inviter_name: string; inviter_email: string | null; resend: boolean };
+
+async function inviteNotices(): Promise<string> {
+  const { data, error } = await admin.rpc("notice_batch_invites");
+  if (error) return "invites: " + error.message;
+  const rows = (data ?? []) as InviteRow[];
+  const done: string[] = [];
+  for (const r of rows) {
+    const link = `${APP_URL}/#/invite/${r.token}`;
+    const role = r.role === "suggester"
+      ? `as a <b>Suggester</b> — you'll propose changes for ${esc(r.inviter_name)} to accept`
+      : `as an <b>Editor</b> — you'll write and revise directly`;
+    const subject = (r.resend ? "Reminder: " : "") + `${r.inviter_name} invited you to co-write “${r.title}” on Dystoria`;
+    const html = shell(
+      `<p style="font-size:17px;color:#6f6656;margin:14px 0 4px">${esc(r.inviter_name)} invited you to co-write</p>
+       <h2 style="font-weight:500;font-style:italic;font-size:28px;line-height:1.15;margin:0 0 10px">${esc(r.title)}</h2>
+       <p style="font-size:16px;line-height:1.5;color:#4a4236;margin:0 0 20px">${role}.</p>
+       <p style="margin:0 0 18px"><a href="${link}" style="display:inline-block;background:#f08c1f;color:#2b2926;text-decoration:none;font:700 12px/1 -apple-system,Segoe UI,sans-serif;letter-spacing:.08em;text-transform:uppercase;padding:13px 22px;border-radius:999px">Open the invitation</a></p>
+       <p style="font-size:14px;line-height:1.5;color:#6f6656;margin:0">Dystoria is a writing app for building a story's world and writing it, alone or together. Sign in — or create a free account — with <b>${esc(r.email)}</b> to accept; the invitation will be waiting.</p>`,
+      `Sent by Dystoria on behalf of ${esc(r.inviter_name)}. Replying reaches them. If you weren't expecting this, you can ignore it — the invitation lapses in 30 days.`);
+    if (await sendEmail(r.email, subject, html, r.inviter_email || undefined)) done.push(r.id);
+  }
+  if (done.length) await admin.rpc("notice_mark_invites", { ids: done });
+  return `invites: ${done.length}/${rows.length} emailed${RESEND_API_KEY ? "" : " (dry run)"}`;
+}
+
+const CORS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+};
+
+Deno.serve(async (req) => {
+  if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
+  let kind = "all";
+  try { const b = await req.json(); if (b && typeof b.kind === "string") kind = b.kind; } catch (_) { /* the scheduler sends no body */ }
+  const out: string[] = [];
+  if (kind === "all" || kind === "invites") out.push(await inviteNotices());
+  if (kind === "all" || kind === "messages") out.push(await messageNotices());
+  return new Response(out.join("\n"), { headers: CORS });
 });
