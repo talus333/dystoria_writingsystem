@@ -1,6 +1,8 @@
 // ============================================================
 //  DYSTORIA — email notices  (Supabase Edge Function, Deno)            v.823
-//  Runs every 15 minutes (and at once when the app asks — see below). Two kinds of email:
+//  Runs every 15 minutes (and at once when the app asks — see below). Three kinds of email:
+//    · "Jeremy invited you to write on Dystoria" (v.825) — a friend invitation, with their note;
+//      the button opens #/join/<token>, and joining makes the two of them writing partners.
 //    · "Jeremy invited you to co-write “Servant”" (v.824) — a co-author invitation the
 //      owner asked to have emailed; the button opens the invitation link. Replies go to
 //      the person who invited them.
@@ -9,9 +11,10 @@
 //      person every 6 hours; each message is emailed about once. People can turn these
 //      off in Dystoria → Writing partners → ⚙.
 //  The selection lives in the database (notice_batch_messages / notice_mark_messages,
-//  migration 14; notice_batch_invites / notice_mark_invites, migration 15), so this file
+//  migration 14; notice_batch_invites / notice_mark_invites, migration 15; notice_batch_friends /
+//  notice_mark_friends, migration 16), so this file
 //  only formats and sends. Running it twice sends nothing twice.
-//  The app calls it with {"kind":"invites"} right after an invitation is asked for, so the
+//  The app calls it with {"kind":"invites"} or {"kind":"friends"} right after an invitation is asked for, so the
 //  email leaves in seconds; the 15-minute schedule is the safety net.
 //
 //  Deploy:   Dashboard → Edge Functions → Create "notices" → paste this file → Deploy
@@ -108,6 +111,30 @@ async function inviteNotices(): Promise<string> {
   return `invites: ${done.length}/${rows.length} emailed${RESEND_API_KEY ? "" : " (dry run)"}`;
 }
 
+type FriendRow = { id: string; email: string; token: string; note: string | null; inviter_name: string; inviter_email: string | null };
+
+async function friendNotices(): Promise<string> {
+  const { data, error } = await admin.rpc("notice_batch_friends");
+  if (error) return "friends: " + error.message;
+  const rows = (data ?? []) as FriendRow[];
+  const done: string[] = [];
+  for (const r of rows) {
+    const link = `${APP_URL}/#/join/${r.token}`;
+    const note = r.note ? `<div style="margin:16px 0;padding:12px 16px;border-left:3px solid #c8a24a;background:#faf6ec;border-radius:0 8px 8px 0;font-size:17px;line-height:1.5;font-style:italic">“${esc(r.note)}”<div style="margin-top:6px;font:12px/1.4 -apple-system,Segoe UI,sans-serif;font-style:normal;color:#8a8276">— ${esc(r.inviter_name)}</div></div>` : "";
+    const subject = `${r.inviter_name} invited you to write on Dystoria`;
+    const html = shell(
+      `<h2 style="font-weight:500;font-size:26px;line-height:1.2;margin:12px 0 8px">${esc(r.inviter_name)} invited you to write on Dystoria</h2>
+       ${note}
+       <p style="font-size:16px;line-height:1.55;color:#4a4236;margin:0 0 18px">Dystoria is a writing app for building a story's world — its places, characters and plot — and writing it, alone or together. Join, and you and ${esc(r.inviter_name)} will be writing partners: you'll see when each other is writing, can message, and can co-write a story.</p>
+       <p style="margin:0 0 18px"><a href="${link}" style="display:inline-block;background:#f08c1f;color:#2b2926;text-decoration:none;font:700 12px/1 -apple-system,Segoe UI,sans-serif;letter-spacing:.08em;text-transform:uppercase;padding:13px 22px;border-radius:999px">Join Dystoria</a></p>
+       <p style="font-size:14px;line-height:1.5;color:#6f6656;margin:0">It's free while Dystoria is in beta.</p>`,
+      `Sent by Dystoria because ${esc(r.inviter_name)} asked us to. Replying reaches them. We won't email you again unless someone invites you.`);
+    if (await sendEmail(r.email, subject, html, r.inviter_email || undefined)) done.push(r.id);
+  }
+  if (done.length) await admin.rpc("notice_mark_friends", { ids: done });
+  return `friends: ${done.length}/${rows.length} emailed${RESEND_API_KEY ? "" : " (dry run)"}`;
+}
+
 const CORS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
@@ -120,6 +147,7 @@ Deno.serve(async (req) => {
   try { const b = await req.json(); if (b && typeof b.kind === "string") kind = b.kind; } catch (_) { /* the scheduler sends no body */ }
   const out: string[] = [];
   if (kind === "all" || kind === "invites") out.push(await inviteNotices());
+  if (kind === "all" || kind === "friends") out.push(await friendNotices());
   if (kind === "all" || kind === "messages") out.push(await messageNotices());
   return new Response(out.join("\n"), { headers: CORS });
 });

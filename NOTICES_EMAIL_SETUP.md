@@ -1,6 +1,7 @@
 # Email notices — step by step
 
-The `notices` function sends two kinds of email:
+The `notices` function sends three kinds of email:
+- **Friend invitations** (v.825). "Invite a friend to Dystoria" in the partners panel sends a personal invitation with your note. Joining from its button makes the two of you writing partners.
 - **Co-author invitations** (v.824). When a story's owner ticks "Email the invitation", the person invited gets an email whose button opens the invitation. Replies go to the owner. The app asks the function to run straight away, so it arrives in seconds.
 - **Messages that waited** (v.823). When a writing partner's messages have gone unread while you were away, one email goes out, at most every six hours.
 
@@ -9,7 +10,7 @@ Three pieces, all in the Supabase dashboard:
 - the `notices` Edge Function;
 - a timer that runs it every 15 minutes.
 
-**Before you start:** migrations 12, 13, 14 and 15 must already have been run.
+**Before you start:** migrations 12 to 16 must already have been run.
 
 ## 1 · An email sender (Resend)
 If you set up Resend for the comment digest, reuse that key.
@@ -49,8 +50,15 @@ select cron.schedule('dystoria-notices', '*/15 * * * *', $$
 **A waiting message:**
 1. From a second account that is your writing partner, send yourself a message and don't open it.
 2. Wait 15 minutes, and stay out of the app for 10 of them.
-3. **Edge Functions → notices → Invoke.** The response says `invites: 0/0 emailed` and `messages: 1/1 emailed`.
+3. **Edge Functions → notices → Invoke.** The response lists `invites`, `friends` and `messages`, with `messages: 1/1 emailed`.
    - Without `RESEND_API_KEY` it answers `(dry run)`, logs who it would email, and marks nothing, so the real run still sends later.
+
+## What stops a friend invitation email
+- It's more than 3 days old and was never sent.
+- One of you has blocked the other.
+- That address already had 3 friend invitations this week, from anyone.
+- You already invited that address in the last 7 days.
+- You've sent 10 friend invitations today.
 
 ## What stops an invitation email
 - The invitation is revoked, accepted, declined or expired.
