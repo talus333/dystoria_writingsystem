@@ -6024,6 +6024,105 @@ body.eink #consentBar #cbAccept{background:#000; color:#fff; border-color:#000}
    vocabulary (Domains, Constructs, Archetypes, Emotion families,
    Bearing) can be added later as categories or subcategories.
    ============================================================ */
+/* ============================================================
+   v.829 — THE CATEGORY REGISTRY [Jeremy: "build the category refactor first, then rename/hide/reorder"]
+   One place that says, for each ELEMENT category: its names (one · many · the builder's title) and what it does.
+   Surfaces that draw categories ask it instead of keeping their own list — the Story Elements rows and their filter
+   tabs, the Story Legend's groups, Quick Chat's "Bring in an element", the two + Element menus, the planner's
+   Elements step, the importer's category picker, the "Edit in the … Creator" buttons and the + add buttons.
+   Ids never change (`setting` is still a Place, `object` an Artifact). The flags document capability and are what a
+   new category will declare (brainstorm §1.3):
+     element — a Story Elements row, a filter tab, a Legend group      legend — in the Story Legend roster
+     map     — placed on section boards                                side   — lives on the side panels, not the boards
+     bond    — a node in Bonds                                         bucket — organised by role in a drawer
+     bearer  — can be the one who could lose a stake                   threat — can be a stake's threat
+     quick   — offered by Quick Chat                                   importer — the AI reader looks for it
+   The hooks are empty here, so nothing changes: window.__dystCatOv(id) → { one, many } | null (a rename),
+   window.__dystCatHidden(id) → bool, window.__dystCatOrder() → [ids] | null. v.830 fills them from the story.
+   ============================================================ */
+var DYST_CATREG = [
+  { id:'being',   one:'Character', many:'Characters', builder:'Character Creator', flags:'element legend map bond bearer bucket quick importer' },
+  { id:'org',     one:'Group',     many:'Groups',     builder:'Group Builder',     flags:'element legend side bond bearer threat bucket quick importer' },
+  { id:'setting', one:'Place',     many:'Places',     builder:'Place Builder',     flags:'element legend map bond threat bucket quick importer' },
+  { id:'object',  one:'Artifact',  many:'Artifacts',  builder:'Artifact Builder',  flags:'element legend map bond threat bucket quick importer' },
+  { id:'concept', one:'Concept',   many:'Concepts',   builder:'Concept Builder',   flags:'element legend side bond threat bucket quick importer' },
+  { id:'event',   one:'Event',     many:'Events',     builder:'Event Builder',     flags:'element legend map bond threat bucket quick importer' },
+  { id:'stakes',  one:'Stake',     many:'Stakes',     builder:'Stakes Builder',    flags:'element legend side importer' }
+];
+function dystCatReg(id){ for (var i = 0; i < DYST_CATREG.length; i++) if (DYST_CATREG[i].id === id) return DYST_CATREG[i]; return null; }
+function dystCatHas(id, flag){ var r = dystCatReg(id); return !!(r && (' ' + r.flags + ' ').indexOf(' ' + flag + ' ') >= 0); }
+function dystCatOv(id){ try { return (typeof window.__dystCatOv === 'function') ? (window.__dystCatOv(id) || null) : null; } catch (e){ return null; } }
+function dystCatHidden(id){ try { return (typeof window.__dystCatHidden === 'function') ? !!window.__dystCatHidden(id) : false; } catch (e){ return false; } }
+/* form: 'one' | 'many' | 'builder'. A renamed category's builder keeps its word: "Crew Creator", "Wagers Builder". */
+function dystCatLabel(id, form){
+  var r = dystCatReg(id); if (!r) return '';
+  form = form || 'one';
+  var ov = dystCatOv(id);
+  if (form === 'builder'){
+    var b = r.builder; if (!ov) return b;
+    if (ov.many && b.indexOf(r.many) === 0) return ov.many + b.slice(r.many.length);
+    if (ov.one && b.indexOf(r.one) === 0) return ov.one + b.slice(r.one.length);
+    return b;
+  }
+  var v = ov && ov[form] ? String(ov[form]) : '';
+  return v || r[form] || '';
+}
+/* The writer's order, applied to a surface's own default order: ids the writer has placed come in their order;
+   anything they have not placed keeps its default position relative to the rest. No order set → the default. */
+function dystCatArrange(ids){
+  var o = null; try { o = (typeof window.__dystCatOrder === 'function') ? window.__dystCatOrder() : null; } catch (e){ o = null; }
+  if (!o || !o.length) return ids.slice();
+  var rank = {}; o.forEach(function(id, i){ rank[id] = i; });
+  var placed = ids.filter(function(id){ return rank[id] != null; }).sort(function(a, b){ return rank[a] - rank[b]; });
+  var out = [], pi = 0;
+  ids.forEach(function(id){ out.push(rank[id] != null ? placed[pi++] : id); });
+  return out;
+}
+/* the ids with a flag, in a surface's default order; opts.all keeps hidden ones, opts.raw skips the writer's order */
+function dystCatIds(flag, order, opts){
+  opts = opts || {};
+  var ids = (order || DYST_CATREG.map(function(r){ return r.id; })).filter(function(id){ return dystCatHas(id, flag); });
+  if (!opts.all) ids = ids.filter(function(id){ return !dystCatHidden(id); });
+  return opts.raw ? ids : dystCatArrange(ids);
+}
+/* [[id, label]] pairs, the shape the old lists had */
+function dystCatCols(flag, order, form, opts){ return dystCatIds(flag, order, opts).map(function(id){ return [id, dystCatLabel(id, form || 'many')]; }); }
+/* v.829 — a menu's [id, form] entries → [id, label], hidden categories left out, dividers kept (a divider that ends up
+   leading, trailing or doubled is dropped). Entries that are not registry categories (Threads) pass through. */
+function dystMenuCats(items){
+  var out = [];
+  items.forEach(function(it){
+    if (typeof it === 'string'){ if (out.length && typeof out[out.length - 1] !== 'string') out.push(it); return; }
+    if (!dystCatReg(it[0])){ out.push(it); return; }
+    if (dystCatHidden(it[0])) return;
+    out.push([it[0], dystCatLabel(it[0], it[1])]);
+  });
+  while (out.length && typeof out[out.length - 1] === 'string') out.pop();
+  return out;
+}
+/* v.830 — the names every getCat(id).name reader sees. A category's own name is its singular (Character) — except Stakes,
+   whose own name is its plural — so a rename sets whichever form it already used. Re-applied only when the story, its
+   settings or this device's defaults change (a signature check: getCat is hot). */
+var _dystCatNameSig = null;
+function dystCatSyncNames(){
+  var sess = null; try { sess = (typeof state !== 'undefined' && state) ? state.session : null; } catch (e){}
+  var sig = [sess, sess && sess.catDisplay, (window.__dystCatRev || 0)];
+  if (_dystCatNameSig && _dystCatNameSig[0] === sig[0] && _dystCatNameSig[1] === sig[1] && _dystCatNameSig[2] === sig[2]) return;
+  _dystCatNameSig = sig;
+  try {
+    var cs = (typeof DYSTORIA_DATA !== 'undefined' && DYSTORIA_DATA.categories) || [];
+    DYST_CATREG.forEach(function(r){
+      var c = null; for (var i = 0; i < cs.length; i++) if (cs[i].id === r.id){ c = cs[i]; break; }
+      if (!c) return;
+      if (r.baseName == null) r.baseName = c.name;
+      c.name = (r.baseName === r.many) ? dystCatLabel(r.id, 'many') : (r.baseName === r.one ? dystCatLabel(r.id, 'one') : r.baseName);
+    });
+  } catch (e){}
+}
+function dystCatFlagMap(flag){ var m = {}; DYST_CATREG.forEach(function(r){ if (dystCatHas(r.id, flag)) m[r.id] = 1; }); return m; }
+/* the Story Elements rows and their filter tabs — Threads always last */
+function dystStoryElementCols(){ return dystCatCols('element', ['being','org','setting','object','concept','event','stakes'], 'many').concat([['thread','Threads']]); }
+try { window.dystCatLabel = dystCatLabel; window.dystCatIds = dystCatIds; window.dystCatCols = dystCatCols; window.dystCatReg = dystCatReg; window.DYST_CATREG = DYST_CATREG; } catch (e){}
 const DYSTORIA_DATA = {
   version: 3,
   categories: [
@@ -7166,7 +7265,7 @@ window.openAccount = openAccount;
 CATS.forEach(c => { state.counts[c.id] = 1; enableCat(c.id); });
 state.selection.being = new Set(['Archetype']);
 
-function getCat(id){ const c = CATS.find(c => c.id === id);
+function getCat(id){ try{ dystCatSyncNames(); }catch(e){} const c = CATS.find(c => c.id === id);   /* v.830 */
   if (c){ if (id === 'org'){ try{ dystSyncCustomGroupKinds(c); }catch(e){} } else if (DYST_FAM_CATS && DYST_FAM_CATS[id]){ try{ dystSyncCustomFamilies(c); }catch(e){} } }   /* v.780/v.781 — the story's own families ride on the pool */
   return c; }   /* v.780 — the story's own kinds of group ride on the pool */
 /* ---- #52 · the group taxonomy, read off the pool itself -----------------------------------
@@ -24942,7 +25041,7 @@ function openElementDossier(key, opts){
         }
         if(hasBuilder){
           var er=document.createElement('div'); er.className='dossier-grow';
-          var creatorName=({ being:'Character Creator', setting:'Place Builder', object:'Artifact Builder', org:'Group Builder', event:'Event Builder', concept:'Concept Builder', stakes:'Stakes Builder' })[w.cat]||'Creator';
+          var creatorName=(dystCatReg(w.cat) ? dystCatLabel(w.cat,'builder') : '')||'Creator';   /* v.829 */
           var eb=document.createElement('button'); eb.className='dossier-enrich'; eb.textContent='✎ Edit in '+creatorName;
           eb.title='Open the '+creatorName+' loaded with this element to change its characteristics';
           eb.addEventListener('click', function(){ close(); if(typeof window.dystEditElementInBuilder==='function') window.dystEditElementInBuilder(key); });
@@ -30544,7 +30643,7 @@ function ensurePlanWizardCSS(){
 var PW_STEPS = ['Goals','Structure','Elements','Review'];
 function pwRenderElements(){
   var host=document.getElementById('pwEls'); if(!host) return; host.innerHTML='';
-  var cats={being:'Character',setting:'Place',object:'Artifact',org:'Group',event:'Event',concept:'Concept'};
+  var cats={}; ['being','setting','object','org','event','concept'].forEach(function(id){ cats[id]=dystCatLabel(id,'one'); });   /* v.829 */
   var ws=(state.prompt && state.prompt.words)||[];
   var rows=ws.filter(function(w){ return w && cats[w.cat]; });
   if(!rows.length){ var e=document.createElement('div'); e.className='pw-empty'; e.textContent='No elements yet — add your first above. Everything here is optional.'; host.appendChild(e); return; }
@@ -32229,7 +32328,7 @@ function irBuildCard(el){
     const hasTraits = (el.cat === 'being' || el.cat === 'object' || el.cat === 'setting');   // beings get traits; objects/settings get characteristics
     if (hasTraits) el.traits = el.traits || [];
     const d = document.createElement('div'); d.className = 'ir-el' + (el.include ? '' : ' off') + (el.sys ? ' sys' : '');
-    const opts = IMP_CATS.map(c => '<option value="' + c[0] + '"' + (c[0] === el.cat ? ' selected' : '') + '>' + c[1] + '</option>').join('');
+    const opts = IMP_CATS.map(c => '<option value="' + c[0] + '"' + (c[0] === el.cat ? ' selected' : '') + '>' + (dystCatReg(c[0]) && c[0] !== 'stakes' ? dystCatLabel(c[0], 'one') : (c[0] === 'stakes' ? dystCatLabel('stakes', 'many') : c[1])) + '</option>').join('');   /* v.829 */
     const subOpts = el.cat === 'being' ? '' : importSubNames(el.cat).map(n => '<option value="' + esc(n) + '"' + (n === el.sub ? ' selected' : '') + '>' + esc(n) + '</option>').join('');
     d.innerHTML =
       '<div class="ir-el-top">' +
@@ -32930,7 +33029,7 @@ function libSyncFromMap(){
   if (!state.session) return;
   const lib = state.session.elemLibrary = state.session.elemLibrary || [];
   const MAPCAT = { being: 1, setting: 1, object: 1, event: 1 };
-  const ROSTERCAT = { being: 1, setting: 1, object: 1, event: 1, concept: 1, org: 1, stakes: 1 };   // concepts/orgs/stakes live in the roster too (side-panel elements)
+  const ROSTERCAT = dystCatFlagMap('legend');   /* v.829 — the registry's legend flag */   // concepts/orgs/stakes live in the roster too (side-panel elements)
   const byKey = {}; lib.forEach(r => { byKey[libKeyOf(r.cat, r.name || r.word)] = r; });
   const seen = new Set();
   const frames = state.frames || (state.prompt ? [{ prompt: state.prompt }] : []);
@@ -33018,7 +33117,7 @@ function openLegendAdd(btn){
   const menu = document.getElementById('aspectMenu'); if (!menu) return;
   menu.innerHTML = '';
   if (menu.parentElement !== document.body) document.body.appendChild(menu);
-  [['being', 'Character'], ['setting', 'Place'], ['object', 'Artifact'], '--', ['concept', 'Concept'], ['org', 'Group'], ['event', 'Event'], ['thread', 'Thread']].forEach(it => {
+  dystMenuCats([['being', 'one'], ['setting', 'one'], ['object', 'one'], '--', ['concept', 'one'], ['org', 'one'], ['event', 'one'], ['thread', 'Thread']]).forEach(it => {   /* v.829 */
     if (it === '--'){ const d = document.createElement('div'); d.style.cssText = 'height:1px; background:var(--line); margin:4px 6px'; menu.appendChild(d); return; }
     const b = document.createElement('button'); b.textContent = it[1];
     b.addEventListener('click', ev => { ev.stopPropagation(); menu.style.display = 'none'; legendAddCat(it[0]); });
@@ -33101,7 +33200,7 @@ function renderStoryLibrary(){
     ((fr.prompt && fr.prompt.words) || []).forEach(w => { if (fkeys.has(wordKey(w))) focusedLibKeys.add(libKeyOf(w.cat, w.name || w.word)); });
   });
   const wrap = bodyEl;
-  LIB_GROUPS.forEach(g => {
+  dystCatCols('element', ['being','setting','object','event','concept','org','stakes'], 'many').forEach(g => {   /* v.829 — was LIB_GROUPS */
     const rows = lib.filter(r => r.cat === g[0]); if (!rows.length) return;
     /* v.634 [Jeremy] — the ones already HERE ride at the top of their category, so a category reads
        as two groups: what is on this board, then what is waiting. The sort is stable, so the order
@@ -56004,7 +56103,7 @@ body.eink #expMenu{background:#fff; border-color:#000}
     pill.title = 'Add a story element';
     pill.addEventListener('click', function(e){
       e.stopPropagation();
-      expPickMenu(pill, [['being','Character'], ['setting','Place'], ['object','Artifact'], '--divider--', ['concept','Concepts'], ['org','Groups'], ['event','Events'], ['thread','Threads']], function(cat, ev){
+      expPickMenu(pill, dystMenuCats([['being','one'], ['setting','one'], ['object','one'], '--divider--', ['concept','many'], ['org','many'], ['event','many'], ['thread','Threads']]), function(cat, ev){   /* v.829 */
         if (cat === 'thread'){   // threads aren't a map/card element — name-and-create, like the sidebar's + thread
           if (window.__dystPlan && typeof window.__dystPlan.addThread === 'function'){ window.__dystPlan.addThread(); return; }
           (async function(){ var nm = (typeof sitePrompt === 'function') ? await sitePrompt('Name this thread', '') : 'Thread'; if (nm === null) return; if (typeof ensureSession === 'function') ensureSession(); var id = (typeof addThread === 'function') ? addThread(nm) : null; if (typeof state !== 'undefined' && id) state.activeThread = id; if (typeof renderConstellation === 'function') renderConstellation(); })();
@@ -56961,7 +57060,7 @@ body.eink #expMenu{background:#fff; border-color:#000}
         html += '<div class="qc-empty">Nothing woven in yet \u2014 as you talk I\u2019ll gather the characters, places and ideas you mention here, or add some yourself below.</div>';
       }
       html += '<div class="qc-add"><div class="qc-addh">Bring in an element</div>';
-      QC_CATS.forEach(function(c){ html += '<div class="qc-catrow"><span class="qc-catname">' + c[1] + '</span><span class="qc-catbtns"><button type="button" class="qc-choose" data-cat="' + c[0] + '" data-nn="' + c[2] + '">choose</button><button type="button" class="qc-roll" data-cat="' + c[0] + '">roll</button></span></div>'; });
+      dystCatCols('quick', ['being','setting','object','event','concept','org'], 'many').map(function(c){ return [c[0], c[1], dystCatLabel(c[0], 'one').toLowerCase()]; }).forEach(function(c){ html += '<div class="qc-catrow"><span class="qc-catname">' + c[1] + '</span><span class="qc-catbtns"><button type="button" class="qc-choose" data-cat="' + c[0] + '" data-nn="' + c[2] + '">choose</button><button type="button" class="qc-roll" data-cat="' + c[0] + '">roll</button></span></div>'; });
       html += '<div class="qc-addh qc-addh2">Narrative layers</div>';
       QC_NARR.forEach(function(c){ html += '<div class="qc-catrow"><span class="qc-catname">' + c[1] + '</span><span class="qc-catbtns"><button type="button" class="qc-choose" data-cat="' + c[0] + '" data-nn="' + c[2] + '">choose</button><button type="button" class="qc-roll" data-cat="' + c[0] + '">roll</button></span></div>'; });
       html += '</div>';
@@ -58902,9 +59001,15 @@ body.eink .pl-filterpick .pf-row.on .pf-box{ background:#000; border-color:#000;
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.751';
+  var APP_VERSION = '2026.07.20.753';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.753', date:'September 25, 2026', notes:[
+      '**Rename, hide and reorder categories.** [Jeremy] Press **\u270e Categories** on the Story Elements heading. Call Characters *Crew* and Places *Decks* in this story; hide a category a story does not use; move the ones that matter to the top. Set it for **this story** (it travels with the story, and co-authors see it) or for **all your stories** on this device. A hidden category keeps its elements \u2014 they are still on the boards and in the Wiki, and come back when you show it.'
+    ]},
+    { v:'2026.07.20.752', date:'September 25, 2026', notes:[
+      '**Behind the scenes: one list of categories.** [Jeremy] What each kind of element is called, and what it can do, now lives in one place that every surface asks \u2014 the Story Elements rows, the Legend, the + Element menus, Quick Chat, the importer. Nothing looks different yet; it is what lets you rename, hide and reorder categories next.'
+    ]},
     { v:'2026.07.20.751', date:'September 25, 2026', notes:[
       '**Co-authors don\u2019t vanish any more.** [Jeremy] After a laptop slept, the network changed or a tab sat in the background, the story\u2019s live link could drop and stay dropped \u2014 a co-author\u2019s disc disappeared until you reloaded, for both of you. Dystoria now notices and reconnects on its own, and says where you are again as soon as you come back to the tab.'
     ]},
@@ -63587,7 +63692,7 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
   /* v.667 · #46 1b — the PROMOTION (design doc §2.1): `stakes` leaves the narrative-layer group and joins
      the story elements, where its rows are the elements themselves (name — bearer) rather than a
      hand-filled card that duplicated them. */
-  var STORY_ELEMENT_COLS = [['being','Characters'],['org','Groups'],['setting','Places'],['object','Artifacts'],['concept','Concepts'],['event','Events'],['stakes','Stakes'],['thread','Threads']];
+  var STORY_ELEMENT_COLS = dystStoryElementCols();   /* v.829 — from the category registry; the surfaces below ask it fresh on every draw */
   var NARR_LAYER_CATS = [['genre','Genre'],['period','Context'],['theme','Theme'],['plot','Plot'],['narration','POV']];   /* v.827 — Conflict folded into Stakes: its row is gone, its card is the Stakes card */   /* v.668 · #47 — the conflict row, a READ of the stakes around one optional choice */
   function gatherElements(){
     var a=api(), byCat={}, seen={};
@@ -63607,14 +63712,14 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     return { x:Math.round(left), y:Math.round(top) };
   }
   function elementCatRow(catId, label, items){
-    var add=document.createElement('button'); add.className='pl-add'; add.textContent='+ '+singularOf(label);
+    var add=document.createElement('button'); add.className='pl-add'; add.textContent='+ '+singularOf(label, catId);
     add.addEventListener('click', function(e){ e.stopPropagation(); var a=api(); if(!a) return;
       if(catId==='thread') a.addThread(); else { var p=addCardPos(add); a.addElement(catId, p.x, p.y); }   // opens the real add card next to the pill
       refreshElementsSoon();
     });
     return elemRow(label, catId, items.map(function(it){ return elementPill(it, it.kind==='element' ? { noTag:(catId==='setting'), onOpen:function(){ if(typeof window.openElementDossier==='function') window.openElementDossier(it.key); } } : (it.kind==='thread' ? { onOpen:function(){ if(typeof window.openThreadCard==='function') window.openThreadCard(it.id); } } : {})); }), add);
   }
-  function singularOf(label){ return label.toLowerCase().replace(/s$/,''); }
+  function singularOf(label, catId){ if(catId && typeof dystCatReg==='function' && dystCatReg(catId)) return dystCatLabel(catId,'one').toLowerCase(); return label.toLowerCase().replace(/s$/,''); }   /* v.829 */
   function sectHead(title, btnLabel, onClick){
     var h=document.createElement('div'); h.className='pl-secthd';
     var t=document.createElement('h3'); t.textContent=title;
@@ -63666,7 +63771,7 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
   }
 
   /* ---------- Element Categories organizer (R8, slice 1): a per-category role/bucket you assign in a drawer ---------- */
-  var STORY_BUCKET_CATS=['being','setting','object','org','concept','event'];
+  var STORY_BUCKET_CATS=dystCatIds('bucket',['being','setting','object','org','concept','event'],{ all:true, raw:true });   /* v.829 — the registry's bucket flag */
   var BUCKET_SETS={
     being:['Narrator','Protagonist','Deuteragonist','Antagonist','Secondary','Supporting','Minor'],
     setting:['Primary','Sub-setting','Recurring','One-off'],
@@ -64354,6 +64459,7 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     bd.addEventListener('click', function(e){ if(e.target===bd) closeCard(); });
     document.body.appendChild(bd);
   }
+  try{ window.__dystLayerCard = openLayerCard; }catch(e){}   /* v.830 — the Categories card is one of these */
   function openThemeCard(){ var t=ensureTheme(); openLayerCard('themeBd','Theme','What the story is really about — its controlling idea and the motifs that echo it.', function(body, render){
     renderWordList(body, (t.thesis.length>1?'Controlling ideas':'Controlling idea'), '+ theme', t.thesis, 'theme', [t.thesis,t.motifs], function(){ save(); render(); });
     renderWordList(body, 'Motifs', '+ motif', t.motifs, 'theme', [t.thesis,t.motifs], function(){ save(); render(); });
@@ -64412,7 +64518,7 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     var a = api();
     var row = document.createElement('div'); row.className = 'pl-nrow pl-nrow-stakes';
     var lc = document.createElement('div'); lc.className = 'pl-nlabel';
-    var badge = document.createElement('span'); badge.className = 'pl-cat ' + catClass('stakes'); badge.textContent = 'Stakes'; badge.title = 'Stakes \u2014 what could be lost, and whose. Each is an element with a bearer, a threat and an axis.';
+    var badge = document.createElement('span'); badge.className = 'pl-cat ' + catClass('stakes'); badge.textContent = dystCatLabel('stakes', 'many');   /* v.829 */ badge.title = 'Stakes \u2014 what could be lost, and whose. Each is an element with a bearer, a threat and an axis.';
     badge.classList.add('pl-cat-org'); badge.title = 'Open the Stakes card \u2014 every stake, who could lose it, what they want, what stands in the way, and what the story chiefly runs against';   /* v.827 */ badge.addEventListener('click', function(e){ e.stopPropagation(); openStakesCard(); });   /* v.796 */
     lc.appendChild(badge);
     { var _xb = document.createElement('button'); _xb.type = 'button'; _xb.className = 'pl-expbtn'; _xb.innerHTML = '\u2726'; _xb.title = 'Explore Stakes \u2014 a Q&A filed into your notes'; _xb.addEventListener('click', function(e){ e.stopPropagation(); qaCatExplore('stakes', 'Stakes'); }); lc.appendChild(_xb); }
@@ -64502,7 +64608,7 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
   }
   function narrFilterBar(){
     var bar=document.createElement('div'); bar.className='pl-nfilter';
-    var tabs=[['all','All'],['goals','Goals'],['layers','Narrative Layers']].concat(STORY_ELEMENT_COLS);
+    var tabs=[['all','All'],['goals','Goals'],['layers','Narrative Layers']].concat(dystStoryElementCols());   /* v.829 */
     tabs.forEach(function(t){
       var b=document.createElement('button'); b.className='pl-nftab'+(narrTab===t[0]?' on':''); b.textContent=t[1];
       b.addEventListener('click', function(e){ e.stopPropagation(); narrTab=t[0];
@@ -64873,7 +64979,10 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
   function storyElementsSection(byCat, threads){
     var sec=document.createElement('div'); sec.className='pl-sect';
     sec.appendChild(sectHead('Story Elements', '\u2726 Explore', function(){ var a=api(); var keys=(a&&a.storyElements)?(a.storyElements()||[]).map(function(o){return o.key;}):[]; if(typeof window.openExplore==='function') window.openExplore(keys, 'Story elements', 'elements'); }));
-    STORY_ELEMENT_COLS.forEach(function(c){ var row = c[0]==='thread' ? elementCatRow(c[0], c[1], threads||[]) : c[0]==='stakes' ? stakesElementRow(byCat[c[0]]||[]) : elementSetRow(c[0], c[1], byCat[c[0]]||[]); if(row&&row.dataset) row.dataset.cat=c[0]; sec.appendChild(row); });   // R32 — tag each row with its category so the filter can show one at a time
+    /* v.830 [Jeremy] — rename, hide or reorder the categories: the door sits on the heading it changes */
+    try{ var _hd=sec.lastChild; var _cb=document.createElement('button'); _cb.type='button'; _cb.className='pl-catedit'; _cb.textContent='\u270e Categories'; _cb.title='Rename, hide or reorder the categories \u2014 for this story, or all your stories';
+      _cb.addEventListener('click', function(e){ e.stopPropagation(); if(typeof window.openCategoriesCard==='function') window.openCategoriesCard(); }); _hd.appendChild(_cb); }catch(e){}
+    dystStoryElementCols().forEach(function(c){ var row = c[0]==='thread' ? elementCatRow(c[0], c[1], threads||[]) : c[0]==='stakes' ? stakesElementRow(byCat[c[0]]||[]) : elementSetRow(c[0], c[1], byCat[c[0]]||[]); if(row&&row.dataset) row.dataset.cat=c[0]; sec.appendChild(row); });   // R32 — tag each row with its category so the filter can show one at a time
     return sec;
   }
   // Which axis best groups a story-element set: characters by narrative role (bucket), everything else by its Type (subcategory).
@@ -64906,7 +65015,7 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
 
     var groups=document.createElement('div'); groups.className='pl-rolegroups';
     function pill(it){ return elementPill(it, { onOpen:function(){ if(typeof window.openElementDossier==='function') window.openElementDossier(it.key); } }); }
-    function addBtn(){ var add=document.createElement('button'); add.className='pl-add'; add.textContent='+ '+singularOf(label); add.addEventListener('click', function(e){ e.stopPropagation(); if(!a) return; var p=addCardPos(add); a.addElement(catId, p.x, p.y); refreshElementsSoon(); }); return add; }
+    function addBtn(){ var add=document.createElement('button'); add.className='pl-add'; add.textContent='+ '+singularOf(label, catId); add.addEventListener('click', function(e){ e.stopPropagation(); if(!a) return; var p=addCardPos(add); a.addElement(catId, p.x, p.y); refreshElementsSoon(); }); return add; }
     function labeledLine(lab, arr){ var ln=document.createElement('div'); ln.className='pl-roleline'; if(lab){ var l=document.createElement('span'); l.className='pl-rolelab'; l.textContent=lab; ln.appendChild(l); } arr.forEach(function(it){ ln.appendChild(pill(it)); }); return ln; }
 
     if(mode==='off'){
@@ -64977,7 +65086,7 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
        creator goes on it, first. The Type shortcuts and the library re-pick stay — they are two
        other jobs, and neither is what "edit in the builder" means. */
     if (typeof window.dystEditElementInBuilder === 'function'){
-      var _cn=({ being:'Character Creator', setting:'Place Builder', object:'Artifact Builder', org:'Group Builder', event:'Event Builder', concept:'Concept Builder' })[w.cat]||'creator';
+      var _cn=((dystCatReg(w.cat) && w.cat!=='stakes') ? dystCatLabel(w.cat,'builder') : '')||'creator';   /* v.829 */
       var cb=document.createElement('button'); cb.className='pm-lib'; cb.textContent='\u270E  Edit in the '+_cn+'\u2026';
       cb.addEventListener('click', function(e){ e.stopPropagation(); closeMenus(); window.dystEditElementInBuilder(key); });
       m.appendChild(cb);
@@ -65956,7 +66065,7 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     var clr=document.createElement('button'); clr.type='button'; clr.className='pf-clear'; clr.textContent='Clear';
     var done=document.createElement('button'); done.type='button'; done.className='pf-done'; done.textContent='Done';
     foot.appendChild(clr); foot.appendChild(done); m.appendChild(foot);
-    var ORDER=[['pov','Viewpoint']].concat(typeof STORY_ELEMENT_COLS!=='undefined' ? STORY_ELEMENT_COLS.slice() : []).concat([['arc','Arcs'],['other','Other']]);   /* v.769: Viewpoint first */
+    var ORDER=[['pov','Viewpoint']].concat(typeof dystStoryElementCols==='function' ? dystStoryElementCols() : []).concat([['arc','Arcs'],['other','Other']]);   /* v.769: Viewpoint first */
     function draw(){
       var st=list.scrollTop, idx=_plotCardIndex(), f=plotCardFilter(idx), term=String(q.value||'').trim().toLowerCase();
       var sel={}; f.forEach(function(k){ sel[k]=1; });
@@ -99432,7 +99541,7 @@ html body.eink #profileCard .pf-head{ background:#fff; box-shadow:0 0 0 100vmax 
     if (later){ clearTimeout(secTimer); secTimer = setTimeout(function(){ broadcast(false); }, 1050); }
     sendKeys(force);
   }
-  var KEYS = ['name', 'section', 'plotGaps', 'deaths', 'deathLog', 'ruinsLog'];
+  var KEYS = ['name', 'section', 'plotGaps', 'deaths', 'deathLog', 'ruinsLog', 'catDisplay'];   /* v.830 — the story's category names travel live */
   function sendKeys(force){
     var sess = state.session; if (!sess) return;
     KEYS.forEach(function(k){ var v = (k === 'name') ? (document.getElementById('storyName') || {}).value || sess.name : (k === 'section' ? ((document.getElementById('sectionTitle') || {}).value || sess.section) : sess[k]);
@@ -99475,7 +99584,8 @@ html body.eink #profileCard .pf-head{ background:#fff; box-shadow:0 0 0 100vmax 
       } else if (p.k === 'name'){ var sn = document.getElementById('storyName'); if (sn && sn.value !== p.v && document.activeElement !== sn){ sn.value = p.v || ''; try{ autosizeStoryName(); }catch(e){} } if (sess) sess.name = p.v || sess.name; }
       else if (p.k === 'section'){ var st = document.getElementById('sectionTitle'); if (st && st.value !== p.v && document.activeElement !== st) st.value = p.v || ''; if (sess) sess.section = p.v || ''; }
       else if (KEYS.indexOf(p.k) >= 0 && sess){ sess[p.k] = p.v;
-        if (p.k === 'plotGaps') state.plotGaps = p.v || {}; if (p.k === 'deaths'){ state.deaths = p.v || 0; try{ updateDeaths(); }catch(e){} } if (p.k === 'deathLog') state.deathLog = p.v || []; if (p.k === 'ruinsLog') state.ruinsLog = p.v || []; }
+        if (p.k === 'plotGaps') state.plotGaps = p.v || {}; if (p.k === 'deaths'){ state.deaths = p.v || 0; try{ updateDeaths(); }catch(e){} } if (p.k === 'deathLog') state.deathLog = p.v || []; if (p.k === 'ruinsLog') state.ruinsLog = p.v || [];
+        if (p.k === 'catDisplay'){ try{ if (window.__planRefreshNarrative) window.__planRefreshNarrative(); }catch(e){} } }
       sent.keys[p.k] = JSON.stringify(p.v == null ? null : p.v);
       persist();
     }catch(e){ console.warn('live keys apply', e); }
@@ -101288,6 +101398,183 @@ body.eink .pl-skc-dadd, body.eink .pl-skc-laneadd{ border-color:#000; color:#000
   document.addEventListener('visibilitychange', function(){ if (document.visibilityState === 'visible'){ try { check(Date.now(), 'back'); } catch (e){} } });
   window.addEventListener('focus', function(){ try { check(Date.now(), 'back'); } catch (e){} });
   window.addEventListener('online', function(){ try { nextAt = 0; check(Date.now(), 'back'); } catch (e){} });
+})();
+</script>
+<style id="dyst-categories-card">
+/* v.830 — the Categories card */
+.pl-secthd{ position:relative; }
+.pl-secthd .pl-catedit{ position:absolute; right:0; top:50%; transform:translateY(-50%); border:1px solid transparent; background:none; font:inherit; font-family:var(--sans); font-size:11px; letter-spacing:.04em; color:#8a6a2a; cursor:pointer; padding:3px 9px; border-radius:999px; opacity:.8; }
+.pl-secthd .pl-catedit:hover{ opacity:1; border-color:var(--line); }
+#catsBd .cat-org{ max-width:620px; }
+#catsBd .pl-cats-scope{ margin:0 6px 8px; }
+#catsBd .pl-cats-hint{ margin:0 6px 10px; font-size:12px; color:#7a746a; line-height:1.45; }
+.pl-cats-row{ display:grid; grid-template-columns:auto 12px minmax(0,1fr) minmax(0,.8fr) auto auto auto; align-items:center; gap:8px; padding:7px 6px; border-top:1px solid rgba(120,110,90,.12); }
+.pl-cats-row.hidden .pl-cats-many, .pl-cats-row.hidden .pl-cats-one{ opacity:.45; }
+.pl-cats-move{ display:flex; flex-direction:column; gap:1px; }
+.pl-cats-move button{ border:none; background:none; cursor:pointer; font-size:10px; line-height:1; color:#8a8172; padding:1px 3px; }
+.pl-cats-move button:disabled{ opacity:.25; cursor:default; }
+.pl-cats-move button:not(:disabled):hover{ color:var(--charcoal); }
+.pl-cats-dot{ width:10px; height:10px; border-radius:50%; }
+.pl-cats-row input{ width:100%; box-sizing:border-box; font:inherit; font-size:13px; padding:5px 8px; border:1px solid var(--line); border-radius:7px; background:rgba(255,255,255,.75); color:var(--charcoal); }
+.pl-cats-row input.pl-cats-one{ font-size:12px; color:#5a5346; }
+.pl-cats-row input:focus{ outline:none; border-color:var(--gold); }
+.pl-cats-n{ font-size:11px; color:#a49b8b; min-width:22px; text-align:right; }
+.pl-cats-eye, .pl-cats-reset{ border:1px solid var(--line); background:rgba(255,255,255,.7); border-radius:999px; font-size:11px; cursor:pointer; padding:3px 9px; color:#5a5346; white-space:nowrap; }
+.pl-cats-eye.off{ color:#a0463a; border-style:dashed; }
+.pl-cats-reset{ border-color:transparent; background:none; color:#8a6a2a; }
+.pl-cats-reset[hidden]{ display:inline-block; visibility:hidden; }
+.pl-cats-foot{ display:flex; align-items:center; gap:10px; margin:12px 6px 2px; font-size:12px; color:#7a746a; }
+.pl-cats-foot button{ margin-left:auto; border:none; background:none; font:inherit; color:#8a6a2a; cursor:pointer; }
+.pl-cats-foot button:hover{ text-decoration:underline; }
+body.ember:not(.eink) .pl-cats-row input, body.ember:not(.eink) .pl-cats-eye{ background:rgba(255,255,255,.06); color:inherit; }
+body.eink .pl-cats-row input, body.eink .pl-cats-eye{ border-color:#000; background:#fff; color:#000; }
+@media (max-width:600px){ .pl-cats-row{ grid-template-columns:auto 12px minmax(0,1fr) auto auto; } .pl-cats-row .pl-cats-one, .pl-cats-row .pl-cats-n{ display:none; } }
+</style>
+<script id="dyst-categories-card-js">
+/* v.830 [Jeremy] "build the category refactor first, then rename/hide/reorder" — the brainstorm's §1.2, on v.829's registry.
+   Two scopes, the same two the word pool has: THIS STORY (state.session.catDisplay — saved, synced, seen live by co-authors)
+   and ALL MY STORIES (this device's default, localStorage 'dystoria.catDisplay'). The story wins field by field: a name set
+   here beats the device's; a hide or show set here beats the device's; an order set here replaces the device's.
+     { labels: { being: { one:'Crew member', many:'Crew' } }, hidden: { object:true }, order: ['concept','being', …] }
+   What a rename reaches: every surface v.829 routed (the rows, their tabs, their + buttons, the Legend, Quick Chat, the
+   + Element menus, the importer, "Edit in the … Creator") and every getCat(id).name reader (element cards, pickers, the
+   Wiki's headings). What hiding does: the category leaves those lists; its elements stay in the story, on the boards,
+   in the roster and the Wiki, and come back when it is shown. Ids never change. */
+(function(){
+  'use strict';
+  var LS = 'dystoria.catDisplay';
+  var scope = 'story';
+  function acct(){ try { var v = JSON.parse(localStorage.getItem(LS) || 'null'); return (v && typeof v === 'object') ? v : {}; } catch (e){ return {}; } }
+  function story(){ try { return (state.session && state.session.catDisplay && typeof state.session.catDisplay === 'object') ? state.session.catDisplay : {}; } catch (e){ return {}; } }
+  var _acctCache = null, _acctRev = -1;
+  function A(){ var r = window.__dystCatRev || 0; if (_acctRev !== r || !_acctCache){ _acctCache = acct(); _acctRev = r; } return _acctCache; }
+  function bump(){ window.__dystCatRev = (window.__dystCatRev || 0) + 1; }
+  function clean(v){ v = String(v == null ? '' : v).replace(/\s+/g, ' ').trim(); return v.slice(0, 28); }
+
+  /* the hooks v.829's registry asks */
+  window.__dystCatOv = function(id){
+    var s = story().labels, a = A().labels;
+    var sv = s && s[id], av = a && a[id];
+    if (!sv && !av) return null;
+    return { one: (sv && sv.one) || (av && av.one) || '', many: (sv && sv.many) || (av && av.many) || '' };
+  };
+  window.__dystCatHidden = function(id){
+    var s = story().hidden; if (s && Object.prototype.hasOwnProperty.call(s, id)) return !!s[id];
+    var a = A().hidden; return !!(a && a[id]);
+  };
+  window.__dystCatOrder = function(){
+    var s = story().order; if (Array.isArray(s) && s.length) return s;
+    var a = A().order; return (Array.isArray(a) && a.length) ? a : null;
+  };
+
+  /* writing */
+  function target(){ if (scope === 'story'){ if (!state.session) return null; var d = state.session.catDisplay; d = (d && typeof d === 'object') ? JSON.parse(JSON.stringify(d)) : {}; return d; } return acct(); }
+  function commit(d){
+    ['labels', 'hidden'].forEach(function(k){ if (d[k] && !Object.keys(d[k]).length) delete d[k]; });
+    if (Array.isArray(d.order) && !d.order.length) delete d.order;
+    if (scope === 'story'){
+      if (!state.session) return;
+      if (typeof pushUndo === 'function'){ try { pushUndo(); } catch (e){} }
+      if (Object.keys(d).length) state.session.catDisplay = d; else delete state.session.catDisplay;   /* a new object: the name signature sees it */
+      try { if (typeof scheduleAutosave === 'function') scheduleAutosave(); else if (typeof saveSession === 'function') saveSession(); } catch (e){}
+    } else {
+      try { if (Object.keys(d).length) localStorage.setItem(LS, JSON.stringify(d)); else localStorage.removeItem(LS); } catch (e){}
+    }
+    bump();
+    try { if (window.__planRefreshNarrative) window.__planRefreshNarrative(); } catch (e){}
+  }
+  function setName(id, many, oneV){
+    var r = dystCatReg(id); if (!r) return;
+    many = clean(many); oneV = clean(oneV);
+    var d = target(); if (!d) return; d.labels = d.labels || {};
+    if (!many && !oneV){ delete d.labels[id]; commit(d); return; }
+    if (!many) many = r.many;
+    if (!oneV){ oneV = (many === r.many) ? r.one : (/[^s]s$/i.test(many) && many.length > 3 ? many.slice(0, -1) : many); }
+    if (many === r.many && oneV === r.one) delete d.labels[id]; else d.labels[id] = { one: oneV, many: many };
+    commit(d);
+  }
+  function setHidden(id, on){ var d = target(); if (!d) return; d.hidden = d.hidden || {}; d.hidden[id] = !!on; if (scope === 'account' && !on) delete d.hidden[id]; commit(d); }
+  function move(id, dir){
+    var cur = currentOrder(); var i = cur.indexOf(id), j = i + dir; if (i < 0 || j < 0 || j >= cur.length) return;
+    var t = cur[i]; cur[i] = cur[j]; cur[j] = t;
+    var d = target(); if (!d) return; d.order = cur; commit(d);
+  }
+  function resetOne(id){ var d = target(); if (!d) return; if (d.labels) delete d.labels[id]; if (d.hidden) delete d.hidden[id]; commit(d); }
+  function resetAll(){ commit({}); }
+  function currentOrder(){ return dystCatIds('element', null, { all:true }); }
+
+  /* what this scope says, for drawing (the story scope draws what the story shows; the device scope, the device's own) */
+  function viewOf(id){
+    if (scope === 'story') return { label: dystCatLabel(id, 'many'), one: dystCatLabel(id, 'one'), hidden: dystCatHidden(id),
+      own: !!((story().labels || {})[id] || Object.prototype.hasOwnProperty.call(story().hidden || {}, id)) };
+    var a = A(), r = dystCatReg(id), l = (a.labels || {})[id];
+    return { label: (l && l.many) || r.many, one: (l && l.one) || r.one, hidden: !!((a.hidden || {})[id]), own: !!(l || (a.hidden || {})[id]) };
+  }
+  function orderFor(){
+    if (scope === 'story') return currentOrder();
+    var a = A().order, ids = DYST_CATREG.map(function(r){ return r.id; });
+    if (!Array.isArray(a) || !a.length) return ids;
+    var rank = {}; a.forEach(function(id, i){ rank[id] = i; });
+    return ids.slice().sort(function(x, y){ return (rank[x] == null ? 99 : rank[x]) - (rank[y] == null ? 99 : rank[y]); });
+  }
+  function counts(){ var n = {}; try { (window.__dystPlan.storyElements() || []).forEach(function(o){ var c = o.w && o.w.cat; if (c) n[c] = (n[c] || 0) + 1; }); } catch (e){} return n; }
+
+  window.openCategoriesCard = function(opts){
+    opts = opts || {}; if (opts.scope) scope = opts.scope;
+    if (typeof window.__dystLayerCard !== 'function') return;
+    window.__dystLayerCard('catsBd', 'Categories', 'Rename, hide or reorder the kinds of element. Nothing is deleted — a hidden category keeps its elements, and they come back when you show it.', function(body, render){
+      var H = function(t, c, tx){ var e = document.createElement(t); if (c) e.className = c; if (tx != null) e.textContent = tx; return e; };
+      var seg = H('div', 'pov-seg pl-cats-scope');
+      [['story', 'This story'], ['account', 'All my stories']].forEach(function(o){ var b = H('button', scope === o[0] ? 'on' : '', o[1]); b.type = 'button'; b.dataset.scope = o[0];
+        b.addEventListener('click', function(e){ e.stopPropagation(); scope = o[0]; render(); }); seg.appendChild(b); });
+      body.appendChild(seg);
+      body.appendChild(H('div', 'pl-cats-hint', scope === 'story'
+        ? 'Changes here are this story’s own, and its co-authors see them. Anything you leave alone follows All my stories.'
+        : 'Your defaults on this device, for every story that has not set its own.'));
+      var n = counts(), ids = orderFor();
+      ids.forEach(function(id, i){
+        var r = dystCatReg(id), v = viewOf(id), c = (typeof getCat === 'function' && getCat(id)) || {};
+        var row = H('div', 'pl-cats-row' + (v.hidden ? ' hidden' : '')); row.dataset.cat = id;
+        var mv = H('span', 'pl-cats-move');
+        var up = H('button', 'pl-cats-up', '▲'); up.type = 'button'; up.title = 'Move up'; up.disabled = (i === 0);
+        var dn = H('button', 'pl-cats-dn', '▼'); dn.type = 'button'; dn.title = 'Move down'; dn.disabled = (i === ids.length - 1);
+        up.addEventListener('click', function(e){ e.stopPropagation(); moveIn(id, -1); render(); });
+        dn.addEventListener('click', function(e){ e.stopPropagation(); moveIn(id, 1); render(); });
+        mv.appendChild(up); mv.appendChild(dn); row.appendChild(mv);
+        var dot = H('span', 'pl-cats-dot'); dot.style.background = c.color || '#999'; row.appendChild(dot);
+        var many = H('input', 'pl-cats-many'); many.type = 'text'; many.value = v.label; many.placeholder = r.many; many.maxLength = 28; many.title = 'What the category is called (' + r.many + ')'; many.setAttribute('aria-label', r.many + ' — name');
+        var oneI = H('input', 'pl-cats-one'); oneI.type = 'text'; oneI.value = v.one; oneI.placeholder = r.one; oneI.maxLength = 28; oneI.title = 'One of them (' + r.one + ') — used for “+ ' + r.one.toLowerCase() + '” and the builder'; oneI.setAttribute('aria-label', r.one + ' — one of them');
+        var save = function(){ setName(id, many.value, (oneI.value === v.one && many.value !== v.label) ? '' : oneI.value); render(); };
+        [many, oneI].forEach(function(inp){ inp.addEventListener('click', function(e){ e.stopPropagation(); });
+          inp.addEventListener('keydown', function(e){ if (e.key === 'Enter'){ e.preventDefault(); inp.blur(); } if (e.key === 'Escape'){ inp.value = inp === many ? v.label : v.one; inp.blur(); } });
+          inp.addEventListener('change', save); });
+        row.appendChild(many); row.appendChild(oneI);
+        row.appendChild(H('span', 'pl-cats-n', String(n[id] || 0)));
+        var eye = H('button', 'pl-cats-eye' + (v.hidden ? ' off' : ''), v.hidden ? 'Hidden' : 'Shown'); eye.type = 'button';
+        eye.title = v.hidden ? 'Show ' + v.label + ' again' : 'Hide ' + v.label + ' from Story Elements, the Legend and the + menus — its elements stay';
+        eye.addEventListener('click', function(e){ e.stopPropagation(); setHidden(id, !v.hidden); render(); });
+        row.appendChild(eye);
+        var rs = H('button', 'pl-cats-reset', '↺'); rs.type = 'button'; rs.title = 'Back to ' + (scope === 'story' ? 'All my stories' : r.many); if (!v.own) rs.hidden = true;
+        rs.addEventListener('click', function(e){ e.stopPropagation(); resetOne(id); render(); });
+        row.appendChild(rs);
+        body.appendChild(row);
+      });
+      var ft = H('div', 'pl-cats-foot');
+      ft.appendChild(H('span', null, 'Threads stay last. The names travel with the story; the defaults stay on this device.'));
+      var ra = H('button', 'pl-cats-resetall', scope === 'story' ? 'Reset this story' : 'Reset my defaults'); ra.type = 'button';
+      ra.addEventListener('click', function(e){ e.stopPropagation(); resetAll(); render(); });
+      ft.appendChild(ra); body.appendChild(ft);
+    });
+    function moveIn(id, dir){
+      if (scope === 'story'){ move(id, dir); return; }
+      var cur = orderFor(); var i = cur.indexOf(id), j = i + dir; if (i < 0 || j < 0 || j >= cur.length) return;
+      var t = cur[i]; cur[i] = cur[j]; cur[j] = t; var d = acct(); d.order = cur; commit(d);
+    }
+  };
+  window.__dystCatDisplay = { setName: function(id, many, oneV, sc){ var o = scope; if (sc) scope = sc; try { setName(id, many, oneV); } finally { scope = o; } },
+    setHidden: function(id, on, sc){ var o = scope; if (sc) scope = sc; try { setHidden(id, on); } finally { scope = o; } },
+    reset: function(sc){ var o = scope; if (sc) scope = sc; try { resetAll(); } finally { scope = o; } } };
+  bump();   /* the hooks exist now: let the names catch up with a story that opened before they did */
 })();
 </script>
 </body></html>
