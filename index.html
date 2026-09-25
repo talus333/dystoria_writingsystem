@@ -5035,6 +5035,7 @@ body.eink .pt-rh-dev{color:#000}
 </head>
 <body>
 <script>try{if(location.hash.lastIndexOf('#/read/',0)===0)document.body.classList.add('guest');}catch(e){}</script>
+<script>/* v.819 — an invitation link (#/invite/<token>): keep the token before the app opens a story and rewrites the address */try{var _dim=(location.hash||'').match(/^#\/invite\/([0-9a-fA-F-]{36})/);if(_dim)localStorage.setItem('dystoria.pendingInvite',_dim[1].toLowerCase());}catch(e){}</script>
 <script>/* v.548: remember an #about-<section> intent before boot can rewrite the hash */
 try{ var _am=(location.hash||'').match(/^#about-([a-z]+)$/); window.__aboutIntent=_am?_am[1]:''; }catch(e){ window.__aboutIntent=''; }</script>
 <script>try{if((localStorage.getItem('dystoria_ember')||'1')!=='0')document.body.classList.add('ember');}catch(e){document.body.classList.add('ember');}</script>
@@ -30723,7 +30724,11 @@ function renderLibrary(){
   const list = loadSessions();
   const wrap = $('libList'); wrap.innerHTML = '';
   // New Story / Import Story now live as pills in the library header
-  list.forEach(s => {
+  /* v.819 [Jeremy] — stories other writers invited you into sit together under "Shared with you", after your own */
+  const _libOwn = list.filter(x => !x._shared), _libShared = list.filter(x => x._shared);
+  let _libShHead = false;
+  _libOwn.concat(_libShared).forEach(s => {
+    if (s._shared && !_libShHead){ _libShHead = true; const gh = document.createElement('div'); gh.className = 'lib-grp-head'; gh.textContent = 'Shared with you'; wrap.appendChild(gh); }
     const d = document.createElement('div');
     d.className = 'lib-item' + (state.session && state.session.id === s.id ? ' current' : '');
 
@@ -30782,7 +30787,7 @@ function renderLibrary(){
     // ---- buttons: centred under the summary box, inside the summary column (keeps the cover tall) ----
     const ra = document.createElement('div'); ra.className = 'lib-actions';
     const mkBtn = (label, title, fn) => { const b = document.createElement('button'); b.textContent = label; if (title) b.title = title; b.addEventListener('click', e => { e.stopPropagation(); fn(e, b); }); return b; };
-    if (cloud.user && s.cloudId && !s._shared) ra.appendChild(mkBtn('Co-Author', 'Invite another writer to co-author this story', () => shareStory(s)));
+    if (cloud.user && s.cloudId) ra.appendChild(mkBtn(s._shared ? 'People' : 'Co-Author', s._shared ? 'Who is writing this story with you' : 'Invite writers to this story and choose what each can do', () => shareStory(s)));   // v.819 — opens the People panel
     ra.appendChild(mkBtn('Share', 'Make it public and copy a reader link', () => libShare(s)));
     ra.appendChild(mkBtn('Export', 'Export as Markdown, Word, or PDF', (e, b) => libExportMenu(s, b)));
     ra.appendChild(mkBtn('Delete', 'Delete this story', async () => { if (await siteConfirm('Delete “' + s.name + '”? This removes it from your library.', 'Delete')) deleteStory(s.id); }));
@@ -35662,7 +35667,10 @@ function ipClose(val){
   if (r) r(val);
 }
 function amOwner(){ return !(state.session && state.session._shared); }
-function editDirectOn(){ return !!(amOwner() && $('edEditSeg') && $('edEditSeg').classList.contains('active')); }
+/* v.819 [Jeremy] — co-author roles. The owner and Editors may edit directly in Revise and approve or reject suggestions;
+   a Suggester only suggests (the rule every collaborator lived under until now). Images and the reader link stay the owner's. */
+function dystCanRevise(){ if (amOwner()) return true; try { return typeof dystMyRole === 'function' && dystMyRole(state.session) === 'editor'; } catch (e){ return false; } }
+function editDirectOn(){ return !!(dystCanRevise() && $('edEditSeg') && $('edEditSeg').classList.contains('active')); }
 // Remembered Suggest/Edit choice (owners), persisted across sessions.
 let _edSegMode = 'suggest';
 try { if (localStorage.getItem('dystoria_refine_mode') === 'edit') _edSegMode = 'edit'; } catch (e){}
@@ -36417,8 +36425,9 @@ function buildEditMode(){
   state._refineBefore = {}; state._refineBeforeHtml = {}; state._refineArchived = {};
   Array.from(ed.children).forEach(c => { const s = c.dataset && c.dataset.sess; if (!s) return; state._refineBefore[s] = (state._refineBefore[s] || '') + (c.textContent || ''); state._refineBeforeHtml[s] = (state._refineBeforeHtml[s] || '') + c.outerHTML; });
   normalizeSuggestions();
-  $('edModeSwitch').style.display = amOwner() ? '' : 'none';
-  const wantEdit = amOwner() && _edSegMode === 'edit';   // restore the last Suggest/Edit choice
+  $('edModeSwitch').style.display = dystCanRevise() ? '' : 'none';
+  $('edModeSwitch').classList.toggle('dyst-nosw', !dystCanRevise());   // v.819 — the sub-bar's CSS shows every .mode-switch with !important; this is what actually hides it
+  const wantEdit = dystCanRevise() && _edSegMode === 'edit';   // restore the last Suggest/Edit choice
   $('edEditSeg').classList.toggle('active', wantEdit);
   $('edSuggestSeg').classList.toggle('active', !wantEdit);
   applyEditEditable();
@@ -38329,7 +38338,7 @@ async function resolveAllSg(accept){
 function renderPending(){
   const n = allSgGroups().length;
   const ep = $('edPending'); if (ep) ep.textContent = n ? (n + ' suggestion' + (n === 1 ? '' : 's')) : '';
-  const eg = $('edGlobal'); if (eg) eg.style.display = (n && amOwner()) ? 'flex' : 'none';
+  const eg = $('edGlobal'); if (eg) eg.style.display = (n && dystCanRevise()) ? 'flex' : 'none';
   const guide = document.querySelector('.ed-guide'); if (guide) guide.style.display = guideDone('refine') ? 'none' : '';   // dismissed once an edit is made
 }
 function closeSgPop(){ const p = $('sgPop'); if (p) p.classList.remove('show'); }
@@ -38339,7 +38348,7 @@ function openSgPop(span){
   const hasIns = spans.some(s => s.classList.contains('sg-ins'));
   const hasDel = spans.some(s => s.classList.contains('sg-del'));
   const kind = (hasIns && hasDel) ? 'Replacement' : (hasIns ? 'Insertion' : 'Deletion');
-  const owner = amOwner(), mine = (au === sgAuthor());
+  const owner = dystCanRevise(), mine = (au === sgAuthor());
   const esc = s => (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const clip = s => { s = (s || '').trim(); return s.length > 60 ? esc(s.slice(0, 57)) + '…' : esc(s); };
   const delTxt = spans.filter(s => s.classList.contains('sg-del')).map(s => s.textContent).join('');
@@ -58885,9 +58894,15 @@ body.eink .pl-filterpick .pf-row.on .pf-box{ background:#000; border-color:#000;
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.741';
+  var APP_VERSION = '2026.07.20.742';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.742', date:'September 25, 2026', notes:[
+      '**Invite co-authors properly.** [Jeremy] A story\u2019s **Co-Author** button in the Library now opens a **People** panel: who is on the story, invitations still waiting, and an invite box. Type an email, choose **Editor** or **Suggester**, and you get an invitation link to send however you like.',
+      '**Invitations wait for them.** Whoever you invite finds a card in Dystoria the moment they sign in \u2014 or sign up \u2014 with that address: accept, decline or later. Only that address can accept, and inviting never reveals whether someone already has an account.',
+      '**Two roles.** Editors write and revise directly and can approve or reject suggestions. Suggesters propose changes in Revise for the owner to accept. Change a role, remove someone, or revoke an invitation from the People panel; a co-author can leave from it too.',
+      '**Shared with you.** Stories other writers invited you into now sit together at the bottom of your Library.'
+    ]},
     { v:'2026.07.20.741', date:'September 25, 2026', notes:[
       '**Writing together, section by section.** When you share a story with a co-author, only the section that changed travels between you now, not the whole book \u2014 so a long book keeps syncing live. The section your co-author is writing in is held for you, with their name at its head, and opens the moment they pause; every other section is yours to write at the same time.'
     ]},
@@ -99552,6 +99567,434 @@ html body.eink #profileCard .pf-head{ background:#fff; box-shadow:0 0 0 100vmax 
     (state.frames || []).forEach(function(fr, i){ sent.frames[i] = h(JSON.stringify(fr)); }); }
   /* an already-open story rejoins on the new wiring */
   setTimeout(function(){ try{ if (live.on && state.session && state.session.cloudId) window.liveJoin(state.session); }catch(e){} }, 0);
+})();
+</script>
+<style id="dyst-coauthor-invites">
+/* v.819 [Jeremy] — co-author phase A: the People panel and the invitation card (charcoal, like My Dystoria Pool) */
+html body:not(.eink) .mode-subbar #edModeSwitch.dyst-nosw, html body #edModeSwitch.dyst-nosw{ display:none !important; }   /* a Suggester has no Edit side */
+.lib-grp-head{ font-family:var(--sans); font-size:11px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:#8a7f6c; margin:10px 2px -4px; padding-bottom:6px; border-bottom:1px solid rgba(128,118,100,.28); }
+#pplPanel, #invCard{ position:fixed; inset:0; z-index:9850; display:none; align-items:flex-start; justify-content:center; padding:7vh 16px 16px; background:rgba(20,18,16,.55); }
+#invCard{ z-index:9900; align-items:center; padding:16px; }
+#pplPanel.show, #invCard.show{ display:flex; }
+#pplPanel .pp-card, #invCard .iv-card{ width:min(560px,100%); max-height:86vh; display:flex; flex-direction:column; background:#34312d; color:#ece6d9; border:1px solid rgba(255,205,116,.16); border-radius:16px; box-shadow:0 28px 80px rgba(0,0,0,.45); overflow:hidden; font-family:'Cormorant Garamond',Georgia,serif; }
+#invCard .iv-card{ width:min(460px,100%); text-align:center; padding:26px 26px 20px; gap:10px; }
+#pplPanel .pp-head{ display:flex; align-items:center; justify-content:space-between; padding:18px 22px 2px; }
+#pplPanel .pp-title{ font-size:24px; color:#f2e7cf; }
+#pplPanel .pp-story{ padding:0 22px; font-size:16px; font-style:italic; color:#cfc5b1; }
+#pplPanel .pp-x{ width:30px; height:30px; border-radius:50%; border:1px solid rgba(255,255,255,.18); background:transparent; color:#cfc5b1; font-size:18px; line-height:26px; cursor:pointer; }
+#pplPanel .pp-x:hover{ color:#f3c77e; border-color:rgba(255,205,116,.5); }
+#pplPanel .pp-sub{ padding:6px 22px 12px; font-size:15px; color:#a89f8e; font-style:italic; line-height:1.4; border-bottom:1px solid rgba(255,255,255,.08); }
+#pplPanel .pp-body{ overflow:auto; padding:2px 22px 12px; }
+#pplPanel .pp-grp{ margin-top:14px; font:600 10.5px/1.4 system-ui,-apple-system,sans-serif; letter-spacing:.1em; text-transform:uppercase; color:#a89f8e; }
+#pplPanel .pp-row{ display:flex; gap:10px; align-items:center; padding:9px 0; border-bottom:1px solid rgba(255,255,255,.06); }
+#pplPanel .pp-disc{ width:28px; height:28px; border-radius:50%; flex:none; display:flex; align-items:center; justify-content:center; font:700 12px/1 system-ui,-apple-system,sans-serif; color:#fff; }
+#pplPanel .pp-who{ flex:1; min-width:0; }
+#pplPanel .pp-name{ font-size:18px; color:#f2e7cf; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+#pplPanel .pp-mail{ font:12px/1.4 system-ui,-apple-system,sans-serif; color:#8f8676; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+#pplPanel .pp-tag{ padding:0 8px; border:1px solid rgba(255,255,255,.16); border-radius:999px; font:600 10px/1.8 system-ui,-apple-system,sans-serif; letter-spacing:.06em; text-transform:uppercase; color:#cfc5b1; white-space:nowrap; }
+#pplPanel .pp-tag.own{ color:#f3c77e; border-color:rgba(255,205,116,.4); }
+#pplPanel select.pp-role{ background:#2b2926; color:#e9dcc2; border:1px solid rgba(255,255,255,.2); border-radius:999px; padding:3px 8px; font:600 11px/1.4 system-ui,-apple-system,sans-serif; letter-spacing:.04em; }
+#pplPanel .pp-btn, #invCard .iv-btn{ border:1px solid rgba(255,255,255,.2); background:transparent; color:#e9dcc2; border-radius:999px; padding:5px 13px; font:700 10.5px/1.5 system-ui,-apple-system,sans-serif; letter-spacing:.08em; text-transform:uppercase; cursor:pointer; white-space:nowrap; }
+#pplPanel .pp-btn:hover, #invCard .iv-btn:hover{ color:#f3c77e; border-color:rgba(255,205,116,.55); }
+#pplPanel .pp-go, #invCard .iv-go{ background:linear-gradient(180deg,#ffb44f,#f08c1f); color:#2b2926; border-color:transparent; }
+#pplPanel .pp-go:hover, #invCard .iv-go:hover{ color:#2b2926; filter:brightness(1.06); }
+#pplPanel .pp-go:disabled{ opacity:.45; cursor:default; filter:none; }
+#pplPanel .pp-form{ display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-top:10px; }
+#pplPanel .pp-email{ flex:1 1 220px; min-width:0; background:#2b2926; color:#f2e7cf; border:1px solid rgba(255,255,255,.2); border-radius:10px; padding:8px 11px; font:15px/1.3 system-ui,-apple-system,sans-serif; }
+#pplPanel .pp-email:focus{ outline:none; border-color:rgba(255,205,116,.55); }
+#pplPanel .pp-seg{ display:inline-flex; border:1px solid rgba(255,255,255,.2); border-radius:999px; overflow:hidden; }
+#pplPanel .pp-seg button{ background:transparent; border:0; color:#cfc5b1; padding:6px 12px; font:700 10.5px/1.4 system-ui,-apple-system,sans-serif; letter-spacing:.08em; text-transform:uppercase; cursor:pointer; }
+#pplPanel .pp-seg button.on{ background:rgba(255,205,116,.16); color:#f3c77e; }
+#pplPanel .pp-hint{ margin-top:6px; font-size:14.5px; font-style:italic; color:#a89f8e; line-height:1.4; }
+#pplPanel .pp-made{ margin-top:12px; padding:12px 14px; border:1px solid rgba(255,205,116,.28); border-radius:12px; background:rgba(255,205,116,.05); font-size:16px; line-height:1.4; color:#e9dcc2; }
+#pplPanel .pp-link{ display:flex; gap:8px; margin-top:8px; }
+#pplPanel .pp-link input{ flex:1; min-width:0; background:#2b2926; color:#cfc5b1; border:1px solid rgba(255,255,255,.14); border-radius:8px; padding:6px 9px; font:12px/1.3 ui-monospace,Menlo,monospace; }
+#pplPanel .pp-msg{ min-height:20px; margin-top:8px; font:13px/1.4 system-ui,-apple-system,sans-serif; color:#f3c77e; }
+#pplPanel .pp-msg.err{ color:#f19a8e; }
+#pplPanel .pp-empty{ padding:10px 0; color:#a89f8e; font-style:italic; font-size:16px; }
+#pplPanel .pp-foot{ display:flex; justify-content:flex-end; gap:8px; padding:12px 22px 16px; border-top:1px solid rgba(255,255,255,.08); }
+#invCard .iv-logo{ font:600 10.5px/1.4 system-ui,-apple-system,sans-serif; letter-spacing:.2em; text-transform:uppercase; color:#a89f8e; }
+#invCard .iv-who{ font-size:19px; color:#cfc5b1; }
+#invCard .iv-title{ font-size:30px; line-height:1.15; color:#f2e7cf; font-style:italic; }
+#invCard .iv-role{ font-size:16px; color:#a89f8e; font-style:italic; line-height:1.4; }
+#invCard .iv-acts{ display:flex; justify-content:center; gap:8px; margin-top:10px; flex-wrap:wrap; }
+#invCard .iv-msg{ min-height:18px; font:13px/1.4 system-ui,-apple-system,sans-serif; color:#f19a8e; }
+@media (max-width:768px){ #pplPanel{ padding:3vh 10px 10px; } #pplPanel .pp-row{ flex-wrap:wrap; } }
+</style>
+<script id="dyst-coauthor-invites-js">
+/* v.819 [Jeremy] — co-author phase A: invitations and roles.
+   · Invite by email with a role (Editor | Suggester). The answer is the same whether or not the address has an account, so
+     the panel can't be used to find out who uses Dystoria (the old share_story said 'no_user').
+   · Every invitation has a link (#/invite/<token>). The owner sends it however they like; the invitee ALSO finds a card
+     waiting in Dystoria as soon as they sign in — or sign up — with that address. Only that address can accept it.
+   · The People panel: who is on the story and what each can do; change a role, remove someone, see, copy or revoke the
+     invitations still waiting; a co-author can leave.
+   · Roles: see dystCanRevise(). A Suggester cannot start a Write session either — their changes go in as suggestions.
+   Needs coauthor_invites_migration_12.sql; until it runs, inviting falls back to the old share_story. */
+(function(){
+  var ROLE_KEY = 'dystoria.coRoles', PEND_KEY = 'dystoria.pendingInvite', LATER_KEY = 'dystoria.invLater';
+  function $i(id){ return document.getElementById(id); }
+  function h(t){ return String(t == null ? '' : t).replace(/[&<>"]/g, function(c){ return { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[c]; }); }
+  function flash(m){ try { flashStatus(m); } catch (e){} }
+  function roles(){ try { return JSON.parse(localStorage.getItem(ROLE_KEY) || '{}') || {}; } catch (e){ return {}; } }
+  function setRole(cid, r){ if (!cid) return; var m = roles(); if (m[cid] === r) return; m[cid] = r; try { localStorage.setItem(ROLE_KEY, JSON.stringify(m)); } catch (e){} }
+  function me(){ return (typeof cloud !== 'undefined' && cloud.user) ? cloud.user : null; }
+  function realUser(){ var u = me(); return !!(u && !u.is_anonymous); }
+  function roleWord(r){ return r === 'suggester' ? 'Suggester' : (r === 'owner' ? 'Owner' : 'Editor'); }
+  function roleLine(r, who){ return r === 'suggester' ? ('as a Suggester — you’ll propose changes for ' + (who || 'the owner') + ' to accept') : 'as an Editor — you’ll write and revise directly'; }
+  function inviteLink(tok){ return location.origin + location.pathname + '#/invite/' + tok; }
+  function hue(id){ try { return livePeerHue(id); } catch (e){ return 30; } }
+  function nameOf(p){ return p ? (p.username || String(p.email || '').split('@')[0] || 'A writer') : 'A writer'; }
+  async function copyText(t){
+    try { await navigator.clipboard.writeText(t); return true; } catch (e){}
+    try { var ta = document.createElement('textarea'); ta.value = t; ta.style.position = 'fixed'; ta.style.opacity = '0'; document.body.appendChild(ta); ta.focus(); ta.select(); var ok = document.execCommand('copy'); ta.remove(); return ok; } catch (e){ return false; }
+  }
+  function missingFn(err){ return !!(err && /could not find the function|does not exist|schema cache|relation .* does not exist|PGRST20[0-9]/i.test(String(err.message || err.code || ''))); }
+
+  /* ---- my role on a shared story (story_people carries it as `access` once migration 12 has run) ---- */
+  window.dystMyRole = function(sess){
+    sess = sess || (typeof state !== 'undefined' ? state.session : null);
+    if (!sess || !sess._shared) return 'owner';
+    return roles()[sess.cloudId] === 'suggester' ? 'suggester' : 'editor';
+  };
+  function applyRole(){
+    try {
+      var em = $i('editMode'); if (!em || !em.classList.contains('show')) return;
+      var ok = dystCanRevise(), sw = $i('edModeSwitch');
+      if (sw){ sw.style.display = ok ? '' : 'none'; sw.classList.toggle('dyst-nosw', !ok); }
+      if (!ok && $i('edEditSeg') && $i('edEditSeg').classList.contains('active')){ $i('edEditSeg').classList.remove('active'); if ($i('edSuggestSeg')) $i('edSuggestSeg').classList.add('active'); if (typeof applyEditEditable === 'function') applyEditEditable(); }
+      if (typeof renderPending === 'function') renderPending();
+    } catch (e){}
+  }
+  window.dystRoleApply = applyRole;
+  var _rsn = window.renderShareNote;
+  if (typeof _rsn === 'function') window.renderShareNote = function(people){
+    try {
+      var u = me(), sess = state.session;
+      if (people && u && sess && sess.cloudId){
+        var mine = people.filter(function(p){ return p.user_id === u.id; })[0];
+        if (mine && mine.role !== 'owner'){ var was = dystMyRole(sess); setRole(sess.cloudId, mine.access === 'suggester' ? 'suggester' : 'editor'); if (was !== dystMyRole(sess)) applyRole(); }
+      }
+    } catch (e){}
+    return _rsn.apply(this, arguments);
+  };
+  function suggesterNote(){
+    var t = (state.session && state.session.name) || 'this story';
+    flash('You’re a Suggester on “' + t + '” — propose changes in Revise. The owner can make you an Editor.');
+  }
+  var _cwn = window.canWriteNow;
+  if (typeof _cwn === 'function') window.canWriteNow = function(){ if (dystMyRole() === 'suggester') return false; return _cwn.apply(this, arguments); };
+  var _sws = window.startWritingSession;
+  if (typeof _sws === 'function') window.startWritingSession = function(){ if (dystMyRole() === 'suggester'){ suggesterNote(); return; } return _sws.apply(this, arguments); };
+
+  /* ---- the People panel ---- */
+  function panel(){
+    var el = $i('pplPanel'); if (el) return el;
+    el = document.createElement('div'); el.id = 'pplPanel'; el.setAttribute('role', 'dialog'); el.setAttribute('aria-label', 'People on this story');
+    el.innerHTML = '<div class="pp-card"><div class="pp-head"><div class="pp-title">People</div><button class="pp-x" type="button" title="Close">×</button></div>'
+      + '<div class="pp-story"></div><div class="pp-sub"></div><div class="pp-body"></div>'
+      + '<div class="pp-foot"><button class="pp-btn pp-done" type="button">Done</button></div></div>';
+    el.addEventListener('mousedown', function(e){ if (e.target === el) pplClose(); });
+    el.querySelector('.pp-x').onclick = pplClose; el.querySelector('.pp-done').onclick = pplClose;
+    document.addEventListener('keydown', function(e){ if (e.key === 'Escape' && el.classList.contains('show')) pplClose(); });
+    document.body.appendChild(el); return el;
+  }
+  function pplClose(){ var el = $i('pplPanel'); if (el) el.classList.remove('show'); }
+  window.pplClose = pplClose;
+  function msg(P, t, err){ var m = P.querySelector('.pp-msg'); if (!m) return; m.textContent = t || ''; m.classList.toggle('err', !!err); }
+
+  window.pplOpen = async function(sess){
+    sess = sess || state.session;
+    if (!(typeof cloudReady === 'function' && cloudReady()) || !realUser()){ flash('Sign in to invite co-authors'); return; }
+    if (!sess || !sess.cloudId){ flash('Save the story to the cloud first, then invite'); return; }
+    var P = panel(); P._sess = sess; P._made = null; if (!P._role) P._role = 'editor';
+    P.querySelector('.pp-story').textContent = sess.name || 'Untitled story';
+    P.querySelector('.pp-body').innerHTML = '<div class="pp-empty">Loading…</div>';
+    P.classList.add('show');
+    await refresh(P);
+  };
+  window.shareStory = function(sess){ return window.pplOpen(sess); };   // the Library's Co-Author / People button
+
+  async function refresh(P){
+    var sess = P._sess, owner = !sess._shared, people = null, invites = [], pre = false;
+    try { var r = await supa.rpc('story_people', { sid: sess.cloudId }); if (!r.error) people = r.data || []; } catch (e){}
+    if (owner){
+      try {
+        var q = await supa.from('story_invites').select('id,email,role,token,created_at,expires_at').eq('story_id', sess.cloudId).eq('status', 'pending').order('created_at', { ascending: false });
+        if (q.error){ if (missingFn(q.error)) pre = true; } else invites = (q.data || []).filter(function(i){ return !i.expires_at || new Date(i.expires_at) > new Date(); });
+      } catch (e){}
+    }
+    P._people = people; P._invites = invites; P._pre = pre;
+    if (people && !owner){
+      try { var u = me(), mine = people.filter(function(p){ return u && p.user_id === u.id; })[0];
+            if (mine && mine.role !== 'owner') setRole(sess.cloudId, mine.access === 'suggester' ? 'suggester' : 'editor');
+            if (state.session && state.session.cloudId === sess.cloudId){ renderShareNote(people); applyRole(); } } catch (e){}
+    }
+    render(P);
+  }
+
+  function render(P){
+    var sess = P._sess, owner = !sess._shared, u = me(), people = P._people || [], invites = P._invites || [];
+    var sub = P.querySelector('.pp-sub');
+    sub.textContent = owner ? 'Invite a writer by email. Editors write and revise directly; Suggesters propose changes for you to accept.'
+                            : 'You’re ' + (dystMyRole(sess) === 'suggester' ? 'a Suggester' : 'an Editor') + ' on this story.';
+    var H = '<div class="pp-grp">On this story</div>';
+    if (!P._people) H += '<div class="pp-empty">Couldn’t load who is on this story — check your connection.</div>';
+    people.forEach(function(p){
+      var isMe = u && p.user_id === u.id, acc = p.role === 'owner' ? 'owner' : (p.access === 'suggester' ? 'suggester' : 'editor');
+      var nm = nameOf(p) + (isMe ? ' (you)' : '');
+      H += '<div class="pp-row" data-uid="' + h(p.user_id) + '"><div class="pp-disc" style="background:hsl(' + hue(p.user_id) + ',42%,44%)">' + h(nameOf(p).charAt(0).toUpperCase()) + '</div>'
+        + '<div class="pp-who"><div class="pp-name">' + h(nm) + '</div>' + (p.email ? '<div class="pp-mail">' + h(p.email) + '</div>' : '') + '</div>';
+      if (acc === 'owner') H += '<span class="pp-tag own">Owner</span>';
+      else if (owner){
+        H += '<select class="pp-role" title="What they can do">'
+          + '<option value="editor"' + (acc === 'editor' ? ' selected' : '') + '>Editor</option>'
+          + '<option value="suggester"' + (acc === 'suggester' ? ' selected' : '') + '>Suggester</option></select>'
+          + '<button class="pp-btn pp-rm" type="button" title="Remove them from this story">Remove</button>';
+      } else {
+        H += '<span class="pp-tag">' + roleWord(acc) + '</span>';
+        if (isMe) H += '<button class="pp-btn pp-leave" type="button" title="Leave this story">Leave</button>';
+      }
+      H += '</div>';
+    });
+    if (owner){
+      if (invites.length){
+        H += '<div class="pp-grp">Invited · waiting</div>';
+        invites.forEach(function(i){
+          H += '<div class="pp-row" data-iid="' + h(i.id) + '" data-tok="' + h(i.token) + '"><div class="pp-disc" style="background:#57514a">✉</div>'
+            + '<div class="pp-who"><div class="pp-name">' + h(i.email) + '</div><div class="pp-mail">' + roleWord(i.role) + ' · invited ' + h(new Date(i.created_at).toLocaleDateString([], { month: 'short', day: 'numeric' })) + '</div></div>'
+            + '<button class="pp-btn pp-cp" type="button" title="Copy the invitation link">Copy link</button>'
+            + '<button class="pp-btn pp-rv" type="button" title="Cancel this invitation">Revoke</button></div>';
+        });
+      }
+      H += '<div class="pp-grp">Invite a writer</div>'
+        + '<div class="pp-form"><input class="pp-email" type="email" placeholder="their email address" autocomplete="off" spellcheck="false">'
+        + '<span class="pp-seg" role="group" aria-label="Role"><button type="button" data-r="editor" class="' + (P._role === 'editor' ? 'on' : '') + '">Editor</button><button type="button" data-r="suggester" class="' + (P._role === 'suggester' ? 'on' : '') + '">Suggester</button></span>'
+        + '<button class="pp-btn pp-go pp-inv" type="button">Invite</button></div>'
+        + '<div class="pp-hint">' + (P._role === 'suggester' ? 'A Suggester proposes changes in Revise for you to accept, and can’t write new sessions.' : 'An Editor writes and revises directly, and can accept or reject suggestions.') + '</div>';
+      if (P._made){
+        H += '<div class="pp-made">Invitation ready for <b>' + h(P._made.email) + '</b>. They’ll find it waiting in Dystoria when they sign in — or sign up — with that address. Send them the link too:'
+          + '<div class="pp-link"><input readonly value="' + h(inviteLink(P._made.token)) + '"><button class="pp-btn pp-go pp-cpm" type="button">Copy link</button></div></div>';
+      }
+      if (P._pre) H += '<div class="pp-hint">Invitation links need the latest database update (migration 12). Until then, inviting adds a writer who already has an account.</div>';
+    }
+    H += '<div class="pp-msg"></div>';
+    var body = P.querySelector('.pp-body'); body.innerHTML = H;
+    wire(P);
+  }
+
+  function wire(P){
+    var sess = P._sess, body = P.querySelector('.pp-body');
+    Array.prototype.forEach.call(body.querySelectorAll('.pp-seg button'), function(b){ b.onclick = function(){ P._role = b.getAttribute('data-r'); var v = body.querySelector('.pp-email').value; render(P); var e = P.querySelector('.pp-email'); e.value = v; e.focus(); }; });
+    var em = body.querySelector('.pp-email'), go = body.querySelector('.pp-inv');
+    if (em){ em.addEventListener('keydown', function(e){ if (e.key === 'Enter'){ e.preventDefault(); invite(P); } }); }
+    if (go) go.onclick = function(){ invite(P); };
+    var cpm = body.querySelector('.pp-cpm'); if (cpm) cpm.onclick = async function(){ msg(P, (await copyText(inviteLink(P._made.token))) ? 'Link copied' : 'Copy the link above'); };
+    Array.prototype.forEach.call(body.querySelectorAll('.pp-cp'), function(b){ b.onclick = async function(){ var tok = b.closest('.pp-row').getAttribute('data-tok'); msg(P, (await copyText(inviteLink(tok))) ? 'Link copied' : 'Couldn’t copy — try again'); }; });
+    Array.prototype.forEach.call(body.querySelectorAll('.pp-rv'), function(b){ b.onclick = async function(){
+      var id = b.closest('.pp-row').getAttribute('data-iid'); b.disabled = true;
+      var r = await supa.rpc('revoke_invite', { iid: id });
+      if (r.error || r.data !== 'ok'){ msg(P, 'Couldn’t revoke: ' + (r.error ? r.error.message : r.data), true); b.disabled = false; return; }
+      if (P._made && P._invites.some(function(i){ return i.id === id && i.token === P._made.token; })) P._made = null;
+      await refresh(P); msg(P, 'Invitation revoked — its link no longer works');
+    }; });
+    Array.prototype.forEach.call(body.querySelectorAll('select.pp-role'), function(sel){ sel.onchange = async function(){
+      var uid = sel.closest('.pp-row').getAttribute('data-uid'), want = sel.value;
+      var r = await supa.rpc('set_collaborator_role', { sid: sess.cloudId, collaborator: uid, a_role: want });
+      if (r.error || r.data !== 'ok'){ msg(P, r.error && missingFn(r.error) ? 'Roles need the latest database update (migration 12)' : ('Couldn’t change the role: ' + (r.error ? r.error.message : r.data)), true); await refresh(P); return; }
+      try { track('coauthor_role_set', { role: want }); } catch (e){}
+      await refresh(P); msg(P, 'Now ' + (want === 'suggester' ? 'a Suggester' : 'an Editor') + ' — it takes effect the next time they open the story');
+    }; });
+    Array.prototype.forEach.call(body.querySelectorAll('.pp-rm'), function(b){ b.onclick = async function(){
+      var row = b.closest('.pp-row'), uid = row.getAttribute('data-uid'), nm = row.querySelector('.pp-name').textContent;
+      if (!(await siteConfirm('Remove ' + nm + ' from “' + (sess.name || 'this story') + '”? They lose access; you can invite them again.', 'Remove'))) return;
+      await unshareStory(sess, uid); await refresh(P); try { loadStoryPeople(sess); } catch (e){}
+    }; });
+    var lv = body.querySelector('.pp-leave'); if (lv) lv.onclick = async function(){
+      if (!(await siteConfirm('Leave “' + (sess.name || 'this story') + '”? It leaves your library; the owner can invite you again.', 'Leave'))) return;
+      var u = me(); var r = await supa.from('story_collaborators').delete().eq('story_id', sess.cloudId).eq('user_id', u.id);
+      if (r.error){ msg(P, 'Couldn’t leave: ' + r.error.message, true); return; }
+      pplClose(); try { deleteStory(sess.id); } catch (e){} flash('You left “' + (sess.name || 'the story') + '”');
+    };
+  }
+
+  async function invite(P){
+    var sess = P._sess, box = P.querySelector('.pp-email'), go = P.querySelector('.pp-inv');
+    var email = String(box && box.value || '').trim();
+    if (!email){ msg(P, 'Type their email address', true); if (box) box.focus(); return; }
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){ msg(P, 'That doesn’t look like an email address', true); return; }
+    if (go) go.disabled = true; msg(P, 'Inviting…');
+    // the invitee should arrive to the current version: save the open story first (version-guarded, as every save is).
+    // A story that isn't open is already current in the cloud — its local copy may be a light catalog entry, never pushed.
+    if (state.session && state.session.id === sess.id && typeof cloudSave === 'function'){ try { await Promise.race([ cloudSave(state.session), new Promise(function(r){ setTimeout(r, 4000); }) ]); } catch (e){} }   // never hold the invite behind a slow save
+    var r = await supa.rpc('create_invite', { sid: sess.cloudId, a_email: email, a_role: P._role || 'editor' });
+    if (r.error && missingFn(r.error)){
+      // migration 12 hasn't run yet → the old route (adds someone who already has an account)
+      var o = await supa.rpc('share_story', { sid: sess.cloudId, invitee_email: email });
+      if (go) go.disabled = false;
+      if (o.error){ msg(P, 'Couldn’t invite: ' + o.error.message, true); return; }
+      var om = { ok: 'Added ' + email + ' — the story appears in their library on their next sign-in', no_user: 'No Dystoria account uses that address yet — ask them to sign up first', self: 'That’s your own address', not_owner: 'Only the owner can invite' }[o.data] || String(o.data);
+      await refresh(P); msg(P, om, o.data !== 'ok'); return;
+    }
+    if (go) go.disabled = false;
+    if (r.error){ msg(P, 'Couldn’t invite: ' + r.error.message, true); return; }
+    var d = r.data || {};
+    var bad = { self: 'That’s your own address', already: email + ' is already on this story', bad_email: 'That doesn’t look like an email address', rate: 'That’s a lot of invitations for one day — try again tomorrow', not_owner: 'Only the owner can invite' }[d.status];
+    if (bad){ msg(P, bad, true); return; }
+    try { track('coauthor_invited', { role: P._role }); } catch (e){}
+    P._made = { email: email.toLowerCase(), token: d.token };
+    await refresh(P);
+    var ok = await copyText(inviteLink(d.token));
+    msg(P, (d.renewed ? 'Invitation renewed' : 'Invitation made') + (ok ? ' — link copied' : ''));
+  }
+
+  /* ---- the invitation card (for the invitee) ---- */
+  function card(){
+    var el = $i('invCard'); if (el) return el;
+    el = document.createElement('div'); el.id = 'invCard'; el.setAttribute('role', 'dialog'); el.setAttribute('aria-label', 'Invitation');
+    el.innerHTML = '<div class="iv-card"></div>';
+    document.body.appendChild(el); return el;
+  }
+  function cardClose(){ var el = $i('invCard'); if (el) el.classList.remove('show'); }
+  window.dystInviteClose = cardClose;
+  function showCard(o){
+    var el = card(), c = el.querySelector('.iv-card');
+    var H = '<div class="iv-logo">Dystoria · Invitation</div>';
+    if (o.who) H += '<div class="iv-who">' + h(o.who) + ' invited you to co-write</div>';
+    if (o.title) H += '<div class="iv-title">' + h(o.title) + '</div>';
+    if (o.line) H += '<div class="iv-role">' + h(o.line) + '</div>';
+    H += '<div class="iv-msg"></div><div class="iv-acts">';
+    (o.buttons || []).forEach(function(b, k){ H += '<button type="button" class="iv-btn' + (b.go ? ' iv-go' : '') + '" data-k="' + k + '">' + h(b.label) + '</button>'; });
+    H += '</div>'; c.innerHTML = H;
+    Array.prototype.forEach.call(c.querySelectorAll('.iv-btn'), function(btn){ btn.onclick = function(){ var b = o.buttons[+btn.getAttribute('data-k')]; if (b && b.fn) b.fn(btn); }; });
+    el.classList.add('show');
+    var g = c.querySelector('.iv-go'); try { if (g) g.focus(); } catch (e){}
+  }
+  function cardMsg(t){ var m = document.querySelector('#invCard .iv-msg'); if (m) m.textContent = t || ''; }
+  var STATUS = {
+    not_found: 'This invitation link isn’t valid. Ask for a new one.',
+    expired: 'This invitation has expired. Ask the owner to invite you again.',
+    revoked: 'This invitation was withdrawn.',
+    declined: 'This invitation was declined.',
+    used: 'This invitation has already been accepted by another account.',
+    self: 'This is your own story.'
+  };
+  function later(id){ try { var a = JSON.parse(sessionStorage.getItem(LATER_KEY) || '[]'); if (a.indexOf(id) < 0) a.push(id); sessionStorage.setItem(LATER_KEY, JSON.stringify(a)); } catch (e){} }
+  function laterSet(){ try { return JSON.parse(sessionStorage.getItem(LATER_KEY) || '[]'); } catch (e){ return []; } }
+
+  async function openAccepted(d){
+    var sid = d.story_id;
+    setRole(sid, d.role === 'suggester' ? 'suggester' : 'editor');
+    // a story you once deleted from your library is tombstoned — joining it again must lift that
+    try {
+      var q = await supa.from('stories').select('id,sid:doc->>id').eq('id', sid).maybeSingle();
+      var gone = [sid, q && q.data && q.data.sid].filter(Boolean);
+      saveDeleted(loadDeleted().filter(function(k){ return gone.indexOf(k) < 0; }));
+    } catch (e){}
+    var s = null;
+    for (var i = 0; i < 6 && !s; i++){
+      try { await cloudPull(true); } catch (e){}
+      s = loadSessions().filter(function(x){ return x.cloudId === sid; })[0];
+      if (!s) await new Promise(function(r){ setTimeout(r, 1200); });
+    }
+    if (s){ try { openSession(s.id); } catch (e){} }
+    else try { renderLibrary(); } catch (e){}
+    flash('You’re co-writing “' + (d.title || 'the story') + '” as ' + (d.role === 'suggester' ? 'a Suggester' : 'an Editor'));
+  }
+  async function accept(tok, btn){
+    if (btn) btn.disabled = true; cardMsg('');
+    var r = await supa.rpc('accept_invite', { tok: tok });
+    if (btn) btn.disabled = false;
+    if (r.error){ cardMsg('Couldn’t accept: ' + r.error.message); return; }
+    var d = r.data || {};
+    if (d.status === 'wrong_account'){ cardMsg('This invitation was sent to ' + (d.email_hint || 'another address') + '. Sign in with that address to accept it.'); return; }
+    if (d.status !== 'ok'){ cardMsg(STATUS[d.status] || ('Couldn’t accept: ' + d.status)); return; }
+    try { localStorage.removeItem(PEND_KEY); } catch (e){}
+    try { track('coauthor_invite_accepted', { role: d.role }); } catch (e){}
+    cardClose(); flash('Opening “' + (d.title || 'the story') + '”…');
+    await openAccepted(d);
+    setTimeout(checkMine, 400);
+  }
+  async function decline(tok, btn){
+    if (!(await siteConfirm('Decline this invitation? The owner can invite you again.', 'Decline'))) return;
+    var r = await supa.rpc('decline_invite', { tok: tok });
+    if (r.error || (r.data !== 'ok' && r.data !== 'declined')){ cardMsg('Couldn’t decline: ' + (r.error ? r.error.message : r.data)); return; }
+    try { localStorage.removeItem(PEND_KEY); } catch (e){}
+    cardClose(); flash('Invitation declined'); setTimeout(checkMine, 400);
+  }
+  function cardFor(inv, tok, extraLater){
+    showCard({ who: inv.inviter_name || 'A writer', title: inv.title, line: roleLine(inv.role, inv.inviter_name),
+      buttons: [
+        { label: 'Decline', fn: function(b){ decline(tok, b); } },
+        { label: 'Later', fn: function(){ if (extraLater) extraLater(); cardClose(); } },
+        { label: 'Accept', go: true, fn: function(b){ accept(tok, b); } }
+      ] });
+  }
+
+  // the link: #/invite/<token>
+  var _busyLink = false;
+  async function handleLink(){
+    var tok = ''; try { tok = localStorage.getItem(PEND_KEY) || ''; } catch (e){}
+    if (!tok || _busyLink || typeof supa === 'undefined' || !supa) return;
+    if ($i('invCard') && $i('invCard').classList.contains('show')) return;
+    _busyLink = true;
+    try {
+      var r = await supa.rpc('invite_peek', { tok: tok });
+      var d = (r && r.data) || {};
+      if (r.error){ if (missingFn(r.error)){ try { localStorage.removeItem(PEND_KEY); } catch (e){} } return; }
+      var drop = function(){ try { localStorage.removeItem(PEND_KEY); } catch (e){} };
+      if (d.status === 'accepted' && d.accepted_by_me){ drop(); await openAccepted(d); return; }
+      if (d.status !== 'pending'){ drop(); showCard({ title: d.title || '', line: STATUS[d.status] || 'This invitation can’t be used.', buttons: [{ label: 'Close', go: true, fn: cardClose }] }); return; }
+      if (!realUser()){
+        showCard({ who: d.inviter_name, title: d.title, line: roleLine(d.role, d.inviter_name) + '. Sign in — or create an account — with ' + d.email_hint + ' to accept.',
+          buttons: [ { label: 'Not now', fn: cardClose },
+                     { label: 'Sign in', go: true, fn: function(){ cardClose(); try { if (typeof openAccount === 'function') openAccount(); else $i('accountBtn').click(); } catch (e){} } } ] });
+        return;
+      }
+      if (!d.for_me){
+        showCard({ who: d.inviter_name, title: d.title, line: 'This invitation was sent to ' + d.email_hint + '. You’re signed in with a different address — sign in with that one to accept it.',
+          buttons: [ { label: 'Close', go: true, fn: cardClose } ] });
+        return;
+      }
+      cardFor(d, tok, drop);
+    } catch (e){} finally { _busyLink = false; }
+  }
+  // the cards waiting for me (no link needed: the address is enough)
+  var _checking = false;
+  async function checkMine(){
+    if (_checking || !realUser() || typeof supa === 'undefined' || !supa) return;
+    if ($i('invCard') && $i('invCard').classList.contains('show')) return;
+    try { if (localStorage.getItem(PEND_KEY)) return; } catch (e){}
+    if (document.body.classList.contains('guest')) return;
+    _checking = true;
+    try {
+      var r = await supa.rpc('my_invites');
+      if (r.error) return;
+      var skip = laterSet(), inv = (r.data || []).filter(function(i){ return skip.indexOf(i.id) < 0; })[0];
+      if (inv) cardFor(inv, inv.token, function(){ later(inv.id); });
+    } catch (e){} finally { _checking = false; }
+  }
+  window.dystInvitesCheck = checkMine;
+  window.dystInviteLink = handleLink;
+
+  // arrive: take the token out of the address bar (it is a key) and remember it through sign-in / sign-up
+  try {
+    var m = (location.hash || '').match(/^#\/invite\/([0-9a-fA-F-]{36})/);
+    if (m){ localStorage.setItem(PEND_KEY, m[1].toLowerCase()); history.replaceState(null, '', location.pathname + location.search); }
+  } catch (e){}
+  window.addEventListener('hashchange', function(){
+    var m2 = (location.hash || '').match(/^#\/invite\/([0-9a-fA-F-]{36})/);
+    if (m2){ try { localStorage.setItem(PEND_KEY, m2[1].toLowerCase()); history.replaceState(null, '', location.pathname + location.search); } catch (e){} handleLink(); }
+  });
+  // one light watcher: a change of account runs the checks; otherwise my_invites every ten minutes
+  var _lastUid = null, _lastMine = 0, _linkTries = 0;
+  setInterval(function(){
+    var u = me(), uid = u ? u.id + (u.is_anonymous ? ':anon' : '') : '';
+    var pend = ''; try { pend = localStorage.getItem(PEND_KEY) || ''; } catch (e){}
+    if (uid !== _lastUid){ _lastUid = uid; _linkTries = 0; if (pend) handleLink(); else if (realUser()){ _lastMine = Date.now(); checkMine(); } return; }
+    if (pend && _linkTries < 1 && typeof supa !== 'undefined' && supa){ _linkTries++; handleLink(); return; }
+    if (realUser() && Date.now() - _lastMine > 600000){ _lastMine = Date.now(); checkMine(); }
+  }, 2500);
 })();
 </script>
 </body></html>
