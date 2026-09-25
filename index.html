@@ -28320,6 +28320,8 @@ async function cloudPull(force){
           loc._baton = r.planning_baton || r.owner;
           loc._isPublic = !!r.is_public; loc._publicToken = r.public_token || '';
           loc._cloudUpdatedAt = r.updated_at || '';
+          /* v.820 — the same save on both sides (the document's own stamp matches) → this copy IS the cloud's */
+          try { if (r.supd && loc.updated === r.supd && typeof dystSyncBase === 'function') dystSyncBase(r.id, loc); } catch (e){}
         }
         return;
       }
@@ -28330,6 +28332,7 @@ async function cloudPull(force){
       d._isPublic = !!r.is_public; d._publicToken = r.public_token || '';
       d._cloudUpdatedAt = r.updated_at || '';   // the base this device last saw (see cloudSave's guard)
       if (!byId[d.id] || (d.updated || '') >= (byId[d.id].updated || '')){
+        try { if (typeof dystSyncBase === 'function') dystSyncBase(r.id, d); } catch (e){}   // v.820 — the copy a later merge compares against
         // The wiki is an expensive derived document, and a cloud doc can legitimately arrive WITHOUT one:
         // a build whose save hadn't landed yet, a doc last written by a device that had it trimmed, or a
         // conflict resolved the other way. Replacing the local entry wholesale then wiped the wiki locally
@@ -28785,6 +28788,7 @@ window.__dystFetchCloudOnly = async function(stub, done){
     if (r.error || !r.data || !r.data.doc){ flashStatus('Could not fetch the story: ' + ((r.error && r.error.message) || 'no document')); return; }
     var d = r.data.doc; d.cloudId = r.data.id; d._owner = r.data.owner; d._shared = (r.data.owner !== cloud.user.id); d._baton = r.data.planning_baton || r.data.owner;
     d._isPublic = !!r.data.is_public; d._publicToken = r.data.public_token || ''; d._cloudUpdatedAt = r.data.updated_at || '';
+    try { if (typeof dystSyncBase === 'function') dystSyncBase(d.cloudId, d); } catch (e){}   // v.820
     var list = loadSessions(); var i = list.findIndex(function(x){ return x.id === stub.id; });
     if (i >= 0) list[i] = d; else list.unshift(d);
     try { rememberOpenStory(d.id); } catch(e){}   // so persistSessions keeps THIS one full
@@ -58894,9 +58898,13 @@ body.eink .pl-filterpick .pf-row.on .pf-box{ background:#000; border-color:#000;
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.742';
+  var APP_VERSION = '2026.07.20.743';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.743', date:'September 25, 2026', notes:[
+      '**Two saves, one story, nothing lost.** [Jeremy] When you and a co-author (or your own second device) save the same story at nearly the same moment, Dystoria now merges the two instead of keeping one: their new paragraphs in \u00a73 and yours in \u00a71 both stay, a section they added comes across, and changes to the plan \u2014 elements, links, notes \u2014 merge the same way.',
+      'Only a section changed in both places keeps your version \u2014 and theirs is saved in Version history, so it can be brought back. The \u201cWhich should the cloud keep?\u201d question now appears only when the book\u2019s shape changed on both sides at once. While Revise is open, the merge waits until you leave it.'
+    ]},
     { v:'2026.07.20.742', date:'September 25, 2026', notes:[
       '**Invite co-authors properly.** [Jeremy] A story\u2019s **Co-Author** button in the Library now opens a **People** panel: who is on the story, invitations still waiting, and an invite box. Type an email, choose **Editor** or **Suggester**, and you get an invitation link to send however you like.',
       '**Invitations wait for them.** Whoever you invite finds a card in Dystoria the moment they sign in \u2014 or sign up \u2014 with that address: accept, decline or later. Only that address can accept, and inviting never reveals whether someone already has an account.',
@@ -99995,6 +100003,348 @@ html body:not(.eink) .mode-subbar #edModeSwitch.dyst-nosw, html body #edModeSwit
     if (pend && _linkTries < 1 && typeof supa !== 'undefined' && supa){ _linkTries++; handleLink(); return; }
     if (realUser() && Date.now() - _lastMine > 600000){ _lastMine = Date.now(); checkMine(); }
   }, 2500);
+})();
+</script>
+<script id="dyst-merge-js">
+/* v.820 [Jeremy: "b2"] — CO-AUTHOR PHASE B2: MERGE, DON'T CHOOSE.
+   cloudSave writes only if the row still carries the stamp this device last saw. When it doesn't, someone else saved in
+   between. Until now that meant one of two copies lost: silently (if this device's clock said it was later) or by a
+   "Keep this device's?" question. Now it is a three-way merge:
+
+     BASE   — the document as this device last agreed it with the cloud: what it last wrote, or what it last pulled.
+              Kept in memory per story (never in the saved document).
+     MINE   — this device's document now.          THEIRS — the cloud's document now.
+
+   · Prose, by section (the editor's own rule: an h3[data-frame] opens a section; the diamond belongs to the next one).
+     Changed only here → mine. Changed only there → theirs. Changed in both → mine, and theirs goes to Version history.
+     A section added at the end on one side comes across. Any other change to the book's shape (a section inserted,
+     removed or moved) merges only if the other side left the prose alone — otherwise the old question is asked.
+   · Everything else by value: objects key by key; lists of elements by their key (an element, a link with an id);
+     logs that only grew keep both sides' new entries; the rest three-way. Per-device things (which section is open,
+     handwriting, the game) stay this device's. Version history is the union of both.
+   · Nothing is taken from under the cursor: before anything is applied, every section, list or value about to change
+     must still be what this device had when the merge began. If something moved, the merge waits for the next save.
+   · While Revise is open its buffer owns the prose, so a merge waits until Revise closes.
+   No base (e.g. the story was edited here before this device ever synced it) → the old dialog, as before. */
+(function(){
+  var BASE = {}, MERGING = {}, DELEGATED = {}, DEFER = {}, MERGES = {};
+  var MINE_ONLY = { frameIdx:1, focusKeys:1, npActive:1, cardTrait:1, npCatFilter:1, game:1, ink:1, inkPages:1, archive:1, id:1, cloudId:1, words:1, links:1, removedLinks:1 };   // per-device, or copies of the open section's plan that saveSession rebuilds from `frames`
+  var SPECIAL = { html:1, frames:1, text:1, updated:1, versions:1 };
+  function J(v){ return v === undefined ? '\u0000' : JSON.stringify(v); }
+  function isObj(v){ return !!v && typeof v === 'object' && !Array.isArray(v); }
+  function strip(doc){ var o = {}; Object.keys(doc || {}).forEach(function(k){ if (k.charAt(0) === '_' || k === 'versions' || k === 'archive') return; o[k] = doc[k]; }); return o; }
+  function setBase(cid, doc){ if (!cid || !doc) return; try { BASE[cid] = JSON.stringify(strip(doc)); } catch (e){} }
+  window.dystSyncBase = setBase;
+
+  /* ---- prose: sections of an HTML string, exactly as editorNodeFrames() cuts the live editor ---- */
+  function isH3(n){ return n && n.nodeType === 1 && n.tagName === 'H3' && n.hasAttribute('data-frame'); }
+  function isMark(n){ return n && n.nodeType === 1 && n.classList && n.classList.contains('sec-mark'); }
+  function segs(html){
+    var t = document.createElement('template'); t.innerHTML = html || '';
+    var kids = Array.prototype.slice.call(t.content.childNodes), cur = 0, out = [], seen = {};
+    kids.forEach(function(c, i){
+      if (isH3(c)) cur = parseInt(c.getAttribute('data-frame'), 10) || 0;
+      var f = cur; if (isMark(c) && isH3(kids[i + 1])) f = parseInt(kids[i + 1].getAttribute('data-frame'), 10) || 0;
+      var last = out[out.length - 1];
+      if (!last || last.f !== f){ if (seen[f]) out.dup = true; seen[f] = 1; last = { f: f, nodes: [] }; out.push(last); }
+      last.nodes.push(c);
+    });
+    out.forEach(function(g){ var d = document.createElement('div'); g.nodes.forEach(function(n){ d.appendChild(n); }); g.h = d.innerHTML; g.c = canon(d); delete g.nodes; });
+    return out;
+  }
+  /* what counts as "changed": the words and their markup — not the editing furniture the app puts on and takes off
+     (Revise turns every heading into a rename field; locks and holds toggle contenteditable) */
+  function canon(d){
+    Array.prototype.forEach.call(d.querySelectorAll('*'), function(x){
+      ['contenteditable', 'spellcheck', 'data-ph', 'data-peerheld', 'data-peerce', 'data-peer-note'].forEach(function(a){ x.removeAttribute(a); });
+      if (x.tagName === 'H3'){ x.removeAttribute('title'); x.classList.remove('ed-sectitle'); }
+      if (x.getAttribute('class') === '') x.removeAttribute('class');
+      if (x.getAttribute('style') === '') x.removeAttribute('style');
+    });
+    return d.innerHTML;
+  }
+  function keysOf(S){ return S.map(function(g){ return g.f; }).join(','); }
+  function byF(S){ var m = {}; S.forEach(function(g){ m[g.f] = g.h; }); return m; }
+  function byC(S){ var m = {}; S.forEach(function(g){ m[g.f] = g.c; }); return m; }
+
+  /* ---- values ---- */
+  function keyOf(x){
+    if (!isObj(x)) return null;
+    if (x.id != null && (typeof x.id === 'string' || typeof x.id === 'number')) return 'i:' + x.id;
+    if (x.word != null && x.cat != null) return 'w:' + (x.set || 0) + '|' + x.cat + '|' + x.word + (x.iid ? '|' + x.iid : '');
+    if (x.eid != null) return 'e:' + x.eid;
+    return null;
+  }
+  function keyed(a){
+    if (!Array.isArray(a)) return null; var m = {}, order = [];
+    for (var i = 0; i < a.length; i++){ var k = keyOf(a[i]); if (k == null || m[k] !== undefined) return null; m[k] = a[i]; order.push(k); }
+    return { m: m, order: order };
+  }
+  function isPrefix(b, a){ if (a.length < b.length) return false; for (var i = 0; i < b.length; i++) if (J(a[i]) !== J(b[i])) return false; return true; }
+  function mergeVal(b, m, t, path, X, depth){
+    var sb = J(b), sm = J(m), st = J(t);
+    if (sm === st || st === sb) return m;
+    if (sm === sb) return X.lock[path] ? m : t;
+    if (X.lock[path]){ X.conf.push(path); return m; }
+    if (depth < 8){
+      if (isObj(m) && isObj(t) && (b === undefined || isObj(b))){
+        var bb = b || {}, out = {}, ks = Object.keys(m);
+        Object.keys(t).forEach(function(k){ if (ks.indexOf(k) < 0) ks.push(k); });
+        Object.keys(bb).forEach(function(k){ if (ks.indexOf(k) < 0) ks.push(k); });
+        ks.forEach(function(k){ var v = mergeVal(bb[k], m[k], t[k], path + '.' + k, X, depth + 1); if (v !== undefined) out[k] = v; });
+        return out;
+      }
+      if (Array.isArray(m) && Array.isArray(t) && (b === undefined || Array.isArray(b))){
+        var r = mergeArr(b || [], m, t, path, X, depth); if (r) return r;
+      }
+    }
+    X.conf.push(path); return m;
+  }
+  function mergeArr(b, m, t, path, X, depth){
+    var kb = keyed(b), km = keyed(m), kt = keyed(t);
+    if (kb && km && kt && (m.length || t.length)){
+      var out = [], order = km.order.slice();
+      kt.order.forEach(function(k){ if (km.m[k] === undefined && kb.m[k] === undefined) order.push(k); });
+      kt.order.forEach(function(k){ if (km.m[k] === undefined && kb.m[k] !== undefined && order.indexOf(k) < 0) order.push(k); });
+      order.forEach(function(k){
+        var inB = kb.m[k] !== undefined, inM = km.m[k] !== undefined, inT = kt.m[k] !== undefined;
+        if (inM && inT){ out.push(mergeVal(kb.m[k], km.m[k], kt.m[k], path + '[' + k + ']', X, depth + 1)); return; }
+        if (inM){ if (!inB) { out.push(km.m[k]); return; } if (J(km.m[k]) === J(kb.m[k])) return; X.conf.push(path + '[' + k + ']'); out.push(km.m[k]); return; }
+        if (inT){ if (!inB) { out.push(kt.m[k]); return; } if (J(kt.m[k]) === J(kb.m[k])) return; X.conf.push(path + '[' + k + ']'); out.push(kt.m[k]); return; }
+      });
+      return out;
+    }
+    var lb = b.length;
+    if (m.length === lb && t.length === lb){ return m.map(function(x, i){ return mergeVal(b[i], x, t[i], path + '.' + i, X, depth + 1); }); }
+    if (isPrefix(b, m) && isPrefix(b, t)){   // a log that grew on both sides: both sides' new entries
+      var extra = m.slice(lb), seen = {}; extra.forEach(function(x){ seen[J(x)] = 1; });
+      return m.concat(t.slice(lb).filter(function(x){ return !seen[J(x)]; }));
+    }
+    if (m.length === lb && isPrefix(b, t)) return m.map(function(x, i){ return mergeVal(b[i], x, t[i], path + '.' + i, X, depth + 1); }).concat(t.slice(lb));
+    if (t.length === lb && isPrefix(b, m)) return m.map(function(x, i){ return i < lb ? mergeVal(b[i], x, t[i], path + '.' + i, X, depth + 1) : x; });
+    return null;
+  }
+
+  /* ---- the book's shape: prose sections and the frames they belong to, merged together ---- */
+  function mergeStructure(b, m, t, X){
+    var Sb = segs(b.html), Sm = segs(m.html), St = segs(t.html);
+    if (Sb.dup || Sm.dup || St.dup) return null;
+    var Kb = keysOf(Sb), Km = keysOf(Sm), Kt = keysOf(St);
+    var fb = b.frames || [], fm = m.frames || [], ft = t.frames || [];
+    var Mb = byC(Sb), Hm = byF(Sm), Ht = byF(St), Cm = byC(Sm), Ct = byC(St), P = { taken: [], conf: [], added: [], mode: 'secs' };
+    function pick(f){
+      var cb = Mb[f], cm = Cm[f], ct = Ct[f];
+      if (cm === ct || ct === cb) return Hm[f];
+      if (cm === cb){ P.taken.push(f); return Ht[f]; }
+      P.conf.push(f); return Hm[f];
+    }
+    function frameAt(i){ return mergeVal(fb[i], fm[i], ft[i], 'frames.' + i, X, 1); }
+    if (Km === Kt && fm.length === ft.length){
+      return { html: Sm.map(function(g){ return pick(g.f); }).join(''), frames: fm.map(function(x, i){ return frameAt(i); }), P: P };
+    }
+    var ext = function(K, n){ return Kb !== '' && K.indexOf(Kb + ',') === 0 && n > fb.length; };   // sections added at the END
+    if (Km === Kb && fm.length === fb.length && ext(Kt, ft.length)){
+      var extraT = St.slice(Sb.length);
+      extraT.forEach(function(g){ P.added.push(g.f); });
+      return { html: Sb.map(function(g){ return pick(g.f); }).join('') + extraT.map(function(g){ return g.h; }).join(''),
+               frames: fb.map(function(x, i){ return frameAt(i); }).concat(ft.slice(fb.length)), P: P };
+    }
+    if (Kt === Kb && ft.length === fb.length && ext(Km, fm.length)){
+      return { html: Sb.map(function(g){ return pick(g.f); }).join('') + Sm.slice(Sb.length).map(function(g){ return g.h; }).join(''),
+               frames: fb.map(function(x, i){ return frameAt(i); }).concat(fm.slice(fb.length)), P: P };
+    }
+    var sameM = (Km === Kb && Sm.every(function(g){ return Mb[g.f] === g.c; }) && J(fm) === J(fb));
+    var sameT = (Kt === Kb && St.every(function(g){ return Mb[g.f] === g.c; }) && J(ft) === J(fb));
+    if (sameM){ P.mode = 'theirs'; return { html: t.html, frames: ft, P: P }; }
+    if (sameT){ P.mode = 'mine'; return { html: m.html, frames: fm, P: P }; }
+    return null;
+  }
+
+  function merge3(base, mine, theirs, opts){
+    opts = opts || {};
+    var X = { conf: [], lock: opts.lock || {} };
+    var st = mergeStructure(base, mine, theirs, X);
+    if (!st) return { fallback: 'structure' };
+    var out = {}, ks = Object.keys(mine);
+    Object.keys(theirs).forEach(function(k){ if (ks.indexOf(k) < 0) ks.push(k); });
+    Object.keys(base).forEach(function(k){ if (ks.indexOf(k) < 0) ks.push(k); });
+    ks.forEach(function(k){
+      if (k.charAt(0) === '_' || SPECIAL[k]) return;
+      if (MINE_ONLY[k]){ if (mine[k] !== undefined) out[k] = mine[k]; return; }
+      var v = mergeVal(base[k], mine[k], theirs[k], k, X, 0); if (v !== undefined) out[k] = v;
+    });
+    out.html = st.html; out.frames = st.frames;
+    out.updated = String(mine.updated || '') > String(theirs.updated || '') ? mine.updated : theirs.updated;
+    var vs = {}, vl = [];
+    (mine.versions || []).concat(theirs.versions || []).forEach(function(v){ var k = v && (v.id || (v.at + '|' + (v.label || ''))); if (!k || vs[k]) return; vs[k] = 1; vl.push(v); });
+    vl.sort(function(x, y){ return String(x.at || '').localeCompare(String(y.at || '')); });
+    if (vl.length) out.versions = vl;
+    return { doc: out, conf: X.conf, prose: st.P };
+  }
+  window.__dystMerge = { merge3: merge3, segs: segs, base: function(cid){ return BASE[cid] ? JSON.parse(BASE[cid]) : null; }, clearBase: function(cid){ delete BASE[cid]; } };
+
+  /* ---- applying a merge to the open story, only where nothing has moved since it began ---- */
+  function edOpen(){ var e = document.getElementById('editMode'); return !!(e && e.classList.contains('show')); }
+  function curVal(k, sess){
+    if (k === 'name'){ var sn = document.getElementById('storyName'); return sn ? (sn.value.trim() || 'Untitled story') : sess.name; }
+    if (k === 'section'){ var st = document.getElementById('sectionTitle'); return st ? st.value.trim() : sess.section; }
+    if (k === 'plotGaps') return state.plotGaps || {}; if (k === 'deaths') return state.deaths || 0;
+    if (k === 'deathLog') return state.deathLog || []; if (k === 'ruinsLog') return state.ruinsLog || [];
+    return sess[k];
+  }
+  function setVal(k, v, sess){
+    if (v === undefined) delete sess[k]; else sess[k] = v;
+    if (k === 'name'){ var sn = document.getElementById('storyName'); if (sn){ sn.value = v || ''; try { autosizeStoryName(); } catch (e){} } }
+    else if (k === 'section'){ var st = document.getElementById('sectionTitle'); if (st) st.value = v || ''; }
+    else if (k === 'plotGaps') state.plotGaps = v || {};
+    else if (k === 'deaths'){ state.deaths = v || 0; try { updateDeaths(); } catch (e){} }
+    else if (k === 'deathLog') state.deathLog = v || [];
+    else if (k === 'ruinsLog') state.ruinsLog = v || [];
+  }
+  function textOf(html){ var d = document.createElement('div'); d.innerHTML = String(html || '').replace(/<\/(p|div|h3|li)>/gi, '$&\n'); return (d.textContent || '').replace(/\n{3,}/g, '\n\n').trim(); }
+  function persist(sess){ try { var list = loadSessions(), i = list.findIndex(function(x){ return x.id === sess.id; }); if (i >= 0) list[i] = sess; persistSessions(list); } catch (e){} }
+
+  function apply(sess, mine, R){
+    var d = R.doc, open = !!(state.session && state.session.id === sess.id);
+    var keys = Object.keys(d).concat(Object.keys(mine).filter(function(k){ return d[k] === undefined; }))
+      .filter(function(k){ return k.charAt(0) !== '_' && !SPECIAL[k] && !MINE_ONLY[k] && J(d[k]) !== J(mine[k]); });
+    var proseChange = J(d.html) !== J(mine.html), framesChange = J(d.frames) !== J(mine.frames);
+    if (!open){
+      keys.forEach(function(k){ if (d[k] === undefined) delete sess[k]; else sess[k] = d[k]; });
+      if (proseChange){ sess.html = d.html; sess.text = textOf(d.html); }
+      if (framesChange) sess.frames = d.frames;
+      if (d.versions) sess.versions = d.versions;
+      return true;
+    }
+    // 1 · has anything moved here since the merge began? then leave it all for the next save
+    var ed = document.getElementById('editor'), nowHTML = (typeof editorHTML === 'function') ? editorHTML() : '';
+    var Sm = segs(mine.html), Mm = byC(Sm), Sc = segs(nowHTML), Mc = byC(Sc), Md = byF(segs(d.html));
+    if (proseChange){
+      if (R.prose.mode === 'theirs'){ if (nowHTML !== mine.html && keysOf(Sc) !== keysOf(Sm)) return false; if (Sc.some(function(g){ return Mm[g.f] !== g.c; })) return false; }
+      else {
+        if (R.prose.added.length && keysOf(Sc) !== keysOf(Sm)) return false;
+        for (var i = 0; i < R.prose.taken.length; i++){ var f = R.prose.taken[i]; if (Mc[f] !== Mm[f]) return false; }
+      }
+    }
+    if (framesChange && J(state.frames) !== J(mine.frames)) return false;
+    for (var j = 0; j < keys.length; j++){ if (J(curVal(keys[j], sess)) !== J(mine[keys[j]])) return false; }
+    // 2 · apply
+    try { live.applying = true; } catch (e){}
+    try {
+      if (proseChange && ed){
+        if (R.prose.mode === 'theirs'){ ed.innerHTML = d.html; }
+        else {
+          R.prose.taken.forEach(function(f){
+            var nodes = editorNodeFrames().filter(function(o){ return o.frame === f; }).map(function(o){ return o.node; });
+            var tmp = document.createElement('div'); tmp.innerHTML = Md[f] || ''; var frag = document.createDocumentFragment(); while (tmp.firstChild) frag.appendChild(tmp.firstChild);
+            ed.insertBefore(frag, nodes[0] || null); nodes.forEach(function(n){ n.remove(); });
+          });
+          R.prose.added.forEach(function(f){ var tmp = document.createElement('div'); tmp.innerHTML = Md[f] || ''; while (tmp.firstChild) ed.appendChild(tmp.firstChild); });
+        }
+        try { normalizeLocks(); } catch (e){} try { paintSectionFocus(); } catch (e){} try { updateWordCount(); } catch (e){}
+      }
+      if (framesChange){
+        state.frames = d.frames;
+        state.frameIdx = Math.min(state.frameIdx || 0, Math.max(0, state.frames.length - 1));
+        if (state.frames[state.frameIdx]){ state.prompt = state.frames[state.frameIdx].prompt; state.selNode = null; state.linkFrom = null; if (state.prompt) sess.words = state.prompt.words; }
+        try { refreshSky(); } catch (e){} try { renderTimeline(); } catch (e){}
+      }
+      keys.forEach(function(k){ setVal(k, d[k], sess); });
+      sess.html = (typeof editorHTML === 'function') ? editorHTML() : d.html; sess.text = (typeof editorText === 'function') ? editorText() : textOf(d.html);
+      if (state.frames) sess.frames = state.frames;
+      var mv = {}; (sess.versions || []).forEach(function(v){ if (v && v.id) mv[v.id] = 1; });
+      if (d.versions){ var add = d.versions.filter(function(v){ return v && v.id && !mv[v.id]; }); if (add.length) sess.versions = (sess.versions || []).concat(add).sort(function(x, y){ return String(x.at || '').localeCompare(String(y.at || '')); }); }
+      persist(sess);
+      try { if (typeof live !== 'undefined' && live.on && typeof liveBroadcast === 'function') setTimeout(function(){ try { liveBroadcast(); } catch (e){} }, 0); } catch (e){}
+    } finally { try { live.applying = false; } catch (e){} }
+    return true;
+  }
+  function secName(f){ try { var fr = state.frames && state.frames[f]; var n = fr && (fr.stageName || '').trim(); return '§' + (f + 1) + (n ? ' ' + n : ''); } catch (e){ return '§' + (f + 1); } }
+  function keepTheirs(sess, theirs, label){
+    try {
+      var th = theirs && theirs.doc && theirs.doc.html; if (!th) return;
+      if (!Array.isArray(sess.versions)) sess.versions = [];
+      if (sess.versions.some(function(v){ return v && v.html === th; })) return;
+      sess.versions.push({ id: 'v' + Date.now().toString(36) + Math.floor(Math.random() * 1e4).toString(36), at: theirs.updated_at || new Date().toISOString(), kind: 'manual',
+                           label: label, html: th, words: (String(th).replace(/<[^>]*>/g, ' ').match(/\S+/g) || []).length });
+    } catch (e){}
+  }
+
+  /* ---- the conflict path ---- */
+  var _conflict = window.cloudConflict;
+  async function delegate(sess){
+    var cid = sess.cloudId, before = sess._cloudUpdatedAt;
+    DELEGATED[cid] = true;
+    try { await _conflict(sess); } finally {
+      try { if (sess._cloudUpdatedAt && sess._cloudUpdatedAt !== before && !sess._needsCloud) setBase(cid, cloudDocOf(sess)); } catch (e){}
+    }
+  }
+  window.cloudConflict = async function(sess){
+    if (!sess || sess._conflict || !sess.cloudId) return;
+    var cid = sess.cloudId;
+    if (!BASE[cid]) return delegate(sess);
+    if (state.session && state.session.id === sess.id && edOpen()){        // Revise's buffer owns the prose: wait
+      sess._needsCloud = true;
+      if (!DEFER[cid]){ DEFER[cid] = sess.id; try { flashStatus('Changes were saved elsewhere — they’ll merge in when you leave Revise'); } catch (e){} }
+      return;
+    }
+    sess._conflict = true; MERGING[cid] = true;
+    try {
+      for (var round = 0; round < 3; round++){
+        var theirs = null;
+        try { var q = await supa.from('stories').select('doc,updated_at').eq('id', cid).single(); theirs = q && q.data; } catch (e){}
+        if (!theirs || !theirs.doc){ sess._conflict = false; MERGING[cid] = false; return delegate(sess); }
+        var base = JSON.parse(BASE[cid]), mine = JSON.parse(JSON.stringify(strip(cloudDocOf(sess))));
+        mine.versions = sess.versions || [];
+        var lock = {}; try { var ak = (typeof npActiveKey === 'function') ? npActiveKey() : 'general'; if (state.session && state.session.id === sess.id){ if (ak === 'general') lock.notepad = 1; else lock['npNotes.' + ak] = 1; } } catch (e){}
+        var R = merge3(base, mine, strip(theirs.doc), { lock: lock });
+        if (R.fallback){ sess._conflict = false; MERGING[cid] = false; return delegate(sess); }
+        if (!apply(sess, mine, R)){ sess._needsCloud = true; return; }         // something moved while we fetched → the next save tries again
+        setBase(cid, theirs.doc);                                           // what we now hold descends from theirs
+        var proseConf = R.prose.conf.slice(), otherConf = R.conf.slice();
+        if (proseConf.length) keepTheirs(sess, theirs, 'From another copy — ' + (proseConf.length ? proseConf.map(secName).join(', ') + ' changed in both places' : 'changed in both places'));
+        var now = new Date().toISOString(), doc = cloudDocOf(sess);
+        var w = await supa.from('stories').update({ title: sess.name || 'Untitled story', doc: doc, updated_at: now }).eq('id', cid).eq('updated_at', theirs.updated_at).select('updated_at');
+        if (w && !w.error && w.data && w.data.length){
+          sess._cloudUpdatedAt = w.data[0].updated_at || now; sess._needsCloud = false;
+          setBase(cid, doc); MERGES[cid] = (MERGES[cid] || 0) + 1; persist(sess);
+          var took = R.prose.taken.length + R.prose.added.length + (R.prose.mode === 'theirs' ? 1 : 0);
+          var msg = 'Merged changes saved elsewhere';
+          if (proseConf.length) msg += ' — ' + proseConf.map(secName).join(', ') + ' changed in both places: yours is kept, theirs is in Version history';
+          else if (otherConf.length) msg += ' — ' + otherConf.length + ' change' + (otherConf.length === 1 ? '' : 's') + ' made in both places kept yours';
+          try { flashStatus(msg); } catch (e){}
+          try { track('sync_merged', { sections_taken: took, section_conflicts: proseConf.length, other_conflicts: otherConf.length }); } catch (e){}
+          try { if (typeof pubBroadcastUpdate === 'function') pubBroadcastUpdate(sess); } catch (e){}
+          window.__dystLastMerge = { taken: R.prose.taken.slice(), added: R.prose.added.slice(), conf: proseConf, other: otherConf.slice(), mode: R.prose.mode };
+          return;
+        }
+        if (w && w.error){ sess._needsCloud = true; return; }
+        // the row moved again while we merged: go round with theirs as the new base
+      }
+      sess._needsCloud = true;
+    } finally { sess._conflict = false; MERGING[cid] = false; }
+  };
+
+  /* ---- every save that lands becomes the base ---- */
+  var _save = window.cloudSave;
+  window.cloudSave = async function(sess){
+    var cid = sess && sess.cloudId, before = sess && sess._cloudUpdatedAt, snap = null;
+    if (cid && !sess._localTrim && !MERGING[cid]){ try { snap = JSON.stringify(strip(cloudDocOf(sess))); } catch (e){} }
+    DELEGATED[cid] = false; var mc = MERGES[cid] || 0;
+    var r = await _save.apply(this, arguments);
+    try {
+      if (snap && !DELEGATED[cid] && !MERGING[cid] && sess.cloudId === cid && !sess._needsCloud && sess._cloudUpdatedAt && sess._cloudUpdatedAt !== before && (MERGES[cid] || 0) === mc) BASE[cid] = snap;   // a save that ended in a merge already set the base to what it wrote
+    } catch (e){}
+    return r;
+  };
+  /* a merge held back by Revise goes ahead once Revise closes */
+  setInterval(function(){
+    Object.keys(DEFER).forEach(function(cid){
+      if (edOpen()) return;
+      var sid = DEFER[cid]; delete DEFER[cid];
+      try { if (state.session && state.session.id === sid && state.session.cloudId === cid) cloudSave(state.session); } catch (e){}
+    });
+  }, 2000);
 })();
 </script>
 </body></html>
