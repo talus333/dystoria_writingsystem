@@ -6447,7 +6447,7 @@ function dystKindPlanHome(){ return (typeof dystCatHidden === 'function' && dyst
 var DYST_KIND_TABS = {
   essay:    { bonds:'Connections', map:false, plot:'Outline' },
   research: { bonds:'Connections', map:'Sites', plot:'Outline' },
-  journal:  { bonds:'Relationships', plot:'Entries' }
+  journal:  { bonds:'Relationships', map:'Scrapbook', plot:'Entries' }   /* v.843 — its Places is a scrapbook */
 };
 var DYST_TAB_DEFAULT = { narrative:'Elements', bonds:'Bonds', map:'Places', plot:'Plot' };
 function dystKindTab(pv){ var t = DYST_KIND_TABS[dystWorkKind()]; var v = t && Object.prototype.hasOwnProperty.call(t, pv) ? t[pv] : undefined; return v === undefined ? DYST_TAB_DEFAULT[pv] : v; }
@@ -6461,6 +6461,8 @@ function dystKindDressTabs(force){
     Array.prototype.forEach.call(host.querySelectorAll('.pl-segbtn'), function(b){ var pv = b.dataset.pv; if (!DYST_TAB_DEFAULT[pv]) return;
       var l = dystKindTab(pv); b.textContent = l || DYST_TAB_DEFAULT[pv]; b.style.display = (l === false) ? 'none' : '';
       if (l === false && b.classList.contains('on')) cur = pv; });
+    Array.prototype.forEach.call(document.querySelectorAll('#placesSeg .pl-segbtn'), function(b){ if (b.dataset.plv === 'scenes'){ b.textContent = (k === 'journal') ? 'Pages' : 'Scenes'; b.title = (k === 'journal') ? 'Pages — this entry’s scrapbook page: photos, notes, who and where. Follows the section navigator.' : 'Scenes — who and what is here, in this section. Follows the section navigator.'; } });   /* v.843 */
+    document.body.classList.toggle('dk-journal', k === 'journal');
     if (cur && typeof window.__planSetView === 'function') window.__planSetView('narrative');
   } catch (e){}
 }
@@ -30852,7 +30854,7 @@ function newSession(){
 // ---- First-run experience: the four doors (roadmap #10). Import · Start Writing · Start Planning · Find an Idea ----
 function frDoorAction(act){
   try {
-    if(act==='write'){ if(typeof goMode==='function') goMode('write'); }
+    if(act==='write'){ try{ if(typeof window.dystJournalToday==='function') window.dystJournalToday(); }catch(e){} if(typeof goMode==='function') goMode('write'); }   /* v.844 — a journal writes into today's entry */
     else if(act==='idea'){ if(typeof window.openExplore==='function') window.openExplore([], 'Find an idea', 'interview'); }
     else if(act==='plan'){ if(typeof window.showPlanningDoors==='function') window.showPlanningDoors(); else { if(typeof goMode==='function') goMode('notepad'); setTimeout(function(){ try{ if(typeof window.__planSetView==='function') window.__planSetView('map'); }catch(e){} }, 80); } }
     else if(act==='import'){ if(typeof openImport==='function') openImport(); }
@@ -59427,9 +59429,15 @@ body.eink .pl-filterpick .pf-row.on .pf-box{ background:#000; border-color:#000;
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.765';
+  var APP_VERSION = '2026.07.20.767';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.767', date:'September 26, 2026', notes:[
+      '**A journal has a calendar.** [Jeremy] In a journal, Entries opens on a month: each dated entry sits on its day (with its first scrapbook photo), the ＋ on an empty day writes an entry for it, entries without a date wait at the side to be given one, and On this day brings back what you wrote on this date in earlier years. Click an entry to open its scrapbook page, Revise it, read it or change its date. Grid brings the Plot grid back. Write Today’s Entry now opens today’s entry — or makes it.'
+    ]},
+    { v:'2026.07.20.766', date:'September 26, 2026', notes:[
+      '**A journal has a scrapbook.** [Jeremy] In a journal, Places is now Scrapbook, and its Pages give every entry a page of its own. Drop photos onto it (or ＋ Photo, or paste one), write a note, and stick on who you were with and where; drag anything to move it, pull its corner to resize it, ↻ to tilt it. The page follows the section navigator, like Scenes did. Your Maps are still beside it.'
+    ]},
     { v:'2026.07.20.765', date:'September 26, 2026', notes:[
       '**The ways in speak what you’re writing.** [Jeremy] “Where would you like to begin?”, “How do you like to plan?” and the guided planner each have their own doors and words for each kind of project. An essay drafts, finds its angle, and starts with its sources, its claims or an outline of the argument; a journal writes today’s entry or gets a prompt (no map, no plot); research sharpens its question and outlines the paper; a collection lays out its stories. A novel’s doors are as they were.',
       '**The planning tabs take the kind’s names.** An essay plans in Elements · Connections · Outline (it has no Places); research in Elements · Connections · Sites · Outline; a journal in Elements · Relationships · Places · Entries.'
@@ -103663,4 +103671,397 @@ html body:not(.mobile-min) #planNarrative .pl-secthd .pl-catedit{ position:stati
   setInterval(function(){ try { dystKindDressTabs(false); } catch (e){} }, 1500);
 })();
 </script>
+<script id="dyst-scrapbook-js">
+/* v.843 [Jeremy: "for the journal the scenes could be a scrapbook for each day where photos can be loaded" — first of the three
+   repurposes, "in that order"] — A JOURNAL'S SCRAPBOOK. In a journal, Places › Scenes becomes Scrapbook › Pages: each entry (each
+   section) has a page. Drop photos on it (or ＋ Photo, or paste), write a note, stick on who you were with and where; drag anything
+   to move it, pull its corner to resize, tilt it. The page follows the section navigator, as Scenes always did.
+   Where it lives: the page's layout rides on its section's frame (`frame.scrap = { items:[…] }`, so it travels when sections
+   move); a photo's bytes live with the story's other pictures (`session.npImages['scrap:<id>']`), which the local cache already
+   knows how to leave to the cloud. Nothing here exists outside a journal. */
+(function(){
+  'use strict';
+  var PAGE_RATIO = 1.414;   /* a landscape page */
+  var root = null, lastSig = '';
+  function isJournal(){ try { return dystWorkKind() === 'journal'; } catch (e){ return false; } }
+  function shown(){ var b = document.body.classList; return isJournal() && b.contains('plan-view-map') && !b.contains('places-maps') && !!(root && root.offsetParent); }
+  function fi(){ try { return Math.max(0, Math.min((state.frames || []).length - 1, state.frameIdx || 0)); } catch (e){ return 0; } }
+  function frame(){ try { return (state.frames || [])[fi()] || null; } catch (e){ return null; } }
+  function page(){ var f = frame(); if (!f) return null; if (!f.scrap || !Array.isArray(f.scrap.items)) f.scrap = { items: [] }; return f.scrap; }
+  function uid(){ return 'sb' + Date.now().toString(36) + Math.floor(Math.random() * 46656).toString(36); }
+  function save(){ try { if (typeof ensureSession === 'function') ensureSession(); if (state.session && state.frames) state.session.frames = state.frames; if (typeof scheduleAutosave === 'function') scheduleAutosave(); } catch (e){} }
+  function undo(){ try { if (typeof pushUndo === 'function') pushUndo(); } catch (e){} }
+  function img(id){ try { return (state.session && state.session.npImages && state.session.npImages['scrap:' + id]) || ''; } catch (e){ return ''; } }
+  function tilt(){ return Math.round((Math.random() * 10 - 5) * 10) / 10; }
+  function nameOf(key){ try { var w = (typeof npFindEl === 'function') ? npFindEl(key) : null; return w ? ((typeof elDisplayName === 'function') ? elDisplayName(w) : (w.name || w.word)) : ''; } catch (e){ return ''; } }
+  function el(tag, cls, txt){ var e = document.createElement(tag); if (cls) e.className = cls; if (txt != null) e.textContent = txt; return e; }
+  function readFile(file){ return new Promise(function(res, rej){
+    var go = function(blob){ var r = new FileReader(); r.onload = function(){ res(r.result); }; r.onerror = rej; r.readAsDataURL(blob); };
+    try { if (typeof compressImage === 'function') compressImage(file, 1400, 0.82).then(go, function(){ go(file); }); else go(file); } catch (e){ go(file); } }); }
+
+  /* ── adding ── */
+  /* where a new thing goes: the free-est spot on the page, read top-left to bottom-right */
+  function hOf(it){ return it.t === 'photo' ? it.w * 1.34 : it.t === 'note' ? Math.max(0.16, it.w * 0.95) : 0.09; }
+  function place(p, w, t){
+    var h = hOf({ t: t, w: w }), best = null;
+    for (var y = 0.05; y <= Math.max(0.05, 0.95 - h) + 1e-9; y += 0.05){
+      for (var x = 0.04; x <= Math.max(0.04, 0.96 - w) + 1e-9; x += 0.04){
+        var sc = 0; p.items.forEach(function(it){ var ih = hOf(it); var ox = Math.max(0, Math.min(x + w, it.x + it.w) - Math.max(x, it.x)), oy = Math.max(0, Math.min(y + h, it.y + ih) - Math.max(y, it.y)); sc += ox * oy; });
+        if (!best || sc < best.sc - 1e-6){ best = { sc: sc, x: x, y: y }; }
+      }
+    }
+    return best ? { x: Math.round(best.x * 1000) / 1000, y: Math.round(best.y * 1000) / 1000 } : { x: 0.1, y: 0.1 };
+  }
+  function addPhotoData(url, cap){
+    var p = page(); if (!p || !url) return null; undo();
+    var id = uid(), w = 0.26, at = place(p, w, 'photo');
+    if (!state.session.npImages) state.session.npImages = {};
+    state.session.npImages['scrap:' + id] = url;
+    p.items.push({ id: id, t: 'photo', x: at.x, y: at.y, w: w, r: tilt(), cap: cap || '' });
+    save(); render(); return id;
+  }
+  async function addFiles(files){
+    var list = Array.prototype.filter.call(files || [], function(f){ return f && /^image\//.test(f.type); });
+    if (!list.length){ try { flashStatus('Only pictures can go on the page'); } catch (e){} return; }
+    for (var i = 0; i < list.length; i++){ try { addPhotoData(await readFile(list[i])); } catch (e){ try { flashStatus('Could not load that picture'); } catch (_){} } }
+  }
+  function addNote(text){ var p = page(); if (!p) return null; undo(); var id = uid(), at = place(p, 0.2, 'note'); p.items.push({ id: id, t: 'note', x: at.x, y: at.y, w: 0.2, r: tilt(), text: text || '' }); save(); render();
+    var n = root && root.querySelector('.sb-item[data-id="' + id + '"] .sb-notetext'); if (n && !text) setTimeout(function(){ try { n.focus(); } catch (e){} }, 30); return id; }
+  function addEl(key){ var p = page(); if (!p || !key) return null; undo(); var id = uid(), at = place(p, 0.14, 'el'); p.items.push({ id: id, t: 'el', x: at.x, y: at.y, w: 0.14, r: tilt(), key: key }); save(); render(); return id; }
+  function remove(id){ var p = page(); if (!p) return; undo(); p.items = p.items.filter(function(it){ if (it.id === id && it.t === 'photo'){ try { delete state.session.npImages['scrap:' + id]; } catch (e){} } return it.id !== id; }); save(); render(); }
+
+  /* ── who & where ── */
+  function pickEl(anchor){
+    var old = document.getElementById('sbPick'); if (old){ old.remove(); return; }
+    var m = el('div', 'sb-pick'); m.id = 'sbPick';
+    var here = {}; try { ((frame() && frame().prompt && frame().prompt.words) || []).forEach(function(w){ here[wordKey(w)] = 1; }); } catch (e){}
+    var all = []; try { (window.__dystPlan.storyElements() || []).forEach(function(o){ var c = o.w && o.w.cat; if (c === 'being' || c === 'setting' || c === 'org' || c === 'object') all.push(o); }); } catch (e){}
+    all.sort(function(a, b){ return (here[b.key] ? 1 : 0) - (here[a.key] ? 1 : 0); });
+    if (!all.length) m.appendChild(el('div', 'sb-pickem', 'No people or places yet — add them in Elements.'));
+    all.slice(0, 60).forEach(function(o){ var b = el('button', 'sb-pickrow'); b.type = 'button';
+      b.appendChild(el('span', 'sb-pickn', nameOf(o.key) || o.w.word)); b.appendChild(el('span', 'sb-pickc', (typeof dystCatLabel === 'function' ? dystCatLabel(o.w.cat, 'one') : o.w.cat) + (here[o.key] ? ' · in this entry' : '')));
+      b.addEventListener('click', function(e){ e.stopPropagation(); m.remove(); addEl(o.key); }); m.appendChild(b); });
+    document.body.appendChild(m);
+    var r = anchor.getBoundingClientRect(); m.style.left = Math.max(8, Math.min(r.left, window.innerWidth - 280)) + 'px'; m.style.top = (r.bottom + 6) + 'px';
+    setTimeout(function(){ document.addEventListener('click', function _c(ev){ if (!m.contains(ev.target)){ m.remove(); document.removeEventListener('click', _c, true); } }, true); }, 0);
+  }
+
+  /* ── drawing ── */
+  function ensureRoot(){
+    if (root && root.parentNode) return root;
+    var sky = document.getElementById('sky'); if (!sky) return null;
+    root = el('div'); root.id = 'scrapbook';
+    root.innerHTML = '<div class="sb-top"><div class="sb-h"></div><div class="sb-tools">'
+      + '<label class="sb-btn sb-addphoto">＋ Photo<input type="file" id="scrapFile" accept="image/*" multiple hidden></label>'
+      + '<button type="button" class="sb-btn sb-addnote">＋ Note</button>'
+      + '<button type="button" class="sb-btn sb-addel">＋ Who &amp; where</button></div></div>'
+      + '<div class="sb-page"><div class="sb-empty">An empty page. Drop photos anywhere on it, or add a note, or who you were with and where.</div></div>';
+    sky.appendChild(root);
+    root.querySelector('#scrapFile').addEventListener('change', function(e){ var f = e.target.files; addFiles(f).then(function(){ e.target.value = ''; }); });
+    root.querySelector('.sb-addnote').addEventListener('click', function(e){ e.stopPropagation(); addNote(''); });
+    root.querySelector('.sb-addel').addEventListener('click', function(e){ e.stopPropagation(); pickEl(e.currentTarget); });
+    root.addEventListener('dragover', function(e){ if (e.dataTransfer && Array.prototype.some.call(e.dataTransfer.types || [], function(t){ return t === 'Files'; })){ e.preventDefault(); root.classList.add('sb-drop'); } });
+    root.addEventListener('dragleave', function(e){ if (e.target === root || !root.contains(e.relatedTarget)) root.classList.remove('sb-drop'); });
+    root.addEventListener('drop', function(e){ root.classList.remove('sb-drop'); if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length){ e.preventDefault(); addFiles(e.dataTransfer.files); } });
+    ['pointerdown', 'mousedown', 'click', 'wheel', 'keydown'].forEach(function(t){ root.addEventListener(t, function(e){ e.stopPropagation(); }); });   /* the map underneath never sees the page's gestures */
+    return root;
+  }
+  function header(){
+    var i = fi(), lab = { n: i + 1, title: '' }; try { if (typeof msSecLabel === 'function') lab = msSecLabel(i) || lab; } catch (e){}
+    var f = frame(), date = f && f.date ? f.date : '';
+    var t = (typeof window.dystEntryDateLabel === 'function' && date) ? window.dystEntryDateLabel(date) : '';
+    return (t ? t + '  ·  ' : '') + (lab.title ? lab.title : ('Entry ' + lab.n));
+  }
+  function render(){
+    if (!isJournal()){ if (root) root.style.display = 'none'; return; }
+    if (!ensureRoot()) return;
+    root.style.display = '';
+    root.querySelector('.sb-h').textContent = header();
+    var pg = root.querySelector('.sb-page'), p = page();
+    Array.prototype.slice.call(pg.querySelectorAll('.sb-item')).forEach(function(n){ n.remove(); });
+    var items = (p && p.items) || [];
+    pg.querySelector('.sb-empty').style.display = items.length ? 'none' : '';
+    items.forEach(function(it){ pg.appendChild(itemNode(it)); });
+    lastSig = sig();
+  }
+  function itemNode(it){
+    var n = el('div', 'sb-item sb-' + it.t); n.dataset.id = it.id;
+    n.style.left = (it.x * 100) + '%'; n.style.top = (it.y * 100) + '%'; n.style.width = (it.w * 100) + '%'; n.style.transform = 'rotate(' + (it.r || 0) + 'deg)';
+    if (it.t === 'photo'){
+      var im = el('img', 'sb-img'); im.src = img(it.id); im.alt = it.cap || 'photo'; im.draggable = false; n.appendChild(im);
+      var cap = el('div', 'sb-cap'); cap.contentEditable = 'true'; cap.spellcheck = true; cap.textContent = it.cap || ''; cap.setAttribute('data-ph', 'Add a caption');
+      cap.addEventListener('input', function(){ it.cap = cap.textContent; save(); }); n.appendChild(cap);
+    } else if (it.t === 'note'){
+      var tx = el('div', 'sb-notetext'); tx.contentEditable = 'true'; tx.spellcheck = true; tx.textContent = it.text || ''; tx.setAttribute('data-ph', 'Write something…');
+      tx.addEventListener('input', function(){ it.text = tx.innerText; save(); }); n.appendChild(tx);
+    } else {
+      var w = (typeof npFindEl === 'function') ? npFindEl(it.key) : null;
+      var s = el('span', 'sb-eln', nameOf(it.key) || '(removed)'); n.appendChild(s);
+      if (w){ n.appendChild(el('span', 'sb-elc', (typeof dystCatLabel === 'function') ? dystCatLabel(w.cat, 'one') : w.cat)); s.title = 'Open its card'; s.addEventListener('click', function(e){ e.stopPropagation(); if (!n._moved && typeof window.openElementDossier === 'function') window.openElementDossier(it.key); }); }
+    }
+    var ctl = el('div', 'sb-ctl');
+    var tb = el('button', 'sb-tilt', '↻'); tb.type = 'button'; tb.title = 'Tilt it';
+    tb.addEventListener('click', function(e){ e.stopPropagation(); it.r = tilt(); n.style.transform = 'rotate(' + it.r + 'deg)'; save(); });
+    var xb = el('button', 'sb-x', '×'); xb.type = 'button'; xb.title = 'Take it off the page';
+    xb.addEventListener('click', function(e){ e.stopPropagation(); remove(it.id); });
+    ctl.appendChild(tb); ctl.appendChild(xb); n.appendChild(ctl);
+    var rz = el('span', 'sb-rz'); rz.title = 'Drag to resize'; n.appendChild(rz);
+    drag(n, it, rz);
+    return n;
+  }
+  function drag(n, it, rz){
+    n.addEventListener('pointerdown', function(e){
+      if (e.button !== 0 || (e.target.closest && e.target.closest('.sb-cap, .sb-notetext, .sb-ctl'))) return;
+      var pg = n.parentNode, R = pg.getBoundingClientRect(), resize = (e.target === rz);
+      var sx = e.clientX, sy = e.clientY, ox = it.x, oy = it.y, ow = it.w, moved = false; n._moved = false;
+      e.preventDefault(); try { n.setPointerCapture(e.pointerId); } catch (_){}
+      n.classList.add('sb-lift');
+      var mv = function(ev){
+        var dx = (ev.clientX - sx) / R.width, dy = (ev.clientY - sy) / R.height;
+        if (Math.abs(ev.clientX - sx) + Math.abs(ev.clientY - sy) > 3){ moved = true; n._moved = true; }
+        if (resize){ it.w = Math.max(0.08, Math.min(0.9, ow + dx)); n.style.width = (it.w * 100) + '%'; }
+        else { it.x = Math.max(-0.05, Math.min(1 - it.w * 0.5, ox + dx)); it.y = Math.max(-0.02, Math.min(0.95, oy + dy)); n.style.left = (it.x * 100) + '%'; n.style.top = (it.y * 100) + '%'; }
+      };
+      var up = function(){ n.removeEventListener('pointermove', mv); n.removeEventListener('pointerup', up); n.removeEventListener('pointercancel', up); n.classList.remove('sb-lift');
+        if (moved){ var p = page(); if (p){ p.items = p.items.filter(function(x){ return x !== it; }).concat([it]); pg.appendChild(n); } save(); } setTimeout(function(){ n._moved = false; }, 0); };   /* the one you moved comes to the top */
+      n.addEventListener('pointermove', mv); n.addEventListener('pointerup', up); n.addEventListener('pointercancel', up);
+    });
+  }
+  /* a pasted picture lands on the page it was pasted over */
+  document.addEventListener('paste', function(e){
+    if (!shown()) return; var t = e.target; if (t && (t.isContentEditable || /^(INPUT|TEXTAREA)$/.test(t.tagName))) return;
+    var fs = []; try { Array.prototype.forEach.call((e.clipboardData && e.clipboardData.items) || [], function(i){ if (i.kind === 'file'){ var f = i.getAsFile(); if (f) fs.push(f); } }); } catch (_){}
+    if (fs.length){ e.preventDefault(); addFiles(fs); }
+  });
+  /* follow the section navigator, the story and the kind */
+  function sig(){ var f = frame(); var p = f && f.scrap; return [isJournal(), state.session && state.session.id, fi(), (state.frames || []).length, p ? p.items.length : 0, f && f.date].join('|'); }
+  setInterval(function(){ try { if (!isJournal()){ if (root && root.style.display !== 'none') root.style.display = 'none'; return; } if (!root || sig() !== lastSig) render(); } catch (e){} }, 400);
+  window.__dystScrap = { render: render, addPhotoData: addPhotoData, addNote: addNote, addEl: addEl, remove: remove, page: function(){ var p = page(); return p ? p.items : []; }, shown: shown };
+})();
+</script>
+<style id="dyst-scrapbook-css">
+/* v.843 — a journal's Scrapbook: the page over the Scenes board */
+#scrapbook{ display:none; position:absolute; inset:0; z-index:6; overflow:auto; padding:108px 28px 48px; box-sizing:border-box;
+  background:radial-gradient(ellipse at 50% 30%, #f6efe1 0%, #ece2cd 70%, #e3d6bb 100%); }
+body.plan-view-map:not(.places-maps) #scrapbook{ display:block; }
+body.places-maps #scrapbook{ display:none !important; }
+#placesSeg{ z-index:8; }
+body.dk-journal.plan-view-map:not(.places-maps) #expRight, body.dk-journal.plan-view-map:not(.places-maps) #expLTabs, body.dk-journal.plan-view-map:not(.places-maps) #placeTitle,
+body.dk-journal.plan-view-map:not(.places-maps) #sceneCarryBar, body.dk-journal.plan-view-map:not(.places-maps) #placeBanner{ display:none !important; }   /* the Scenes board's tools stand down for the page */
+#scrapbook .sb-top{ max-width:1000px; margin:0 auto 12px; display:flex; align-items:flex-end; justify-content:space-between; gap:14px; flex-wrap:wrap; }
+#scrapbook .sb-h{ font-family:var(--serif); font-size:24px; font-style:italic; color:#4a3f2c; }
+#scrapbook .sb-tools{ display:flex; gap:8px; flex-wrap:nowrap; align-items:center; margin-left:auto; }
+#scrapbook .sb-btn{ display:inline-flex; align-items:center; white-space:nowrap; border:1px solid rgba(90,70,40,.35); background:rgba(255,252,244,.8); color:#4a3f2c; border-radius:999px; padding:7px 14px; cursor:pointer; font:600 12px/1.2 var(--sans); letter-spacing:.04em; }
+#scrapbook .sb-btn:hover{ border-color:#b8862e; color:#2b2926; background:#fffdf7; }
+#scrapbook .sb-page{ position:relative; max-width:1000px; margin:0 auto; aspect-ratio:1.414 / 1; min-height:420px; border-radius:6px;
+  background:#fbf7ee; box-shadow:0 1px 0 rgba(255,255,255,.7) inset, 0 18px 40px rgba(60,40,10,.18), 0 2px 6px rgba(60,40,10,.12);
+  background-image:linear-gradient(rgba(160,138,86,.07) 1px, transparent 1px); background-size:100% 30px; overflow:hidden; }
+#scrapbook.sb-drop .sb-page{ outline:3px dashed #c8961f; outline-offset:-10px; }
+#scrapbook .sb-empty{ position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); max-width:360px; text-align:center; font-family:var(--serif); font-style:italic; font-size:17px; line-height:1.5; color:rgba(74,63,44,.5); pointer-events:none; }
+#scrapbook .sb-item{ position:absolute; box-sizing:border-box; cursor:grab; touch-action:none; transform-origin:50% 50%; transition:box-shadow .15s; }
+#scrapbook .sb-item.sb-lift{ cursor:grabbing; box-shadow:0 18px 32px rgba(40,25,5,.3) !important; z-index:5; }
+#scrapbook .sb-photo{ background:#fff; padding:3.5% 3.5% 0; box-shadow:0 6px 16px rgba(40,25,5,.22); }
+#scrapbook .sb-photo .sb-img{ display:block; width:100%; height:auto; pointer-events:none; user-select:none; }
+#scrapbook .sb-cap{ min-height:1.6em; padding:6px 2px 9px; font-family:var(--serif); font-style:italic; font-size:14px; color:#4a3f2c; text-align:center; outline:none; cursor:text; }
+#scrapbook .sb-note{ background:#fcf1b8; padding:14px 14px 18px; box-shadow:0 5px 12px rgba(40,25,5,.18); }
+#scrapbook .sb-note::before{ content:''; position:absolute; left:50%; top:-9px; width:56px; height:18px; transform:translateX(-50%) rotate(-2deg); background:rgba(214,200,160,.7); }
+#scrapbook .sb-notetext{ min-height:3em; font-family:var(--serif); font-size:16px; line-height:1.45; color:#3d3422; outline:none; cursor:text; white-space:pre-wrap; }
+#scrapbook [data-ph]:empty::before{ content:attr(data-ph); color:rgba(74,63,44,.4); }
+#scrapbook .sb-el{ width:auto !important; min-width:90px; max-width:260px; display:inline-flex; flex-direction:column; align-items:flex-start; gap:1px; padding:7px 14px 8px; border-radius:999px; background:#2b2926; color:#f5efe2; box-shadow:0 4px 10px rgba(40,25,5,.25); }
+#scrapbook .sb-eln{ font:600 13px/1.25 var(--sans); cursor:pointer; }
+#scrapbook .sb-elc{ font:600 9.5px/1.2 var(--sans); letter-spacing:.12em; text-transform:uppercase; color:#c8961f; }
+#scrapbook .sb-ctl{ position:absolute; top:-12px; right:-12px; display:none; gap:4px; }
+#scrapbook .sb-item:hover .sb-ctl{ display:flex; }
+#scrapbook .sb-ctl button{ width:24px; height:24px; border-radius:50%; border:1px solid rgba(90,70,40,.35); background:#fffdf7; color:#4a3f2c; cursor:pointer; font-size:13px; line-height:1; padding:0; }
+#scrapbook .sb-ctl .sb-x:hover{ background:#8c2f24; color:#fff; border-color:#8c2f24; }
+#scrapbook .sb-rz{ position:absolute; right:-6px; bottom:-6px; width:14px; height:14px; border-radius:3px; background:#c8961f; opacity:0; cursor:nwse-resize; }
+#scrapbook .sb-item:hover .sb-rz{ opacity:.85; }
+#scrapbook .sb-el .sb-rz{ display:none; }
+.sb-pick{ position:fixed; z-index:1200; width:268px; max-height:320px; overflow:auto; background:#2b2926; border:1px solid rgba(200,170,110,.3); border-radius:12px; padding:6px; box-shadow:0 14px 34px rgba(0,0,0,.35); }
+.sb-pickrow{ display:flex; flex-direction:column; align-items:flex-start; width:100%; border:none; background:transparent; color:#f5efe2; text-align:left; padding:7px 10px; border-radius:8px; cursor:pointer; }
+.sb-pickrow:hover{ background:rgba(255,247,230,.08); }
+.sb-pickn{ font:600 13px/1.3 var(--sans); }
+.sb-pickc{ font:600 9.5px/1.3 var(--sans); letter-spacing:.1em; text-transform:uppercase; color:#c8961f; }
+.sb-pickem{ padding:10px; color:rgba(245,239,226,.7); font:13px/1.4 var(--sans); }
+</style>
+<script id="dyst-calendar-js">
+/* v.844 [Jeremy: "in that order" — the second repurpose] — A JOURNAL'S CALENDAR. In a journal, Entries opens on a month: every
+   entry that has a date sits on its day (with its first scrapbook photo), an empty day's ＋ writes a new entry for it, undated
+   entries wait underneath to be given one, and "On this day" brings back what you wrote on this date in earlier years. The Plot
+   grid is one click away (Grid). "Write Today's Entry" finds today's entry, or makes one.
+   An entry's date is its section's (`frame.date = 'YYYY-MM-DD'`), so it travels with the section; a new entry is placed among
+   the others in date order and titled with its day. Nothing here exists outside a journal. */
+(function(){
+  'use strict';
+  var MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  var DAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  function pad(n){ return (n < 10 ? '0' : '') + n; }
+  function iso(y, m, d){ return y + '-' + pad(m + 1) + '-' + pad(d); }
+  function todayIso(){ var t = new Date(); return iso(t.getFullYear(), t.getMonth(), t.getDate()); }
+  function parse(s){ var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(s || '')); return m ? { y: +m[1], m: +m[2] - 1, d: +m[3] } : null; }
+  /* "Saturday, September 26, 2026" — computed in UTC, so a date never slides a day with the clock */
+  function label(s, short){ var p = parse(s); if (!p) return ''; try { return new Date(Date.UTC(p.y, p.m, p.d)).toLocaleDateString(undefined, short ? { weekday:'short', month:'short', day:'numeric', timeZone:'UTC' } : { weekday:'long', year:'numeric', month:'long', day:'numeric', timeZone:'UTC' }); } catch (e){ return s; } }
+  window.dystEntryDateLabel = function(s){ return label(s); };
+  function isJournal(){ try { return dystWorkKind() === 'journal'; } catch (e){ return false; } }
+  function frames(){ try { return state.frames || []; } catch (e){ return []; } }
+  function title(i){ try { var l = (typeof msSecLabel === 'function') ? msSecLabel(i) : null; return (l && l.title) ? l.title : ('Entry ' + (i + 1)); } catch (e){ return 'Entry ' + (i + 1); } }
+  function thumb(i){ try { var f = frames()[i], it = f && f.scrap && (f.scrap.items || []).filter(function(x){ return x.t === 'photo'; })[0]; return it ? ((state.session.npImages || {})['scrap:' + it.id] || '') : ''; } catch (e){ return ''; } }
+  function save(){ try { if (state.session && state.frames) state.session.frames = state.frames; if (typeof scheduleAutosave === 'function') scheduleAutosave(); } catch (e){} }
+  function byDate(){ var m = {}; frames().forEach(function(f, i){ if (f && f.date){ (m[f.date] = m[f.date] || []).push(i); } }); return m; }
+  /* where a new entry for `d` goes: after the last entry dated on or before it (undated ones keep their places) */
+  function slotFor(d){ var at = 0, fr = frames(), any = false; fr.forEach(function(f, i){ if (f && f.date){ any = true; if (f.date <= d) at = i + 1; } }); return any ? at : fr.length; }
+  function newEntry(d){
+    if (typeof insertBlankSectionAt !== 'function') return -1;
+    var at = slotFor(d), nm = label(d);
+    var i = insertBlankSectionAt(at, { blankMap: true, mut: function(fr){ fr.date = d; fr.stageName = nm; } });
+    try { if (i === 0 && window.__dystPlan && window.__dystPlan.renameSection) window.__dystPlan.renameSection(0, nm); } catch (e){}
+    save(); return i;
+  }
+  function setDate(i, d){ var f = frames()[i]; if (!f) return; if (d) f.date = d; else delete f.date; save(); }
+  /* "Write Today's Entry": today's entry, or a new one (a blank first page simply becomes today's) */
+  window.dystJournalToday = function(){
+    if (!isJournal()) return -1;
+    try { if (typeof ensureSession === 'function') ensureSession(); } catch (e){}
+    var t = todayIso(), have = byDate()[t];
+    if (have && have.length){ try { switchFrame(have[have.length - 1]); } catch (e){} return have[have.length - 1]; }
+    var fr = frames(), blank = false;
+    try { blank = fr.length <= 1 && !(fr[0] && fr[0].date) && !String((typeof editorText === 'function') ? editorText() : '').trim(); } catch (e){}
+    if (blank){ if (!fr.length){ newEntry(t); return 0; } fr[0].date = t; try { window.__dystPlan.renameSection(0, label(t)); } catch (e){} save(); try { switchFrame(0); } catch (e){} return 0; }
+    var i = newEntry(t); try { switchFrame(i); } catch (e){} return i;
+  };
+
+  var root = null, view = null, pop = null;
+  function grid(){ try { return localStorage.getItem('dystoria.entriesView') === 'grid'; } catch (e){ return false; } }
+  function setGrid(on){ try { localStorage.setItem('dystoria.entriesView', on ? 'grid' : 'calendar'); } catch (e){} apply(); }
+  function apply(){ document.body.classList.toggle('jcal-on', isJournal() && !grid()); document.body.classList.toggle('jcal-grid', isJournal() && grid()); }
+  function el(tag, cls, txt){ var e = document.createElement(tag); if (cls) e.className = cls; if (txt != null) e.textContent = txt; return e; }
+  function ensure(){
+    if (root && root.parentNode) return root;
+    var sky = document.getElementById('sky'); if (!sky) return null;
+    root = el('div'); root.id = 'jCal'; sky.appendChild(root);
+    var back = el('button', '', '▦ Calendar'); back.id = 'jCalBack'; back.type = 'button'; back.title = 'Back to the calendar';
+    back.addEventListener('click', function(e){ e.stopPropagation(); setGrid(false); render(); }); sky.appendChild(back);
+    ['pointerdown', 'mousedown', 'click', 'wheel', 'keydown'].forEach(function(t){ root.addEventListener(t, function(e){ e.stopPropagation(); }); });
+    return root;
+  }
+  function closePop(){ if (pop && pop.parentNode) pop.parentNode.removeChild(pop); pop = null; }
+  function openEntry(i, how){
+    closePop();
+    try {
+      if (how === 'page'){ goMode('notepad'); window.__planSetView('map'); try { localStorage.setItem('dystoria.places.view', 'scenes'); } catch (e){} var s = document.querySelector('#placesSeg .pl-segbtn[data-plv="scenes"]'); if (s) s.click(); switchFrame(i); }
+      else if (how === 'read'){ goMode('read'); setTimeout(function(){ try { msScrollTo('read', i); } catch (e){} }, 250); }
+      else { goMode('edit'); setTimeout(function(){ try { msScrollTo('edit', i); } catch (e){} }, 250); }
+    } catch (e){}
+  }
+  function entryPop(i, anchor){
+    closePop(); pop = el('div', 'jc-pop'); pop.id = 'jcPop';
+    pop.appendChild(el('div', 'jc-poph', title(i)));
+    var f = frames()[i]; if (f && f.date) pop.appendChild(el('div', 'jc-popd', label(f.date)));
+    [['page', 'Open its scrapbook page'], ['edit', 'Open it in Revise'], ['read', 'Read it']].forEach(function(a){ var b = el('button', 'jc-popb', a[1]); b.type = 'button'; b.dataset.how = a[0]; b.addEventListener('click', function(e){ e.stopPropagation(); openEntry(i, a[0]); }); pop.appendChild(b); });
+    var row = el('label', 'jc-popdate'); row.appendChild(el('span', '', 'Date'));
+    var inp = el('input'); inp.type = 'date'; inp.value = (f && f.date) || ''; inp.addEventListener('change', function(){ setDate(i, inp.value); closePop(); render(); }); row.appendChild(inp); pop.appendChild(row);
+    document.body.appendChild(pop);
+    var r = anchor.getBoundingClientRect(); pop.style.left = Math.max(8, Math.min(r.left, window.innerWidth - 250)) + 'px'; pop.style.top = Math.min(window.innerHeight - 220, r.bottom + 6) + 'px';
+    setTimeout(function(){ document.addEventListener('click', function _c(ev){ if (pop && !pop.contains(ev.target)){ closePop(); document.removeEventListener('click', _c, true); } }, true); }, 0);
+  }
+  function chip(i, small){
+    var c = el('button', 'jc-chip' + (small ? ' jc-chip-s' : '')); c.type = 'button'; c.dataset.i = i;
+    var t = thumb(i); if (t){ var im = el('img', 'jc-thumb'); im.src = t; im.alt = ''; c.appendChild(im); }
+    c.appendChild(el('span', 'jc-ct', title(i)));
+    c.addEventListener('click', function(e){ e.stopPropagation(); entryPop(i, c); });
+    return c;
+  }
+  function render(){
+    apply();
+    if (!isJournal()){ if (root) root.style.display = 'none'; var bk = document.getElementById('jCalBack'); if (bk) bk.style.display = 'none'; return; }
+    if (!ensure()) return;
+    root.style.display = ''; var bk2 = document.getElementById('jCalBack'); if (bk2) bk2.style.display = '';
+    var map = byDate(), t = todayIso();
+    if (!view){ var ds = Object.keys(map).sort(), last = ds.length ? parse(ds[ds.length - 1]) : null, tp = parse(t); view = last && (last.y > tp.y || (last.y === tp.y && last.m >= tp.m)) ? { y: last.y, m: last.m } : { y: tp.y, m: tp.m }; if (last && !(map[t])) view = { y: tp.y, m: tp.m }; }
+    root.innerHTML = '';
+    var hd = el('div', 'jc-head');
+    var prev = el('button', 'jc-nav', '‹'); prev.type = 'button'; prev.title = 'Previous month'; prev.addEventListener('click', function(e){ e.stopPropagation(); view.m--; if (view.m < 0){ view.m = 11; view.y--; } render(); });
+    var next = el('button', 'jc-nav', '›'); next.type = 'button'; next.title = 'Next month'; next.addEventListener('click', function(e){ e.stopPropagation(); view.m++; if (view.m > 11){ view.m = 0; view.y++; } render(); });
+    var h = el('div', 'jc-month', MONTHS[view.m] + ' ' + view.y);
+    var td = el('button', 'jc-today', 'Today'); td.type = 'button'; td.addEventListener('click', function(e){ e.stopPropagation(); var p = parse(t); view = { y: p.y, m: p.m }; render(); });
+    var gb = el('button', 'jc-gridbtn', 'Grid'); gb.type = 'button'; gb.title = 'The Plot grid, for threads and cards'; gb.addEventListener('click', function(e){ e.stopPropagation(); setGrid(true); });
+    hd.appendChild(prev); hd.appendChild(h); hd.appendChild(next); hd.appendChild(td); hd.appendChild(gb); root.appendChild(hd);
+    var body = el('div', 'jc-body'), cal = el('div', 'jc-cal');
+    DAYS.forEach(function(d){ cal.appendChild(el('div', 'jc-dow', d)); });
+    var first = new Date(Date.UTC(view.y, view.m, 1)).getUTCDay(), n = new Date(Date.UTC(view.y, view.m + 1, 0)).getUTCDate();
+    for (var b = 0; b < first; b++) cal.appendChild(el('div', 'jc-day jc-out'));
+    for (var d = 1; d <= n; d++){
+      (function(d){
+        var key = iso(view.y, view.m, d), cell = el('div', 'jc-day' + (key === t ? ' jc-todayc' : '') + (map[key] ? ' jc-has' : '')); cell.dataset.date = key;
+        cell.appendChild(el('div', 'jc-dn', String(d)));
+        (map[key] || []).forEach(function(i){ cell.appendChild(chip(i)); });
+        var add = el('button', 'jc-add', '＋'); add.type = 'button'; add.title = 'Write an entry for ' + label(key);
+        add.addEventListener('click', function(e){ e.stopPropagation(); var i = newEntry(key); try { if (typeof flashStatus === 'function') flashStatus('An entry for ' + label(key)); } catch (_){} render(); var c = root.querySelector('.jc-chip[data-i="' + i + '"]'); if (c) c.classList.add('jc-new'); });
+        cell.appendChild(add); cal.appendChild(cell);
+      })(d);
+    }
+    body.appendChild(cal);
+    /* the side: On this day, and the undated */
+    var side = el('div', 'jc-side');
+    var tp2 = parse(t), otd = []; Object.keys(map).forEach(function(k){ var p = parse(k); if (p && p.m === tp2.m && p.d === tp2.d && p.y !== tp2.y) map[k].forEach(function(i){ otd.push({ i: i, y: p.y }); }); });
+    otd.sort(function(a, b){ return b.y - a.y; });
+    var o = el('div', 'jc-sec'); o.appendChild(el('div', 'jc-sech', 'On this day'));
+    if (otd.length) otd.forEach(function(x){ var r = el('div', 'jc-otd'); r.appendChild(el('span', 'jc-otdy', (tp2.y - x.y) + (tp2.y - x.y === 1 ? ' year ago' : ' years ago'))); r.appendChild(chip(x.i, true)); o.appendChild(r); });
+    else o.appendChild(el('div', 'jc-none', 'Nothing yet on ' + label(t, true).replace(/^\w+,?\s*/, '') + ' in earlier years.'));
+    side.appendChild(o);
+    var und = []; frames().forEach(function(f, i){ if (f && !f.date) und.push(i); });
+    if (und.length){ var u = el('div', 'jc-sec'); u.appendChild(el('div', 'jc-sech', 'Not dated yet'));
+      und.forEach(function(i){ var r = el('div', 'jc-und'); r.appendChild(chip(i, true)); var inp = el('input'); inp.type = 'date'; inp.title = 'Give it a date'; inp.addEventListener('change', function(){ setDate(i, inp.value); render(); }); r.appendChild(inp); u.appendChild(r); });
+      side.appendChild(u); }
+    body.appendChild(side); root.appendChild(body);
+    lastSig = sig();
+  }
+  var lastSig = '';
+  function sig(){ var fr = frames(); return [isJournal(), grid(), state.session && state.session.id, fr.length, fr.map(function(f){ return (f && f.date) || ''; }).join(','), fr.map(function(f, i){ return (f && f.stageName) || ''; }).join('|')].join('#'); }
+  setInterval(function(){ try { if (!isJournal()){ document.body.classList.remove('jcal-on', 'jcal-grid'); if (root && root.style.display !== 'none') root.style.display = 'none'; var bk = document.getElementById('jCalBack'); if (bk) bk.style.display = 'none'; return; }
+    if (document.body.classList.contains('plan-view-plot') && (!root || sig() !== lastSig)) render(); else apply(); } catch (e){} }, 500);
+  window.__dystCal = { render: render, newEntry: newEntry, setDate: setDate, label: label, view: function(y, m){ view = { y: y, m: m }; render(); }, grid: setGrid };
+})();
+</script>
+<style id="dyst-calendar-css">
+/* v.844 — a journal's Calendar, over the Plot grid (Grid brings the grid back) */
+#jCal{ display:none; position:absolute; left:0; right:0; top:44px; bottom:0; z-index:24; overflow:auto; padding:22px 28px 40px; box-sizing:border-box; background:#f7f2e7; }
+body.plan-view-plot.jcal-on #jCal{ display:block; }
+#jCalBack{ display:none; position:absolute; top:52px; right:18px; z-index:25; border:1px solid rgba(90,70,40,.35); background:#fffdf7; color:#4a3f2c; border-radius:999px; padding:6px 13px; cursor:pointer; font:600 12px/1.2 var(--sans); }
+body.plan-view-plot.jcal-grid #jCalBack{ display:block; }
+#jCal .jc-head{ display:flex; align-items:center; gap:10px; max-width:1180px; margin:0 auto 16px; }
+#jCal .jc-month{ font-family:var(--serif); font-size:26px; color:#3d3422; min-width:230px; text-align:center; }
+#jCal .jc-nav{ width:34px; height:34px; border-radius:50%; border:1px solid rgba(90,70,40,.3); background:#fffdf7; color:#4a3f2c; font-size:20px; line-height:1; cursor:pointer; }
+#jCal .jc-today, #jCal .jc-gridbtn{ border:1px solid rgba(90,70,40,.3); background:#fffdf7; color:#4a3f2c; border-radius:999px; padding:7px 14px; cursor:pointer; font:600 12px/1.2 var(--sans); letter-spacing:.04em; }
+#jCal .jc-gridbtn{ margin-left:auto; }
+#jCal .jc-body{ display:flex; gap:22px; max-width:1180px; margin:0 auto; align-items:flex-start; }
+#jCal .jc-cal{ flex:1; display:grid; grid-template-columns:repeat(7, minmax(0,1fr)); gap:6px; }
+#jCal .jc-dow{ font:700 10.5px/1.2 var(--sans); letter-spacing:.14em; text-transform:uppercase; color:#a08a56; text-align:center; padding:4px 0; }
+#jCal .jc-day{ position:relative; min-height:96px; background:#fffdf8; border:1px solid rgba(160,138,86,.22); border-radius:8px; padding:6px 6px 8px; display:flex; flex-direction:column; gap:4px; }
+#jCal .jc-out{ background:transparent; border-color:transparent; }
+#jCal .jc-todayc{ border-color:#c8961f; box-shadow:0 0 0 1px #c8961f inset; }
+#jCal .jc-dn{ font:600 12px/1 var(--sans); color:#8a7a58; }
+#jCal .jc-has .jc-dn{ color:#3d3422; }
+#jCal .jc-add{ position:absolute; top:4px; right:5px; width:22px; height:22px; border-radius:50%; border:1px dashed rgba(160,138,86,.6); background:transparent; color:#a08a56; cursor:pointer; opacity:0; font-size:13px; line-height:1; padding:0; }
+#jCal .jc-day:hover .jc-add{ opacity:1; }
+#jCal .jc-chip{ display:flex; align-items:center; gap:6px; width:100%; border:none; border-radius:6px; background:#2b2926; color:#f5efe2; padding:4px 7px; cursor:pointer; text-align:left; font:600 11.5px/1.25 var(--sans); }
+#jCal .jc-chip:hover{ background:#3d3a35; }
+#jCal .jc-chip.jc-new{ box-shadow:0 0 0 2px #c8961f; }
+#jCal .jc-chip-s{ width:auto; }
+#jCal .jc-thumb{ width:26px; height:26px; object-fit:cover; border-radius:4px; flex:0 0 auto; }
+#jCal .jc-ct{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+#jCal .jc-side{ width:250px; flex:0 0 250px; display:flex; flex-direction:column; gap:18px; }
+#jCal .jc-sech{ font:700 10.5px/1.2 var(--sans); letter-spacing:.16em; text-transform:uppercase; color:#a08a56; margin-bottom:8px; }
+#jCal .jc-none{ font-family:var(--serif); font-style:italic; font-size:14.5px; color:rgba(61,52,34,.6); }
+#jCal .jc-otd, #jCal .jc-und{ display:flex; align-items:center; gap:8px; margin-bottom:6px; flex-wrap:wrap; }
+#jCal .jc-otdy{ font:600 11px/1.2 var(--sans); color:#8a7a58; min-width:72px; }
+#jCal .jc-und input{ border:1px solid rgba(90,70,40,.3); border-radius:6px; padding:3px 6px; font:12px var(--sans); background:#fffdf7; color:#3d3422; }
+.jc-pop{ position:fixed; z-index:1200; width:236px; background:#2b2926; color:#f5efe2; border:1px solid rgba(200,170,110,.3); border-radius:12px; padding:10px; box-shadow:0 14px 34px rgba(0,0,0,.35); display:flex; flex-direction:column; gap:4px; }
+.jc-poph{ font-family:var(--serif); font-size:16px; }
+.jc-popd{ font:600 10.5px/1.3 var(--sans); letter-spacing:.08em; color:#c8961f; margin-bottom:4px; }
+.jc-popb{ text-align:left; border:none; background:transparent; color:#f5efe2; padding:7px 8px; border-radius:8px; cursor:pointer; font:13px/1.3 var(--sans); }
+.jc-popb:hover{ background:rgba(255,247,230,.08); }
+.jc-popdate{ display:flex; align-items:center; gap:8px; padding:6px 8px 2px; font:600 10.5px/1.2 var(--sans); letter-spacing:.1em; text-transform:uppercase; color:#c8961f; }
+.jc-popdate input{ flex:1; border:1px solid rgba(200,170,110,.35); background:#1f1d1a; color:#f5efe2; border-radius:6px; padding:4px 6px; font:12px var(--sans); color-scheme:dark; }
+</style>
 </body></html>
