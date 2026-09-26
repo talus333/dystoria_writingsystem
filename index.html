@@ -6051,7 +6051,7 @@ var DYST_CATREG = [
   { id:'event',   one:'Event',     many:'Events',     builder:'Event Builder',     flags:'element legend map bond threat bucket quick importer' },
   { id:'stakes',  one:'Stake',     many:'Stakes',     builder:'Stakes Builder',    flags:'element legend side importer' }
 ];
-function dystCatReg(id){ for (var i = 0; i < DYST_CATREG.length; i++) if (DYST_CATREG[i].id === id) return DYST_CATREG[i]; return null; }
+function dystCatReg(id){ dystCatSyncCustom(); for (var i = 0; i < DYST_CATREG.length; i++) if (DYST_CATREG[i].id === id) return DYST_CATREG[i]; return null; }
 function dystCatHas(id, flag){ var r = dystCatReg(id); return !!(r && (' ' + r.flags + ' ').indexOf(' ' + flag + ' ') >= 0); }
 function dystCatOv(id){ try { return (typeof window.__dystCatOv === 'function') ? (window.__dystCatOv(id) || null) : null; } catch (e){ return null; } }
 function dystCatHidden(id){ try { return (typeof window.__dystCatHidden === 'function') ? !!window.__dystCatHidden(id) : false; } catch (e){ return false; } }
@@ -6083,7 +6083,7 @@ function dystCatArrange(ids){
 /* the ids with a flag, in a surface's default order; opts.all keeps hidden ones, opts.raw skips the writer's order */
 function dystCatIds(flag, order, opts){
   opts = opts || {};
-  var ids = (order || DYST_CATREG.map(function(r){ return r.id; })).filter(function(id){ return dystCatHas(id, flag); });
+  var ids = dystCatWithCustom(order || null).filter(function(id){ return dystCatHas(id, flag); });   /* v.837 — the story's own categories ride after theirs */
   if (!opts.all) ids = ids.filter(function(id){ return !dystCatHidden(id); });
   return opts.raw ? ids : dystCatArrange(ids);
 }
@@ -6093,6 +6093,7 @@ function dystCatCols(flag, order, form, opts){ return dystCatIds(flag, order, op
    leading, trailing or doubled is dropped). Entries that are not registry categories (Threads) pass through. */
 function dystMenuCats(items){
   var out = [];
+  items = dystMenuWithCustom(items);   /* v.837 */
   items.forEach(function(it){
     if (typeof it === 'string'){ if (out.length && typeof out[out.length - 1] !== 'string') out.push(it); return; }
     if (!dystCatReg(it[0])){ out.push(it); return; }
@@ -6102,6 +6103,99 @@ function dystMenuCats(items){
   while (out.length && typeof out[out.length - 1] === 'string') out.pop();
   return out;
 }
+/* ============================================================
+   v.837 [Jeremy] "can we add the ability to make your own category" — THE STORY'S OWN CATEGORIES.
+   A category of your own is built ON one of the seven (it "works like" a Concept, an Artifact, a Character, a Place, a Group
+   or an Event), so every tool that knows elements already knows its elements: they are that kind of element, carrying a
+   tag (`w.ccat`) that files them under your category instead. It has its own row in Story Elements, its own filter tab, its
+   own Legend group and notepad tab, its own "+ Source" — and it renames, hides and reorders like the rest. Removing it
+   loses nothing: its elements go back to the category it was built on. Kept per story in `session.catCustom`
+   [{ id:'cc_…', one, many, base, color, kind? }].
+   ============================================================ */
+var DYST_CATREG_BASE = DYST_CATREG.slice();
+var DYST_CC_COLORS = ['#7f9bb3', '#b98a5e', '#a3869e', '#8fa37a', '#c2a55a', '#6f9c97'];
+var _dystCCSig = null, _dystCCMap = {};
+function dystCustomCats(){ try { var s = (typeof state !== 'undefined' && state) ? state.session : null; return (s && Array.isArray(s.catCustom)) ? s.catCustom : []; } catch (e){ return []; } }
+function dystCatSyncCustom(){
+  if (typeof DYST_CATREG_BASE === 'undefined' || !DYST_CATREG_BASE) return;
+  var cc = dystCustomCats(), sess = null; try { sess = state.session; } catch (e){}
+  var tag = cc.map(function(c){ return c ? [c.id, c.one, c.many, c.base, c.color].join('/') : ''; }).join(';');
+  if (_dystCCSig && _dystCCSig[0] === sess && _dystCCSig[1] === tag) return;
+  _dystCCSig = [sess, tag];
+  DYST_CATREG.length = 0; DYST_CATREG_BASE.forEach(function(r){ DYST_CATREG.push(r); });
+  _dystCCMap = {};
+  cc.forEach(function(c){
+    if (!c || !c.id || _dystCCMap[c.id]) return;
+    var b = null; DYST_CATREG_BASE.forEach(function(r){ if (r.id === c.base) b = r; });
+    if (!b || b.id === 'stakes') return;
+    var fl = ['element', 'legend', 'quick'];
+    ['map', 'side', 'bond'].forEach(function(f){ if ((' ' + b.flags + ' ').indexOf(' ' + f + ' ') >= 0) fl.push(f); });
+    var r = { id:c.id, one:c.one || 'Item', many:c.many || 'Items', builder:(c.one || 'Item') + ' Builder', flags:fl.join(' '), custom:true, base:b.id, color:c.color || '#9c8f86' };
+    DYST_CATREG.push(r); _dystCCMap[c.id] = r;
+  });
+}
+function dystCatIsCustom(id){ dystCatSyncCustom(); return !!_dystCCMap[id]; }
+/* the category an element is FILED under: yours if it carries your tag (and is still the kind yours is built on), else its own */
+function dystElCat(w){ if (!w) return ''; var c = w.ccat; if (c){ dystCatSyncCustom(); var r = _dystCCMap[c]; if (r && r.base === w.cat) return c; } return w.cat; }
+/* a surface's default order with the story's own categories placed right after the one each is built on */
+function dystCatWithCustom(order){
+  dystCatSyncCustom();
+  var ids = (order || DYST_CATREG_BASE.map(function(r){ return r.id; })).slice();
+  DYST_CATREG.forEach(function(r){
+    if (!r.custom || ids.indexOf(r.id) >= 0) return;
+    var at = -1; for (var i = ids.length - 1; i >= 0; i--){ var x = ids[i]; if (x === r.base || (_dystCCMap[x] && _dystCCMap[x].base === r.base)){ at = i; break; } }
+    if (at < 0){ if (!order) ids.push(r.id); return; }
+    ids.splice(at + 1, 0, r.id);
+  });
+  return ids;
+}
+function dystMenuWithCustom(items){
+  dystCatSyncCustom();
+  var cs = DYST_CATREG.filter(function(r){ return r.custom; }); if (!cs.length) return items;
+  var out = [];
+  items.forEach(function(it){ out.push(it); if (typeof it === 'string') return; cs.forEach(function(r){ if (r.base === it[0]) out.push([r.id, it[1] === 'Threads' || it[1] === 'Thread' ? 'one' : it[1]]); }); });
+  return out;
+}
+/* what getCat(id) answers for one of yours: its names and colour over the pool it is built on */
+function dystCustomCatObj(id){
+  try { dystCatSyncCustom(); var r = _dystCCMap[id]; if (!r) return undefined;
+    var b = null; (DYSTORIA_DATA.categories || []).forEach(function(c){ if (c.id === r.base) b = c; });
+    return { id:r.id, name:dystCatLabel(r.id, 'one'), color:r.color, description:'Your own category, built on ' + dystCatLabel(r.base, 'many') + '.', subcategories:b ? b.subcategories : [], custom:true, base:r.base };
+  } catch (e){ return undefined; }
+}
+try { window.dystElCat = dystElCat; window.dystCatIsCustom = dystCatIsCustom; window.dystCustomCats = dystCustomCats; } catch (e){}
+/* v.837 [Jeremy] "can we add the type of project feature (essay, research, short story collection, novel, etc) and adjust the
+   categories and names accordingly" — WHAT YOU'RE WRITING (brainstorm Part A). A kind is a starting point, not a cage: it
+   renames and hides categories and Narrative Layers, and adds the categories that kind needs (Sources, Claims, Findings)
+   as the story's own. Nothing is deleted, and everything can still be changed in ✎ Categories. */
+var DYST_WORK_KINDS = [
+  { id:'novel',      name:'Novel',                  hint:'A long story — every category as it is.' },
+  { id:'collection', name:'Short story collection', hint:'Stories that share a world or a thread.' },
+  { id:'essay',      name:'Essay',                  hint:'An argument: people, ideas, sources and claims.' },
+  { id:'journal',    name:'Journal',                hint:'Your days: people, places, moments.' },
+  { id:'research',   name:'Research',               hint:'Questions, sources and findings.' }
+];
+var DYST_KIND_PRESETS = {
+  novel:      { labels:{}, hidden:{}, customs:[] },
+  collection: { labels:{ theme:{ one:'Through-line', many:'Through-line' } }, hidden:{}, customs:[] },
+  essay:      { labels:{ being:{ one:'Person', many:'People' }, org:{ one:'School of thought', many:'Schools of thought' }, concept:{ one:'Idea', many:'Ideas' },
+                         event:{ one:'Case', many:'Cases & events' }, stakes:{ one:'Stake', many:'Why it matters' }, thread:{ one:'Line of argument', many:'Lines of argument' },
+                         genre:{ one:'Form', many:'Form' }, theme:{ one:'Thesis', many:'Thesis' }, plot:{ one:'Structure', many:'Structure' }, narration:{ one:'Voice', many:'Voice' } },
+                hidden:{ setting:true, object:true },
+                customs:[ { one:'Source', many:'Sources', base:'concept', color:'#7f9bb3' }, { one:'Claim', many:'Claims', base:'concept', color:'#b98a5e' } ] },
+  journal:    { labels:{ being:{ one:'Person', many:'People' }, org:{ one:'Circle', many:'Circles' }, object:{ one:'Keepsake', many:'Keepsakes' },
+                         concept:{ one:'Recurring thought', many:'Recurring thoughts' }, event:{ one:'Moment', many:'Moments' },
+                         genre:{ one:'Kind of journal', many:'Kind of journal' }, period:{ one:'Season of life', many:'Season of life' } },
+                hidden:{ stakes:true, plot:true, narration:true }, customs:[] },
+  research:   { labels:{ being:{ one:'Person', many:'People' }, org:{ one:'Institution', many:'Institutions' }, setting:{ one:'Site', many:'Sites' },
+                         concept:{ one:'Term', many:'Concepts & terms' }, thread:{ one:'Line of inquiry', many:'Lines of inquiry' },
+                         genre:{ one:'Discipline & method', many:'Discipline & method' }, period:{ one:'Background', many:'Background' },
+                         theme:{ one:'Research question', many:'Research question' }, plot:{ one:'Structure', many:'Structure' } },
+                hidden:{ object:true, stakes:true, narration:true },
+                customs:[ { one:'Source', many:'Sources', base:'concept', color:'#7f9bb3' }, { one:'Finding', many:'Findings', base:'concept', color:'#8fa37a' } ] }
+};
+function dystWorkKind(){ try { var k = state.session && state.session.workKind; return DYST_KIND_PRESETS[k] ? k : 'novel'; } catch (e){ return 'novel'; } }
+try { window.DYST_WORK_KINDS = DYST_WORK_KINDS; window.dystWorkKind = dystWorkKind; } catch (e){}
 /* v.830 — the names every getCat(id).name reader sees. A category's own name is its singular (Character) — except Stakes,
    whose own name is its plural — so a rename sets whichever form it already used. Re-applied only when the story, its
    settings or this device's defaults change (a signature check: getCat is hot). */
@@ -6123,7 +6217,7 @@ function dystCatSyncNames(){
 }
 function dystCatFlagMap(flag){ var m = {}; DYST_CATREG.forEach(function(r){ if (dystCatHas(r.id, flag)) m[r.id] = 1; }); return m; }
 /* the Story Elements rows and their filter tabs — Threads always last */
-function dystStoryElementCols(){ return dystCatCols('element', ['being','org','setting','object','concept','event','stakes'], 'many').concat([['thread','Threads']]); }
+function dystStoryElementCols(){ var _to = dystCatOv('thread'); return dystCatCols('element', ['being','org','setting','object','concept','event','stakes'], 'many').concat([['thread', (_to && _to.many) || 'Threads']]); }   /* v.837 — a kind of work can rename Threads too */
 try { window.dystCatLabel = dystCatLabel; window.dystCatIds = dystCatIds; window.dystCatCols = dystCatCols; window.dystCatReg = dystCatReg; window.DYST_CATREG = DYST_CATREG; } catch (e){}
 const DYSTORIA_DATA = {
   version: 3,
@@ -7269,7 +7363,7 @@ state.selection.being = new Set(['Archetype']);
 
 function getCat(id){ try{ dystCatSyncNames(); }catch(e){} const c = CATS.find(c => c.id === id);   /* v.830 */
   if (c){ if (id === 'org'){ try{ dystSyncCustomGroupKinds(c); }catch(e){} } else if (DYST_FAM_CATS && DYST_FAM_CATS[id]){ try{ dystSyncCustomFamilies(c); }catch(e){} } }   /* v.780/v.781 — the story's own families ride on the pool */
-  return c; }   /* v.780 — the story's own kinds of group ride on the pool */
+  return c || ((typeof dystCustomCatObj === 'function') ? dystCustomCatObj(id) : c); }   /* v.780 — the story's own kinds of group ride on the pool; v.837 — and your own categories answer too */
 /* ---- #52 · the group taxonomy, read off the pool itself -----------------------------------
    [Jeremy, 2026-09-03] "remember element groups and bonds are supposed to be in sync."
    They are the same vocabulary seen from two rooms: the `org` pool's subcategories are what the
@@ -12155,6 +12249,8 @@ function ecRenderSubOptions(selected, containerSub){
   sel.innerHTML = opts.join('');
 }
 function openElemCard(catId, mode, node, opts){
+  { const _cr = (typeof dystCatReg === 'function') ? dystCatReg(catId) : null;   /* v.837 — yours: the card of the kind it is built on, tagged */
+    if (_cr && _cr.custom){ openElemCard(_cr.base, mode, node, Object.assign({}, opts || {}, { direct: true, ccat: _cr.id })); return; } }
   // + element \u2192 open the builder DIRECTLY (one less step). The "By description" pass now lives inside each
   // builder (below the name), so the old chooser (Creator \u00b7 By description) is redundant.
   if (catId === 'being' && (mode === 'add' || mode == null) && !(opts && opts.direct) && typeof window.openCharCreator === 'function'){ window.openCharCreator(); return; }
@@ -12165,12 +12261,13 @@ function openElemCard(catId, mode, node, opts){
   if (catId === 'concept' && (mode === 'add' || mode == null) && !(opts && opts.direct) && typeof window.openConceptCreator === 'function'){ window.openConceptCreator(); return; }
   if (addsLocked()){ flashStatus('The session is underway \u2014 end it to add elements'); return; }
   if ($('ecScope')) $('ecScope').checked = false;
+  EC.ccat = (opts && opts.ccat) || null;   /* v.837 */
   EC.cat = catId; EC.cats = null; EC.mode = mode || 'add'; EC.node = (node == null ? -1 : node); EC.block = null; EC.fam = '';
   { const s = $('ecSurprise'); if (s) s.style.display = 'none'; }
   const cat = getCat(catId);
   const containerSub = (EC.mode === 'container') ? levelContainerSub() : null;
   $('ecTitle').textContent = containerSub ? ('This map is a \u2014 ' + containerSub)
-    : ((mode === 'replace' ? 'Change \u2014 ' : 'Add \u2014 ') + (cat ? cat.name : catId));
+    : ((mode === 'replace' ? 'Change \u2014 ' : 'Add \u2014 ') + (EC.ccat ? dystCatLabel(EC.ccat, 'one') : (cat ? cat.name : catId)));
   ecRenderSubOptions('', containerSub);
   { const _ss = $('ecSub'); if (_ss && !_ss._newSubWired){ _ss._newSubWired = 1; _ss.addEventListener('change', function(){
       if (_ss.value === '__newsub__'){
@@ -12202,7 +12299,7 @@ function openElemCard(catId, mode, node, opts){
   { const res = $('ecResults'); if (res) res.scrollTop = 0; }   // always open at the top of the list
   sr.focus(); sr.select();
 }
-function closeElemCard(){ const c = $('elemCard'); c.classList.remove('show', 'ec-goal', 'ec-tall', 'ec-right'); c.style.height = ''; c.style.maxHeight = ''; c.style.zIndex = ''; EC.cat = null; EC.cats = null; EC.mode = 'add'; EC.block = null; try { window.__qaOnElementAdd = null; } catch(e){} try { document.body.classList.remove('qa-cardopen'); } catch(e){} }
+function closeElemCard(){ const c = $('elemCard'); EC.ccat = null; c.classList.remove('show', 'ec-goal', 'ec-tall', 'ec-right'); c.style.height = ''; c.style.maxHeight = ''; c.style.zIndex = ''; EC.cat = null; EC.cats = null; EC.mode = 'add'; EC.block = null; try { window.__qaOnElementAdd = null; } catch(e){} try { document.body.classList.remove('qa-cardopen'); } catch(e){} }
 // "Surprise Me" — add a random guide/exercise from the current block, respecting the subcategory toggle filter
 function ecSurpriseRoll(){
   if (addsLocked()){ flashStatus('The session is underway — end it to add'); return; }
@@ -12365,6 +12462,7 @@ function commitWord(word, sub, catId){
   if (!state.prompt){ state.prompt = { words: [], sets: 1, links: [], removedLinks: [] }; state.activeSet = 0; state.frames = [{ gap: null, prompt: state.prompt }]; state.frameIdx = 0; }
   const s = Math.min(state.activeSet || 0, (state.prompt.sets || 1) - 1);
   const built = ecBuildItem(word, sub, s, catId);
+  if (EC.ccat && built && built.cat === ((typeof dystCatReg === 'function' && dystCatReg(EC.ccat)) || {}).base) built.ccat = EC.ccat;   /* v.837 — filed under your category */
   ensureDistinctBeing(built);   // duplicate of an existing being ("another God") → give this one its own instance id so it gets its own notepad
   const builtIdx = state.prompt.words.length;
   state.prompt.words.push(built);
@@ -30563,7 +30661,9 @@ function showPlanningDoors(){
   if (document.getElementById('planningDoors')) return;
   ensureDoorsCSS();
   var w=document.createElement('div'); w.id='planningDoors';
-  w.innerHTML = '<div class="fr-card"><div class="fr-h">How do you like to plan?</div>'
+  var _kc = (typeof dystWorkKind === 'function') ? dystWorkKind() : 'novel';   /* v.837 — what you're writing, first */
+  var _kinds = (window.DYST_WORK_KINDS || []).map(function(k){ return '<button type="button" class="fr-kind' + (k.id === _kc ? ' on' : '') + '" data-kind="' + k.id + '" title="' + k.hint + '">' + k.name + '</button>'; }).join('');
+  w.innerHTML = '<div class="fr-card">' + (_kinds ? '<div class="fr-kinds"><div class="fr-kh">What are you writing?</div><div class="fr-krow">' + _kinds + '</div></div>' : '') + '<div class="fr-h">How do you like to plan?</div>'
     + '<div class="fr-sub">One guided path, or jump straight in — there’s no wrong door, and you can move between them anytime.</div>'
     + '<div class="fr-doors">'
     + '<button type="button" class="fr-door" data-act="wizard"><span class="fr-dk">Guided</span><span class="fr-dt">Walk me through it</span><span class="fr-dd">We’ll set your goals and structure, then help you gather your first characters and places.</span></button>'
@@ -30577,6 +30677,9 @@ function showPlanningDoors(){
   function skip(){ frPlanClosePlanning(); if(typeof goMode==='function') goMode('notepad'); setTimeout(function(){ try{ if(typeof window.__planSetView==='function') window.__planSetView('map'); }catch(e){} }, 80); }
   Array.prototype.forEach.call(w.querySelectorAll('.fr-door,.fr-step'), function(b){ b.addEventListener('click', function(){ frPlanAction(b.getAttribute('data-act')); }); });
   var sk=w.querySelector('.fr-skip'); if(sk) sk.addEventListener('click', skip);
+  Array.prototype.forEach.call(w.querySelectorAll('.fr-kind'), function(b){ b.addEventListener('click', function(e){ e.stopPropagation();   /* v.837 */
+    try{ if(typeof ensureSession==='function') ensureSession(); if(window.__dystWorkKind) window.__dystWorkKind.set(b.getAttribute('data-kind')); }catch(err){}
+    Array.prototype.forEach.call(w.querySelectorAll('.fr-kind'), function(x){ x.classList.toggle('on', x === b); }); }); });
   try { track('planning_doors_shown'); } catch(e){}
 }
 window.showPlanningDoors = showPlanningDoors;
@@ -33204,8 +33307,8 @@ function renderStoryLibrary(){
     ((fr.prompt && fr.prompt.words) || []).forEach(w => { if (fkeys.has(wordKey(w))) focusedLibKeys.add(libKeyOf(w.cat, w.name || w.word)); });
   });
   const wrap = bodyEl;
-  dystCatCols('element', ['being','setting','object','event','concept','org','stakes'], 'many').forEach(g => {   /* v.829 — was LIB_GROUPS */
-    const rows = lib.filter(r => r.cat === g[0]); if (!rows.length) return;
+  dystCatCols('element', ['being','setting','object','event','concept','org','stakes'], 'many', { all:true }).filter(g => !dystCatHidden(g[0]) || lib.some(r => ((typeof dystElCat === 'function' && r.item) ? dystElCat(r.item) : r.cat) === g[0])).forEach(g => {   /* v.829 — was LIB_GROUPS; v.837 — a hidden category that holds elements keeps its Legend group, so they stay reachable */
+    const rows = lib.filter(r => ((typeof dystElCat === 'function' && r.item) ? dystElCat(r.item) : r.cat) === g[0]); if (!rows.length) return;   /* v.837 */
     /* v.634 [Jeremy] — the ones already HERE ride at the top of their category, so a category reads
        as two groups: what is on this board, then what is waiting. The sort is stable, so the order
        the roster already had survives inside each group; and it asks `libOnCurrentSurface`, the
@@ -44094,7 +44197,7 @@ function renderNpElements(){
   // number same-named elements (e.g. three unnamed "God" beings) so their notepad chips are distinguishable
   const _npDup = (function(){ const byName = {}, out = {}; els.forEach(e => { const nm = (typeof elDisplayName === 'function') ? elDisplayName(e.w) : (e.w.word || ''); (byName[nm] = byName[nm] || []).push(e.key); }); Object.keys(byName).forEach(nm => { const ks = byName[nm]; if (ks.length > 1) ks.forEach((k, ix) => { out[k] = ' · ' + (ix + 1); }); }); return out; })();
   const cats = [], seenC = new Set();
-  els.forEach(e => { const c = e.w.cat; if (!seenC.has(c)){ seenC.add(c); cats.push(c); } });
+  els.forEach(e => { const c = (typeof dystElCat === 'function') ? dystElCat(e.w) : e.w.cat; if (!seenC.has(c)){ seenC.add(c); cats.push(c); } });   /* v.837 */
   const goals = goalItems(state.session && state.session.goal);
   let filter = state.npCatFilter || 'all';
   if (filter === 'sections' || filter === 'parts') filter = 'plot';   // retired tabs → fold into the Plot tab (sections now live in the plot card)
@@ -44323,7 +44426,7 @@ function renderNpElements(){
   if (filter === 'all') goals.forEach(mkGoal);   // goals are included in the All view
   if (filter === 'all') _arcs.forEach(mkArc);    // arcs, too
   // every story element automatically gets a pill (filtered by the active category tab; the open element always shows)
-  els.forEach(e => { if (filter !== 'all' && e.w.cat !== filter && e.key !== state.npActive) return; mk(e.key, false); });
+  els.forEach(e => { if (filter !== 'all' && ((typeof dystElCat === 'function') ? dystElCat(e.w) : e.w.cat) !== filter && e.key !== state.npActive) return; mk(e.key, false); });   /* v.837 */
   applyNpSearch();   // re-apply any active name search to the freshly-built pills
 }
 function npSelect(key){
@@ -59007,9 +59110,14 @@ body.eink .pl-filterpick .pf-row.on .pf-box{ background:#000; border-color:#000;
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.759';
+  var APP_VERSION = '2026.07.20.760';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.760', date:'September 26, 2026', notes:[
+      '**What are you writing?** [Jeremy] A story can be a Novel, a Short story collection, an Essay, a Journal or Research \u2014 choose in \u270e Categories, or when you start planning. Each renames the categories and Narrative Layers to suit (an essay\u2019s Characters are People, its Concepts are Ideas, its Theme is its Thesis), sets aside what it doesn\u2019t use, and adds what it needs \u2014 Sources and Claims for an essay, Sources and Findings for research. Nothing is deleted, and you can change any of it.',
+      '**Make your own categories.** [Jeremy] In \u270e Categories, add a category of your own \u2014 name it, and say what each one is (an idea kept off the map, a thing on the map, a person, a place, a group or an event). It gets its own row in Story Elements, its own tab, Legend group and notepad tab, and it renames, hides and reorders like the rest. Remove it and its elements go back to where they came from.',
+      '**\u270e Categories moved** beside the \u2726 on the Story Elements heading.'
+    ]},
     { v:'2026.07.20.759', date:'September 26, 2026', notes:[
       '**Beta readers don\u2019t have to swap.** [Jeremy] In your reader profile, choose how you take part: swap reads, read for others with nothing needed back, both \u2014 or just find readers for your own work. A volunteer can be asked to read (or offer to), and a one-way reader owes nothing: the \u201cyou owe them a read\u201d rule is for swaps only.',
       '**Invite anyone to be your beta reader.** Beta readers \u2192 Group \u2192 Invite readers: send an invitation by email, or make a link to share in a post or a newsletter. They don\u2019t need to be writers \u2014 they make a free account from the link, become your reader, and are emailed whenever you send them something.',
@@ -63526,6 +63634,7 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     return m[catId] || 'cat-theme';
   }
   function elemRow(labelText, badgeCatId, pillNodes, addBtn){
+    try{ var _lv=(typeof window.__dystCatOv==='function')?window.__dystCatOv(badgeCatId):null; if(_lv && _lv.many) labelText=_lv.many; }catch(e){}   /* v.837 — a kind of work renames the layers */
     var row=document.createElement('div'); row.className='pl-nrow';
     var lc=document.createElement('div'); lc.className='pl-nlabel';
     var badge=document.createElement('span'); badge.className='pl-cat '+catClass(badgeCatId); badge.textContent=labelText; lc.appendChild(badge);
@@ -63728,7 +63837,7 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
   var NARR_LAYER_CATS = [['genre','Genre'],['period','Context'],['theme','Theme'],['plot','Plot'],['narration','POV']];   /* v.827 — Conflict folded into Stakes: its row is gone, its card is the Stakes card */   /* v.668 · #47 — the conflict row, a READ of the stakes around one optional choice */
   function gatherElements(){
     var a=api(), byCat={}, seen={};
-    if(a){ (a.storyElements()||[]).forEach(function(o){ var c=o.w.cat; seen[o.key]=1; var nm=(c==='being' && o.w && o.w.name && String(o.w.name).trim()) ? String(o.w.name).trim() : a.displayName(o.w); (byCat[c]=byCat[c]||[]).push({ kind:'element', key:o.key, label:a.displayName(o.w), name:nm }); }); }
+    if(a){ (a.storyElements()||[]).forEach(function(o){ var c=(typeof dystElCat==='function')?dystElCat(o.w):o.w.cat; seen[o.key]=1; var nm=(o.w.cat==='being' && o.w && o.w.name && String(o.w.name).trim()) ? String(o.w.name).trim() : a.displayName(o.w); (byCat[c]=byCat[c]||[]).push({ kind:'element', key:o.key, label:a.displayName(o.w), name:nm }); }); }
     // POV (narration) is a writing guide, so its words are stored as constraints and skipped above — pull them in so the POV row shows what was added
     if(a && a.guideEls){ (a.guideEls('narration')||[]).forEach(function(o){ if(seen[o.key]) return; seen[o.key]=1; (byCat['narration']=byCat['narration']||[]).push({ kind:'element', key:o.key, label:a.displayName(o.w) }); }); }
     var threads = a ? (a.threads()||[]).map(function(t){ return { kind:'thread', id:t.id, label:t.name||'Thread' }; }) : [];
@@ -63751,7 +63860,7 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     });
     return elemRow(label, catId, items.map(function(it){ return elementPill(it, it.kind==='element' ? { noTag:(catId==='setting'), onOpen:function(){ if(typeof window.openElementDossier==='function') window.openElementDossier(it.key); } } : (it.kind==='thread' ? { onOpen:function(){ if(typeof window.openThreadCard==='function') window.openThreadCard(it.id); } } : {})); }), add);
   }
-  function singularOf(label, catId){ if(catId && typeof dystCatReg==='function' && dystCatReg(catId)) return dystCatLabel(catId,'one').toLowerCase(); return label.toLowerCase().replace(/s$/,''); }   /* v.829 */
+  function singularOf(label, catId){ if(catId && typeof dystCatReg==='function' && dystCatReg(catId)) return dystCatLabel(catId,'one').toLowerCase(); try{ var _ov=(catId && typeof window.__dystCatOv==='function')?window.__dystCatOv(catId):null; if(_ov && _ov.one) return String(_ov.one).toLowerCase(); }catch(e){} return label.toLowerCase().replace(/s$/,''); }   /* v.837 — a renamed Threads says "+ line of argument" */   /* v.829 */
   function sectHead(title, btnLabel, onClick){
     var h=document.createElement('div'); h.className='pl-secthd';
     var t=document.createElement('h3'); t.textContent=title;
@@ -64734,7 +64843,7 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
   function layersSection(byCat){
     var sec=document.createElement('div'); sec.className='pl-sect';
     sec.appendChild(sectHead('Narrative Layers', '\u2726 Explore', function(){ if(typeof window.openExplore==='function') window.openExplore([], 'Narrative layers', 'layers'); }));
-    NARR_LAYER_CATS.forEach(function(c){
+    NARR_LAYER_CATS.filter(function(c){ return !(typeof dystCatHidden==='function' && dystCatHidden(c[0])); }).forEach(function(c){   /* v.837 — a kind of work can set a layer aside */
       var row = c[0]==='narration' ? povRow() : c[0]==='genre' ? genreRow() : c[0]==='theme' ? themeRow() : c[0]==='period' ? contextRow() : c[0]==='plot' ? plotRow(byCat[c[0]]||[]) : elementCatRow(c[0], c[1], byCat[c[0]]||[]);
       sec.appendChild(row);
     });
@@ -65013,15 +65122,16 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     sec.appendChild(sectHead('Story Elements', '\u2726 Explore', function(){ var a=api(); var keys=(a&&a.storyElements)?(a.storyElements()||[]).map(function(o){return o.key;}):[]; if(typeof window.openExplore==='function') window.openExplore(keys, 'Story elements', 'elements'); }));
     /* v.830 [Jeremy] — rename, hide or reorder the categories: the door sits on the heading it changes */
     try{ var _hd=sec.lastChild; var _cb=document.createElement('button'); _cb.type='button'; _cb.className='pl-catedit'; _cb.textContent='\u270e Categories'; _cb.title='Rename, hide or reorder the categories \u2014 for this story, or all your stories';
-      _cb.addEventListener('click', function(e){ e.stopPropagation(); if(typeof window.openCategoriesCard==='function') window.openCategoriesCard(); }); _hd.appendChild(_cb); }catch(e){}
+      _cb.addEventListener('click', function(e){ e.stopPropagation(); if(typeof window.openCategoriesCard==='function') window.openCategoriesCard(); }); _hd.insertBefore(_cb, _hd.children[1] || null); }catch(e){}   /* v.837 [Jeremy] "just to the right of the explore star" */
     dystStoryElementCols().forEach(function(c){ var row = c[0]==='thread' ? elementCatRow(c[0], c[1], threads||[]) : c[0]==='stakes' ? stakesElementRow(byCat[c[0]]||[]) : elementSetRow(c[0], c[1], byCat[c[0]]||[]); if(row&&row.dataset) row.dataset.cat=c[0]; sec.appendChild(row); });   // R32 — tag each row with its category so the filter can show one at a time
     return sec;
   }
   // Which axis best groups a story-element set: characters by narrative role (bucket), everything else by its Type (subcategory).
   function groupAxis(catId){ return catId==='being' ? 'bucket' : 'sub'; }
   function subOfKey(key){ var a=api(); try{ var w=a&&a.npFindEl?a.npFindEl(key):null; return (w&&w.sub)||''; }catch(e){ return ''; } }
-  function groupLabelOf(catId, key){ return groupAxis(catId)==='bucket' ? elemBucket(key) : subOfKey(key); }
+  function groupLabelOf(catId, key){ if(typeof dystCatIsCustom==='function' && dystCatIsCustom(catId)) return ''; return groupAxis(catId)==='bucket' ? elemBucket(key) : subOfKey(key); }   /* v.837 — yours read as one list */
   function groupOrderFor(catId){
+    if(typeof dystCatIsCustom==='function' && dystCatIsCustom(catId)) return [];
     if(groupAxis(catId)==='bucket') return bucketSet(catId).slice();
     var order=[]; try{ var c=getCat(catId); if(c&&c.subcategories) order=c.subcategories.map(function(s){ return s.name; }); }catch(e){}
     return order;
@@ -65035,14 +65145,16 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     var row=document.createElement('div'); row.className='pl-nrow';
     var lc=document.createElement('div'); lc.className='pl-nlabel';
     var badge=document.createElement('span'); badge.className='pl-cat '+catClass(catId)+' pl-cat-org'; badge.textContent=label; badge.title='Organize '+label+' by role';
-    badge.addEventListener('click', function(e){ e.stopPropagation(); openCatOrganizer(catId); });
+    var _own=(typeof dystCatIsCustom==='function') && dystCatIsCustom(catId);   /* v.837 — yours: its own colour, and its badge opens ✎ Categories */
+    if(_own){ try{ badge.style.setProperty('background', dystCatReg(catId).color, 'important'); badge.classList.add('pl-cat-own'); }catch(e){} badge.title='Your own category — rename, hide or remove it in ✎ Categories'; }
+    badge.addEventListener('click', function(e){ e.stopPropagation(); if(_own){ if(typeof window.openCategoriesCard==='function') window.openCategoriesCard({ scope:'story' }); return; } openCatOrganizer(catId); });
     lc.appendChild(badge);
     var mode=elemSortMode(catId);
     var sel=document.createElement('select'); sel.className='pl-sortsel'; sel.title='How to arrange these';
     [['off','Unsorted'],['label','Sort with label'],['nolabel','Sort without label']].forEach(function(o){ var op=document.createElement('option'); op.value=o[0]; op.textContent=o[1]; if(o[0]===mode) op.selected=true; sel.appendChild(op); });
     sel.addEventListener('change', function(e){ e.stopPropagation(); setElemSortMode(catId, sel.value); renderNarrative(); });
     lc.appendChild(sel);
-    { var _xb=document.createElement('button'); _xb.type='button'; _xb.className='pl-expbtn'; _xb.innerHTML='\u2726'; _xb.title='Explore '+label+' \u2014 a Q&A filed into your notes'; _xb.addEventListener('click', function(e){ e.stopPropagation(); qaCatExplore(catId, label); }); lc.appendChild(_xb); }
+    if(!_own){ var _xb=document.createElement('button'); _xb.type='button'; _xb.className='pl-expbtn'; _xb.innerHTML='\u2726'; _xb.title='Explore '+label+' \u2014 a Q&A filed into your notes'; _xb.addEventListener('click', function(e){ e.stopPropagation(); qaCatExplore(catId, label); }); lc.appendChild(_xb); }
     row.appendChild(lc);
 
     var groups=document.createElement('div'); groups.className='pl-rolegroups';
@@ -99584,7 +99696,7 @@ html body.eink #profileCard .pf-head{ background:#fff; box-shadow:0 0 0 100vmax 
     if (later){ clearTimeout(secTimer); secTimer = setTimeout(function(){ broadcast(false); }, 1050); }
     sendKeys(force);
   }
-  var KEYS = ['name', 'section', 'plotGaps', 'deaths', 'deathLog', 'ruinsLog', 'catDisplay'];   /* v.830 — the story's category names travel live */
+  var KEYS = ['name', 'section', 'plotGaps', 'deaths', 'deathLog', 'ruinsLog', 'catDisplay', 'catCustom', 'workKind'];   /* v.837 */   /* v.830 — the story's category names travel live */
   function sendKeys(force){
     var sess = state.session; if (!sess) return;
     KEYS.forEach(function(k){ var v = (k === 'name') ? (document.getElementById('storyName') || {}).value || sess.name : (k === 'section' ? ((document.getElementById('sectionTitle') || {}).value || sess.section) : sess[k]);
@@ -99628,7 +99740,7 @@ html body.eink #profileCard .pf-head{ background:#fff; box-shadow:0 0 0 100vmax 
       else if (p.k === 'section'){ var st = document.getElementById('sectionTitle'); if (st && st.value !== p.v && document.activeElement !== st) st.value = p.v || ''; if (sess) sess.section = p.v || ''; }
       else if (KEYS.indexOf(p.k) >= 0 && sess){ sess[p.k] = p.v;
         if (p.k === 'plotGaps') state.plotGaps = p.v || {}; if (p.k === 'deaths'){ state.deaths = p.v || 0; try{ updateDeaths(); }catch(e){} } if (p.k === 'deathLog') state.deathLog = p.v || []; if (p.k === 'ruinsLog') state.ruinsLog = p.v || [];
-        if (p.k === 'catDisplay'){ try{ if (window.__planRefreshNarrative) window.__planRefreshNarrative(); }catch(e){} } }
+        if (p.k === 'catDisplay' || p.k === 'catCustom' || p.k === 'workKind'){ try{ window.__dystCatRev = (window.__dystCatRev || 0) + 1; if (window.__planRefreshNarrative) window.__planRefreshNarrative(); }catch(e){} } }
       sent.keys[p.k] = JSON.stringify(p.v == null ? null : p.v);
       persist();
     }catch(e){ console.warn('live keys apply', e); }
@@ -101589,12 +101701,100 @@ body.eink .pl-cats-row input, body.eink .pl-cats-eye{ border-color:#000; backgro
   }
   function orderFor(){
     if (scope === 'story') return currentOrder();
-    var a = A().order, ids = DYST_CATREG.map(function(r){ return r.id; });
+    var a = A().order, ids = DYST_CATREG.filter(function(r){ return !r.custom; }).map(function(r){ return r.id; });   /* v.837 — your own are the story's, not the device's */
     if (!Array.isArray(a) || !a.length) return ids;
     var rank = {}; a.forEach(function(id, i){ rank[id] = i; });
     return ids.slice().sort(function(x, y){ return (rank[x] == null ? 99 : rank[x]) - (rank[y] == null ? 99 : rank[y]); });
   }
-  function counts(){ var n = {}; try { (window.__dystPlan.storyElements() || []).forEach(function(o){ var c = o.w && o.w.cat; if (c) n[c] = (n[c] || 0) + 1; }); } catch (e){} return n; }
+  function counts(){ var n = {}; try { (window.__dystPlan.storyElements() || []).forEach(function(o){ var c = o.w && (typeof dystElCat === 'function' ? dystElCat(o.w) : o.w.cat); if (c) n[c] = (n[c] || 0) + 1; }); } catch (e){} return n; }
+  /* v.837 — your own categories */
+  function newId(){ return 'cc_' + Date.now().toString(36) + Math.floor(Math.random() * 1296).toString(36); }
+  function addCustom(o){
+    if (!state.session) return null;
+    var one = clean(o.one), many = clean(o.many); if (!many && !one) return null;
+    if (!many) many = /s$/i.test(one) ? one : one + 's';
+    if (!one) one = (/[^s]s$/i.test(many) && many.length > 3) ? many.slice(0, -1) : many;
+    var base = o.base || 'concept'; if (!dystCatReg(base) || base === 'stakes') base = 'concept';
+    var list = dystCustomCats().slice();
+    var have = list.filter(function(c){ return c && String(c.many).toLowerCase() === many.toLowerCase(); })[0]; if (have) return have.id;
+    var c = { id:newId(), one:one, many:many, base:base, color:o.color || DYST_CC_COLORS[list.length % DYST_CC_COLORS.length] };
+    if (o.kind) c.kind = o.kind;
+    list.push(c);
+    if (typeof pushUndo === 'function'){ try { pushUndo(); } catch (e){} }
+    state.session.catCustom = list;
+    saveStory(); return c.id;
+  }
+  function removeCustom(id){
+    if (!state.session) return;
+    var list = dystCustomCats().filter(function(c){ return c && c.id !== id; });
+    if (typeof pushUndo === 'function'){ try { pushUndo(); } catch (e){} }
+    if (list.length) state.session.catCustom = list; else delete state.session.catCustom;
+    try { var strip = function(w){ if (w && w.ccat === id) delete w.ccat; };
+      (state.frames || []).forEach(function(fr){ ((fr.prompt && fr.prompt.words) || []).forEach(strip); });
+      ((state.prompt && state.prompt.words) || []).forEach(strip);
+      (state.session.elemLibrary || []).forEach(function(r){ if (r) strip(r.item); }); } catch (e){}
+    var d = story(); if (d.labels || d.hidden || d.order){ d = JSON.parse(JSON.stringify(d)); if (d.labels) delete d.labels[id]; if (d.hidden) delete d.hidden[id]; if (Array.isArray(d.order)) d.order = d.order.filter(function(x){ return x !== id; }); var o = scope; scope = 'story'; try { commit(d); } finally { scope = o; } return; }
+    saveStory();
+  }
+  function saveStory(){
+    bump();
+    try { if (typeof scheduleAutosave === 'function') scheduleAutosave(); else if (typeof saveSession === 'function') saveSession(); } catch (e){}
+    try { if (window.__planRefreshNarrative) window.__planRefreshNarrative(); } catch (e){}
+    try { if (typeof renderNpElements === 'function') renderNpElements(); } catch (e){}
+  }
+  function countOf(id){ return counts()[id] || 0; }
+  /* v.837 — what you're writing: a kind re-dresses the story (names and hides for the categories, Threads and the Narrative
+     Layers; the categories it needs, as your own). The names and hides it owns are replaced; your own categories and your
+     order are kept; a category an earlier kind added that is still empty is taken away again. */
+  function applyKind(k){
+    var p = DYST_KIND_PRESETS[k]; if (!p || !state.session) return;
+    var list = dystCustomCats().filter(function(c){ return !(c && c.kind && c.kind !== k && !countOf(c.id)); });
+    (p.customs || []).forEach(function(pc){ if (!list.some(function(c){ return c && String(c.many).toLowerCase() === pc.many.toLowerCase(); })) list.push({ id:newId(), one:pc.one, many:pc.many, base:pc.base, color:pc.color, kind:k }); });
+    if (typeof pushUndo === 'function'){ try { pushUndo(); } catch (e){} }
+    if (list.length) state.session.catCustom = list; else delete state.session.catCustom;
+    if (k === 'novel') delete state.session.workKind; else state.session.workKind = k;
+    var d = story(); d = JSON.parse(JSON.stringify(d || {}));
+    d.labels = JSON.parse(JSON.stringify(p.labels || {})); d.hidden = JSON.parse(JSON.stringify(p.hidden || {}));
+    Object.keys(d.labels).forEach(function(id){ if (dystCatReg(id)) logName(id, { one: d.labels[id].one, many: d.labels[id].many }); });
+    var o = scope; scope = 'story'; try { commit(d); } finally { scope = o; }
+    try { track('work_kind_set', { kind:k }); } catch (e){}
+  }
+  window.__dystWorkKind = { set: applyKind, get: function(){ return dystWorkKind(); }, addCustom: function(o){ var id = addCustom(o || {}); return id; }, removeCustom: removeCustom };
+  function kindRow(H, render){
+    var wrap = H('div', 'pl-kinds'); wrap.appendChild(H('div', 'pl-kinds-h', 'What are you writing?'));
+    var row = H('div', 'pl-kinds-row'), cur = dystWorkKind();
+    DYST_WORK_KINDS.forEach(function(k){ var b = H('button', 'pl-kind' + (cur === k.id ? ' on' : ''), k.name); b.type = 'button'; b.dataset.kind = k.id; b.title = k.hint;
+      b.addEventListener('click', async function(e){ e.stopPropagation(); if (k.id === dystWorkKind()) return;
+        var ok = true; try { ok = await siteConfirm('Set this story up as ' + (/^[aeiou]/i.test(k.name) ? 'an ' : 'a ') + k.name.toLowerCase() + '? The categories and Narrative Layers take its names' + (DYST_KIND_PRESETS[k.id].customs.length ? ', and ' + DYST_KIND_PRESETS[k.id].customs.map(function(c){ return c.many; }).join(' and ') + ' are added' : '') + '. Nothing is deleted — every element stays, and you can change any of it here.', 'Set up as ' + k.name); } catch (err){}
+        if (!ok) return; applyKind(k.id); render(); });
+      row.appendChild(b); });
+    wrap.appendChild(row);
+    var hint = (DYST_WORK_KINDS.filter(function(x){ return x.id === cur; })[0] || {}).hint || '';
+    wrap.appendChild(H('div', 'pl-cats-hint pl-kinds-hint', hint));
+    return wrap;
+  }
+  function newCatForm(H, render){
+    var f = H('div', 'pl-cats-new');
+    f.appendChild(H('div', 'pl-kinds-h', 'Make a category of your own'));
+    var r1 = H('div', 'pl-cats-newrow');
+    var many = H('input', 'pl-cats-nmany'); many.type = 'text'; many.placeholder = 'Name — e.g. Sources'; many.maxLength = 28;
+    var oneI = H('input', 'pl-cats-none'); oneI.type = 'text'; oneI.placeholder = 'One of them — e.g. Source'; oneI.maxLength = 28;
+    var like = H('select', 'pl-cats-nlike');
+    [['concept', 'an idea — kept off the map'], ['object', 'a thing — placed on the map'], ['being', 'a person'], ['setting', 'a place'], ['org', 'a group'], ['event', 'an event']].forEach(function(o){ var op = document.createElement('option'); op.value = o[0]; op.textContent = 'Each one is ' + o[1]; like.appendChild(op); });
+    var go = H('button', 'pl-cats-nadd', '+ Add'); go.type = 'button';
+    [many, oneI, like].forEach(function(x){ x.addEventListener('click', function(e){ e.stopPropagation(); }); });
+    var msg = H('div', 'pl-cats-nmsg');
+    go.addEventListener('click', function(e){ e.stopPropagation();
+      if (!clean(many.value) && !clean(oneI.value)){ msg.textContent = 'Give it a name first.'; try { many.focus(); } catch (err){} return; }
+      var id = addCustom({ many: many.value, one: oneI.value, base: like.value }); if (!id){ msg.textContent = 'Open a story first.'; return; }
+      try { track('category_created', { base: like.value }); } catch (err){}
+      render(); });
+    many.addEventListener('keydown', function(e){ if (e.key === 'Enter'){ e.preventDefault(); go.click(); } });
+    r1.appendChild(many); r1.appendChild(oneI); f.appendChild(r1);
+    var r2 = H('div', 'pl-cats-newrow'); r2.appendChild(like); r2.appendChild(go); f.appendChild(r2); f.appendChild(msg);
+    f.appendChild(H('div', 'pl-cats-hint', 'Its elements are real elements of that kind — on the map or off it, in Bonds, the Wiki and the notepad — filed under your category. Remove it and they go back to where they came from.'));
+    return f;
+  }
 
   window.openCategoriesCard = function(opts){
     opts = opts || {}; if (opts.scope) scope = opts.scope;
@@ -101605,12 +101805,14 @@ body.eink .pl-cats-row input, body.eink .pl-cats-eye{ border-color:#000; backgro
       [['story', 'This story'], ['account', 'All my stories']].forEach(function(o){ var b = H('button', scope === o[0] ? 'on' : '', o[1]); b.type = 'button'; b.dataset.scope = o[0];
         b.addEventListener('click', function(e){ e.stopPropagation(); scope = o[0]; render(); }); seg.appendChild(b); });
       body.appendChild(seg);
+      if (scope === 'story' && state.session) body.appendChild(kindRow(H, render));   /* v.837 */
       body.appendChild(H('div', 'pl-cats-hint', scope === 'story'
         ? 'Changes here are this story’s own, and its co-authors see them. Anything you leave alone follows All my stories.'
         : 'Your defaults on this device, for every story that has not set its own.'));
       var n = counts(), ids = orderFor();
       ids.forEach(function(id, i){
         var r = dystCatReg(id), v = viewOf(id), c = (typeof getCat === 'function' && getCat(id)) || {};
+        if (!r) return;
         var row = H('div', 'pl-cats-row' + (v.hidden ? ' hidden' : '')); row.dataset.cat = id;
         var mv = H('span', 'pl-cats-move');
         var up = H('button', 'pl-cats-up', '▲'); up.type = 'button'; up.title = 'Move up'; up.disabled = (i === 0);
@@ -101634,8 +101836,17 @@ body.eink .pl-cats-row input, body.eink .pl-cats-eye{ border-color:#000; backgro
         var rs = H('button', 'pl-cats-reset', '↺'); rs.type = 'button'; rs.title = 'Back to ' + (scope === 'story' ? 'All my stories' : r.many); if (!v.own) rs.hidden = true;
         rs.addEventListener('click', function(e){ e.stopPropagation(); resetOne(id); render(); });
         row.appendChild(rs);
+        /* v.837 — yours can be removed; its elements go back to the kind it is built on */
+        if (r.custom){ var del = H('button', 'pl-cats-del', '✕'); del.type = 'button'; del.title = 'Remove ' + v.label + ' — its elements go back to ' + dystCatLabel(r.base, 'many');
+          del.addEventListener('click', async function(e){ e.stopPropagation(); var k = n[id] || 0;
+            var ok = true; try { ok = await siteConfirm('Remove the category “' + v.label + '”?' + (k ? ' Its ' + k + ' element' + (k > 1 ? 's stay' : ' stays') + ' in the story as ' + dystCatLabel(r.base, 'many') + '.' : ''), 'Remove'); } catch (err){}
+            if (!ok) return; removeCustom(id); render(); });
+          row.appendChild(del); row.classList.add('own');
+          row.title = 'Your own category — each one is ' + dystCatLabel(r.base, 'one').toLowerCase(); }
+        else row.appendChild(H('span', 'pl-cats-delsp'));
         body.appendChild(row);
       });
+      if (scope === 'story' && state.session) body.appendChild(newCatForm(H, render));   /* v.837 */
       var ft = H('div', 'pl-cats-foot');
       ft.appendChild(H('span', null, 'Threads stay last. The names travel with the story; the defaults stay on this device.'));
       var ra = H('button', 'pl-cats-resetall', scope === 'story' ? 'Reset this story' : 'Reset my defaults'); ra.type = 'button';
@@ -102582,5 +102793,37 @@ html body.ember:not(.eink) #editMode #edUndoRedo button{ background:var(--lab-wa
 html body.ember:not(.eink) #editMode #edUndoRedo button:hover:not(:disabled){ background:rgba(255,205,116,.16) !important; border-color:var(--lab-line, rgba(255,205,116,.5)) !important; color:var(--lab-gold, #ffcd74) !important; }
 /* the closed Plot card's count of the elements it isn't showing */
 .pl-pcard-elcount{ font-family:var(--sans); font-size:10.5px; letter-spacing:.04em; color:#8a8172; margin-top:3px; }
+</style>
+<style id="dyst-v837">
+/* v.837 — ✎ Categories right after the ✦ star (the phone keeps v.830's placement: its heading is centred) */
+html body:not(.mobile-min) #planNarrative .pl-secthd .pl-catedit{ position:static; transform:none; top:auto; right:auto; margin-left:-4px; }
+/* a kind's longer names ("Schools of thought", "Lines of argument") wrap in the label column instead of running under the pills */
+#planNarrative .pl-nlabel .pl-cat{ white-space:normal; display:inline-block; max-width:118px; line-height:1.3; vertical-align:top; }
+/* your own category's badge */
+.pl-cat.pl-cat-own{ color:#fff !important; }
+/* the Categories card: what you're writing; your own; removing yours */
+#catsBd .pl-kinds{ margin:4px 6px 12px; }
+#catsBd .pl-kinds-h, #catsBd .pl-cats-new .pl-kinds-h{ font-family:var(--sans); font-size:10.5px; font-weight:700; letter-spacing:.12em; text-transform:uppercase; color:#8a8172; margin-bottom:7px; }
+#catsBd .pl-kinds-row{ display:flex; flex-wrap:wrap; gap:6px; }
+#catsBd .pl-kind{ border:1px solid var(--line); background:rgba(255,255,255,.6); color:var(--charcoal); border-radius:999px; padding:5px 12px; cursor:pointer; font:600 12px/1.3 var(--sans); }
+#catsBd .pl-kind:hover{ border-color:var(--gold); }
+#catsBd .pl-kind.on{ background:var(--charcoal); color:#f5efe2; border-color:var(--charcoal); }
+#catsBd .pl-kinds-hint{ margin:7px 0 0; }
+.pl-cats-row{ grid-template-columns:auto 12px minmax(0,1fr) minmax(0,.8fr) auto auto auto auto; }
+.pl-cats-del{ border:none; background:none; cursor:pointer; color:#9a8f7e; font-size:12px; padding:3px 6px; border-radius:6px; }
+.pl-cats-del:hover{ color:#a4453a; background:rgba(164,69,58,.08); }
+.pl-cats-delsp{ width:20px; }
+#catsBd .pl-cats-new{ margin:14px 6px 4px; padding-top:12px; border-top:1px solid rgba(120,110,90,.16); }
+#catsBd .pl-cats-newrow{ display:flex; gap:8px; margin-bottom:8px; }
+#catsBd .pl-cats-newrow input, #catsBd .pl-cats-newrow select{ flex:1; min-width:0; box-sizing:border-box; font:inherit; font-size:13px; padding:6px 9px; border:1px solid var(--line); border-radius:7px; background:rgba(255,255,255,.75); color:var(--charcoal); }
+#catsBd .pl-cats-nadd{ flex:none; border:1px solid var(--charcoal); background:var(--charcoal); color:#f5efe2; border-radius:999px; padding:6px 14px; cursor:pointer; font:700 11px/1.2 var(--sans); letter-spacing:.06em; text-transform:uppercase; }
+#catsBd .pl-cats-nmsg{ min-height:14px; font-size:12px; color:#a4453a; }
+/* the planning doors: what you're writing */
+#planningDoors .fr-kinds{ margin:0 0 18px; text-align:center; }
+#planningDoors .fr-kh{ font-family:var(--sans); font-size:11px; font-weight:700; letter-spacing:.14em; text-transform:uppercase; opacity:.7; margin-bottom:8px; }
+#planningDoors .fr-krow{ display:flex; flex-wrap:wrap; gap:6px; justify-content:center; }
+#planningDoors .fr-kind{ border:1px solid rgba(250,154,49,.3); background:transparent; color:inherit; border-radius:999px; padding:6px 13px; cursor:pointer; font:600 12px/1.3 var(--sans); }
+#planningDoors .fr-kind:hover{ border-color:var(--gold, #fa9a31); }
+#planningDoors .fr-kind.on{ background:rgba(250,154,49,.16); border-color:var(--gold, #fa9a31); color:#f6d9a8; }
 </style>
 </body></html>
