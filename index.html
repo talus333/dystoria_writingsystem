@@ -26125,7 +26125,9 @@ function migrateElementKey(oldKey, newKey){
       remapRe(s.npNotes);
       remapExact(s.npImages);
       remapExact(s.npColors);
-      remapExact(s.elStyle);   /* v.874 · #53 phase 3 — the writer's own shape and colour on the Bonds map */
+      remapExact(s.elStyle);
+      /* v.875 — and a bond's own line, keyed by the pair */
+      if (s.bondStyle) Object.keys(s.bondStyle).forEach(k => { const pr = k.split('\u2194'); if (pr.indexOf(oldKey) < 0) return; const nk = pr.map(x => x === oldKey ? newKey : x).sort().join('\u2194'); if (s.bondStyle[nk] === undefined) s.bondStyle[nk] = s.bondStyle[k]; delete s.bondStyle[k]; });   /* v.874 · #53 phase 3 — the writer's own shape and colour on the Bonds map */
       remapExact(s.elFields);   /* v.839 — and a claim's links to it */
       remapExact(s.elStory);   /* v.848 — and which story it belongs to */
       try { if (s.elFields) Object.keys(s.elFields).forEach(function(k){ var f = s.elFields[k]; ['supports', 'disputes', 'examples'].forEach(function(p){ if (Array.isArray(f[p])) f[p] = f[p].map(function(x){ return x === oldKey ? newKey : x; }); }); }); } catch (e){}
@@ -59698,9 +59700,12 @@ body.eink .pl-filterpick .pf-row.on .pf-box{ background:#000; border-color:#000;
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.797';
+  var APP_VERSION = '2026.07.20.798';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.798', date:'September 27, 2026', notes:[
+      '**Your own line on the Bonds map.** [Jeremy] Open a bond’s card and there is now “How the line looks”: solid, dotted, long dashes or dash-and-dot, and the same thirteen colours as the pills, with “Its feeling” as the default. The short even dash isn’t offered — on this map it means a secret — and a secret bond stays dashed whatever you choose. When your colour hides the line’s own, the card and the line’s tooltip still say what it would have shown (warm, cold, conflict and its intensity). The arrowhead takes your colour; the line’s thickness still means intensity and its arrow still means direction.'
+    ]},
     { v:'2026.07.20.797', date:'September 27, 2026', notes:[
       '**Your own shape and colour on the Bonds map.** [Jeremy] Select a pill on the Bonds map and a third circle sits between the link and the ×: it opens a small picker for that one element — seven shapes (pill, plaque, hexagon, shield, chevron, diamond, pennant) and thirteen colours from the app’s own warm family, filled or pale — with its kind’s own look marked as the default and one click back to it. Every line still lands on the outline you chose. It is only how the element looks: nothing else reads it, and the pill’s tooltip still names what kind of element it is.'
     ]},
@@ -80882,7 +80887,7 @@ body:not(.eink) #libExportMenu button:hover{ background:rgba(255,255,255,.08) !i
     var secret = false;
     if (d) secret = !!d.secret;
     else try{ secret = !!((e.aspects.fwd && e.aspects.fwd.secret) || (e.aspects.rev && e.aspects.rev.secret)); }catch(err){}
-    return { w:w, op:op, col:col, secret:secret, conflict:!!mood.conflict };
+    return lnApply({ w:w, op:op, col:col, secret:secret, conflict:!!mood.conflict }, e, inten, mood);   /* #53 phase 3b */
   }
 
   /* ---- render ------------------------------------------------------------ */
@@ -83455,6 +83460,61 @@ body:not(.eink) #libExportMenu button:hover{ background:rgba(255,255,255,.08) !i
   }
   function escH(t){ return String(t == null ? '' : t).replace(/[&<>"]/g, function(c){ return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
   V.closeStylePop = closeStylePop; V.elStyleOf = elStyleOf; V.stColours = stColours;
+  /* ---- #53 phase 3b · the writer's own line, one bond at a time ----------------------------
+     [Jeremy, 2026-09-03] "…and a line style changer and colour picker for the arrows." Every channel on a line
+     already SAYS something — colour is its feeling (warm, neutral, cold; crimson for conflict), width is
+     intensity, the arrow is direction, the 5-4 dash is SECRET — so the rule this follows is the design's own:
+     **a style may override a DERIVED value if it announces the override, and may never override a STORED
+     fact.** So: colour, from the same thirteen hues, displaces the feeling's hue and the line's tooltip and its
+     card then say what the feeling was; a line pattern from a set that leaves out 5-4, so a chosen dash can
+     never be read as a secret, and a secret bond stays dashed whatever is chosen; width and the arrow are not
+     offered. `state.session.bondStyle['<a>↔<b>'] = { hue?, dash? }`, keyed by the pair (section-free, like
+     bonds since v.412), carried through a rename. Presentation only. */
+  var LN_DASH = [['', 'Solid', ''], ['dot', 'Dotted', '1.5 4.5'], ['long', 'Long dashes', '11 6'], ['dashdot', 'Dash and dot', '11 4 2 4']];
+  function lnDash(k){ for (var i = 0; i < LN_DASH.length; i++) if (LN_DASH[i][0] === k) return LN_DASH[i][2]; return ''; }
+  function lnHex(name){ var hx = stHueHex(name); if (!hx) return null; var c = stHsl(hx); return stHex(c[0], Math.min(c[1] * 1.15, .46), .44); }
+  function pairKeyOf(e){ return [String(e.akey), String(e.bkey)].sort().join('↔'); }
+  function bondStyleOf(e){ try { var s = state.session; return (s && s.bondStyle && e && s.bondStyle[pairKeyOf(e)]) || null; } catch (err){ return null; } }
+  function lnApply(r, e, inten, mood){
+    var ov = bondStyleOf(e); if (!ov) return r;
+    /* what the line's OWN colour says — read off the colour it would have been, so the words and the ink can't disagree */
+    var reading = (mood && mood.conflict ? 'conflict' : ({ '#c98a3e': 'warm', '#4f78c2': 'cold' }[String(r.col).toLowerCase()] || 'neutral')) + (inten ? ' · intensity ' + inten : '');
+    if (ov.hue){ var lh = lnHex(ov.hue); if (lh){ r.derived = r.col; r.reading = reading; r.col = lh; r.userCol = ov.hue; } }
+    if (ov.dash){ if (r.secret) r.dashKept = true; else { var d = lnDash(ov.dash); if (d){ r.dash = d; r.userDash = ov.dash; } } }
+    return r;
+  }
+  function lnNote(st){ if (!st) return ''; var bits = []; if (st.userCol) bits.push('colour set by you — its own colour would say ' + st.reading); if (st.userDash) bits.push('line style set by you'); if (st.dashKept) bits.push('kept dashed: it is a secret');
+    return bits.length ? bits.join('; ') : ''; }
+  function lnMark(svg, col, ci, wi){
+    if (ci >= 0) return 'bnArrow' + ci + '_' + wi;
+    var id = 'bnArrowU' + String(col).replace(/[^0-9a-f]/gi, '') + '_' + wi;
+    if (!document.getElementById(id)){ var base = document.getElementById('bnArrow0_' + wi); if (base){ var mk = base.cloneNode(true); mk.setAttribute('id', id); var p = mk.querySelector('path'); if (p) p.setAttribute('fill', col); base.parentNode.appendChild(mk); } }
+    return id;
+  }
+  function lnSection(c, e, idx, m){
+    var st = edgeStyle(e), ov = bondStyleOf(e) || {}, box = el('div', 'bn-line');
+    var H = '<div class="bn-ln-h">How the line looks <span>only here — it changes nothing about the bond</span></div>'
+      + '<div class="bn-ln-dash" role="group" aria-label="Line">' + LN_DASH.map(function(x){ return '<button type="button" data-dash="' + x[0] + '" aria-pressed="' + ((ov.dash || '') === x[0]) + '" title="' + x[1] + '"' + (st.secret ? ' disabled' : '') + '><svg viewBox="0 0 44 8" aria-hidden="true"><line x1="2" y1="4" x2="42" y2="4"' + (x[2] ? ' stroke-dasharray="' + x[2] + '"' : '') + '/></svg></button>'; }).join('') + '</div>'
+      + (st.secret ? '<div class="bn-ln-note">It is a secret, so it stays dashed — that pattern is kept for secrets and can’t be chosen.</div>' : '<div class="bn-ln-note">The short even dash isn’t offered: on this map it means a secret.</div>')
+      + '<div class="bn-ln-hues"><button type="button" class="bn-ln-hue bn-ln-def" data-hue="" aria-pressed="' + (!ov.hue) + '" title="Its own colour — what it feels like">Its feeling</button>'
+      + ST_HUES.map(function(x){ return '<button type="button" class="bn-ln-hue" data-hue="' + x[0] + '" aria-pressed="' + (ov.hue === x[0]) + '" title="' + x[0] + '" style="background:' + lnHex(x[0]) + '"></button>'; }).join('') + '</div>'
+      + (st.userCol ? '<div class="bn-ln-said">Your colour hides its own, which says <b>' + escH(st.reading) + '</b>.</div>' : '')
+      + '<div class="bn-ln-foot"><button type="button" class="bn-ln-reset"' + ((ov.hue || ov.dash) ? '' : ' disabled') + '>Back to the default</button></div>';
+    box.innerHTML = H;
+    var set = function(ch){
+      try { var s = state.session; if (!s) return; s.bondStyle = s.bondStyle || {}; var k = pairKeyOf(e), cur = ch === null ? {} : Object.assign({}, s.bondStyle[k] || {});
+        if (ch) Object.keys(ch).forEach(function(q){ if (!ch[q]) delete cur[q]; else cur[q] = ch[q]; });
+        if (!cur.hue && !cur.dash) delete s.bondStyle[k]; else s.bondStyle[k] = cur;
+        if (typeof scheduleAutosave === 'function') scheduleAutosave();
+      } catch (err){}
+      m.ui.sel = idx; V.render(m); openCard(e, idx, m);
+    };
+    Array.prototype.forEach.call(box.querySelectorAll('.bn-ln-dash button'), function(b){ b.onclick = function(){ set({ dash: b.dataset.dash }); }; });
+    Array.prototype.forEach.call(box.querySelectorAll('.bn-ln-hue'), function(b){ b.onclick = function(){ set({ hue: b.dataset.hue }); }; });
+    box.querySelector('.bn-ln-reset').onclick = function(){ set(null); };
+    c.appendChild(box);
+  }
+  V.bondStyleOf = bondStyleOf; V.pairKeyOf = pairKeyOf;
   /* the silhouette in LOCAL coordinates, centred on the node. '' (the pill) returns null and keeps
      the rectangle path it has always had — the commonest node must not change at all. */
   function silhouette(shape, w, h){
@@ -83990,6 +84050,7 @@ body:not(.eink) #libExportMenu button:hover{ background:rgba(255,255,255,.08) !i
       line.setAttribute('stroke-linecap','butt');
       line.setAttribute('class','bn-edge' + (m.ui.sel === idx ? ' on' : ''));
       if (st.secret) line.setAttribute('stroke-dasharray','5 4');
+      else if (st.dash) line.setAttribute('stroke-dasharray', st.dash);
       var ci = COLS.indexOf(st.col); if (ci < 0) ci = 0;
       var wi = WIDX.indexOf(st.w); if (wi < 0) wi = 1;
 
@@ -84067,8 +84128,9 @@ body:not(.eink) #libExportMenu button:hover{ background:rgba(255,255,255,.08) !i
         : curve
           ? ('M'+qa.x+' '+qa.y+' C '+curve.c1.x+' '+curve.c1.y+' '+curve.c2.x+' '+curve.c2.y+' '+qb.x+' '+qb.y)
           : ('M'+qa.x+' '+qa.y+' L '+qb.x+' '+qb.y));
-      if (arrowFrom === e.akey) line.setAttribute('marker-end','url(#bnArrow'+ci+'_'+wi+')');
-      else if (arrowFrom === e.bkey) line.setAttribute('marker-start','url(#bnArrow'+ci+'_'+wi+')');
+      var _mk = lnMark(svg, st.col, COLS.indexOf(st.col) >= 0 ? ci : -1, wi);   /* a colour of the writer's own gets its own head */
+      if (arrowFrom === e.akey) line.setAttribute('marker-end','url(#'+_mk+')');
+      else if (arrowFrom === e.bkey) line.setAttribute('marker-start','url(#'+_mk+')');
       svg.appendChild(line);
 
       /* on a layered chart the label must read the way the eye travels — down.
@@ -84083,7 +84145,7 @@ body:not(.eink) #libExportMenu button:hover{ background:rgba(255,255,255,.08) !i
       if (st.conflict){ var wm = el('i','bn-war','⚔'); wm.title = 'Conflict'; lab.appendChild(wm); }
       if (faces) lab.appendChild(el('i','bn-more','+' + faces));
       if (runChip) lab.appendChild(el('i','bn-more','all ' + runChip));
-      lab.title = describe(e);
+      lab.title = describe(e); if (lnNote(st)) lab.title = (lab.title ? lab.title + '  \u00b7  ' : '') + lnNote(st);
       if (runChip){
         var names = (runMembers[runK] || []).map(function(k){
           var nd = (nodeEls[k] && nodeEls[k].textContent) || k;
@@ -84120,6 +84182,7 @@ body:not(.eink) #libExportMenu button:hover{ background:rgba(255,255,255,.08) !i
       trunk.setAttribute('stroke-linecap','butt');
       trunk.setAttribute('class','bn-edge bn-trunk' + (sel ? ' on' : ''));
       if (st0.secret) trunk.setAttribute('stroke-dasharray','5 4');
+      else if (st0.dash) trunk.setAttribute('stroke-dasharray', st0.dash);
       svg.appendChild(trunk);
 
       tips.forEach(function(t){
@@ -84141,7 +84204,8 @@ body:not(.eink) #libExportMenu button:hover{ background:rgba(255,255,255,.08) !i
         limb.setAttribute('stroke-linecap','butt');
         limb.setAttribute('class','bn-edge bn-limb' + (m.ui.sel === t.r.idx ? ' on' : ''));
         if (st.secret) limb.setAttribute('stroke-dasharray','5 4');
-        limb.setAttribute('marker-end','url(#bnArrow'+ci+'_'+wi+')');
+        else if (st.dash) limb.setAttribute('stroke-dasharray', st.dash);
+        limb.setAttribute('marker-end','url(#'+lnMark(svg, st.col, COLS.indexOf(st.col) >= 0 ? ci : -1, wi)+')');
         svg.appendChild(limb);
         /* every limb keeps its own card — the fork shares a word, not a bond. The clickable thing
            is an invisible fat copy of the same path: a 1.6px stroke is not a target, and thickening
@@ -84153,7 +84217,7 @@ body:not(.eink) #libExportMenu button:hover{ background:rgba(255,255,255,.08) !i
         hit.setAttribute('class','bn-limbhit');
         hit.style.pointerEvents = 'stroke'; hit.style.cursor = 'pointer';
         var ttl = document.createElementNS('http://www.w3.org/2000/svg','title');
-        ttl.textContent = describe(t.r.e); hit.appendChild(ttl);
+        ttl.textContent = describe(t.r.e) + (lnNote(st) ? '  \u00b7  ' + lnNote(st) : ''); hit.appendChild(ttl);
         hit.addEventListener('click', function(ev){
           ev.stopPropagation(); m.ui.sel = t.r.idx; openCard(t.r.e, t.r.idx, m);
         });
@@ -84533,6 +84597,7 @@ body:not(.eink) #libExportMenu button:hover{ background:rgba(255,255,255,.08) !i
       : (/^conceptmap:/.test(e.origin) ? ('In the concept map' + (e.groupLabel ? ' “'+e.groupLabel+'”' : '') + ' — standing') : '')));
     line('Where it lives', where);
     if (e.conflict) line('Reads as', 'conflict');
+    try { lnSection(c, e, idx, m); } catch (err){}   /* #53 phase 3b — how the line looks */
 
     var acts = el('div','bn-acts');
     /* A standing bond is Bonds' own — of course it can be changed and removed
@@ -85202,6 +85267,23 @@ body:not(.eink) #libExportMenu button:hover{ background:rgba(255,255,255,.08) !i
       '.bn-node.bn-styled.bn-tr-pale[class*="bn-sh-"]{ filter:drop-shadow(0 1px 0 var(--bn-rim)) drop-shadow(0 -1px 0 var(--bn-rim)) drop-shadow(1px 0 0 var(--bn-rim)) drop-shadow(-1px 0 0 var(--bn-rim)); }',
       'body.eink .bn-node.bn-styled{ background:#000 !important; color:#fff !important; box-shadow:none !important; }',
       '.bn-selstyle:hover{ border-color:#c49e4a; }',
+      /* #53 phase 3b — the line's own look, in the bond's card */
+      '.bn-line{ margin-top:12px; padding-top:10px; border-top:1px solid rgba(90,80,60,.14) }',
+      '.bn-ln-h{ display:flex; flex-wrap:wrap; align-items:baseline; gap:4px 8px; font:700 9.5px/1.3 var(--sans); letter-spacing:.14em; text-transform:uppercase; color:#8a6d2f; margin-bottom:8px }',
+      '.bn-ln-h span{ font:italic 11px/1.3 var(--sans); letter-spacing:0; text-transform:none; color:#8a8070 }',
+      '.bn-ln-dash{ display:grid; grid-template-columns:repeat(4,1fr); gap:5px }',
+      '.bn-ln-dash button{ height:26px; border-radius:8px; border:1px solid rgba(90,80,60,.2); background:#fff; cursor:pointer; padding:0 6px; display:flex; align-items:center }',
+      '.bn-ln-dash button svg{ width:100%; height:8px; stroke:#5d5446; stroke-width:2 }',
+      '.bn-ln-dash button[aria-pressed="true"]{ border-color:#c49e4a; background:#fbeed2; box-shadow:0 0 0 1px #c49e4a }',
+      '.bn-ln-dash button[disabled]{ opacity:.4; cursor:default }',
+      '.bn-ln-note{ margin:5px 0 9px; font:11px/1.35 var(--sans); color:#8a8070 }',
+      '.bn-ln-hues{ display:grid; grid-template-columns:repeat(8,1fr); gap:5px }',
+      '.bn-ln-hue{ height:20px; border-radius:6px; border:0; padding:0; cursor:pointer }',
+      '.bn-ln-hue[aria-pressed="true"]{ outline:2px solid #2b2926; outline-offset:2px }',
+      '.bn-ln-def{ grid-column:span 3; background:#fff; border:1px dashed rgba(90,80,60,.35); font:700 9px/1 var(--sans); letter-spacing:.06em; text-transform:uppercase; color:#6b5c39 }',
+      '.bn-ln-said{ margin-top:8px; font:12px/1.4 var(--sans); color:#5d5446 }',
+      '.bn-ln-foot{ margin-top:6px; display:flex; justify-content:flex-end }',
+      '.bn-ln-reset{ border:0; background:transparent; color:#8a6d2f; font:600 11.5px var(--sans); cursor:pointer; text-decoration:underline; text-underline-offset:3px } .bn-ln-reset[disabled]{ opacity:.35; cursor:default; text-decoration:none }',
       '.bn-stylepop{ position:fixed; z-index:9600; width:292px; box-sizing:border-box; padding:14px 14px 12px; border-radius:14px; background:#fbf8f0; color:#2b2926;',
       '  border:1px solid rgba(90,80,60,.22); box-shadow:0 14px 34px -12px rgba(40,30,10,.45); font:13px/1.4 var(--sans); }',
       '.bn-sp-h{ display:flex; align-items:baseline; justify-content:space-between; gap:10px } .bn-sp-h b{ font:600 15px/1.3 var(--serif); overflow:hidden; text-overflow:ellipsis; white-space:nowrap }',
