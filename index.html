@@ -29235,7 +29235,7 @@ function liveDocStr(){
   delete d.ink; delete d.inkPages; delete d.frameIdx; delete d.focusKeys; delete d.game;
   // …and neither do heavy, regenerable caches — they'd bloat every keystroke broadcast.
   // (They still sync via the periodic full cloud save, so a collaborator gets them on reload.)
-  delete d.wikiAI; delete d.wikiOverview; delete d.wikiQuestions; delete d.wikiReading; delete d.wikiDoc; delete d.sessionLog; delete d.archive; delete d.elementQuestions; delete d.goalQuestions;
+  delete d.wikiAI; delete d.wikiOverview; delete d.wikiQuestions; delete d.wikiReading; delete d.wikiDoc; delete d.sessionLog; delete d.replay; delete d.archive; delete d.elementQuestions; delete d.goalQuestions;
   return JSON.stringify(d);
 }
 function liveJoin(sess){
@@ -59697,9 +59697,12 @@ body.eink .pl-filterpick .pf-row.on .pf-box{ background:#000; border-color:#000;
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.793';
+  var APP_VERSION = '2026.07.20.794';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.794', date:'September 27, 2026', notes:[
+      '**Replay your writing.** [Jeremy] Your Record of Work now has a Replay: press play and watch the story grow from where the replay began (or your earliest saved version) to now — every burst of writing in order, typed as you typed it, at 1×, 4×, 16× or 64×, with the date, the words and the session as it goes. Drag the slider to any moment. Turn on “Show where it came from” to colour the page by origin — typed here, dictated, moved from your own work, pasted from outside, co-authors, AI Rephrase. Only you can see it; it isn’t part of an issued Record.'
+    ]},
     { v:'2026.07.20.793', date:'September 27, 2026', notes:[
       '**Record of Work is in Export.** [Jeremy] In Review, Export ▾ → Record of Work… opens your record with the Issue section in view — it’s how you hand someone the story’s making, so it sits beside PDF, Word and ePub. The separate Record button is gone, which also brings it back to phones. Settings → Data → Open your record still works.'
     ]},
@@ -106524,6 +106527,7 @@ body.eink #qaIntroModal .qaim-card{ background:#fff !important; color:#000 !impo
     var b = { o: c.o, t0: c.t0, t1: c.t1, add: c.add, del: c.del, n: c.n, m: c.m };
     if (c.ws) b.ws = c.ws; if (c.f != null) b.f = c.f; if (c.extra) Object.keys(c.extra).forEach(function(k){ b[k] = c.extra[k]; });
     seal(L, b); rollup(L);
+    try { if (window.__dystReplayCap) window.__dystReplayCap(c.sess, b); } catch (e){}   /* v.871 — the replay */
     if (save !== false){ try { if (c.sess === state.session && typeof scheduleAutosave === 'function') scheduleAutosave(); } catch (e){} }
   }
   /* v.868 — which section a change is in: the section heading before the caret */
@@ -107290,6 +107294,331 @@ body.eink #rwPage .rw-issue.rw-flash{ box-shadow:0 0 0 2px #000 }
   /* the pill is gone; if an older part of the page made one, take it away */
   function unpill(){ var p = document.getElementById('rdRecordBtn'); if (p) p.remove(); }
   unpill(); document.addEventListener('DOMContentLoaded', unpill);
+})();
+</script>
+<!-- v.871 [Jeremy: "next"] — #81 Record of Work, P6a: the REPLAY, on your private record.
+     Every time the Ledger closes a burst of writing, the replay keeps the one change it made to the manuscript: where (p),
+     how much went (d) and what came in (s) — one splice, measured by trimming what didn't change from both ends.
+     s.replay = { v:1, begun, base, f:[{ a, b, o, p, d, s, w, i }] }   (a/b: the burst's start and end; o: where it came from;
+     w: the writing session; i: the ledger step). `base` is the story as it stood when the replay began; saved versions from
+     before that are the replay's earlier drafts. It stays with the story, never travels in the live broadcast, and is
+     folded session by session if it grows past its budget. Only the writer sees it; an issued Record never carries it. -->
+<style id="dyst-replay-css">
+#rwPage .rp-sec .rw-intro{ margin-bottom:14px }
+#rwPage .rp-paper{ position:relative; height:340px; overflow:auto; border-radius:12px; background:#1c1a17; border:1px solid rgba(255,205,116,.12); padding:22px 26px 40px; box-sizing:border-box; scroll-behavior:auto;
+  font-family:var(--serif); font-size:19px; line-height:1.55; color:#efe6d2; overscroll-behavior:contain }
+#rwPage .rp-paper .rp-l{ margin:0 0 .55em; min-height:.6em; white-space:pre-wrap; overflow-wrap:anywhere }
+#rwPage .rp-paper .rp-hd{ font-family:var(--sans); font-size:11px; font-weight:700; letter-spacing:.16em; text-transform:uppercase; color:#b9ab8c; margin:1.4em 0 .8em }
+#rwPage .rp-paper .rp-more{ font:600 10px/1 var(--sans); letter-spacing:.14em; text-transform:uppercase; color:#7f7563; margin:0 0 14px }
+#rwPage .rp-paper .rp-empty{ font:italic 15px/1.5 var(--sans); color:#9d917a }
+#rwPage .rp-new{ background:rgba(255,205,116,.22); border-radius:3px; box-shadow:0 0 0 1px rgba(255,205,116,.18) }
+#rwPage .rp-del{ text-decoration:line-through; text-decoration-color:rgba(236,120,96,.9); color:rgba(239,230,210,.45) }
+#rwPage .rp-caret{ display:inline-block; width:2px; height:1.05em; margin:0 -1px; vertical-align:-.15em; background:#ffcd74; animation:rpBlink 1s steps(2) infinite }
+@keyframes rpBlink{ 50%{ opacity:0 } }
+#rwPage .rp-origins [data-o]{ border-radius:2px; box-decoration-break:clone; -webkit-box-decoration-break:clone }
+#rwPage .rp-origins [data-o="typed"]{ background:rgba(57,135,229,.24) }
+#rwPage .rp-origins [data-o="dict"]{ background:rgba(217,89,38,.28) }
+#rwPage .rp-origins [data-o="pin"]{ background:rgba(25,158,112,.28) }
+#rwPage .rp-origins [data-o="pout"]{ background:repeating-linear-gradient(135deg, rgba(201,133,0,.40) 0 5px, rgba(201,133,0,.20) 5px 10px) }
+#rwPage .rp-origins [data-o="ai"]{ background:rgba(213,81,129,.30) }
+#rwPage .rp-origins [data-o="co"]{ background:rgba(0,131,0,.32) }
+#rwPage .rp-origins [data-o="imp"]{ background:rgba(144,133,233,.30) }
+#rwPage .rp-origins [data-o="pre"]{ background:rgba(160,150,132,.13) }
+#rwPage .rp-origins [data-o="x"], #rwPage .rp-origins [data-o="undo"]{ background:rgba(125,143,163,.26) }
+#rwPage .rp-origins .rp-new{ box-shadow:0 0 0 1px rgba(255,205,116,.55) }
+#rwPage .rp-spark{ display:block; width:100%; height:38px; margin:14px 0 2px }
+#rwPage .rp-spark .rp-area{ fill:rgba(255,205,116,.13) } #rwPage .rp-spark .rp-line{ fill:none; stroke:#c9a24a; stroke-width:1.5; vector-effect:non-scaling-stroke }
+#rwPage .rp-spark .rp-sep{ stroke:rgba(255,205,116,.16); stroke-width:1; vector-effect:non-scaling-stroke }
+#rwPage .rp-spark .rp-head{ stroke:#ffcd74; stroke-width:1.5; vector-effect:non-scaling-stroke }
+#rwPage .rp-ctl{ display:flex; align-items:center; gap:12px; flex-wrap:wrap }
+#rwPage .rp-play{ width:40px; height:40px; flex:0 0 auto; border-radius:50%; border:1px solid rgba(255,205,116,.45); background:#ffb347; color:#2b2926; cursor:pointer; display:grid; place-items:center; padding:0 }
+#rwPage .rp-play:hover{ background:#ffc46b } #rwPage .rp-play svg{ width:16px; height:16px; fill:currentColor }
+#rwPage .rp-range{ flex:1 1 220px; min-width:160px; accent-color:#ffb347; height:24px; margin:0 }
+#rwPage .rp-speed{ display:inline-flex; border:1px solid rgba(255,205,116,.28); border-radius:999px; overflow:hidden; flex:0 0 auto }
+#rwPage .rp-speed button{ border:0; background:transparent; color:#cdbf9f; font:700 10.5px/1 var(--sans); letter-spacing:.06em; padding:8px 10px; cursor:pointer }
+#rwPage .rp-speed button[aria-pressed="true"]{ background:rgba(255,205,116,.2); color:#fff3da }
+#rwPage .rp-when{ display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-top:10px; font:500 12.5px/1.4 var(--sans); color:#cdbf9f }
+#rwPage .rp-when b{ color:#f2e7cf; font-weight:600 }
+#rwPage .rp-sess{ font:600 10px/1 var(--sans); letter-spacing:.14em; text-transform:uppercase; color:#ffcd74; min-height:10px }
+#rwPage .rp-org{ display:flex; align-items:center; gap:14px; flex-wrap:wrap; margin-top:14px }
+#rwPage .rp-tog{ display:inline-flex; align-items:center; gap:8px; font:600 12.5px/1 var(--sans); color:#e6dcc5; cursor:pointer; user-select:none }
+#rwPage .rp-tog input{ accent-color:#ffb347; width:16px; height:16px; margin:0 }
+#rwPage .rp-keys{ display:flex; flex-wrap:wrap; gap:6px 14px; font:500 11.5px/1.3 var(--sans); color:#cdbf9f }
+#rwPage .rp-keys[hidden]{ display:none }
+#rwPage .rp-keys span{ display:inline-flex; align-items:center; gap:6px } #rwPage .rp-keys i{ width:11px; height:11px; border-radius:3px; display:inline-block; background:var(--c) }
+@media (max-width:640px){ #rwPage .rp-paper{ height:300px; padding:16px 16px 34px; font-size:17px } #rwPage .rp-range{ flex-basis:100% ; order:3 } }
+@media (prefers-reduced-motion: reduce){ #rwPage .rp-caret{ animation:none } }
+body.eink #rwPage .rp-paper{ background:#fff; color:#000; border-color:#000 } body.eink #rwPage .rp-new{ background:none; text-decoration:underline }
+</style>
+<script id="dyst-replay-js">
+(function(){
+  'use strict';
+  if (window.dystReplay) return;
+  var SK = '.sg-del, .sess-foot, .sess-focus, .sec-mark, script, style, button, select, input, textarea, .nt-pop, .ed-partname';
+  var H1 = '\u0001';   // a heading line
+  /* the manuscript as lines of text: one per top-level block, headings marked */
+  function rtext(root){
+    var out = [];
+    root.childNodes.forEach(function(n){
+      if (n.nodeType === 3){ if (n.nodeValue.trim()) out.push(n.nodeValue.replace(/\n/g, ' ')); return; }
+      if (n.nodeType !== 1 || n.matches(SK)) return;
+      var t; if (n.querySelector(SK)){ var c = n.cloneNode(true); Array.prototype.forEach.call(c.querySelectorAll(SK), function(x){ x.remove(); }); t = c.textContent; } else t = n.textContent;
+      t = String(t).replace(/\n/g, ' '); if (!t.trim()) return;   /* empty blocks (a new paragraph not yet written in, an image, a section mark) aren't text */
+      out.push((/^H[1-6]$/.test(n.tagName) ? H1 : '') + t);
+    });
+    return out.join('\n');
+  }
+  function htmlText(html){ var t = document.createElement('template'); t.innerHTML = html || ''; var d = document.createElement('div'); d.appendChild(t.content); return rtext(d); }
+  function liveRoot(s, m){
+    var ed = document.getElementById('editor'); if (!ed || !s || state.session !== s || (ed.dataset.sid && ed.dataset.sid !== s.id)) return null;
+    if (m === 'r'){ var em = document.getElementById('editMode'), eb = document.getElementById('editBody'); if (em && em.classList.contains('show') && eb) return eb; }
+    return ed;
+  }
+  function applyStr(t, f){ return t.slice(0, f.p) + f.s + t.slice(f.p + f.d); }
+  function diff(a, b){
+    var n = Math.min(a.length, b.length), p = 0; while (p < n && a.charCodeAt(p) === b.charCodeAt(p)) p++;
+    var e = 0; while (e < n - p && a.charCodeAt(a.length - 1 - e) === b.charCodeAt(b.length - 1 - e)) e++;
+    return { p: p, d: a.length - p - e, s: b.slice(p, b.length - e) };
+  }
+  /* ---- capture ---- */
+  var TAIL = {};   // sid → { R, n, t }: the text the replay ends on, so each burst diffs against it
+  function ensureR(s, now){
+    if (!s.replay || s.replay.v !== 1 || !Array.isArray(s.replay.f)) s.replay = { v: 1, begun: new Date().toISOString(), base: now != null ? now : htmlText(s.html || ''), f: [] };
+    return s.replay;
+  }
+  /* the replay begins the moment a story is first changed — read from the page just before the change lands */
+  function first(e){
+    try { var t = e.target, n = t && (t.nodeType === 1 ? t : t.parentNode), root = n && n.closest && n.closest('#editor, #editBody'); if (!root) return;
+      var s = state.session; if (!s || (s.replay && s.replay.v === 1)) return;
+      var live = liveRoot(s, root.id === 'editBody' ? 'r' : 'w'); if (live !== root) return;
+      ensureR(s, rtext(root)); } catch (x){}
+  }
+  ['beforeinput', 'paste', 'drop', 'cut'].forEach(function(ev){ document.addEventListener(ev, first, true); });
+  function tail(s){
+    var R = ensureR(s), c = TAIL[s.id];
+    if (c && c.R === R && c.n === R.f.length) return c.t;
+    var t = R.base; for (var i = 0; i < R.f.length; i++) t = applyStr(t, R.f[i]);
+    TAIL[s.id] = { R: R, n: R.f.length, t: t }; return t;
+  }
+  var MAXF = 4000, MAXS = 1500000;
+  function size(R){ var n = String(R.base || '').length; R.f.forEach(function(f){ n += (f.s ? f.s.length : 0) + 48; }); return n; }
+  function grp(f){ return f.w || ('d' + new Date(f.a).toDateString()); }
+  /* past its budget, the older half folds into one step per session: the text is exact, the steps are coarser */
+  function compact(R, force){
+    if (!force && R.f.length <= MAXF && (R.f.length % 200 || size(R) <= MAXS)) return false;
+    var k = Math.floor(R.f.length / 2); if (k < 2) return false;
+    var old = R.f.slice(0, k), rest = R.f.slice(k), t = R.base, out = [], i = 0;
+    while (i < old.length){
+      var g = grp(old[i]), start = t, j = i, cnt = {};
+      while (j < old.length && grp(old[j]) === g){ t = applyStr(t, old[j]); cnt[old[j].o] = (cnt[old[j].o] || 0) + (old[j].s ? old[j].s.length : 0) + 1; j++; }
+      var df = diff(start, t);
+      if (df.d || df.s){ var dom = Object.keys(cnt).sort(function(x, y){ return cnt[y] - cnt[x]; })[0]; var f = { a: old[i].a, b: old[j - 1].b, o: dom, p: df.p, d: df.d, s: df.s, r: (j - i) }; if (old[i].w) f.w = old[i].w; out.push(f); }
+      i = j;
+    }
+    R.f = out.concat(rest); R.folded = (R.folded || 0) + 1; return true;
+  }
+  function capture(s, b){
+    try {
+      if (!s) return; var root = liveRoot(s, b && b.m); if (!root) return;
+      var was = tail(s), now = rtext(root); if (now === was) return;
+      var df = diff(was, now), t = Date.now(), R = s.replay;
+      var f = { a: b ? b.t0 : t, b: b ? b.t1 : t, o: b ? b.o : 'x', p: df.p, d: df.d, s: df.s };
+      if (b && b.ws) f.w = b.ws; if (b && b.i != null) f.i = b.i;
+      R.f.push(f); TAIL[s.id] = { R: R, n: R.f.length, t: now };
+      if (compact(R)) TAIL[s.id] = { R: R, n: R.f.length, t: now };
+    } catch (e){}
+  }
+  window.__dystReplayCap = capture;
+
+  /* ---- the model: earlier drafts, the base, every step, and anything not yet kept ---- */
+  function ms(x){ var t = typeof x === 'number' ? x : Date.parse(x); return isFinite(t) ? t : 0; }
+  function model(s){
+    var R = ensureR(s), F = [], t = '', begun = ms(R.begun);
+    var vs = (s.versions || []).filter(function(v){ return v && v.at && ms(v.at) < begun && (v.html || v.text); }).sort(function(a, b){ return ms(a.at) - ms(b.at); });
+    vs.forEach(function(v){ var tx = v.html ? htmlText(v.html) : String(v.text || '').replace(/\n+$/, ''); var df = diff(t, tx); if (df.d || df.s) F.push({ a: ms(v.at), b: ms(v.at), o: 'pre', p: df.p, d: df.d, s: df.s, v: 1 }); t = tx; });
+    var db = diff(t, R.base); if (db.d || db.s) F.push({ a: begun, b: begun, o: 'pre', p: db.p, d: db.d, s: db.s, base: 1 });
+    R.f.forEach(function(f){ F.push(f); });
+    var root = liveRoot(s, 'r') || liveRoot(s, 'w'); if (root){ var now = rtext(root), was = tail(s); if (now !== was){ var dn = diff(was, now), n = Date.now(); F.push({ a: n, b: n, o: 'x', p: dn.p, d: dn.d, s: dn.s, live: 1 }); } }
+    return { F: F, R: R, drafts: vs.length };
+  }
+  /* ---- the engine: lines of text + runs of origin, with a snapshot every 40 steps for seeking ---- */
+  function wc(t){ var m = String(t).replace(/\u0001/g, ' ').match(/[^\s]+/g); return m ? m.length : 0; }
+  function locate(lines, p){ var acc = 0; for (var i = 0; i < lines.length; i++){ var L = lines[i].length; if (p <= acc + L) return { li: i, ci: p - acc }; acc += L + 1; } var z = lines.length - 1; return { li: z, ci: lines[z].length }; }
+  function rpush(out, r){ if (!r[0]) return; var l = out[out.length - 1]; if (l && l[1] === r[1]) out[out.length - 1] = [l[0] + r[0], r[1]]; else out.push(r); }
+  function rsplice(runs, p, d, n, o){
+    var out = [], pos = 0, i = 0;
+    for (; i < runs.length; i++){ if (pos + runs[i][0] <= p){ out.push(runs[i]); pos += runs[i][0]; } else break; }
+    var off = p - pos;
+    if (i < runs.length && off > 0) rpush(out, [off, runs[i][1]]);
+    if (n > 0) rpush(out, [n, o]);
+    var skip = d, j = i, o2 = off;
+    while (j < runs.length){ var av = runs[j][0] - o2; if (skip >= av){ skip -= av; j++; o2 = 0; continue; } rpush(out, [av - skip, runs[j][1]]); j++; break; }
+    for (; j < runs.length; j++) rpush(out, runs[j]);
+    return out;
+  }
+  function Engine(F){
+    this.F = F; this.snaps = []; this.words = []; this.focus = [];
+    var st = { lines: [''], runs: [], words: 0 };
+    for (var k = 0; k <= F.length; k++){
+      if (k % 40 === 0) this.snaps.push({ k: k, lines: st.lines.slice(), runs: st.runs.slice(), words: st.words });
+      if (k === F.length) break;
+      var info = this.apply(st, F[k]); this.words.push(st.words); this.focus.push(info.end);
+    }
+    this.fin = st;
+  }
+  Engine.prototype.apply = function(st, f){
+    var A = locate(st.lines, f.p), B = locate(st.lines, f.p + f.d);
+    var before = st.lines.slice(A.li, B.li + 1), ns = st.lines[A.li].slice(0, A.ci) + (f.s || '') + st.lines[B.li].slice(B.ci), nl = ns.split('\n');
+    st.words += wc(nl.join(' ')) - wc(before.join(' '));
+    st.lines = st.lines.slice(0, A.li).concat(nl, st.lines.slice(B.li + 1));
+    st.runs = rsplice(st.runs, f.p, f.d, (f.s || '').length, f.o || 'x');
+    return { end: f.p + (f.s || '').length };
+  };
+  Engine.prototype.at = function(k){
+    var sn = this.snaps[Math.min(this.snaps.length - 1, Math.floor(k / 40))], st = { lines: sn.lines.slice(), runs: sn.runs.slice(), words: sn.words };
+    for (var i = sn.k; i < k; i++) this.apply(st, this.F[i]);
+    return st;
+  };
+  function text(st){ return st.lines.join('\n'); }
+
+  /* ---- drawing a window of the page around where the writing is ---- */
+  function esc(t){ return String(t).replace(/[&<>"]/g, function(c){ return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+  /* st: the state; focus: the offset to centre; mark: { p, d, s, o, q, done } the step being shown */
+  function draw(st, focus, mark){
+    var L = locate(st.lines, Math.max(0, focus)), a = Math.max(0, L.li - 18), z = Math.min(st.lines.length, L.li + 8);
+    var w0 = 0; for (var i = 0; i < a; i++) w0 += st.lines[i].length + 1;
+    var w1 = w0; for (i = a; i < z; i++) w1 += st.lines[i].length + (i < st.lines.length - 1 ? 1 : 0);
+    /* pieces over [w0, w1): origin runs, split where the step lands */
+    var P = [], pos = 0;
+    for (i = 0; i < st.runs.length && pos < w1; i++){ var r = st.runs[i], e = pos + r[0]; if (e > w0) P.push({ a: Math.max(pos, w0), b: Math.min(e, w1), o: r[1] }); pos = e; }
+    var full = text(st), out = [], cut = function(x){ var res = []; P.forEach(function(pc){ if (x > pc.a && x < pc.b){ res.push({ a: pc.a, b: x, o: pc.o }, { a: x, b: pc.b, o: pc.o }); } else res.push(pc); }); P = res; };
+    if (mark && !mark.done){ cut(mark.p); cut(mark.p + mark.d); } else if (mark){ cut(mark.p); cut(mark.p + mark.s.length); }
+    var ins = function(){ if (!mark) return; var shown = mark.done ? '' : mark.s.slice(0, Math.ceil(mark.s.length * mark.q)); if (shown) out.push({ t: shown, o: mark.o, c: 'rp-new' }); out.push({ caret: 1 }); };
+    var placed = false;
+    P.forEach(function(pc){
+      if (mark && !mark.done && !placed && pc.a >= mark.p){ ins(); placed = true; }
+      var cls = (mark && !mark.done && pc.a >= mark.p && pc.b <= mark.p + mark.d) ? 'rp-del' : (mark && mark.done && pc.a >= mark.p && pc.b <= mark.p + mark.s.length ? 'rp-new' : '');
+      out.push({ t: full.slice(pc.a, pc.b), o: pc.o, c: cls });
+      if (mark && mark.done && !placed && pc.b === mark.p + mark.s.length){ out.push({ caret: 1 }); placed = true; }
+    });
+    if (mark && !placed){ if (mark.done) out.push({ caret: 1 }); else ins(); }
+    /* into lines */
+    var H = a > 0 ? '<div class="rp-more">· · ·</div>' : '', line = '', head = null, flushL = function(){ H += '<div class="rp-l' + (head ? ' rp-hd' : '') + '">' + (line || (head ? '' : '&#8203;')) + '</div>'; line = ''; head = null; };
+    var atStart = true;
+    out.forEach(function(tk){
+      if (tk.caret){ line += '<span class="rp-caret" aria-hidden="true"></span>'; atStart = false; return; }
+      var parts = tk.t.split('\n');
+      parts.forEach(function(seg, n){
+        if (n > 0){ flushL(); atStart = true; }
+        if (seg.charAt(0) === H1){ head = 1; seg = seg.slice(1); }
+        if (seg){ line += '<span data-o="' + esc(tk.o || 'x') + '"' + (tk.c ? ' class="' + tk.c + '"' : '') + '>' + esc(seg) + '</span>'; atStart = false; }
+      });
+    });
+    flushL();
+    if (z < st.lines.length) H += '<div class="rp-more">· · ·</div>';
+    return H;
+  }
+
+  /* ---- the section on your record ---- */
+  var KEYS = [['typed', 'Typed here', '#3987e5'], ['dict', 'Dictated', '#d95926'], ['pin', 'Moved from your own work', '#199e70'], ['pout', 'Pasted from outside', '#c98500'],
+    ['ai', 'AI-assisted (Rephrase)', '#d55181'], ['co', 'A co-author’s', '#008300'], ['imp', 'Imported', '#9085e9'], ['pre', 'Before the replay began', '#a09684'], ['x', 'Other changes (moves, undo, merges)', '#7d8fa3']];
+  function when(t){ try { return new Date(t).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }); } catch (e){ return ''; } }
+  function clock(t){ try { return new Date(t).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }); } catch (e){ return ''; } }
+  var ICON_PLAY = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5v11l9-5.5z"/></svg>', ICON_PAUSE = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 2.5h3v11h-3zM9.5 2.5h3v11h-3z"/></svg>';
+  var PREF = 'dystoria.replayPrefs';
+  function prefs(){ try { return JSON.parse(localStorage.getItem(PREF) || '{}') || {}; } catch (e){ return {}; } }
+  function savePrefs(p){ try { localStorage.setItem(PREF, JSON.stringify(p)); } catch (e){} }
+  function section(s){
+    var M = model(s), F = M.F, E = new Engine(F), N = F.length, sec = document.createElement('section');
+    sec.className = 'rw-sec rp-sec'; sec.setAttribute('aria-label', 'Replay');
+    var begun = new Date(M.R.begun), fine = M.R.f.length;
+    var sess = {}; F.forEach(function(f){ if (!f.v && !f.base && !f.live) sess[grp(f)] = 1; }); var ns = Object.keys(sess).length;
+    var intro = N ? ('Your story, from ' + (M.drafts ? 'its earliest saved draft' : 'where the replay began') + ' to now — ' + N.toLocaleString() + ' step' + (N === 1 ? '' : 's') + (ns ? ' over ' + ns + ' session' + (ns === 1 ? '' : 's') : '') + '. Replay began ' + esc(begun.toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' })) + (M.drafts ? '; before that it steps through your saved versions' : '') + '. Only you can see it.')
+      : 'The replay fills in as you write — every burst of writing, where it came from, in order. Only you can see it.';
+    sec.innerHTML = '<div class="rw-sh">Replay</div><div class="rw-intro">' + intro + '</div>'
+      + '<div class="rp-paper" tabindex="0" aria-label="The page at this point in the replay"></div>'
+      + (N ? '<svg class="rp-spark" viewBox="0 0 1000 38" preserveAspectRatio="none" aria-hidden="true"></svg>'
+      + '<div class="rp-ctl"><button type="button" class="rp-play" aria-label="Play">' + ICON_PLAY + '</button>'
+      + '<input class="rp-range" type="range" min="0" max="' + N + '" step="1" value="' + N + '" aria-label="Replay position">'
+      + '<div class="rp-speed" role="group" aria-label="Speed">' + [1, 4, 16, 64].map(function(x){ return '<button type="button" data-x="' + x + '">' + x + '×</button>'; }).join('') + '</div></div>'
+      + '<div class="rp-when"><span class="rp-at"></span><span class="rp-sess" aria-live="polite"></span></div>'
+      + '<div class="rp-org"><label class="rp-tog"><input type="checkbox" class="rp-oc"> Show where it came from</label><div class="rp-keys" hidden></div></div>' : '');
+    var paper = sec.querySelector('.rp-paper');
+    if (!N){ paper.innerHTML = '<div class="rp-empty">Nothing yet.</div>'; return sec; }
+    var range = sec.querySelector('.rp-range'), play = sec.querySelector('.rp-play'), atEl = sec.querySelector('.rp-at'), sessEl = sec.querySelector('.rp-sess'), oc = sec.querySelector('.rp-oc'), keys = sec.querySelector('.rp-keys');
+    /* the growth line */
+    (function(){
+      var sv = sec.querySelector('.rp-spark'), mx = Math.max(1, Math.max.apply(null, E.words)), pts = E.words.map(function(w, i){ return ((i + 1) / N * 1000).toFixed(1) + ',' + (36 - w / mx * 32).toFixed(1); });
+      var d = 'M0,36 L' + pts.join(' L'), seps = '', prev = null;
+      F.forEach(function(f, i){ var g = f.v ? 'v' : grp(f); if (prev != null && g !== prev){ var x = (i / N * 1000).toFixed(1); seps += '<line class="rp-sep" x1="' + x + '" x2="' + x + '" y1="0" y2="38"/>'; } prev = g; });
+      sv.innerHTML = seps + '<path class="rp-area" d="' + d + ' L1000,36 Z"/><path class="rp-line" d="' + d + '"/><line class="rp-head" x1="1000" x2="1000" y1="0" y2="38"/>';
+    })();
+    var present = {}; F.forEach(function(f){ if (f.s) present[f.o === 'undo' ? 'x' : f.o] = 1; });
+    keys.innerHTML = KEYS.filter(function(k){ return present[k[0]]; }).map(function(k){ return '<span><i style="--c:' + k[2] + '"></i>' + esc(k[1]) + '</span>'; }).join('');
+    var P = prefs(), speed = [1, 4, 16, 64].indexOf(P.x) >= 0 ? P.x : 16;
+    var setSpeed = function(x){ speed = x; Array.prototype.forEach.call(sec.querySelectorAll('.rp-speed button'), function(b){ b.setAttribute('aria-pressed', String(+b.dataset.x === x)); }); P.x = x; savePrefs(P); };
+    setSpeed(speed);
+    oc.checked = !!P.o; var setOrig = function(){ paper.classList.toggle('rp-origins', oc.checked); keys.hidden = !oc.checked; P.o = oc.checked ? 1 : 0; savePrefs(P); }; setOrig();
+    /* state */
+    var k = N, st = E.fin, playing = false, stage = 'gap', acc = 0, last = 0, raf = 0, shownK = -1;
+    var label = function(i){ var f = F[i]; if (!f) return 'The beginning';
+      if (f.v) return 'Earlier draft · <b>' + esc(when(f.a)) + '</b>';
+      if (f.base) return 'When the replay began · <b>' + esc(when(f.a)) + '</b>';
+      if (f.live) return '<b>Now</b> — changes since the last step';
+      return '<b>' + esc(when(f.a)) + '</b> · ' + esc(clock(f.a)); };
+    var sessTxt = function(i){ var f = F[i]; if (!f || f.v || f.base || f.live) return ''; var g = grp(f), ord = Object.keys(sess).indexOf(g); return ord >= 0 ? 'Session ' + (ord + 1) + ' of ' + ns : ''; };
+    var show = function(mark){
+      var focus = mark ? (mark.done ? mark.p + mark.s.length : mark.p) : 0;
+      paper.innerHTML = draw(st, focus, mark);
+      var c = paper.querySelector('.rp-caret'); if (c){ var pr = paper.getBoundingClientRect(), cr = c.getBoundingClientRect(); var y = cr.top - pr.top + paper.scrollTop; if (y < paper.scrollTop + 40 || y > paper.scrollTop + paper.clientHeight - 60) paper.scrollTop = Math.max(0, y - paper.clientHeight * 0.55); }
+    };
+    var info = function(i){ var w = i > 0 ? E.words[i - 1] : 0; atEl.innerHTML = label(i - 1) + ' · ' + w.toLocaleString() + ' word' + (w === 1 ? '' : 's'); sessEl.textContent = sessTxt(i - 1);
+      range.value = String(i); range.setAttribute('aria-valuetext', atEl.textContent);
+      var h = sec.querySelector('.rp-head'); if (h){ var x = (i / N * 1000).toFixed(1); h.setAttribute('x1', x); h.setAttribute('x2', x); } };
+    var settle = function(){ shownK = k; var f = F[k - 1]; show(f ? { p: f.p, d: f.d, s: f.s || '', o: f.o, done: 1 } : null); info(k); };
+    var seek = function(i){ k = Math.max(0, Math.min(N, i)); st = E.at(k); stage = 'gap'; acc = 0; settle(); };
+    var typing = function(f){ return (f.o === 'typed' || f.o === 'dict') && !f.r && (f.s || '').length <= 4000; };
+    var gapOf = function(i){ if (i === 0) return 250; var p = F[i - 1], f = F[i]; return grp(p) !== grp(f) ? 1600 : Math.max(120, Math.min(2500, (f.a - p.b) || 0)); };
+    var durOf = function(f){ return typing(f) ? Math.max(150, Math.min(30000, (f.b - f.a) || 0)) : 450; };
+    var stop = function(){ playing = false; cancelAnimationFrame(raf); play.innerHTML = ICON_PLAY; play.setAttribute('aria-label', 'Play'); };
+    var tick = function(now){
+      if (!playing) return; if (!sec.isConnected){ stop(); return; }
+      var dt = Math.min(250, now - (last || now)); last = now; acc += dt * speed;
+      var mark = null, guard = 0;
+      while (k < N && guard++ < 4000){
+        var f = F[k];
+        if (stage === 'gap'){ var g = gapOf(k); if (acc < g) break; acc -= g; stage = 'in'; }
+        var D = durOf(f);
+        if (acc < D){ mark = { p: f.p, d: f.d, s: f.s || '', o: f.o, q: typing(f) ? acc / D : 1 }; break; }
+        acc -= D; E.apply(st, f); k++; stage = 'gap';
+      }
+      if (mark){ shownK = -1; show(mark); info(k); if (k < N) sessEl.textContent = sessTxt(k); }
+      else if (k !== shownK) settle();
+      if (k >= N){ stop(); return; }
+      raf = requestAnimationFrame(tick);
+    };
+    play.onclick = function(){
+      if (playing){ stop(); return; }
+      if (k >= N) seek(0);
+      playing = true; last = 0; play.innerHTML = ICON_PAUSE; play.setAttribute('aria-label', 'Pause'); raf = requestAnimationFrame(tick);
+      try { track('replay_played', { steps: N, speed: speed }); } catch (e){}
+    };
+    range.addEventListener('input', function(){ seek(+range.value); });
+    range.addEventListener('keydown', function(e){ e.stopPropagation(); });
+    Array.prototype.forEach.call(sec.querySelectorAll('.rp-speed button'), function(b){ b.onclick = function(){ setSpeed(+b.dataset.x); }; });
+    oc.addEventListener('change', setOrig);
+    paper.addEventListener('keydown', function(e){ if (e.key === ' '){ e.preventDefault(); play.click(); } });
+    seek(N); requestAnimationFrame(function(){ if (sec.isConnected && !playing) settle(); });   /* once it's on the page, bring the last change into view */
+    sec.__rp = { E: E, F: F, seek: seek, state: function(){ return { k: k, text: text(st), runs: st.runs, playing: playing, speed: speed }; } };
+    return sec;
+  }
+  window.dystReplay = { rtext: rtext, htmlText: htmlText, diff: diff, model: model, Engine: Engine, compact: compact, capture: capture, section: section, tail: tail };
+  /* your record gains the Replay, right after what it's made of */
+  (function(){ var o = window.dystOpenRecord; if (typeof o !== 'function' || o.__rp) return;
+    var w = function(){ var r = o.apply(this, arguments);
+      try { var page = document.getElementById('rwPage'), col = page && page.querySelector('.rw-col'), s = state.session; if (col && s && !col.querySelector('.rp-sec')){ var first = col.querySelector('.rw-sec'); col.insertBefore(section(s), first ? first.nextSibling : null); } } catch (e){ try { console.warn('replay', e); } catch (_){} }
+      return r; };
+    w.__rp = 1; Object.keys(o).forEach(function(k2){ if (!(k2 in w)) w[k2] = o[k2]; }); window.dystOpenRecord = w; })();
 })();
 </script>
 </body></html>
