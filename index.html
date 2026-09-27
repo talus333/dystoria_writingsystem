@@ -59688,9 +59688,12 @@ body.eink .pl-filterpick .pf-row.on .pf-box{ background:#000; border-color:#000;
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.786';
+  var APP_VERSION = '2026.07.20.787';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.787', date:'September 27, 2026', notes:[
+      '**An account, right where you are.** [Jeremy] On the first steps — where to begin, how to plan, the planner, the premise page, the importer, Explore — a door that needs a free account no longer sends you off to a separate sign-in box. One charcoal card comes up over the page you’re on: create your account (or sign in) there, and the moment you’re in, the door you pressed opens for you. If your email needs confirming, the card waits and carries on by itself when you do.'
+    ]},
     { v:'2026.07.20.786', date:'September 27, 2026', notes:[
       '**A way back, and one frame.** [Jeremy] Every page of the first steps has a ← in the top left corner that goes one page back: the planner and the premise page to How do you like to plan?, that to Where would you like to begin?, and that to the Library (from + New Project) or the welcome page. Esc does the same on the planning pages. Where would you like to begin? and How do you like to plan? now share one frame — the logo, the question and the doors sit at the same height on both.'
     ]},
@@ -106013,5 +106016,218 @@ body.eink .fr-backarrow{ color:#000; border-color:#000; background:#fff }
   #firstRunDoors .fr-sub, #planningDoors .fr-sub, #newProjectDoors .fr-sub{ min-height:2.9em; max-width:680px; margin-left:auto !important; margin-right:auto !important; line-height:1.45 }
   #firstRunDoors .fr-doors.fr-n3, #planningDoors .fr-doors.fr-n3{ max-width:900px; margin-left:auto; margin-right:auto }
 }
+</style>
+<script id="dyst-frauth-js">
+/* v.864 [Jeremy: "when a user comes to a place in the first new project steps where they need to create an account, can we allow
+   them to create an account in place without needing to leave the stage, state, place they are at, so as soon as they create the
+   account they continue where they were. Make that pop up and create account step all in the lighter charcoal style"]
+   AN ACCOUNT, IN PLACE. On the first steps (where to begin, how to plan, the planner, the premise page, the importer, the Explore
+   conversation), an AI door asked of a writer who is signed out no longer throws the cream "Create free account" confirm and a
+   separate sign-in box: one charcoal card comes up over the page they are on —
+     ask      "This part runs on AI" · Not now / Create free account (or: I already have an account)
+     form     email · username · password · the Terms and Privacy tick → Create account   (or email · password → Sign in)
+     confirm  when the project asks for email confirmation: "Check your email" — it carries on by itself the moment the
+              confirmation lands in any tab, or with "I've confirmed — continue"
+   then (a new account) the AI-privacy choices, the same card the app already shows, and then it continues: the door they pressed
+   is pressed again for them, and they are where they would have been. Nothing behind the card moves while it is up. Everywhere
+   else in the app the sign-up works as before. */
+(function(){
+  'use strict';
+  var PAGES = ['firstRunDoors', 'planningDoors', 'premiseDoor', 'planWizard', 'newProjectDoors'];
+  var SHOWN = ['importBackdrop', 'importCard', 'qaWin'];
+  function onFirstSteps(){
+    for (var i = 0; i < PAGES.length; i++) if (document.getElementById(PAGES[i])) return true;
+    for (i = 0; i < SHOWN.length; i++){ var e = document.getElementById(SHOWN[i]); if (e && e.classList.contains('show')) return true; }
+    return false;
+  }
+  window.dystOnFirstSteps = onFirstSteps;
+  /* what was pressed — read before the AI gate's own capture listener swallows the click */
+  var last = null, lastAt = 0;
+  window.addEventListener('click', function(e){ last = e.target; lastAt = Date.now(); }, true);
+  function signedIn(){ try { return !!(cloud.user && !cloud.user.is_anonymous); } catch (e){ return false; } }
+  var S = null;   // { stage, mode, pending, email, pass, user, msg, busy, wait }
+  function el(tag, cls, txt){ var e = document.createElement(tag); if (cls) e.className = cls; if (txt != null) e.textContent = txt; return e; }
+  function close(){ var w = document.getElementById('frAuth'); if (w) w.remove(); if (S && S.wait) clearInterval(S.wait); S = null; document.removeEventListener('keydown', esc, true); }
+  function esc(e){ if (e.key === 'Escape' && S && !S.busy){ e.stopPropagation(); e.preventDefault(); close(); } }
+  function resume(){
+    var p = S && S.pending; close();
+    try { if (window.__dystVersion) localStorage.setItem('dystoria.appVersion', window.__dystVersion); } catch (e){}   /* a writer who has just arrived needs no "what's new" over their first steps */
+    try { flashStatus('You’re in — carrying on'); } catch (e){}
+    if (p && p.isConnected){ setTimeout(function(){ try { p.click(); } catch (e){} }, 120); }
+  }
+  function afterIn(isNew){
+    if (!S) return; if (S.wait){ clearInterval(S.wait); S.wait = 0; }
+    try { track(isNew ? 'signed_up' : 'signed_in', { via: 'firststeps' }); } catch (e){}
+    var needConsent = false; try { needConsent = (typeof aiConsentAcked === 'function') && !aiConsentAcked() && (typeof openAiConsent === 'function'); } catch (e){}
+    if (!needConsent){ resume(); return; }
+    /* the AI-privacy choices: the app's own card (already charcoal), over this one; carry on when it closes */
+    var w = document.getElementById('frAuth'); if (w) w.classList.add('fra-hold');
+    try { openAiConsent(); } catch (e){ resume(); return; }
+    var n = 0, iv = setInterval(function(){ var ov = document.getElementById('aiConsent'); if (!ov || !ov.classList.contains('show') || ++n > 1800){ clearInterval(iv); resume(); } }, 150);
+  }
+  function watch(){   /* the confirmation link opened in another tab signs this one in too */
+    if (!S || S.wait) return;
+    S.wait = setInterval(function(){ if (signedIn()) afterIn(true); }, 700);
+  }
+  function msg(t){ if (!S) return; S.msg = t || ''; var m = document.querySelector('#frAuth .fra-msg'); if (m) m.textContent = S.msg; }
+  async function doSignUp(email, user, pass){
+    if (typeof supa === 'undefined' || !supa){ msg('Accounts can’t be reached right now — try again in a moment.'); return; }
+    S.busy = true; draw(); msg('Creating your account…');
+    try {
+      var r;
+      if (cloud.user && cloud.user.is_anonymous){ r = await supa.auth.updateUser({ email: email, password: pass, data: { username: user } }); try { await supa.from('profiles').update({ username: user }).eq('id', cloud.user.id); } catch (e){} }
+      else r = await supa.auth.signUp({ email: email, password: pass, options: { data: { username: user } } });
+      S.busy = false;
+      if (r && r.error){ draw(); msg(r.error.message || String(r.error)); return; }
+      try { cloud.username = user; } catch (e){}
+      S.email = email; S.pass = pass;
+      var sess = r && r.data && r.data.session;
+      if (sess || signedIn()){ setTimeout(function(){ afterIn(true); }, signedIn() ? 0 : 400); return; }
+      S.stage = 'confirm'; draw(); watch();
+    } catch (e){ S.busy = false; draw(); msg('Couldn’t create the account: ' + ((e && e.message) || e)); }
+  }
+  async function doSignIn(email, pass, quiet){
+    if (typeof supa === 'undefined' || !supa){ msg('Accounts can’t be reached right now — try again in a moment.'); return; }
+    S.busy = true; draw(); if (!quiet) msg('Signing in…');
+    try {
+      var r = await supa.auth.signInWithPassword({ email: email, password: pass });
+      S.busy = false;
+      if (r && r.error){ draw(); msg(/confirm/i.test(r.error.message || '') ? 'Not confirmed yet — open the link in the email we sent, then try again.' : (r.error.message || String(r.error))); return; }
+      var n = 0, iv = setInterval(function(){ if (signedIn() || ++n > 20){ clearInterval(iv); afterIn(false); } }, 100);
+    } catch (e){ S.busy = false; draw(); msg('Couldn’t sign in: ' + ((e && e.message) || e)); }
+  }
+  function draw(){
+    if (!S) return;
+    var w = document.getElementById('frAuth');
+    if (!w){ w = el('div'); w.id = 'frAuth'; w.setAttribute('role', 'dialog'); w.setAttribute('aria-modal', 'true'); document.body.appendChild(w);
+      w.addEventListener('mousedown', function(e){ if (e.target === w && S && !S.busy && S.stage === 'ask') close(); });
+      requestAnimationFrame(function(){ w.classList.add('in'); }); }
+    var keep = {}; Array.prototype.forEach.call(w.querySelectorAll('input'), function(i){ keep[i.name] = i.type === 'checkbox' ? i.checked : i.value; });
+    var c = el('div', 'fra-card');
+    var x = el('button', 'fra-x'); x.type = 'button'; x.title = 'Not now'; x.setAttribute('aria-label', 'Close'); x.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>'; x.onclick = function(){ if (!S.busy) close(); };
+    c.appendChild(x);
+    if (S.stage === 'ask'){
+      c.appendChild(el('div', 'fra-kick', 'A free account'));
+      c.appendChild(el('div', 'fra-h', 'This part runs on AI'));
+      c.appendChild(el('div', 'fra-p', 'Finding the seed of a story, turning your few lines into a starting point, sparks, summaries and the Story Wiki all run on AI — and that needs a free Dystoria account. Make one right here; you’ll carry on exactly where you are.'));
+      var a = el('div', 'fra-acts');
+      var no = el('button', 'fra-ghost', 'Not now'); no.type = 'button'; no.onclick = close;
+      var yes = el('button', 'fra-go', 'Create free account'); yes.type = 'button'; yes.onclick = function(){ S.stage = 'form'; S.mode = 'up'; S.msg = ''; draw(); };
+      a.appendChild(no); a.appendChild(yes); c.appendChild(a);
+      var have = el('button', 'fra-link', 'I already have an account'); have.type = 'button'; have.onclick = function(){ S.stage = 'form'; S.mode = 'in'; S.msg = ''; draw(); };
+      c.appendChild(have);
+    } else if (S.stage === 'form'){
+      var up = S.mode === 'up';
+      c.appendChild(el('div', 'fra-kick', up ? 'A free account' : 'Welcome back'));
+      c.appendChild(el('div', 'fra-h', up ? 'Create your account' : 'Sign in to Dystoria'));
+      c.appendChild(el('div', 'fra-p fra-p-sm', up ? 'Everything you’ve started stays exactly as it is — it becomes yours, saved to your account.' : 'Everything you’ve started here stays as it is, and joins your library.'));
+      var f = el('form', 'fra-form'); f.setAttribute('novalidate', '');
+      var inp = function(name, type, ph, ac){ var i = el('input', 'fra-in'); i.name = name; i.type = type; i.placeholder = ph; i.autocomplete = ac; i.value = keep[name] != null ? keep[name] : ''; f.appendChild(i); return i; };
+      var em = inp('email', 'email', 'Email', 'email');
+      var un = up ? inp('username', 'text', 'Username — how co-authors will see you', 'username') : null; if (un) un.maxLength = 24;
+      var pw = inp('password', 'password', up ? 'Password (6 characters or more)' : 'Password', up ? 'new-password' : 'current-password');
+      var ag = null;
+      if (up){
+        var lb = el('label', 'fra-agree'); ag = el('input'); ag.type = 'checkbox'; ag.name = 'agree'; ag.checked = !!keep.agree;
+        var sp = el('span'); var mn = (window.dystMinAge && window.dystMinAge()) || 13;
+        sp.innerHTML = 'I’m ' + mn + ' or older and agree to the <a href="#" data-legal="terms">Terms</a> and <a href="#" data-legal="privacy">Privacy Policy</a>.';
+        lb.appendChild(ag); lb.appendChild(sp); f.appendChild(lb);
+      }
+      f.appendChild(el('div', 'fra-msg', S.msg || ''));
+      var go = el('button', 'fra-go fra-wide', S.busy ? (up ? 'Creating…' : 'Signing in…') : (up ? 'Create account' : 'Sign in')); go.type = 'submit'; go.disabled = !!S.busy;
+      f.appendChild(go);
+      f.addEventListener('submit', function(e){
+        e.preventDefault(); if (S.busy) return;
+        var E = em.value.trim(), W = pw.value;
+        if (!E || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(E)){ msg('Enter your email address.'); em.focus(); return; }
+        if (up){
+          var U = un.value.trim().slice(0, 24);
+          if (!U){ msg('Choose a username — it’s how co-authors will see you.'); un.focus(); return; }
+          if (W.length < 6){ msg('Your password needs at least 6 characters.'); pw.focus(); return; }
+          if (!ag.checked){ msg('Please confirm you’re ' + ((window.dystMinAge && window.dystMinAge()) || 13) + '+ and agree to the Terms and Privacy Policy.'); return; }
+          doSignUp(E, U, W);
+        } else {
+          if (!W){ msg('Enter your password.'); pw.focus(); return; }
+          doSignIn(E, W);
+        }
+      });
+      ['keydown', 'keyup', 'keypress', 'input'].forEach(function(t){ f.addEventListener(t, function(e){ if (e.key !== 'Escape') e.stopPropagation(); }); });
+      c.appendChild(f);
+      var sw = el('button', 'fra-link', up ? 'I already have an account — sign in' : 'New here? Create a free account'); sw.type = 'button';
+      sw.onclick = function(){ if (S.busy) return; S.mode = up ? 'in' : 'up'; S.msg = ''; draw(); };
+      c.appendChild(sw);
+      setTimeout(function(){ try { var t = (!em.value ? em : (un && !un.value ? un : pw)); t.focus(); } catch (e){} }, 40);
+    } else if (S.stage === 'confirm'){
+      c.appendChild(el('div', 'fra-kick', 'One more step'));
+      c.appendChild(el('div', 'fra-h', 'Check your email'));
+      var p = el('div', 'fra-p'); p.appendChild(document.createTextNode('We sent a confirmation link to ')); p.appendChild(el('b', null, S.email || 'your inbox')); p.appendChild(document.createTextNode('. Open it, and you’ll carry on right here — this page waits for you.'));
+      c.appendChild(p);
+      c.appendChild(el('div', 'fra-wait', 'Waiting for your confirmation…'));
+      c.appendChild(el('div', 'fra-msg', S.msg || ''));
+      var a2 = el('div', 'fra-acts');
+      var nn = el('button', 'fra-ghost', 'Not now'); nn.type = 'button'; nn.onclick = close;
+      var ok = el('button', 'fra-go', S.busy ? 'Checking…' : 'I’ve confirmed — continue'); ok.type = 'button'; ok.disabled = !!S.busy;
+      ok.onclick = function(){ if (S.email && S.pass) doSignIn(S.email, S.pass, false); };
+      a2.appendChild(nn); a2.appendChild(ok); c.appendChild(a2);
+    }
+    w.innerHTML = ''; w.appendChild(c);
+  }
+  window.dystFirstStepsAuth = function(){
+    if (document.getElementById('frAuth')) return;
+    var pend = null;
+    try { if (last && Date.now() - lastAt < 1500){ var t = last.closest ? last.closest('.fr-door, button, a, [role="button"]') : null; if (t && !t.closest('#frAuth')) pend = t; } } catch (e){}
+    S = { stage: 'ask', mode: 'up', pending: pend, msg: '', busy: false, wait: 0 };
+    draw(); document.addEventListener('keydown', esc, true);
+    try { track('firststeps_auth_shown'); } catch (e){}
+  };
+  /* the one door every AI gate goes through */
+  try {
+    var _p = window.promptAiSignup;
+    if (typeof _p === 'function' && !_p.__fra){
+      var w2 = function(){ if (onFirstSteps() && !signedIn()) return window.dystFirstStepsAuth(); return _p.apply(this, arguments); };
+      w2.__fra = 1; try { Object.keys(_p).forEach(function(k){ if (!(k in w2)) w2[k] = _p[k]; }); } catch (e){}
+      window.promptAiSignup = w2;
+    }
+  } catch (e){}
+})();
+</script>
+<style id="dyst-frauth-css">
+/* v.864 — an account, in place: the lighter charcoal of the loading screen, over the first steps */
+#frAuth{ position:fixed; inset:0; z-index:9500; display:flex; align-items:center; justify-content:center; padding:24px; background:rgba(14,12,9,.58); -webkit-backdrop-filter:blur(3px); backdrop-filter:blur(3px); opacity:0; transition:opacity .18s ease }
+#frAuth.in{ opacity:1 }
+#frAuth.fra-hold{ opacity:.0; pointer-events:none }
+#frAuth .fra-card{ position:relative; width:min(460px, 100%); box-sizing:border-box; padding:30px 32px 24px; border-radius:18px; background:#2b2926; border:1px solid rgba(255,205,116,.2); box-shadow:0 30px 80px rgba(0,0,0,.55), inset 0 1px 0 rgba(255,247,230,.04); color:#f2e7cf; text-align:left; transform:translateY(6px); transition:transform .2s ease }
+#frAuth.in .fra-card{ transform:none }
+#frAuth .fra-x{ position:absolute; top:14px; right:14px; width:32px; height:32px; display:inline-flex; align-items:center; justify-content:center; padding:0; border-radius:50%; border:1px solid rgba(255,255,255,.14); background:transparent; color:#cfc5b1; cursor:pointer }
+#frAuth .fra-x:hover{ border-color:rgba(255,205,116,.55); color:#f6efdd }
+#frAuth .fra-x svg{ width:15px; height:15px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round }
+#frAuth .fra-kick{ font:600 10.5px/1.3 var(--sans); letter-spacing:.18em; text-transform:uppercase; color:#c8961f; margin:0 0 8px }
+#frAuth .fra-h{ font-family:'Cormorant Garamond', var(--serif), Georgia, serif; font-size:29px; line-height:1.15; font-weight:500; color:#f6efdd; margin:0 0 10px }
+#frAuth .fra-p{ font:15px/1.55 var(--sans); color:rgba(240,232,212,.72); margin:0 0 20px }
+#frAuth .fra-p b{ color:#f2e7cf; font-weight:600 }
+#frAuth .fra-p-sm{ font-size:13.5px; margin-bottom:16px }
+#frAuth .fra-acts{ display:flex; justify-content:flex-end; gap:10px; flex-wrap:wrap }
+#frAuth .fra-go, #frAuth .fra-ghost{ height:40px; box-sizing:border-box; padding:0 20px; border-radius:999px; font:700 11px/1 var(--sans); letter-spacing:.12em; text-transform:uppercase; cursor:pointer }
+#frAuth .fra-go{ border:0; background:linear-gradient(180deg,#ffb44f,#f08c1f); color:#2b2926 }
+#frAuth .fra-go[disabled]{ opacity:.55; cursor:default }
+#frAuth .fra-go.fra-wide{ width:100%; margin-top:6px }
+#frAuth .fra-ghost{ border:1px solid rgba(255,205,116,.3); background:transparent; color:#d8ceb8 }
+#frAuth .fra-ghost:hover{ border-color:rgba(255,205,116,.65); color:#f6efdd }
+#frAuth .fra-link{ display:block; margin:16px auto 0; border:0; background:none; padding:4px; font:13px/1.3 var(--sans); color:rgba(240,232,212,.6); text-decoration:underline; text-underline-offset:3px; cursor:pointer }
+#frAuth .fra-link:hover{ color:#f6efdd }
+#frAuth .fra-form{ display:flex; flex-direction:column; gap:10px }
+#frAuth .fra-in{ height:44px; box-sizing:border-box; padding:0 14px; border-radius:11px; border:1px solid rgba(200,170,110,.26); background:rgba(255,247,230,.045); color:#f6efdd; font:15px var(--sans); outline:none }
+#frAuth .fra-in::placeholder{ color:rgba(240,232,212,.36) }
+#frAuth .fra-in:focus{ border-color:rgba(200,150,31,.7); background:rgba(255,247,230,.07) }
+#frAuth .fra-agree{ display:flex; gap:10px; align-items:flex-start; margin:4px 0 0; font:13px/1.45 var(--sans); color:rgba(240,232,212,.7); cursor:pointer }
+#frAuth .fra-agree input{ margin-top:2px; accent-color:#f08c1f; width:15px; height:15px; flex:none }
+#frAuth .fra-agree a{ color:#f3d59b }
+#frAuth .fra-msg{ min-height:18px; font:13px/1.4 var(--sans); color:#f3c77e }
+#frAuth .fra-msg:empty{ min-height:0 }
+#frAuth .fra-wait{ display:flex; align-items:center; gap:10px; margin:-6px 0 16px; font:italic 13px/1.4 var(--sans); color:rgba(240,232,212,.55) }
+#frAuth .fra-wait::before{ content:''; width:14px; height:14px; border-radius:50%; border:2px solid rgba(255,205,116,.25); border-top-color:#f0a13a; animation:fraSpin .9s linear infinite }
+@keyframes fraSpin{ to{ transform:rotate(360deg) } }
+@media (max-width:520px){ #frAuth .fra-card{ padding:26px 20px 20px } #frAuth .fra-h{ font-size:25px } }
+body.eink #frAuth .fra-card{ background:#fff; color:#000; border-color:#000 } body.eink #frAuth .fra-h, body.eink #frAuth .fra-p{ color:#000 }
 </style>
 </body></html>
