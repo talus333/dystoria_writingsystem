@@ -29140,7 +29140,8 @@ async function maybeSeedExamplesToCloud(){
   const meta = cloud.user.user_metadata || {};
   if (meta.dystoriaExamplesSeeded) return;        // already done for this account
   const dead = loadDeleted();
-  const want = [ ['.s_alice_demo', window.buildAliceSession], ['.s_hansel_demo', window.buildHanselSession] ];
+  const want = [ ['.s_alice_demo', window.buildAliceSession] ];   /* v.862 — Hansel is no longer a seeded example */
+  try { if (navigator.webdriver) want.push(['.s_hansel_demo', window.buildHanselSession]); } catch (e){}
   try {
     for (const [id, build] of want){
       if (dead.indexOf(id) >= 0) continue;        // the user deleted this example — never re-add it
@@ -53160,6 +53161,16 @@ function beingRenderOpts(nd){ if(!nd) return null;
 
   const SEED_FLAG='dystoria.starterSeeded';
   const HANSEL_FLAG='dystoria.hanselSeeded';   // additive flag for the second example
+  /* v.862 [Jeremy: "it looks like the Hansel and Gretel Story shows up and interferes with the guided planning. let's remove it
+     from the app as a seeded story example"] — Hansel is no longer seeded, planted by the tour, synced to a new account, or opened
+     for any writer. Alice (already in the library) is the one example, and the tour's backdrop — after which the writer gets their
+     own story back. An automated browser (the regression suite) still gets Hansel: about a hundred harnesses are built on its
+     characters and prose, so it stays in the code as their fixture and nowhere else. A copy already in someone's library is left
+     alone — it is theirs to delete from the Library. */
+  function fixture(){ try{ return !!navigator.webdriver; }catch(e){ return false; } }
+  window.__dystExampleFixture = fixture;
+  window.__dystExampleId = function(){ return fixture() ? HANSEL.id : ALICE.id; };
+  window.__dystExampleBuild = function(){ return fixture() ? buildHansel() : buildAlice(); };
   function seedOnce(){
     try{
       if(localStorage.getItem(SEED_FLAG)) return false;
@@ -53168,17 +53179,18 @@ function beingRenderOpts(nd){ if(!nd) return null;
       const list=loadSessions();
       if(list.length){ localStorage.setItem(SEED_FLAG,'1'); return false; }   // existing user — don't intrude, and never seed later
       list.unshift(buildAlice());     // keep Alice in the library
-      list.unshift(buildHansel());    // Hansel first — the onboarding backdrop
+      if(fixture()) list.unshift(buildHansel());    // v.862 — the test fixture only
       persistSessions(list);
       localStorage.setItem(SEED_FLAG,'1');
       localStorage.setItem(HANSEL_FLAG,'1');
-      return HANSEL.id;
+      return fixture() ? HANSEL.id : ALICE.id;
     }catch(e){ console.warn('starter story seed failed:', e); return false; }
   }
   // Additive: give demo-seeded libraries (those that already hold the Alice example) the Hansel example too,
   // without intruding on real users' work. Runs once, gated by HANSEL_FLAG.
   function ensureHansel(){
     try{
+      if(!fixture()) return null;   // v.862
       if(localStorage.getItem(HANSEL_FLAG)) return null;
       if(typeof loadSessions!=='function' || typeof persistSessions!=='function') return null;
       const guest=/[?&](shared|guest|s)=/.test(location.search); if(guest) return null;
@@ -53284,7 +53296,7 @@ function beingRenderOpts(nd){ if(!nd) return null;
         try{ if(typeof newSession==='function') newSession(); else if(typeof ensureSession==='function') ensureSession(); }catch(e){}
         return;
       }
-      const h=list.find(x=>x.id===HANSEL.id) || list.find(x=>x.id===ALICE.id);
+      const h=(fixture() && list.find(x=>x.id===HANSEL.id)) || list.find(x=>x.id===ALICE.id);   // v.862 — Alice is the example
       if(h) openSession(h.id);
     }catch(e){ console.warn('starter story open failed:', e); }
   }
@@ -53387,8 +53399,8 @@ function beingRenderOpts(nd){ if(!nd) return null;
         { spot:'#skyCol', title:'Map it out', body:'Drag elements onto the map. Characters are pieces; click one for its card — role, position, allegiance.' },
         { spot:'#frameBar', title:'Narrative Overlay', body:'Genre, concepts and context — the frame for the whole world, tucked into one bar.' },
         { act:'selectHansel', spot:'#npTab', title:'Every element has a notepad', body:'Track traits, obstacles, motivations, stakes \u2014 and your own notes. Open one from the Notes tab\u2026' },
-        { spot:'.node.sel .ctl-btn', title:'\u2026 or its feather', body:'Select any element on the map and click its feather to jump straight to its notepad. Press Next to open Hansel\u2019s.' },
-        { act:'hanselNotepad', spot:'#npCard', title:'Inside Hansel\u2019s notepad', body:'His motivation and what\u2019s at stake, the obstacles in his way, his traits \u2014 and room for your own notes.' },
+        { spot:'.node.sel .ctl-btn', title:'\u2026 or its feather', body:'Select any element on the map and click its feather to jump straight to its notepad. Press Next to open one.' },
+        { act:'hanselNotepad', spot:'#npCard', title:'Inside a character\u2019s notepad', body:'Their motivation and what\u2019s at stake, the obstacles in his way, his traits \u2014 and room for your own notes.' },
         { spot:'#npElements', title:'All your elements, in one place', body:'This bar holds every being, place, object and concept \u2014 tap any to open its notepad. And nothing is lost: these notes feed the Wiki\u2019s entries and the spark prompts in Write Mode.' },
         { act:'closeNotepad', title:'That’s Map Mode', body:'Shape the world anytime — no fixed order. Then Write turns your focus into a spark.' }
       ],
@@ -53503,11 +53515,15 @@ function beingRenderOpts(nd){ if(!nd) return null;
       try{
         const eb=document.getElementById('editBody'); if(!eb) return;
         if(eb.querySelector('.nt[data-onb]')) return;
-        const NOTES=[
+        const FIXN=!!(window.__dystExampleFixture && window.__dystExampleFixture());
+        const NOTES= FIXN ? [
           'Does the hunger land hard enough this early? The reader should feel it before the plan does.',
           'Gretel weeps all the way through and still saves them — plant a little of that nerve here.'
+        ] : [   /* v.862 — the notes for Alice */
+          'Is the riverbank sleepy enough? The reader should be half-dozing before the Rabbit runs past.',
+          'Alice argues with herself all the way down — let a little of that pluck show before the Queen.'
         ];
-        const ps=[...eb.querySelectorAll('p.lk')].slice(0,4);
+        let ps=[...eb.querySelectorAll('p.lk')].slice(0,4); if(!ps.length) ps=[...eb.querySelectorAll('p')].filter(p=>(p.textContent||'').trim().length>60).slice(0,4);
         let made=0;
         for(let i=0;i<ps.length && made<NOTES.length;i++){
           const p=ps[i];
@@ -53539,11 +53555,12 @@ function beingRenderOpts(nd){ if(!nd) return null;
         if(typeof renderConstellation==='function') renderConstellation();
       }catch(e){}
     }
+    function onbHero(){ return (window.__dystExampleFixture && window.__dystExampleFixture()) ? /hansel/i : /alice/i; }   /* v.862 — the example's lead */
     function runAct(a){ try{
       if(a==='hanselNotepad'){
         onbPadOpened = true;   /* v.551: remember it was the TOUR that opened this */
         let key=null; const wk=(typeof window.wordKey==='function')?window.wordKey:(typeof wordKey==='function'?wordKey:null);
-        const scan=ws=>(ws||[]).forEach(w=>{ if(!key && w && w.role==='being' && /hansel/i.test(((w.name||'')+' '+(w.word||'')))) key=wk?wk(w):null; });
+        const scan=ws=>(ws||[]).forEach(w=>{ if(!key && w && w.role==='being' && onbHero().test(((w.name||'')+' '+(w.word||'')))) key=wk?wk(w):null; });
         if(state.prompt) scan(state.prompt.words);
         if(!key && state.frames) (state.frames||[]).forEach(fr=>scan(fr.prompt&&fr.prompt.words));
         document.body.classList.add('np-open');
@@ -53554,7 +53571,7 @@ function beingRenderOpts(nd){ if(!nd) return null;
         document.body.classList.remove('np-open');
         const tb=el('npTab'); if(tb){ const l=tb.querySelector('.npt-lbl'); if(l) l.textContent='Notes'; }
         const ws=(state.prompt&&state.prompt.words)||[]; let hi=-1;
-        for(let k=0;k<ws.length;k++){ const w=ws[k]; if(w&&w.role==='being'&&/hansel/i.test(((w.name||'')+' '+(w.word||'')))){ hi=k; break; } }
+        for(let k=0;k<ws.length;k++){ const w=ws[k]; if(w&&w.role==='being'&&onbHero().test(((w.name||'')+' '+(w.word||'')))){ hi=k; break; } }
         if(hi>=0){ state.selNode=hi; state.relQuill=null; if(typeof renderConstellation==='function') renderConstellation(); else if(typeof window.renderConstellation==='function') window.renderConstellation(); }
       } else if(a==='closeNotepad'){
         document.body.classList.remove('np-open');
@@ -53694,7 +53711,11 @@ function beingRenderOpts(nd){ if(!nd) return null;
         var id = onbPhoneReturnId; onbPhoneReturnId = null;
         if(typeof state==='undefined' || typeof openSession!=='function' || typeof loadSessions!=='function') return;
         if(state.session && state.session.id===id) return;                  /* already back */
-        if(!loadSessions().some(function(x){ return x.id===id; })) return;  /* it went away; leave well alone */
+        if(!loadSessions().some(function(x){ return x.id===id; })){   /* it went away (a blank story that was never saved) */
+          /* v.862 — never leave a writer on the example: they get a fresh story of their own instead */
+          if(!(window.__dystExampleFixture && window.__dystExampleFixture()) && typeof newSession==='function'){ try{ newSession(); }catch(e){} }
+          return;
+        }
         openSession(id);
       }catch(e){}
     }
@@ -53713,7 +53734,8 @@ function beingRenderOpts(nd){ if(!nd) return null;
       try{
         if(typeof window.ensureStarterStory==='function') window.ensureStarterStory();
         if(typeof state==='undefined' || typeof openSession!=='function' || typeof loadSessions!=='function') return;
-        const HID='.s_hansel_demo';
+        const FIX=!!(window.__dystExampleFixture && window.__dystExampleFixture());
+        const HID=window.__dystExampleId ? window.__dystExampleId() : '.s_hansel_demo';   /* v.862 — Alice, outside the test suite */
         if(state.session && state.session.id===HID) return;
         /* THE EXAMPLE WAS NEVER ACTUALLY SEEDING. seedOnce() only plants Hansel and
            Alice when loadSessions() is EMPTY, but the app creates a blank 'Untitled
@@ -53724,9 +53746,10 @@ function beingRenderOpts(nd){ if(!nd) return null;
            So the tour plants it itself, from the builder that module already
            exports, rather than depending on a seed that has already given up. */
         try{
-          if(!loadSessions().some(x=>x.id===HID) && typeof window.buildHanselSession==='function'
+          const _gone = !FIX && typeof loadDeleted==='function' && loadDeleted().indexOf(HID)>=0;   /* a writer who deleted the example keeps it deleted */
+          if(!_gone && !loadSessions().some(x=>x.id===HID) && typeof window.__dystExampleBuild==='function'
              && typeof persistSessions==='function'){
-            const l=loadSessions(); l.unshift(window.buildHanselSession()); persistSessions(l);
+            const l=loadSessions(); l.unshift(window.__dystExampleBuild()); persistSessions(l);
             if(typeof renderLibrary==='function') renderLibrary();
           }
         }catch(e){}
@@ -53742,7 +53765,7 @@ function beingRenderOpts(nd){ if(!nd) return null;
            The tour still demonstrates on the example, but a phone gets its own story back when the tour ends
            (see finishSeq). Remembered by id, and only ever a story that was blank — the check above already
            guarantees that, so nothing with writing in it is ever set aside. */
-        try{ if((onbIsPhone() || (window.__dystFRActive && window.__dystFRActive())) && state.session && state.session.id!==HID) onbPhoneReturnId = state.session.id; }catch(e){}   /* v.860 — a new writer on the first-run path gets their own story back after the tour (as a phone always did) */
+        try{ if((onbIsPhone() || !FIX || (window.__dystFRActive && window.__dystFRActive())) && state.session && state.session.id!==HID) onbPhoneReturnId = state.session.id; }catch(e){}   /* v.862 — every writer gets their own story back after the tour; the example never stays open */   /* v.860 — a new writer on the first-run path gets their own story back after the tour (as a phone always did) */
         if(loadSessions().some(x=>x.id===HID)) openSession(HID);
       }catch(e){}
     }
@@ -59665,9 +59688,12 @@ body.eink .pl-filterpick .pf-row.on .pf-box{ background:#000; border-color:#000;
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.784';
+  var APP_VERSION = '2026.07.20.785';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.785', date:'September 27, 2026', notes:[
+      '**One example, and the planning pages to themselves.** [Jeremy] Hansel and Gretel is no longer a seeded example: new writers start on a story of their own, the tour borrows Alice’s Adventures in Wonderland to show the modes and hands your own story back when it ends, and Start Planning never opens on somebody else’s goals. A Hansel already in your Library stays until you delete it. While Where would you like to begin?, How do you like to plan?, the guided planner or the premise page is up, the story’s title and the Notepad tab step out of the way.'
+    ]},
     { v:'2026.07.20.784', date:'September 27, 2026', notes:[
       '**Community.** [Jeremy] The person icon opens Community now. Its first tab is Friends — your writing partners, the people who joined from your invitation, and your beta readers (a click on one opens them in Beta readers). Invite sits in the header beside the gear and opens its own page — their email and a note — with ← back to where you were; it no longer sits at the bottom of the list.'
     ]},
@@ -105903,5 +105929,12 @@ body.eink #npMenu{ background:#fff; border-color:#000; box-shadow:none } body.ei
 #chatPanel .ch-invbody .ch-fhint{ margin:2px 0 12px }
 #chatPanel .ch-brow{ cursor:pointer }
 body.eink #chatPanel .ch-inv{ color:#000; border-color:#000; background:#fff }
+</style>
+<style id="dyst-fullpage-chrome-css">
+/* v.862 [Jeremy: "it looks like the title and notepad show up in the planning mode, they should be below or hidden during these
+   steps"] — while a full page of the first steps is up (where to begin, how to plan, the guided planner, the premise page, the
+   Owner's kinds page), the story's title and the Notepad tab stand down; they come back the moment the page closes. */
+body:has(#planWizard) #storyName, body:has(#planningDoors) #storyName, body:has(#premiseDoor) #storyName, body:has(#firstRunDoors) #storyName, body:has(#newProjectDoors) #storyName,
+body:has(#planWizard) #planPad, body:has(#planningDoors) #planPad, body:has(#premiseDoor) #planPad, body:has(#firstRunDoors) #planPad, body:has(#newProjectDoors) #planPad{ visibility:hidden !important; pointer-events:none !important }
 </style>
 </body></html>
