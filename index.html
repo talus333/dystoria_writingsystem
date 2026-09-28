@@ -29233,6 +29233,7 @@ function liveJoin(sess){
     .on('presence', { event: 'sync' }, liveRefreshPeers)
     .on('presence', { event: 'join' }, () => { liveRefreshPeers(); liveBroadcast(true); })
     .on('broadcast', { event: 'doc' }, ({ payload }) => { if (payload && typeof payload.doc === 'string') liveApplyRemote(payload.doc); })
+    .on('broadcast', { event: 'rtc' }, (m) => { try{ if (window.__dystRtcIn) window.__dystRtcIn(m && m.payload); }catch(e){} })   /* v.885 */
     .subscribe((status) => {
       if (status === 'SUBSCRIBED'){ live.on = true; live.lastDoc = liveDocStr(); liveTrack(); }
     });
@@ -59725,9 +59726,15 @@ body.eink .pl-filterpick .pf-row.on .pf-box{ background:#000; border-color:#000;
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.807';
+  var APP_VERSION = '2026.07.20.809';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.809', date:'September 28, 2026', notes:[
+      '**A quieter Elements page.** [Jeremy] Plan → Elements loses its row of category pills. Its search now sits at the right of the mode bar, with a **Filter** pill before it that reads ALL — press it for the list (Goals, Narrative Layers and every kind of element) and pick one. The section titles — Goals, Narrative Layers, Narrative Elements — are now set in the same serif and size as the name of a map or scene.'
+    ]},
+    { v:'2026.07.20.808', date:'September 28, 2026', notes:[
+      '**Talk with a co-author.** [Jeremy] When a co-author is in the same story, their chat window has a small green handset. Press it and they hear a soft ring and see “… is calling” with Answer and Decline; once you are connected the bar shows the time, a Mute button and Hang up. The call goes straight between your two browsers — nothing is recorded — and it ends if either of you hangs up, closes the chat window or leaves the story. Your browser asks once for the microphone.'
+    ]},
     { v:'2026.07.20.807', date:'September 28, 2026', notes:[
       '**The Notepad, tidied.** [Jeremy] The element pills under its header take exactly two rows (scroll for the rest), the header is as tall as the mode bars with no orange line above it, and Open card is a smaller, finer pill with a little card mark — it fills charcoal when you point at it.'
     ]},
@@ -101187,6 +101194,7 @@ html body.eink #profileCard .pf-head{ background:#fff; box-shadow:0 0 0 100vmax 
       .on('broadcast', { event: 'sec' }, function(m){ var p = m && m.payload; if (!p || typeof p.html !== 'string') return; if (p.nf && state.frames && state.frames.length !== p.nf){ refetch(); return; } try { if (window.dystLedgerCo) window.dystLedgerCo(+p.f, p.html, p.by || ''); } catch (e){} applySec(+p.f, p.html); })
       .on('broadcast', { event: 'keys' }, function(m){ var p = m && m.payload; if (p && p.k) applyKeys(p); })
       .on('broadcast', { event: 'refetch' }, function(){ refetch(); })
+      .on('broadcast', { event: 'rtc' }, function(m){ try{ if (window.__dystRtcIn) window.__dystRtcIn(m && m.payload); }catch(e){} })   /* v.885 — a call's handshake */
       .subscribe(function(status){
         if (status === 'SUBSCRIBED'){ live.on = true; live.lastDoc = (typeof liveDocStr === 'function') ? liveDocStr() : '';
           sent.skel = skeleton(); frames().forEach(function(f){ sent.sec[f] = h(secHTML(f)); }); sendKeysBaseline(); window.liveTrack(); }
@@ -109198,4 +109206,352 @@ html body:not(.eink) #npCard .npc-title .npc-opencard.npc-opencard::before{ cont
 html body:not(.eink) #npCard .npc-title .npc-opencard.npc-opencard:hover, html body:not(.eink) #npCard .npc-title .npc-opencard.npc-opencard:focus-visible{
   background:#2b2926 !important; color:#f3c77e !important; border-color:#2b2926 !important; box-shadow:0 2px 6px rgba(43,41,38,.18) !important; outline:none; }
 </style>
+<style id="dyst-cocall-css">
+/* v.885 [Jeremy] — "can we add a little button in the chat window for co-authors in the same project for live audio chat?"
+   A handset in the chat window's head (only while they are here in this story); a call bar under the head that says what is
+   happening — calling, ringing, connecting, the call with its time, mute and hang up. */
+.cf-win .cf-call{ flex:none; width:26px; height:26px; border-radius:50%; border:1px solid rgba(95,191,110,.45); background:transparent; color:#8fd39a; cursor:pointer; padding:0;
+  display:inline-flex; align-items:center; justify-content:center; transition:background .12s, color .12s, border-color .12s }
+.cf-win .cf-call:hover{ background:rgba(95,191,110,.14); color:#b5ecbd; border-color:rgba(95,191,110,.8) }
+.cf-win .cf-call.busy{ background:#3f8f4c; color:#fff; border-color:#3f8f4c }
+.cf-win .cf-call svg, .cf-cbar svg{ width:13px; height:13px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round }
+.cf-cbar{ display:flex; align-items:center; gap:8px; padding:8px 10px 8px 14px; border-bottom:1px solid rgba(255,255,255,.08); background:rgba(95,191,110,.08);
+  font:12px/1.35 system-ui,-apple-system,sans-serif; color:#d9e9d6 }
+.cf-cbar.ended{ background:rgba(255,255,255,.04); color:#a89f8e }
+.cf-cbar.warn{ background:rgba(240,140,31,.1); color:#f3c77e }
+.cf-cbar .cc-dot{ flex:none; width:8px; height:8px; border-radius:50%; background:#5fbf6e }
+.cf-cbar.ringing .cc-dot, .cf-cbar.calling .cc-dot, .cf-cbar.connecting .cc-dot{ animation:ccPulse 1.1s ease-in-out infinite }
+.cf-cbar.ended .cc-dot, .cf-cbar.warn .cc-dot{ background:#8f8676; animation:none }
+@keyframes ccPulse{ 0%,100%{ opacity:1; transform:scale(1) } 50%{ opacity:.35; transform:scale(.7) } }
+.cf-cbar .cc-t{ flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
+.cf-cbar .cc-t b{ font-weight:600; color:#f2e7cf }
+.cf-cbar .cc-time{ font-variant-numeric:tabular-nums; color:#9fcfa6; margin-left:4px }
+.cf-cbar button{ flex:none; border-radius:999px; padding:4px 10px; font:700 9.5px/1.4 system-ui,-apple-system,sans-serif; letter-spacing:.08em; text-transform:uppercase; cursor:pointer;
+  display:inline-flex; align-items:center; gap:5px; border:1px solid rgba(255,255,255,.2); background:transparent; color:#e8dfcc }
+.cf-cbar button:hover{ border-color:rgba(255,205,116,.55); color:#f3c77e }
+.cf-cbar .cc-yes{ background:#3f8f4c; border-color:#3f8f4c; color:#fff }
+.cf-cbar .cc-yes:hover{ background:#4ca35a; border-color:#4ca35a; color:#fff }
+.cf-cbar .cc-end{ background:#a3503c; border-color:#a3503c; color:#fff5ec }
+.cf-cbar .cc-end:hover{ background:#b75b44; border-color:#b75b44; color:#fff }
+.cf-cbar .cc-mute.on{ background:rgba(255,205,116,.16); border-color:rgba(255,205,116,.55); color:#f3c77e }
+#cfDock .cf-pill.on-call{ border-color:rgba(95,191,110,.7); box-shadow:0 0 0 3px rgba(95,191,110,.18) }
+#cfDock .cf-pill.on-call .cf-pav{ box-shadow:0 0 0 2px #5fbf6e }
+body.eink .cf-win .cf-call{ color:#000; border-color:#000 } body.eink .cf-cbar{ background:#fff; color:#000 } body.eink .cf-cbar .cc-t b{ color:#000 }
+</style>
+<script id="dyst-cocall-js">
+/* v.885 — LIVE AUDIO BETWEEN CO-AUTHORS, from the chat window (v.855).
+   PEER TO PEER: the voices go straight between the two browsers (WebRTC). Nothing is recorded and nothing passes through
+   Dystoria's servers but the handshake, which rides the story's own Realtime channel (the one presence and live editing already
+   use) as `rtc` broadcasts addressed to one person: ring · accept · decline · busy · cancel · offer · answer · ice · hangup.
+   Only someone who is HERE in the same story can be called (they are on that channel), so the handset shows only then.
+   Addresses are found with public STUN servers. Most home and office networks connect that way; a few strict ones (some
+   corporate or mobile networks) need a relay (TURN) — `window.DYST_ICE` takes a list of ICE servers if one is added later, and
+   when a connection cannot be made the bar says so plainly rather than sitting on "Connecting…".
+   One call at a time. A second ring while busy answers "busy". If both press call at once, the one with the smaller id rings
+   and the other picks up. Closing the chat window, or leaving the story, ends the call. */
+(function(){
+  'use strict';
+  var C = null;   // the call: { uid, name, role, state, cid, pc, stream, audio, t0, tick, pend, muted, timers:[] }
+  var PHONE = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h3.5l1.8 4.3-2.2 1.4a11 11 0 0 0 6.2 6.2l1.4-2.2L20 15.5V19a1.5 1.5 0 0 1-1.6 1.5A16.5 16.5 0 0 1 3.5 5.6 1.5 1.5 0 0 1 5 4z"/></svg>';
+  var MIC = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></svg>';
+  var MICOFF = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 9v2a3 3 0 0 0 5.1 2.1M15 10V6a3 3 0 0 0-5.8-1M5.5 11a6.5 6.5 0 0 0 10.9 4.8M18.5 11a6.4 6.4 0 0 1-.6 2.6M12 17.5V21M4 4l16 16"/></svg>';
+  function me(){ try { return (cloud.user && !cloud.user.is_anonymous) ? cloud.user : null; } catch (e){ return null; } }
+  function myName(){ try { if (typeof myDisplayName === 'function') return myDisplayName(); } catch (e){} try { return cloud.username || 'A co-author'; } catch (e){ return 'A co-author'; } }
+  function peers(){ try { return (live.on && live.peers) || []; } catch (e){ return []; } }
+  function here(uid){ return peers().some(function(p){ return p && p.id === uid; }); }
+  function first(n){ return String(n || 'them').trim().split(/\s+/)[0]; }
+  function h(t){ return String(t == null ? '' : t).replace(/[&<>"]/g, function(c){ return { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[c]; }); }
+  function mmss(ms){ var s = Math.max(0, Math.round(ms / 1000)), m = Math.floor(s / 60); s = s % 60; return (m < 10 ? '0' : '') + m + ':' + (s < 10 ? '0' : '') + s; }
+  function ice(){ try { if (Array.isArray(window.DYST_ICE) && window.DYST_ICE.length) return window.DYST_ICE; } catch (e){} return [{ urls:['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }]; }
+  function supported(){ return !!(window.RTCPeerConnection && navigator.mediaDevices && navigator.mediaDevices.getUserMedia); }
+  function send(to, kind, data){
+    var u = me(); var ch = null; try { ch = live.channel; } catch (e){}
+    if (!u || !ch || typeof ch.send !== 'function') return false;
+    try { ch.send({ type:'broadcast', event:'rtc', payload: Object.assign({ to:to, from:u.id, fromName:myName(), kind:kind, cid:(C && C.cid) || '' }, data || {}) }); return true; } catch (e){ return false; }
+  }
+  window.__dystRtcSend = send;
+  function win(uid){ return document.getElementById('cfw-' + uid); }
+  function openWin(uid, name){ try { if (typeof window.dystChatFloat === 'function') return window.dystChatFloat(uid, name); } catch (e){} return win(uid); }
+
+  /* ---- the ring: two soft notes, every 2.4 s, while someone is calling you ---- */
+  var ringT = 0, actx = null;
+  function chime(){ try { actx = actx || new (window.AudioContext || window.webkitAudioContext)(); var t = actx.currentTime;
+      [[659.25, 0], [880, 0.18]].forEach(function(n){ var o = actx.createOscillator(), g = actx.createGain(); o.type = 'sine'; o.frequency.value = n[0];
+        g.gain.setValueAtTime(0.0001, t + n[1]); g.gain.exponentialRampToValueAtTime(0.12, t + n[1] + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t + n[1] + 0.5);
+        o.connect(g); g.connect(actx.destination); o.start(t + n[1]); o.stop(t + n[1] + 0.55); }); } catch (e){} }
+  function ringOn(){ ringOff(); chime(); ringT = setInterval(chime, 2400); }
+  function ringOff(){ if (ringT){ clearInterval(ringT); ringT = 0; } }
+
+  /* ---- the bar ---- */
+  var lastBar = {};   // uid → { cls, html } of an ended call, kept a few seconds
+  function bar(uid){
+    var el = win(uid); if (!el) return null; var b = el.querySelector('.cf-cbar');
+    if (!b){ b = document.createElement('div'); b.className = 'cf-cbar'; var hd = el.querySelector('.cf-head'); hd.parentNode.insertBefore(b, hd.nextSibling); }
+    return b;
+  }
+  function paint(){
+    Object.keys(window.dystChatFloats || {}).forEach(function(uid){
+      var el = win(uid); if (!el) return;
+      var hd = el.querySelector('.cf-head'), cb = hd && hd.querySelector('.cf-call');
+      if (hd && !cb){ cb = document.createElement('button'); cb.type = 'button'; cb.className = 'cf-call'; cb.innerHTML = PHONE;
+        cb.addEventListener('click', function(e){ e.stopPropagation(); if (C && C.uid === uid) return; call(uid); });
+        var go = hd.querySelector('.cf-go'); hd.insertBefore(cb, go || hd.querySelector('.cf-min')); }
+      var w = (window.dystChatFloats || {})[uid] || {}, nm = first(w.name);
+      var canCall = here(uid) && supported() && !!me();
+      var mine = C && C.uid === uid;
+      if (cb){ cb.style.display = (canCall || mine) ? '' : 'none'; cb.classList.toggle('busy', !!mine);
+        cb.title = mine ? 'On a call with ' + nm : 'Talk with ' + nm + ' — a live audio call'; cb.setAttribute('aria-label', cb.title); }
+      var b = el.querySelector('.cf-cbar');
+      if (!mine && !lastBar[uid]){ if (b) b.remove(); }
+      if (w.pill) w.pill.classList.toggle('on-call', !!(mine && C.state === 'live'));
+    });
+    if (C) render();
+  }
+  function render(){
+    if (!C) return; var b = bar(C.uid); if (!b) return; var nm = h(first(C.name)), s = C.state, html = '', cls = s;
+    if (s === 'calling') html = '<span class="cc-dot"></span><span class="cc-t">Calling <b>' + nm + '</b>…</span><button type="button" class="cc-end" data-a="cancel">Cancel</button>';
+    else if (s === 'ringing') html = '<span class="cc-dot"></span><span class="cc-t"><b>' + nm + '</b> is calling</span><button type="button" data-a="decline">Decline</button><button type="button" class="cc-yes" data-a="answer">' + PHONE + 'Answer</button>';
+    else if (s === 'connecting') html = '<span class="cc-dot"></span><span class="cc-t">Connecting…</span><button type="button" class="cc-end" data-a="hangup">Hang up</button>';
+    else if (s === 'live') html = '<span class="cc-dot"></span><span class="cc-t">On a call with <b>' + nm + '</b><span class="cc-time">' + mmss(Date.now() - C.t0) + '</span></span>'
+      + '<button type="button" class="cc-mute' + (C.muted ? ' on' : '') + '" data-a="mute" title="' + (C.muted ? 'Unmute' : 'Mute') + '">' + (C.muted ? MICOFF + 'Muted' : MIC + 'Mute') + '</button><button type="button" class="cc-end" data-a="hangup">Hang up</button>';
+    if (b.getAttribute('data-k') === s + (C.muted ? 'm' : '') && s === 'live'){ var tm = b.querySelector('.cc-time'); if (tm) tm.textContent = mmss(Date.now() - C.t0); return; }
+    b.className = 'cf-cbar ' + cls; b.setAttribute('data-k', s + (C.muted ? 'm' : '')); b.innerHTML = html;
+    Array.prototype.forEach.call(b.querySelectorAll('button[data-a]'), function(bt){ bt.addEventListener('click', function(e){ e.stopPropagation(); act(bt.getAttribute('data-a')); }); });
+  }
+  function act(a){ if (!C) return; if (a === 'cancel'){ send(C.uid, 'cancel'); end('Call cancelled'); } else if (a === 'decline'){ send(C.uid, 'decline'); end('Call declined'); }
+    else if (a === 'answer') answer(); else if (a === 'hangup'){ send(C.uid, 'hangup'); end('Call ended'); } else if (a === 'mute') mute(); }
+  function note(uid, msg, warn){
+    lastBar[uid] = 1; var b = bar(uid); if (!b) return;
+    b.className = 'cf-cbar ' + (warn ? 'warn' : 'ended'); b.removeAttribute('data-k'); b.innerHTML = '<span class="cc-dot"></span><span class="cc-t">' + h(msg) + '</span>';
+    setTimeout(function(){ if (!(C && C.uid === uid)){ delete lastBar[uid]; var bb = win(uid) && win(uid).querySelector('.cf-cbar'); if (bb) bb.remove(); paint(); } }, 5000);
+  }
+
+  /* ---- the call ---- */
+  function later(fn, ms){ var t = setTimeout(fn, ms); if (C) C.timers.push(t); return t; }
+  function call(uid){
+    if (C) return false; if (!here(uid)){ note(uid, first(((window.dystChatFloats || {})[uid] || {}).name) + ' isn’t in this story right now', true); return false; }
+    if (!supported()){ note(uid, 'This browser can’t make calls', true); return false; }
+    var w = (window.dystChatFloats || {})[uid] || {};
+    C = { uid:uid, name:w.name || '', role:'caller', state:'calling', cid:(Date.now().toString(36) + Math.random().toString(36).slice(2, 7)), pend:[], timers:[], muted:false };
+    delete lastBar[uid];
+    if (!send(uid, 'ring')){ var n0 = C.name; C = null; note(uid, 'Couldn’t reach ' + first(n0), true); return false; }
+    later(function(){ if (C && C.state === 'calling'){ send(C.uid, 'cancel'); end('No answer'); } }, 35000);
+    paint(); try { track('cocall_start'); } catch (e){}
+    return true;
+  }
+  async function getMic(){ return navigator.mediaDevices.getUserMedia({ audio:{ echoCancellation:true, noiseSuppression:true, autoGainControl:true }, video:false }); }
+  function makePC(){
+    var pc = new RTCPeerConnection({ iceServers: ice() }); C.pc = pc; var cid = C.cid, uid = C.uid;
+    pc.onicecandidate = function(e){ if (e.candidate && C && C.cid === cid) send(uid, 'ice', { c: e.candidate.toJSON ? e.candidate.toJSON() : e.candidate }); };
+    pc.ontrack = function(e){ if (!C || C.cid !== cid) return; var a = C.audio; if (!a){ a = C.audio = document.createElement('audio'); a.autoplay = true; a.setAttribute('playsinline', ''); a.id = 'dystCallAudio'; a.style.display = 'none'; document.body.appendChild(a); }
+      a.srcObject = (e.streams && e.streams[0]) || new MediaStream([e.track]); try { var p = a.play(); if (p && p.catch) p.catch(function(){}); } catch (x){} };
+    pc.onconnectionstatechange = function(){ if (!C || C.cid !== cid) return; var st = pc.connectionState;
+      if (st === 'connected'){ if (C.state !== 'live'){ C.state = 'live'; C.t0 = Date.now(); C.tick = setInterval(render, 1000); paint(); try { track('cocall_live'); } catch (e){} } }
+      else if (st === 'failed'){ send(uid, 'hangup'); end('Couldn’t connect — one of your networks won’t allow a direct call', true); }
+      else if (st === 'disconnected'){ later(function(){ if (C && C.cid === cid && pc.connectionState === 'disconnected'){ send(uid, 'hangup'); end('The call dropped', true); } }, 7000); } };
+    (C.stream ? C.stream.getTracks() : []).forEach(function(t){ pc.addTrack(t, C.stream); });
+    return pc;
+  }
+  async function flush(){ if (!C || !C.pc || !C.pc.remoteDescription) return; var q = C.pend.splice(0); for (var i = 0; i < q.length; i++){ try { await C.pc.addIceCandidate(q[i]); } catch (e){} } }
+  async function answer(){
+    if (!C || C.state !== 'ringing') return; ringOff(); C.state = 'connecting'; render();
+    try { C.stream = await getMic(); } catch (e){ send(C.uid, 'decline', { why:'mic' }); end('Your microphone is blocked — allow it for this site to talk', true); return; }
+    if (!C) { return; }
+    makePC(); send(C.uid, 'accept');
+    later(function(){ if (C && C.state === 'connecting'){ send(C.uid, 'hangup'); end('Couldn’t connect — one of your networks won’t allow a direct call', true); } }, 25000);
+  }
+  function mute(){ if (!C || !C.stream) return; C.muted = !C.muted; C.stream.getAudioTracks().forEach(function(t){ t.enabled = !C.muted; }); render(); }
+  function end(msg, warn){
+    if (!C) return; var c = C; C = null; ringOff();
+    try { (c.timers || []).forEach(clearTimeout); } catch (e){} try { if (c.tick) clearInterval(c.tick); } catch (e){}
+    try { if (c.pc) c.pc.close(); } catch (e){} try { if (c.stream) c.stream.getTracks().forEach(function(t){ t.stop(); }); } catch (e){}
+    try { if (c.audio){ c.audio.srcObject = null; c.audio.remove(); } } catch (e){}
+    var dur = c.t0 ? ' · ' + mmss(Date.now() - c.t0) : '';
+    note(c.uid, (msg || 'Call ended') + (c.t0 && /ended/.test(msg || 'ended') ? dur : ''), warn);
+    paint();
+  }
+  /* ---- what arrives ---- */
+  window.__dystRtcIn = async function(p){
+    var u = me(); if (!p || !u || p.to !== u.id || !p.from || p.from === u.id) return;
+    var k = p.kind;
+    if (k === 'ring'){
+      if (C && C.uid === p.from && C.role === 'caller' && C.state === 'calling'){
+        /* both pressed call: the smaller id rings, the larger picks up */
+        if (u.id < p.from) return;
+        C.timers.forEach(clearTimeout); C.timers = []; C.role = 'callee'; C.cid = p.cid; C.state = 'ringing'; answer(); return;
+      }
+      if (C){ send(p.from, 'busy', { cid:p.cid }); return; }
+      if (!supported()){ send(p.from, 'decline', { cid:p.cid, why:'browser' }); return; }
+      openWin(p.from, p.fromName);
+      C = { uid:p.from, name:p.fromName || ((window.dystChatFloats || {})[p.from] || {}).name || '', role:'callee', state:'ringing', cid:p.cid, pend:[], timers:[], muted:false };
+      delete lastBar[p.from];
+      later(function(){ if (C && C.state === 'ringing'){ end('Missed call from ' + first(C.name)); } }, 40000);
+      ringOn(); paint(); return;
+    }
+    if (!C || C.uid !== p.from || (p.cid && C.cid && p.cid !== C.cid)) return;
+    if (k === 'cancel'){ end('Missed call from ' + first(C.name)); }
+    else if (k === 'decline'){ end(p.why === 'mic' ? first(C.name) + '’s microphone is blocked' : first(C.name) + ' can’t talk right now', true); }
+    else if (k === 'busy'){ end(first(C.name) + ' is on another call', true); }
+    else if (k === 'hangup'){ end('Call ended'); }
+    else if (k === 'accept' && C.role === 'caller' && C.state === 'calling'){
+      C.state = 'connecting'; render();
+      try { C.stream = await getMic(); } catch (e){ send(C.uid, 'hangup'); end('Your microphone is blocked — allow it for this site to talk', true); return; }
+      if (!C) return;
+      var pc = makePC();
+      try { var off = await pc.createOffer({ offerToReceiveAudio:true }); await pc.setLocalDescription(off); send(C.uid, 'offer', { sdp: pc.localDescription && pc.localDescription.toJSON ? pc.localDescription.toJSON() : { type:off.type, sdp:off.sdp } }); }
+      catch (e){ send(C.uid, 'hangup'); end('Couldn’t start the call', true); return; }
+      later(function(){ if (C && C.state === 'connecting'){ send(C.uid, 'hangup'); end('Couldn’t connect — one of your networks won’t allow a direct call', true); } }, 25000);
+    }
+    else if (k === 'offer' && C.role === 'callee' && C.pc && p.sdp){
+      try { await C.pc.setRemoteDescription(p.sdp); await flush(); var ans = await C.pc.createAnswer(); await C.pc.setLocalDescription(ans);
+        send(C.uid, 'answer', { sdp: C.pc.localDescription && C.pc.localDescription.toJSON ? C.pc.localDescription.toJSON() : { type:ans.type, sdp:ans.sdp } }); }
+      catch (e){ send(C.uid, 'hangup'); end('Couldn’t start the call', true); }
+    }
+    else if (k === 'answer' && C.role === 'caller' && C.pc && p.sdp){ try { await C.pc.setRemoteDescription(p.sdp); await flush(); } catch (e){} }
+    else if (k === 'ice' && p.c){ if (C.pc && C.pc.remoteDescription){ try { await C.pc.addIceCandidate(p.c); } catch (e){} } else C.pend.push(p.c); }
+  };
+  /* keep the handsets current; end a call whose window was closed or whose other end left the story */
+  var gone = 0;
+  setInterval(function(){
+    try { paint(); } catch (e){}
+    if (!C) { gone = 0; return; }
+    if (!win(C.uid)){ send(C.uid, C.state === 'ringing' ? 'decline' : (C.state === 'calling' ? 'cancel' : 'hangup')); end('Call ended'); return; }
+    if (!here(C.uid)){ if (++gone >= 8){ gone = 0; end(first(C.name) + ' left the story'); } } else gone = 0;
+  }, 1000);
+  window.addEventListener('pagehide', function(){ if (C) send(C.uid, C.state === 'ringing' ? 'decline' : (C.state === 'calling' ? 'cancel' : 'hangup')); });
+  window.dystCoCall = { call:call, answer:answer, hangup:function(){ if (C){ send(C.uid, 'hangup'); end('Call ended'); } }, mute:mute, state:function(){ return C ? { uid:C.uid, role:C.role, state:C.state, muted:C.muted, conn:C.pc ? C.pc.connectionState : '' } : null; } };
+})();
+</script>
+<style id="dyst-el-bar-css">
+/* v.886 [Jeremy] — "For the Elements mode under Plan, can we move the search bar to the right of the mode bar, and can we turn the
+   pills for the categories into a filter like the notepad. can we also make the titles of the categories (Goals, Narrative Layers,
+   Narrative Elements) the same font and size as the Map and Scene name."
+   The Elements page's filter row leaves the page. Its search moves into the right of the charcoal mode bar (where the map's own
+   controls sit on the Places page), with a Filter pill before it (ALL by default), the Notepad's v.883 pill. The row of category
+   pills stays in the page as the one source of truth, hidden on a desktop; the Filter pill lists them and a pick presses the real
+   one, and the bar's search types into the real search. A phone keeps its own ALL dropdown (v.680); e-ink keeps its white row.
+   The section titles wear the Places title (#placeTitle .pt-name): the book serif at 26px, not the 11px letter-spaced caps. */
+#plElTools{ display:none; }
+@media (min-width:769px){
+  html body.plan-view-narrative:not(.eink):not(.mobile-min) #expMapBar #plElTools{ display:flex !important; }
+  html body:not(.eink):not(.mobile-min) #planNarrative .pl-nfilter{ display:none !important; }
+  html body:not(.eink):not(.mobile-min) #planNarrative{ padding-top:26px !important; }
+}
+#plElTools{ margin-left:auto; align-items:center; gap:8px; flex:none; position:relative; }
+#plElTools #plFilterPill{ flex:none; display:inline-flex; align-items:center; gap:6px; height:24px; padding:0 11px 0 10px; box-sizing:border-box; margin:0;
+  border-radius:999px; cursor:pointer; font:600 10px/1 var(--sans); letter-spacing:.11em; text-transform:uppercase; white-space:nowrap;
+  background:transparent; color:#fa9a31; border:1px solid rgba(250,154,49,.45); box-shadow:none; transition:background .12s, color .12s, border-color .12s; }
+#plElTools #plFilterPill:hover, #plElTools #plFilterPill.open{ background:rgba(250,154,49,.12); color:#ffb347; border-color:rgba(250,154,49,.7); }
+#plElTools #plFilterPill.filtered{ background:rgba(250,154,49,.16); color:#ffc46e; }
+#plElTools #plFilterPill svg{ width:11px; height:11px; flex:none; }
+#plElTools #plFilterPill .npf-car{ font-size:8px; opacity:.8; }
+#plElTools .ple-search{ display:flex; align-items:center; gap:6px; width:230px; height:24px; box-sizing:border-box; padding:0 10px; border-radius:999px;
+  background:rgba(255,255,255,.07); border:1px solid rgba(250,154,49,.3); transition:border-color .12s, background .12s; }
+#plElTools .ple-search:focus-within{ background:rgba(255,255,255,.1); border-color:rgba(250,154,49,.6); }
+#plElTools .ple-search.has-q{ border-color:#fa9a31; }
+#plElTools .ple-search svg{ width:12px; height:12px; flex:none; color:rgba(250,154,49,.8); }
+#plElTools .ple-search input{ flex:1; min-width:0; border:none; background:transparent; outline:none; box-shadow:none; padding:0; margin:0; height:auto;
+  font:400 12px/1.2 var(--sans); color:#efe8d6; }
+#plElTools .ple-search input::placeholder{ color:rgba(239,232,214,.45); }
+#plElTools .ple-x{ display:none; flex:none; cursor:pointer; border:none; background:none; padding:0 0 0 2px; font:400 14px/1 var(--sans); color:rgba(239,232,214,.6); }
+#plElTools .ple-x:hover{ color:#ffb347; }
+#plElTools .ple-search.has-q .ple-x{ display:inline; }
+/* the list — the Notepad's light dropdown (v.883), fixed under the pill */
+#plFilterMenu{ position:fixed; z-index:4300; min-width:196px; max-height:min(440px, calc(100vh - 120px)); overflow:auto; padding:6px; box-sizing:border-box;
+  background:#fbf8f1; border:1px solid rgba(43,41,38,.14); border-radius:12px; box-shadow:0 18px 44px -18px rgba(20,14,4,.55); }
+#plFilterMenu[hidden]{ display:none; }
+#plFilterMenu .npf-opt{ display:flex; align-items:center; width:100%; box-sizing:border-box; text-align:left; border:none; background:none; cursor:pointer; border-radius:8px;
+  padding:7px 10px; font:600 10.5px/1.2 var(--sans); letter-spacing:.11em; text-transform:uppercase; color:#2b2926; }
+#plFilterMenu .npf-opt:hover{ background:rgba(43,41,38,.07); }
+#plFilterMenu .npf-opt.on{ background:#2b2926; color:#f3c77e; }
+#plFilterMenu .npf-sep{ height:1px; margin:4px 6px; background:rgba(43,41,38,.1); }
+/* the section titles — the Places title's serif and size */
+html body #planNarrative .pl-secthd{ margin:0 0 14px; }
+html body #planNarrative .pl-secthd h3{ font-family:var(--serif) !important; font-size:26px !important; line-height:1.15 !important; font-weight:500 !important;
+  letter-spacing:0 !important; text-transform:none !important; color:var(--charcoal) !important; }
+html body #planNarrative .pl-secthd h3 .pl-exstar{ font-size:14px; margin-left:6px; vertical-align:3px; }
+html body.mobile-min #planNarrative .pl-secthd h3{ font-size:23px !important; }
+body.eink #planNarrative .pl-secthd h3{ color:#000 !important; }
+</style>
+<script id="dyst-el-bar-js">
+/* v.886 — the Elements page's Filter pill and search in the mode bar (see the style block above). */
+(function(){
+  'use strict';
+  var FUNNEL = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5h18l-7 8.5V19l-4 2v-7.5z"/></svg>';
+  var LENS = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>';
+  function tabs(){ return Array.prototype.slice.call(document.querySelectorAll('#planNarrative .pl-nfilter .pl-nftab')); }
+  function realInput(){ return document.querySelector('#planNarrative .pl-nfilter .pl-nfsearch input'); }
+  function current(){ var t = tabs(); var on = t.filter(function(x){ return x.classList.contains('on'); })[0] || t[0]; return on ? String(on.textContent || '').trim() : 'All'; }
+  var menu = null, tools = null, pill = null, box = null, inp = null;
+  function shut(){ if (menu) menu.hidden = true; if (pill){ pill.classList.remove('open'); pill.setAttribute('aria-expanded', 'false'); } }
+  function open(){
+    if (!menu){ menu = document.createElement('div'); menu.id = 'plFilterMenu'; menu.setAttribute('role', 'listbox'); menu.hidden = true; document.body.appendChild(menu);
+      menu.addEventListener('click', function(ev){ ev.stopPropagation(); }); }
+    menu.innerHTML = '';
+    var t = tabs();
+    t.forEach(function(tab, i){
+      var o = document.createElement('button'); o.type = 'button'; o.className = 'npf-opt' + (tab.classList.contains('on') ? ' on' : ''); o.setAttribute('role', 'option');
+      o.textContent = String(tab.textContent || '').trim();
+      o.addEventListener('click', function(){ shut(); tab.click(); setTimeout(ensure, 0); });
+      menu.appendChild(o);
+      /* All · then the two page sections (Goals, Narrative Layers) · then the element categories */
+      if ((i === 0 || i === 2) && i < t.length - 1) menu.appendChild(Object.assign(document.createElement('div'), { className:'npf-sep' }));
+    });
+    menu.hidden = false;
+    var r = pill.getBoundingClientRect();
+    menu.style.left = Math.max(8, Math.min(Math.round(r.left), window.innerWidth - menu.offsetWidth - 8)) + 'px';
+    var below = r.bottom + 6, h = menu.offsetHeight;
+    menu.style.top = Math.round(below + h > window.innerHeight - 8 ? Math.max(8, r.top - h - 6) : below) + 'px';
+    pill.classList.add('open'); pill.setAttribute('aria-expanded', 'true');
+  }
+  function push(){
+    var ri = realInput(); if (!ri) return;
+    if (ri.value !== inp.value){ ri.value = inp.value; try{ ri.dispatchEvent(new Event('input', { bubbles:true })); }catch(e){} }
+    box.classList.toggle('has-q', !!inp.value.trim());
+  }
+  function build(){
+    tools = document.createElement('div'); tools.id = 'plElTools';
+    pill = document.createElement('button'); pill.type = 'button'; pill.id = 'plFilterPill'; pill.setAttribute('aria-haspopup', 'listbox'); pill.setAttribute('aria-expanded', 'false');
+    pill.title = 'Show one part of the page — goals, narrative layers, or one kind of element';
+    pill.innerHTML = FUNNEL + '<span class="npf-lbl">All</span><span class="npf-car" aria-hidden="true">▾</span>';
+    pill.addEventListener('click', function(ev){ ev.stopPropagation(); if (menu && !menu.hidden) shut(); else open(); });
+    box = document.createElement('div'); box.className = 'ple-search'; box.innerHTML = LENS;
+    inp = document.createElement('input'); inp.type = 'text'; inp.id = 'plElSearch'; inp.placeholder = 'Search elements…'; inp.autocomplete = 'off'; inp.setAttribute('aria-label', 'Search story elements');
+    inp.addEventListener('click', function(e){ e.stopPropagation(); });
+    inp.addEventListener('input', push);
+    inp.addEventListener('keydown', function(e){ if (e.key === 'Escape' && inp.value){ e.stopPropagation(); inp.value = ''; push(); } });
+    var x = document.createElement('button'); x.type = 'button'; x.className = 'ple-x'; x.textContent = '×'; x.title = 'Clear search';
+    x.addEventListener('click', function(e){ e.stopPropagation(); inp.value = ''; push(); try{ inp.focus(); }catch(_){} });
+    box.appendChild(inp); box.appendChild(x);
+    tools.appendChild(pill); tools.appendChild(box);
+  }
+  function ensure(){
+    var bar = document.getElementById('expMapBar'); if (!bar) return;
+    if (!tools) build();
+    if (tools.parentNode !== bar) bar.appendChild(tools);
+    var l = current(), lb = pill.querySelector('.npf-lbl');
+    if (lb.textContent !== l) lb.textContent = l;
+    var f = !/^all$/i.test(l); if (pill.classList.contains('filtered') !== f) pill.classList.toggle('filtered', f);
+    /* the page re-renders its row from its own state; the bar follows it when the bar is not being typed in */
+    var ri = realInput();
+    if (ri && document.activeElement !== inp && ri.value !== inp.value){ inp.value = ri.value; box.classList.toggle('has-q', !!inp.value.trim()); }
+  }
+  window.__dystElBar = { ensure:ensure, open:function(){ ensure(); open(); }, current:current };
+  var q = false;
+  function queue(){ if (q) return; q = true; requestAnimationFrame(function(){ q = false; try{ ensure(); }catch(e){} }); }
+  document.addEventListener('click', shut);
+  window.addEventListener('resize', shut);
+  document.addEventListener('keydown', function(e){ if (e.key === 'Escape' && menu && !menu.hidden) shut(); });
+  function boot(){
+    var pn = document.getElementById('planNarrative'), bar = document.getElementById('expMapBar');
+    if (!pn || !bar){ setTimeout(boot, 500); return; }
+    try{ new MutationObserver(queue).observe(pn, { childList:true, subtree:true, attributes:true, attributeFilter:['class'] }); }catch(e){}
+    try{ new MutationObserver(queue).observe(bar, { childList:true }); }catch(e){}
+    var wasEl = null;
+    try{ new MutationObserver(function(){ var on = document.body.classList.contains('plan-view-narrative'); if (on !== wasEl){ wasEl = on; if (!on) shut(); queue(); } }).observe(document.body, { attributes:true, attributeFilter:['class'] }); }catch(e){}
+    queue();
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
+})();
+</script>
 </body></html>
