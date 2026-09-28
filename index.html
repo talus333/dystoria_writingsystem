@@ -59738,9 +59738,12 @@ body.eink .pl-filterpick .pf-row.on .pf-box{ background:#000; border-color:#000;
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.812';
+  var APP_VERSION = '2026.07.20.813';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.813', date:'September 28, 2026', notes:[
+      '**Only what you have added.** [Jeremy] On Plan → Elements, Narrative Layers and Story Elements now show only the rows you have put something in. “+ layer” and “+ element” sit beside their titles (as “+ goal” does) — press one for the list of kinds and pick one to add. A row that has something in it ends with a small **+** to add another of the same kind. Setting the Filter pill to an empty kind still shows its row, ready to add to.'
+    ]},
     { v:'2026.07.20.812', date:'September 28, 2026', notes:[
       '**A smaller Notepad title.** [Jeremy] “Notepad” in the Notepad’s header is a little smaller — the same serif, at 22px.'
     ]},
@@ -109731,4 +109734,128 @@ html body #planNarrative .pl-secthd .pl-goaladd-hd .pl-add{ margin:0; }
 html body #planPad .pad-head .pad-title{ font-family:var(--serif) !important; font-size:22px !important;   /* v.889 [Jeremy: "the notepad font can be a little bit smaller"] — 26 → 22 */ font-weight:500 !important; line-height:1.15 !important;
   letter-spacing:0 !important; text-transform:none !important; white-space:nowrap; }
 </style>
+<style id="dyst-el-rows-css">
+/* v.890 [Jeremy] — "for the narrative layers and elements, have the +layer and +element pills to the right of the title as well. Only
+   show the layers and elements if the user has added at least one. Once there is one, you can also have a + pill for that
+   particular element at the end of the added pills for that element".
+   · "+ layer" and "+ element" sit beside the Narrative Layers and Story Elements titles, as "+ goal" does beside Goals (v.888);
+     each opens a list of its kinds, and a pick does exactly what that row's own + did.
+   · A row with nothing in it is not shown (unless the Filter pill has been set to that very kind — then it is, to add to).
+   · A row with something in it ends its pills with a small "+" of its own. The button keeps its words ("+ character") for
+     screen readers and titles; only its face is the "+". */
+html body #planNarrative .pl-nrow.pl-row-empty{ display:none !important; }
+html body #planNarrative .pl-secthd .pl-hdadd{ display:inline-flex; align-items:center; align-self:center; flex:none; margin:0 0 0 2px; }
+html body #planNarrative .pl-secthd .pl-hdadd .pl-add{ margin:0; background:#fff; border:1px dotted #b3a892; color:#6b675f; }
+html body #planNarrative .pl-secthd .pl-hdadd .pl-add:hover{ border-color:#9a8f7d; color:var(--charcoal); }
+html body #planNarrative .pl-secthd .pl-hdadd .pl-add.open{ border-style:solid; border-color:#9a8f7d; color:var(--charcoal); }
+body.eink #planNarrative .pl-secthd .pl-hdadd .pl-add{ border-color:#000; color:#000; }
+/* the row's own "+" — a small round pill at the end of its pills */
+html body #planNarrative .pl-nrow .pl-add.pl-add-plus{ font-size:0 !important; width:26px; min-width:26px; height:26px; padding:0 !important; border-radius:999px !important;
+  display:inline-flex !important; align-items:center; justify-content:center; box-sizing:border-box; vertical-align:middle; line-height:1; }
+html body #planNarrative .pl-nrow .pl-add.pl-add-plus::before{ content:'+'; font:500 16px/1 var(--sans); }
+/* the list */
+#plAddMenu{ position:fixed; z-index:4300; min-width:188px; max-height:min(440px, calc(100vh - 120px)); overflow:auto; padding:6px; box-sizing:border-box;
+  background:#fbf8f1; border:1px solid rgba(43,41,38,.14); border-radius:12px; box-shadow:0 18px 44px -18px rgba(20,14,4,.55); }
+#plAddMenu[hidden]{ display:none; }
+#plAddMenu .npa-h{ padding:6px 10px 4px; font:600 9.5px/1.2 var(--sans); letter-spacing:.16em; text-transform:uppercase; color:#8d8a84; }
+#plAddMenu .npf-opt{ display:flex; align-items:center; justify-content:space-between; gap:12px; width:100%; box-sizing:border-box; text-align:left; border:none; background:none; cursor:pointer; border-radius:8px;
+  padding:7px 10px; font:600 10.5px/1.2 var(--sans); letter-spacing:.11em; text-transform:uppercase; color:#2b2926; }
+#plAddMenu .npf-opt:hover{ background:rgba(43,41,38,.07); }
+#plAddMenu .npf-opt .npa-n{ font:500 10px/1 var(--sans); letter-spacing:.04em; color:#8d8a84; text-transform:none; }
+</style>
+<script id="dyst-el-rows-js">
+/* v.890 — see the style block above. A pass over the Elements page after every render of it. */
+(function(){
+  'use strict';
+  var menu = null, menuFor = null;
+  function host(){ return document.getElementById('planNarrative'); }
+  function badgeOf(row){ var b = row.querySelector('.pl-nlabel .pl-cat'); return b ? String(b.textContent || '').trim() : ''; }
+  function has(row){ return !!row.querySelector('.pl-pill, .pl-layerpill, .pl-povpill, .pl-povvp'); }
+  function count(row){ return row.querySelectorAll('.pl-pill, .pl-layerpill, .pl-povpill, .pl-povvp').length; }
+  function tabNow(){ var t = document.querySelector('#planNarrative .pl-nftab.on'); return t ? String(t.textContent || '').trim() : 'All'; }
+  function rows(sec){ return Array.prototype.filter.call(sec.children, function(c){ return c.classList && c.classList.contains('pl-nrow'); }); }
+  function shut(){ if (menu) menu.hidden = true; if (menuFor){ menuFor.classList.remove('open'); menuFor = null; } }
+  function pick(row, anchor){
+    shut();
+    var add = row.querySelector('.pl-add');
+    if (add){
+      /* the row's own + opens its card beside itself — here, beside the title's pill it was chosen from */
+      var r = anchor.getBoundingClientRect();
+      add.getBoundingClientRect = function(){ return r; };
+      try{ add.click(); }catch(e){}
+      setTimeout(function(){ try{ delete add.getBoundingClientRect; }catch(e){} }, 0);
+      return;
+    }
+    var b = row.querySelector('.pl-nlabel .pl-cat-org') || row.querySelector('.pl-nlabel .pl-cat');   /* a layer already written: its card */
+    if (b) try{ b.click(); }catch(e){}
+  }
+  function open(btn, sec, title){
+    if (menu && !menu.hidden && menuFor === btn){ shut(); return; }
+    if (!menu){ menu = document.createElement('div'); menu.id = 'plAddMenu'; menu.setAttribute('role', 'menu'); menu.hidden = true; document.body.appendChild(menu);
+      menu.addEventListener('click', function(ev){ ev.stopPropagation(); }); }
+    menu.innerHTML = '';
+    var h = document.createElement('div'); h.className = 'npa-h'; h.textContent = title; menu.appendChild(h);
+    rows(sec).forEach(function(row){
+      var lbl = badgeOf(row); if (!lbl) return;
+      var o = document.createElement('button'); o.type = 'button'; o.className = 'npf-opt'; o.setAttribute('role', 'menuitem');
+      var nm = document.createElement('span'); nm.textContent = lbl; o.appendChild(nm);
+      var n = count(row); if (n){ var c = document.createElement('span'); c.className = 'npa-n'; c.textContent = row.querySelector('.pl-add') ? String(n) : 'edit'; o.appendChild(c); }
+      o.addEventListener('click', function(){ pick(row, btn); });
+      menu.appendChild(o);
+    });
+    menu.hidden = false; menuFor = btn; btn.classList.add('open');
+    var r = btn.getBoundingClientRect();
+    menu.style.left = Math.max(8, Math.min(Math.round(r.left), window.innerWidth - menu.offsetWidth - 8)) + 'px';
+    var below = r.bottom + 6, hh = menu.offsetHeight;
+    menu.style.top = Math.round(below + hh > window.innerHeight - 8 ? Math.max(8, r.top - hh - 6) : below) + 'px';
+  }
+  function headAdd(sec, word, title){
+    var hd = sec.querySelector('.pl-secthd'); if (!hd || hd.querySelector('.pl-hdadd')) return;
+    var w = document.createElement('div'); w.className = 'pl-hdadd';
+    var b = document.createElement('button'); b.type = 'button'; b.className = 'pl-add'; b.textContent = '+ ' + word; b.title = 'Add ' + (/^[aeiou]/.test(word) ? 'an ' : 'a ') + word + ' — choose which kind';
+    b.addEventListener('click', function(e){ e.stopPropagation(); open(b, sec, title); });
+    w.appendChild(b);
+    var h3 = hd.querySelector('h3'); hd.insertBefore(w, h3 ? h3.nextSibling : hd.firstChild);
+  }
+  function plusOf(row){
+    var add = row.querySelector('.pl-add'); if (!add || add.classList.contains('pl-add-plus')) return;
+    var words = String(add.textContent || '').replace(/^\+\s*/, '');
+    add.classList.add('pl-add-plus'); if (!add.title) add.title = 'Add ' + (/^[aeiou]/i.test(words) ? 'an ' : 'a ') + words; add.setAttribute('aria-label', add.textContent);
+    /* at the end of the pills it adds to: the last line that holds any */
+    var lines = Array.prototype.filter.call(row.querySelectorAll('.pl-roleline, .pl-pills'), function(l){ return !!l.querySelector('.pl-pill, .pl-layerpill, .pl-povpill, .pl-povvp'); });
+    var last = lines[lines.length - 1];
+    if (last && add.parentNode !== last){ var was = add.parentNode; last.appendChild(add); if (was && was !== last && was.classList && was.classList.contains('pl-roleline') && !was.children.length) was.remove(); }
+    else if (last && last.lastElementChild !== add) last.appendChild(add);
+  }
+  function shape(){
+    var h = host(); if (!h) return;
+    var tab = tabNow().toLowerCase();
+    [['layers', 'layer', 'Add a narrative layer'], ['elements', 'element', 'Add a story element']].forEach(function(k){
+      var sec = h.querySelector('.pl-sect[data-sect="' + k[0] + '"]'); if (!sec) return;
+      headAdd(sec, k[1], k[2]);
+      rows(sec).forEach(function(row){
+        var full = has(row), asked = tab !== 'all' && tab !== 'goals' && tab !== 'narrative layers' && badgeOf(row).toLowerCase() === tab;
+        var hide = !full && !asked;
+        if (row.classList.contains('pl-row-empty') !== hide) row.classList.toggle('pl-row-empty', hide);
+        if (full) plusOf(row);
+      });
+    });
+  }
+  window.__dystElRows = { shape:shape, open:function(which){ var h = host(); var sec = h && h.querySelector('.pl-sect[data-sect="' + which + '"]'); var b = sec && sec.querySelector('.pl-hdadd .pl-add'); if (b) open(b, sec, which === 'layers' ? 'Add a narrative layer' : 'Add a story element'); } };
+  var q = false;
+  function queue(){ if (q) return; q = true; requestAnimationFrame(function(){ q = false; try{ shape(); }catch(e){} }); }
+  document.addEventListener('click', shut);
+  window.addEventListener('resize', shut);
+  document.addEventListener('keydown', function(e){ if (e.key === 'Escape' && menu && !menu.hidden) shut(); });
+  function boot(){
+    var h = host(); if (!h){ setTimeout(boot, 500); return; }
+    try{ new MutationObserver(function(ms){
+      /* the page's own changes (a render, the Filter pill's classes) — not this pass's own class on a row */
+      for (var i = 0; i < ms.length; i++){ var m = ms[i]; if (m.type === 'childList' || (m.attributeName === 'class' && m.target.classList && m.target.classList.contains('pl-nftab'))){ queue(); return; } }
+    }).observe(h, { childList:true, subtree:true, attributes:true, attributeFilter:['class'] }); }catch(e){}
+    queue();
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
+})();
+</script>
 </body></html>
