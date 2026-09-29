@@ -59797,9 +59797,12 @@ body.eink .pl-filterpick .pf-row.on .pf-box{ background:#000; border-color:#000;
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.828';
+  var APP_VERSION = '2026.07.20.829';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.829', date:'September 29, 2026', notes:[
+      '**More ways to filter Characters.** [Jeremy] On Plan → Elements, under Characters, the Role filter (now “All roles”) can be joined by Type, Archetype, Occupation, Sex and Age — whatever your characters carry — each its own small filter, and they combine: Protagonist + Human shows the human protagonists. A filter only appears once there are two or more different values to pick between, on every element type (“All types” for places, artifacts and the rest).'
+    ]},
     { v:'2026.07.20.828', date:'September 29, 2026', notes:[
       '**Signed out means signed out.** [Jeremy] Signing out clears every open Dystoria tab and window, not just the one you pressed it in — another tab could write your stories back. And when a sign-in ends on its own (it lapses, or you sign out on another device), your account’s stories are put away in this browser, out of the library, and come back the moment you sign in again. Nobody else signing in on this browser sees them.'
     ]},
@@ -66120,6 +66123,21 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
   function elemSortMode(catId){ return 'label'; }   // sorting is fixed to "with label" for now (the per-category sort dropdown is hidden)
   function setElemSortMode(catId, m){ try{ data.elemSort=data.elemSort||{}; data.elemSort[catId]=m; save(); }catch(e){} }
   // One row for a story-element set: category badge + a small sort control, then the pills grouped/ordered by the chosen mode.
+  /* v.906 — a character's filterable dimensions: its identity (Type, Archetype, Occupation) and attributes (Sex, Age), whichever the
+     story's characters actually carry — a kind of work that names them differently gets its own names */
+  var CHAR_AXIS_ORDER=['Type','Archetype','Occupation','Sex','Age'];
+  function charFilterAxes(items){
+    var a=api(), seen={}, dims={};
+    (items||[]).forEach(function(it){ var m={}; try{ var w=(a&&a.npFindEl)?a.npFindEl(it.key):null;
+      if(w){ (w.identity||[]).concat(w.attrs||[]).forEach(function(x){ if(x && x.sub && x.word && m[x.sub]==null) m[x.sub]=String(x.word); });
+        if(w.sub && w.word && m[w.sub]==null && typeof IDENTITY_SUBS!=='undefined' && IDENTITY_SUBS.indexOf(w.sub)>=0) m[w.sub]=String(w.word); } }catch(e){}
+      dims[it.key]=m; Object.keys(m).forEach(function(k){ seen[k]=1; }); });
+    var names=CHAR_AXIS_ORDER.filter(function(k){ return seen[k]; }).concat(Object.keys(seen).filter(function(k){ return CHAR_AXIS_ORDER.indexOf(k)<0; }).sort());
+    return names.map(function(k){ var lk=k.toLowerCase();
+      var pl=(/s$/.test(lk)?lk:lk+'s'), all=(k==='Sex'||k==='Age') ? ('Any '+lk) : ('All '+pl);
+      if(all.length>11) all=pl.charAt(0).toUpperCase()+pl.slice(1);   /* “Archetypes”, “Occupations”: the long ones drop the “All” so they fit under the name */
+      return { id:k, name:k, all:all, none:'Not set', of:function(it){ return (dims[it.key]&&dims[it.key][k])||''; } }; });
+  }
   function elementSetRow(catId, label, items){
     var a=api();
     var row=document.createElement('div'); row.className='pl-nrow';
@@ -66157,6 +66175,19 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
         un.forEach(function(it){ flat.appendChild(pill(it)); });
         flat.appendChild(addBtn());
         groups.appendChild(flat);
+      } else if(!_own && typeof window.dystElFilters==='function'){
+        /* v.906 [Jeremy] "Could we add those aspects as filters as well? … All Roles, and All Types below for example? they could combine" ·
+           "Only show the filter type as soon as there is more than one role applied … more than one type, etc" — the row's own family
+           (a character's role, everything else's type) and, for characters, each identity/attribute dimension they carry; combined. */
+        var _isRole=(groupAxis(catId)==='bucket'), _ol=(_isRole?'Unsorted':'Other');
+        var _axes=[{ id:'', name:(_isRole?'Role':'Type'), all:(_isRole?'All roles':'All types'), none:_ol, order:order.slice(), of:function(it){ return groupLabelOf(catId, it.key)||''; } }];
+        if(catId==='being') _axes=_axes.concat(charFilterAxes(items));
+        var _pass=window.dystElFilters(lc, { cat:catId, label:label, items:items, axes:_axes, onPick:function(){ renderNarrative(); } });
+        var _in={}; _pass.forEach(function(it){ _in[it.key]=1; });
+        var _run=document.createElement('div'); _run.className='pl-roleline pl-famline'; { var _c=window.dystElFamFilter && window.dystElFamFilter.current ? window.dystElFamFilter.current(catId) : ''; if(_c) _run.dataset.fam=_c; }
+        order.reduce(function(acc, g){ return acc.concat(buckets[g]||[]); }, []).concat(un).forEach(function(it){ if(_in[it.key]) _run.appendChild(pill(it)); });
+        _run.appendChild(addBtn());
+        groups.appendChild(_run);
       } else if(anyGroup && typeof window.dystElFamFilter==='function'){
         /* v.898 [Jeremy] "instead of having the Family in bold, have a filter under the element category name that is default to ALL …
            When defaulted to all, have the pills going across and wrapping" — one wrapping run, in family order; the Filter pill picks one */
@@ -111440,6 +111471,87 @@ html body:not(.eink) #editMode #edUndoRedo button#edUndoBtn:hover:not(:disabled)
   window.dystAcctSignoutAll = function(){ try { if (CH) CH.postMessage({ type:'signout' }); } catch (e){} try { localStorage.setItem('dystoria.signoutPing', String(Date.now())); } catch (e){} };
   /* the note, after the reload that put a story away */
   setTimeout(function(){ try { var n = sessionStorage.getItem('dystoria.putAway'); if (n){ sessionStorage.removeItem('dystoria.putAway'); flashStatus(note(+n || 0)); } } catch (e){} }, 2500);
+})();
+</script>
+<style id="dyst-elfilt906-css">
+/* v.906 [Jeremy] — a Characters row can be filtered on more than its role: Role, then Type, Archetype, Occupation, Sex, Age (whatever
+   the story's characters carry), each its own small Filter pill stacked under the name, and they combine. A filter pill shows only once
+   there are two or more different values to choose between — on every row, for every filter. */
+html body #planNarrative .pl-nlabel .pl-famf + .pl-famf{ margin-top:5px; }
+html body #planNarrative .pl-nlabel .pl-famf{ max-width:138px; }   /* “All archetypes”, “All occupations” whole */
+#plFamMenu .pff-h{ padding:6px 10px 4px; font:600 9.5px/1.2 var(--sans); letter-spacing:.16em; text-transform:uppercase; color:#8d8a84; }
+#plFamMenu .npf-opt.pff-zero{ opacity:.45; }
+</style>
+<script id="dyst-elfilt906-js">
+/* v.906 — several filters on one Elements row, combined. `o.axes` = [{ id ('' = the row's own family axis), name, all, none, order?, of(it) }].
+   Each axis keeps its pick in the same memory the v.898 pill used (window.__dystElFam; the family axis under the bare category id, so
+   dystElFamFilter.current(cat) still answers). Returns the items that pass every filter. */
+(function(){
+  'use strict';
+  var FUNNEL = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5h18l-7 8.5V19l-4 2v-7.5z"/></svg>';
+  var SEL = window.__dystElFam = window.__dystElFam || {};
+  var menu = null, menuFor = null, openedAt = 0;
+  function shut(){ if (menu) menu.hidden = true; if (menuFor){ menuFor.classList.remove('open'); menuFor.setAttribute('aria-expanded', 'false'); menuFor = null; } }
+  function place(btn){ var r = btn.getBoundingClientRect();
+    menu.style.left = Math.max(8, Math.min(Math.round(r.left), window.innerWidth - menu.offsetWidth - 8)) + 'px';
+    var below = r.bottom + 6, hh = menu.offsetHeight; menu.style.top = Math.round(below + hh > window.innerHeight - 8 ? Math.max(8, r.top - hh - 6) : below) + 'px'; }
+  function matches(ax, it){ var v = ax.of(it) || ''; return !ax.cur || (ax.cur === ax.none ? !v : v === ax.cur); }
+  function open(btn, ax, o){
+    if (menu && !menu.hidden && menuFor === btn){ shut(); return; }
+    shut();
+    menu = document.getElementById('plFamMenu');
+    if (!menu){ menu = document.createElement('div'); menu.id = 'plFamMenu'; menu.setAttribute('role', 'listbox'); menu.hidden = true; document.body.appendChild(menu); }
+    if (!menu.__stop){ menu.__stop = 1; menu.addEventListener('click', function(e){ e.stopPropagation(); }); }
+    menu.innerHTML = '';
+    if (o.axes.filter(function(a){ return a.live; }).length > 1){ var h = document.createElement('div'); h.className = 'pff-h'; h.textContent = ax.name; menu.appendChild(h); }
+    /* counts are what this filter would show, given the others */
+    var pool = o.items.filter(function(it){ return o.axes.every(function(a){ return a === ax || matches(a, it); }); });
+    var add = function(val, label, n){
+      var b = document.createElement('button'); b.type = 'button'; b.className = 'npf-opt' + (val === ax.cur ? ' on' : '') + (n ? '' : ' pff-zero'); b.setAttribute('role', 'option'); b.setAttribute('aria-selected', val === ax.cur ? 'true' : 'false'); b.dataset.fam = val; b.dataset.axis = ax.id;
+      var l = document.createElement('span'); l.textContent = label; b.appendChild(l);
+      var c = document.createElement('span'); c.className = 'pff-n'; c.textContent = String(n); b.appendChild(c);
+      b.addEventListener('click', function(){ shut(); SEL[ax.key] = val; try{ o.onPick(val, ax.id); }catch(e){} });
+      menu.appendChild(b);
+    };
+    add('', 'All', pool.length);
+    var sep = document.createElement('div'); sep.className = 'npf-sep'; menu.appendChild(sep);
+    ax.values.forEach(function(v){ add(v, v, pool.filter(function(it){ return (ax.of(it) || '') === v; }).length); });
+    if (ax.hasNone) add(ax.none, ax.none, pool.filter(function(it){ return !ax.of(it); }).length);
+    menu.hidden = false; openedAt = Date.now(); menuFor = btn; btn.classList.add('open'); btn.setAttribute('aria-expanded', 'true');
+    place(btn);
+  }
+  window.dystElFilters = function(lc, o){
+    var items = o.items || [];
+    o.axes.forEach(function(ax){
+      ax.key = ax.id ? (o.cat + '|' + ax.id) : o.cat;
+      var count = {}, none = 0;
+      items.forEach(function(it){ var v = ax.of(it) || ''; if (v) count[v] = (count[v] || 0) + 1; else none++; });
+      var vals = Object.keys(count);
+      if (ax.order) vals.sort(function(p, q){ var i = ax.order.indexOf(p), j = ax.order.indexOf(q); return ((i < 0 ? 1e6 : i) - (j < 0 ? 1e6 : j)) || p.localeCompare(q); });
+      else vals.sort(function(p, q){ return p.localeCompare(q); });
+      ax.values = vals; ax.hasNone = none > 0;
+      ax.live = vals.length >= 2;   /* [Jeremy] "Only show the filter type as soon as there is more than one role applied … more than one type, etc" */
+      var cur = SEL[ax.key] || '';
+      if (cur && !(ax.live && (vals.indexOf(cur) >= 0 || (cur === ax.none && ax.hasNone)))){ cur = ''; SEL[ax.key] = ''; }
+      ax.cur = cur;
+    });
+    o.axes.forEach(function(ax){
+      if (!ax.live) return;
+      var b = document.createElement('button'); b.type = 'button'; b.className = 'pl-famf' + (ax.cur ? ' filtered' : ''); b.dataset.cat = o.cat; b.dataset.axis = ax.id;
+      b.setAttribute('aria-haspopup', 'listbox'); b.setAttribute('aria-expanded', 'false');
+      b.title = ax.cur ? ('Showing ' + o.label + ' — ' + ax.name + ': ' + ax.cur + ' · pick another, or All') : ('Filter ' + o.label + ' by ' + ax.name.toLowerCase());
+      b.innerHTML = FUNNEL + '<span class="pff-l"></span><span class="pff-c" aria-hidden="true">▾</span>';
+      b.querySelector('.pff-l').textContent = ax.cur || ax.all;
+      b.addEventListener('click', function(e){ e.stopPropagation(); open(b, ax, o); });
+      lc.appendChild(b);
+    });
+    return items.filter(function(it){ return o.axes.every(function(ax){ return matches(ax, it); }); });
+  };
+  document.addEventListener('click', shut);
+  window.addEventListener('resize', shut);
+  document.addEventListener('keydown', function(e){ if (e.key === 'Escape' && menu && !menu.hidden) shut(); });
+  document.addEventListener('scroll', function(e){ if (Date.now() - openedAt < 400) return; /* the scroll that brought the pill into view */ if (menu && !menu.hidden && !(e.target && e.target.nodeType === 1 && menu.contains(e.target))) shut(); }, true);
+  setTimeout(function(){ try{ if (document.querySelector('#planNarrative .pl-nrow') && typeof window.__planRefreshNarrative === 'function') window.__planRefreshNarrative(); }catch(e){} }, 0);
 })();
 </script>
 </body></html>
