@@ -5726,6 +5726,7 @@ body.eink #consentBar #cbAccept{background:#000; color:#fff; border-color:#000}
       <input type="file" id="edImgFile" accept="image/*" style="display:none">
       <!-- the notes & margin-notepad toggles now live in the Notes dropdown (left of Style); keep hidden stubs so existing wiring stays valid -->
       <span id="edLegacyNoteBtns" style="display:none"><button id="edGutterBtn" type="button"></button><button id="edNotesBtn" type="button"></button></span>
+      <div id="edImgWrap"><button id="edImgBtn" type="button" class="rd-iconbtn" title="Images — add a book cover, or insert an image at the cursor" aria-label="Images" aria-haspopup="menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="1.8"/><path d="m21 16-5-5-9 9"/></svg></button><div id="edImgMenu" role="menu"></div></div>   <!-- v.898 [Jeremy] "add that back in, with the image icon in the mode bar to the left of the scaling pill" -->
       <button id="edFindBtn" type="button" class="rd-iconbtn" title="Find & replace across the whole story (⌘F)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg></button>
       <span id="edUndoRedo">
         <button id="edUndoBtn" title="Undo (⌘Z)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg></button>
@@ -59746,9 +59747,14 @@ body.eink .pl-filterpick .pf-row.on .pf-box{ background:#000; border-color:#000;
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.820';
+  var APP_VERSION = '2026.07.20.821';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.821', date:'September 29, 2026', notes:[
+      '**Elements: one run of pills, and a family filter.** [Jeremy] On Plan → Elements the bold family names between an element type’s pills are gone — the pills run across and wrap, with the + at the end. Under each type’s name a small Filter pill (ALL) lists its families with their counts; pick one to see only its pills, or All for the lot.',
+      '**Book view: smaller section symbols, bigger Part headers.** [Jeremy] In Read’s Book view the numbered symbol above each section is drawn smaller, and the Part header a little larger.',
+      '**Images are back in Revise.** [Jeremy] An image icon in Revise’s mode bar, just left of the zoom pill, opens Add book cover and Insert image at cursor again.'
+    ]},
     { v:'2026.07.20.820', date:'September 29, 2026', notes:[
       '**Element cards, tidied further.** [Jeremy] The element’s map mark sits in a circle like the other icons at the bottom. “Edit in Character Creator” (and every builder’s) is now a small “✎ Edit” pill at the end of the Characteristics line. Drives, Bonds and the other descriptions have their title and line outside the box, the same as Notes.'
     ]},
@@ -66010,6 +66016,18 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
         un.forEach(function(it){ flat.appendChild(pill(it)); });
         flat.appendChild(addBtn());
         groups.appendChild(flat);
+      } else if(anyGroup && typeof window.dystElFamFilter==='function'){
+        /* v.898 [Jeremy] "instead of having the Family in bold, have a filter under the element category name that is default to ALL …
+           When defaulted to all, have the pills going across and wrapping" — one wrapping run, in family order; the Filter pill picks one */
+        var _fams=[], _by={};
+        order.forEach(function(g){ if(buckets[g] && buckets[g].length){ _fams.push({ name:g, n:buckets[g].length }); _by[g]=buckets[g]; } });
+        if(un.length){ var _ol=(groupAxis(catId)==='bucket'?'Unsorted':'Other'); _fams.push({ name:_ol, n:un.length }); _by[_ol]=un; }
+        var _cur=window.dystElFamFilter.current(catId); if(_cur && !_by[_cur]) _cur='';
+        window.dystElFamFilter(lc, { cat:catId, label:label, fams:_fams, total:items.length, onPick:function(){ renderNarrative(); } });
+        var _run=document.createElement('div'); _run.className='pl-roleline pl-famline'; if(_cur) _run.dataset.fam=_cur;
+        (_cur ? _by[_cur] : _fams.reduce(function(acc, f){ return acc.concat(_by[f.name]); }, [])).forEach(function(it){ _run.appendChild(pill(it)); });
+        _run.appendChild(addBtn());
+        groups.appendChild(_run);
       } else {
         order.forEach(function(g){ if(buckets[g] && buckets[g].length) groups.appendChild(labeledLine(g, buckets[g])); });
         if(un.length) groups.appendChild(labeledLine(anyGroup?(groupAxis(catId)==='bucket'?'Unsorted':'Other'):'', un));
@@ -110906,4 +110924,110 @@ body.ember:not(.eink) #dossierBd .dossier-prose .dn-h, body.ember:not(.eink) #do
   window.__dystDossier896 = { fmt:fmt, dress:dress };
 })();
 </script>
+<style id="dyst-elfam-css">
+/* v.898 [Jeremy] — "For all the element types, instead of having the Family in bold, have a filter under the element category name
+   that is default to ALL, and has the ability to filter the pills you see in that section to the right by family type. When
+   defaulted to all, have the pills going across and wrapping".
+   · On Plan → Elements a row's pills are one wrapping run — no bold family (or, for Characters, role) labels between them — in the
+     same order as before, with the row's "+" at the end.
+   · Under the category's name, a small Filter pill (ALL by default) lists the families that row has, each with its count; a pick
+     shows only that family's pills (the pill then names it), and All brings the whole row back. It is remembered per category
+     while the app is open. */
+html body #planNarrative .pl-nlabel .pl-famf{ display:flex; align-items:center; gap:5px; width:max-content; max-width:118px; height:22px; margin:7px 0 0; padding:0 9px 0 8px; box-sizing:border-box;
+  border-radius:999px; cursor:pointer; font:600 9.5px/1 var(--sans); letter-spacing:.11em; text-transform:uppercase; white-space:nowrap;
+  background:transparent; color:#8a6a2a; border:1px solid rgba(168,116,31,.4); transition:background .12s, color .12s, border-color .12s; }
+html body #planNarrative .pl-nlabel .pl-famf:hover, html body #planNarrative .pl-nlabel .pl-famf.open{ background:rgba(196,158,74,.12); border-color:rgba(168,116,31,.7); color:#5f4a1e; }
+html body #planNarrative .pl-nlabel .pl-famf.filtered{ background:#2b2926; border-color:#2b2926; color:#f3c77e; }
+html body #planNarrative .pl-nlabel .pl-famf svg{ width:10px; height:10px; flex:none; }
+html body #planNarrative .pl-nlabel .pl-famf .pff-l{ overflow:hidden; text-overflow:ellipsis; min-width:0; }
+html body #planNarrative .pl-nlabel .pl-famf .pff-c{ font-size:7.5px; opacity:.8; flex:none; }
+body.ember:not(.eink) #planNarrative .pl-nlabel .pl-famf:not(.filtered){ color:#fa9a31; border-color:rgba(250,154,49,.45); }
+body.eink #planNarrative .pl-nlabel .pl-famf{ color:#000; border-color:#000; }
+html body #planNarrative .pl-nrow .pl-roleline.pl-famline{ flex-wrap:wrap; }
+#plFamMenu{ position:fixed; z-index:4300; min-width:186px; max-height:min(440px, calc(100vh - 120px)); overflow:auto; padding:6px; box-sizing:border-box;
+  background:#fbf8f1; border:1px solid rgba(43,41,38,.14); border-radius:12px; box-shadow:0 18px 44px -18px rgba(20,14,4,.55); }
+#plFamMenu[hidden]{ display:none; }
+#plFamMenu .npf-opt{ display:flex; align-items:center; justify-content:space-between; gap:14px; width:100%; box-sizing:border-box; text-align:left; border:none; background:none; cursor:pointer; border-radius:8px;
+  padding:7px 10px; font:600 10.5px/1.2 var(--sans); letter-spacing:.11em; text-transform:uppercase; color:#2b2926; }
+#plFamMenu .npf-opt:hover{ background:rgba(43,41,38,.07); }
+#plFamMenu .npf-opt.on{ background:#2b2926; color:#f3c77e; }
+#plFamMenu .npf-opt .pff-n{ font:500 10px/1 var(--sans); letter-spacing:.04em; text-transform:none; opacity:.7; }
+#plFamMenu .npf-sep{ height:1px; margin:4px 6px; background:rgba(43,41,38,.1); }
+</style>
+<script id="dyst-elfam-js">
+/* v.898 — the family filter under each Elements row's name (see the style block above). The row is built by elementSetRow; this is
+   its pill and its list. */
+(function(){
+  'use strict';
+  var FUNNEL = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5h18l-7 8.5V19l-4 2v-7.5z"/></svg>';
+  var SEL = window.__dystElFam = window.__dystElFam || {};   /* catId → family name ('' = All) */
+  var menu = null, menuFor = null;
+  function shut(){ if (menu) menu.hidden = true; if (menuFor){ menuFor.classList.remove('open'); menuFor.setAttribute('aria-expanded', 'false'); menuFor = null; } }
+  function open(btn, o){
+    if (menu && !menu.hidden && menuFor === btn){ shut(); return; }
+    shut();
+    if (!menu){ menu = document.createElement('div'); menu.id = 'plFamMenu'; menu.setAttribute('role', 'listbox'); menu.hidden = true; document.body.appendChild(menu);
+      menu.addEventListener('click', function(e){ e.stopPropagation(); }); }
+    menu.innerHTML = '';
+    var cur = SEL[o.cat] || '';
+    var add = function(val, label, n){
+      var b = document.createElement('button'); b.type = 'button'; b.className = 'npf-opt' + (val === cur ? ' on' : ''); b.setAttribute('role', 'option'); b.setAttribute('aria-selected', val === cur ? 'true' : 'false'); b.dataset.fam = val;
+      var l = document.createElement('span'); l.textContent = label; b.appendChild(l);
+      var c = document.createElement('span'); c.className = 'pff-n'; c.textContent = String(n); b.appendChild(c);
+      b.addEventListener('click', function(){ shut(); SEL[o.cat] = val; try{ o.onPick(val); }catch(e){} });
+      menu.appendChild(b);
+    };
+    add('', 'All', o.total);
+    var sep = document.createElement('div'); sep.className = 'npf-sep'; menu.appendChild(sep);
+    o.fams.forEach(function(f){ add(f.name, f.name, f.n); });
+    menu.hidden = false; menuFor = btn; btn.classList.add('open'); btn.setAttribute('aria-expanded', 'true');
+    var r = btn.getBoundingClientRect();
+    menu.style.left = Math.max(8, Math.min(Math.round(r.left), window.innerWidth - menu.offsetWidth - 8)) + 'px';
+    var below = r.bottom + 6, hh = menu.offsetHeight;
+    menu.style.top = Math.round(below + hh > window.innerHeight - 8 ? Math.max(8, r.top - hh - 6) : below) + 'px';
+  }
+  /* o = { cat, label, fams:[{name, n}], total, onPick(val) } → the pill, appended to the row's label column */
+  window.dystElFamFilter = function(lc, o){
+    var cur = SEL[o.cat] || '';
+    if (cur && !o.fams.some(function(f){ return f.name === cur; })){ cur = ''; SEL[o.cat] = ''; }
+    var b = document.createElement('button'); b.type = 'button'; b.className = 'pl-famf' + (cur ? ' filtered' : ''); b.dataset.cat = o.cat;
+    b.setAttribute('aria-haspopup', 'listbox'); b.setAttribute('aria-expanded', 'false');
+    b.title = cur ? ('Showing ' + o.label + ': ' + cur + ' — pick another family, or All') : ('Filter ' + o.label + ' by family');
+    b.innerHTML = FUNNEL + '<span class="pff-l"></span><span class="pff-c" aria-hidden="true">▾</span>';
+    b.querySelector('.pff-l').textContent = cur || 'All';
+    b.addEventListener('click', function(e){ e.stopPropagation(); open(b, o); });
+    lc.appendChild(b);
+    return b;
+  };
+  window.dystElFamFilter.current = function(cat){ return SEL[cat] || ''; };
+  document.addEventListener('click', shut);
+  window.addEventListener('resize', shut);
+  document.addEventListener('keydown', function(e){ if (e.key === 'Escape' && menu && !menu.hidden) shut(); });
+  document.addEventListener('scroll', function(e){ if (menu && !menu.hidden && !(e.target && e.target.nodeType === 1 && menu.contains(e.target))) shut(); }, true);
+  /* a page already on Elements before this loaded draws once more, with its pills */
+  setTimeout(function(){ try{ if (document.querySelector('#planNarrative .pl-nrow') && !document.querySelector('#planNarrative .pl-famf') && typeof window.__planRefreshNarrative === 'function') window.__planRefreshNarrative(); }catch(e){} }, 0);
+})();
+</script>
+<style id="dyst-book898-css">
+/* v.898 [Jeremy] — "Make the symbols with the numbers smaller" · "also make the part headers a little bit bigger" (Read → Book view,
+   where the page's type scales with the page and the section's symbol did not). The symbol — every shape, its number with it — is
+   drawn at three-quarters of its size; the Part header goes from 3.3% of the page's width to 3.9%. */
+#readBody.book .rd-page-content .sec-mark .dia{ zoom:.74; }
+/* …keeping the outline shapes' line as heavy as before */
+#readBody.book .rd-page-content .sec-mark[data-sym="odiamond"] .dia, #readBody.book .rd-page-content .sec-mark[data-sym="ring"] .dia{ box-shadow:inset 0 0 0 2.6px var(--ink); }
+#readBody.book .rd-page-content .rd-part{ font-size:calc(var(--pw) * 0.039); }
+</style>
+<style id="dyst-edimg898-css">
+/* v.898 [Jeremy] — "it seems the add image feature is gone from revise mode. can we add that back in, with the image icon in the mode bar
+   to the left of the scaling pill". Revise's image door is back in its mode bar as an icon (a framed picture), just left of the
+   − 100% + pill: Add / Change book cover · Remove book cover · Insert image at cursor — the v.600-era menu and wiring, which had
+   lost only its button. Owner-only, as before. */
+html body #edSubbar #edImgWrap.on{ display:inline-flex !important; align-items:center; order:0 !important; margin:0 !important; }
+html body #edSubbar #edImgBtn{ border:none !important; background:none !important; box-shadow:none !important; padding:2px 7px !important;
+  color:var(--ink-faint) !important; display:inline-flex !important; align-items:center; justify-content:center; letter-spacing:0 !important; }
+html body #edSubbar #edImgBtn svg{ width:16px !important; height:16px !important; margin:0 !important; }
+html body #edSubbar #edImgBtn:hover, html body #edSubbar #edImgWrap.open #edImgBtn{ color:var(--gold) !important; background:none !important; border:none !important; }
+body.ember:not(.eink) #edSubbar #edImgBtn{ color:#8a6a3a !important; border:none !important; }
+body.ember:not(.eink) #edSubbar #edImgBtn:hover, body.ember:not(.eink) #edSubbar #edImgWrap.open #edImgBtn{ color:#ffb347 !important; }
+</style>
 </body></html>
