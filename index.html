@@ -29489,6 +29489,7 @@ function stripHeavyForLocal(s){
   } catch(e){ return s; }
 }
 function persistSessions(list){
+  if (window.__dystPurging) return;   /* v.905 — a sign-out is clearing this browser: nothing may write the library back */
   var keep = {};   // prefer to keep the story you're working on (or about to open) full & offline-safe
   try { if (typeof state !== 'undefined' && state.session && state.session.id) keep[state.session.id] = 1; } catch(e){}
   try { var wid = (typeof intendedStoryId === 'function') ? intendedStoryId() : null; if (wid) keep[wid] = 1; } catch(e){}
@@ -45531,6 +45532,8 @@ function init(){
     window.__dystSignOutConfirmed = false;
     try { if (typeof window.dystProfileFlush === 'function') await window.dystProfileFlush(); } catch (e){}   /* v.815 — the profile goes up before the browser is cleared */
     try { if (typeof window.dystPoolFlush === 'function') await window.dystPoolFlush(); } catch (e){}   /* v.878 — and so does My Dystoria pool */
+    window.__dystPurging = true; try { clearTimeout(autosaveHandle); } catch (e){}   /* v.905 — from here nothing in this tab writes the library */
+    try { if (typeof window.dystAcctSignoutAll === 'function') window.dystAcctSignoutAll(); } catch (e){}   /* v.905 — and every other Dystoria tab stops and reloads */
     try { await supa.auth.signOut(); } catch (e){}
     // Drop the open story so an autosave can't re-persist it after the purge.
     try { state.session = null; clearTimeout(autosaveHandle); } catch (e){}
@@ -45541,6 +45544,7 @@ function init(){
         .filter(k => k.indexOf('dystoria.') === 0 || k.indexOf('dystoria_') === 0)
         .forEach(k => localStorage.removeItem(k));
     } catch (e){}
+    try { if (typeof _idbClearStore === 'function') await _idbClearStore('dystoria', 'kv'); } catch (e){}   /* v.905 — any account's put-away stories go with the rest */
     // Fresh user: leave onboarding at its default (on) so the next person gets the quick overview.
     try { localStorage.removeItem('dystoria.onboarding'); localStorage.removeItem('dystoria.onb.overviewSeen'); localStorage.removeItem('dystoria.onb.modesOffered'); } catch (e){}
     $('authCard').classList.remove('show');
@@ -45566,15 +45570,16 @@ function init(){
          write needs the new one); it is only the SYNC that belongs to an actual arrival. */
       const _arrived = (_evt === 'SIGNED_IN' || _evt === 'INITIAL_SESSION');
       if (cloud.user){ analyticsIdentify(cloud.user, cloud.username);
-        if (_arrived){ loadMyProfile(); cloudPull(); try{ if (window.__dystOnbAccountCheck) window.__dystOnbAccountCheck(cloud.user); }catch(e){}
+        if (_arrived){ loadMyProfile(); if (typeof window.dystAcctArriveThen === 'function') window.dystAcctArriveThen(cloudPull); else cloudPull(); try{ if (window.__dystOnbAccountCheck) window.__dystOnbAccountCheck(cloud.user); }catch(e){}
           if (!cloud.user.is_anonymous && typeof window.__dystMaybeShowUpdate === 'function') window.__dystMaybeShowUpdate(); } }
-      else { analyticsReset(); cloud.username = ''; liveLeave(); renderShareNote(null); }
+      else { analyticsReset(); cloud.username = ''; liveLeave(); renderShareNote(null); try { if (typeof window.dystAcctLeave === 'function') window.dystAcctLeave(); } catch (e){} }   /* v.905 */
     });
     supa.auth.getSession().then(({ data }) => {
       cloud.user = (data && data.session) ? data.session.user : null;
       cloud.token = (data && data.session) ? data.session.access_token : '';
       updateAccountUI();
-      if (cloud.user){ loadMyProfile(); cloudPull(); try{ if (window.__dystOnbAccountCheck) window.__dystOnbAccountCheck(cloud.user); }catch(e){}
+      if (!cloud.user){ try { if (typeof window.dystAcctLeave === 'function') window.dystAcctLeave(); } catch (e){} }   /* v.905 — a sign-in that ended while the page was closed */
+      if (cloud.user){ loadMyProfile(); if (typeof window.dystAcctArriveThen === 'function') window.dystAcctArriveThen(cloudPull); else cloudPull(); try{ if (window.__dystOnbAccountCheck) window.__dystOnbAccountCheck(cloud.user); }catch(e){}
         if (!cloud.user.is_anonymous && typeof window.__dystMaybeShowUpdate === 'function') window.__dystMaybeShowUpdate();   // signed-in accounts see the update notes / restore-point backup (never signed-out visitors)
         // Existing accounts that predate the AI-consent screen: show the approval once so everyone has seen it.
         /* v.866 [Jeremy] — the AI-privacy card is for a new account being made, not for signing in: no longer shown on load */
@@ -59792,9 +59797,12 @@ body.eink .pl-filterpick .pf-row.on .pf-box{ background:#000; border-color:#000;
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.827';
+  var APP_VERSION = '2026.07.20.828';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.828', date:'September 29, 2026', notes:[
+      '**Signed out means signed out.** [Jeremy] Signing out clears every open Dystoria tab and window, not just the one you pressed it in — another tab could write your stories back. And when a sign-in ends on its own (it lapses, or you sign out on another device), your account’s stories are put away in this browser, out of the library, and come back the moment you sign in again. Nobody else signing in on this browser sees them.'
+    ]},
     { v:'2026.07.20.827', date:'September 29, 2026', notes:[
       '**The tour’s Notepad, in two steps.** [Jeremy] The guided tour first points at the Notepad tab at the bottom of the screen, then opens it — and the card for the open notepad sits in the middle of the screen instead of the corner.',
       '**Closing the begin page.** [Jeremy] “Where would you like to begin?” has a big × at the top right to close it and go straight into the app. The back arrow and “I’ll look around on my own” are gone from that page.'
@@ -111364,4 +111372,74 @@ body.eink #firstRunDoors > .fr-skip.fr-closex{ color:#000 !important; border-col
 html body:not(.eink) #editMode #edUndoRedo button#edUndoBtn, html body:not(.eink) #editMode #edUndoRedo button#edRedoBtn{ background:var(--mb-bg) !important; border-color:var(--mb-line) !important; color:var(--mb-ink) !important; }
 html body:not(.eink) #editMode #edUndoRedo button#edUndoBtn:hover:not(:disabled), html body:not(.eink) #editMode #edUndoRedo button#edRedoBtn:hover:not(:disabled){ background:var(--mb-bg-h) !important; border-color:var(--mb-line-h) !important; color:var(--mb-ink-h) !important; }
 </style>
+<script id="dyst-acct-keep">
+/* v.905 [Jeremy] "I am signed out yet i can still see stories in the library from my account"
+   Two ways a browser kept an account's stories after its writer was signed out:
+   1. ANOTHER TAB. Sign out clears this browser and reloads — but a second Dystoria tab (or the installed app) still held the library in
+      memory, and its next autosave wrote it straight back. Now the tab that signs out tells every other tab first (a BroadcastChannel, and
+      a storage ping for browsers without one); they stop saving at once and reload after the clear.
+   2. A SIGN-OUT THAT WASN'T PRESSED. A session can end without the Sign out button — it lapses, or ends on another device — and nothing
+      cleared the library. Wiping it then could lose work that never reached the cloud, so the account's stories are PUT AWAY instead:
+      moved into this browser's IndexedDB under the account's id, out of every list, and brought back the moment that same account signs
+      in again (before the cloud sync runs). Another account signing in never sees them. The examples stay out.
+   `dystoria.acct` records which account the library in this browser belongs to; the explicit sign-out clears it with everything else. */
+(function(){
+  'use strict';
+  var ACCT = 'dystoria.acct', CH = null, busy = null;
+  function isEx(s){ return !!(s && typeof s.id === 'string' && s.id.indexOf('.s_') === 0); }
+  /* what is the account's to put away: not the examples, and not a blank page the app opened by itself (moving that would only make another) */
+  function words(s){ try { if (s.prompt && s.prompt.words && s.prompt.words.length) return true; return (s.frames || []).some(function(f){ return f && f.prompt && f.prompt.words && f.prompt.words.length; }); } catch (e){ return false; } }
+  function movable(s){ return !!(s && s.id && !isEx(s) && (s.cloudId || s._owner || String(s.text || '').trim() || s.ink || words(s))); }
+  function realUser(){ try { return (cloud.user && !cloud.user.is_anonymous) ? cloud.user : null; } catch (e){ return null; } }
+  function acct(){ try { return localStorage.getItem(ACCT) || ''; } catch (e){ return ''; } }
+  function libOpen(){ try { var l = document.getElementById('library'); return !!(l && l.classList.contains('open')); } catch (e){ return false; } }
+  function merge(a, b){ var out = (a || []).slice(), at = {}; out.forEach(function(s, i){ if (s && s.id) at[s.id] = i; });
+    (b || []).forEach(function(s){ if (!s || !s.id) return; var i = at[s.id]; if (i == null){ at[s.id] = out.length; out.push(s); } else if ((s.updated || 0) >= (out[i].updated || 0)) out[i] = s; }); return out; }
+  function hold(){ window.__dystPurging = true; try { clearTimeout(autosaveHandle); } catch (e){} }
+  /* ---- 2 · put the account's stories away ---- */
+  async function putAway(uid){
+    if (!uid || window.__dystPurging) return false;
+    var list = loadSessions(), move = list.filter(movable), keep = list.filter(function(s){ return !movable(s); });
+    if (!move.length) return false;
+    var key = 'stash:' + uid, merged;
+    try { merged = merge(await idbGet(key), move); await idbSet(key, merged); var chk = await idbGet(key); if (!chk || chk.length !== merged.length) return false; }
+    catch (e){ return false; }   /* nowhere safe to put them: leave the library exactly as it is */
+    var cur = null; try { cur = state.session && state.session.id; } catch (e){}
+    var moved = !!cur && move.some(function(s){ return s.id === cur; });
+    try { persistSessions(keep); } catch (e){ return false; }
+    try { sessionStorage.setItem('dystoria.putAway', String(move.length)); } catch (e){}
+    if (moved){ hold(); setTimeout(function(){ try { location.reload(); } catch (e){} }, 60); }
+    else { try { if (libOpen()) renderLibrary(); } catch (e){} try { flashStatus(note(move.length)); sessionStorage.removeItem('dystoria.putAway'); } catch (e){} }
+    return true;
+  }
+  function note(n){ return 'Signed out — your account’s ' + (n === 1 ? 'story is' : n + ' stories are') + ' put away until you sign in again'; }
+  window.dystAcctLeave = function(){
+    if (realUser() || window.__dystPurging) return Promise.resolve(false);
+    var uid = acct(); if (!uid) return Promise.resolve(false);
+    if (busy) return busy;
+    busy = putAway(uid).then(function(r){ if (r !== false || !loadSessions().some(movable)){ try { localStorage.removeItem(ACCT); } catch (e){} } busy = null; return r; }, function(){ busy = null; return false; });
+    return busy;
+  };
+  /* ---- the account arrives: bring back what was put away for it, then let the sync run ---- */
+  window.dystAcctArriveThen = function(next){
+    var go = function(){ try { next(); } catch (e){} };
+    var u = realUser(); if (!u){ window.dystAcctLeave().then(go, go); return; }
+    (async function(){
+      var prev = acct();
+      if (prev && prev !== u.id){ await putAway(prev); if (window.__dystPurging) return 'held'; }   /* another account's library was still here: its own, put away under its own name */
+      try { localStorage.setItem(ACCT, u.id); } catch (e){}
+      var key = 'stash:' + u.id, st = null; try { st = await idbGet(key); } catch (e){}
+      if (st && st.length){ try { persistSessions(merge(loadSessions(), st)); await idbSet(key, null); if (libOpen()) renderLibrary(); flashStatus('Welcome back — your stories are here again'); } catch (e){} }
+    })().then(function(r){ if (r !== 'held') go(); }, go);
+  };
+  /* ---- 1 · the explicit sign-out reaches every tab ---- */
+  try { CH = ('BroadcastChannel' in window) ? new BroadcastChannel('dystoria-auth') : null; } catch (e){ CH = null; }
+  function heard(){ if (window.__dystPurging) return; hold(); setTimeout(function(){ try { location.reload(); } catch (e){} }, 1500); }
+  if (CH) CH.onmessage = function(e){ if (e && e.data && e.data.type === 'signout') heard(); };
+  window.addEventListener('storage', function(e){ if (e && e.key === 'dystoria.signoutPing' && e.newValue) heard(); });
+  window.dystAcctSignoutAll = function(){ try { if (CH) CH.postMessage({ type:'signout' }); } catch (e){} try { localStorage.setItem('dystoria.signoutPing', String(Date.now())); } catch (e){} };
+  /* the note, after the reload that put a story away */
+  setTimeout(function(){ try { var n = sessionStorage.getItem('dystoria.putAway'); if (n){ sessionStorage.removeItem('dystoria.putAway'); flashStatus(note(+n || 0)); } } catch (e){} }, 2500);
+})();
+</script>
 </body></html>
