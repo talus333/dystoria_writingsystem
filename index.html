@@ -59747,9 +59747,17 @@ body.eink .pl-filterpick .pf-row.on .pf-box{ background:#000; border-color:#000;
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.821';
+  var APP_VERSION = '2026.07.20.823';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.823', date:'September 29, 2026', notes:[
+      '**A new story starts with no thread.** [Jeremy] The Plot grid and the Threads row begin empty; add the first thread when you want one.',
+      '**A plainer first look at Connections.** [Jeremy] Instead of the big window of group kinds, Connections now says what it is for: the relationships between your elements, which you can draw as soon as you have some — and which Dystoria remembers and uses when it helps you explore, revise and build the wiki. It opens on the Story Legend, and an empty Groups drawer explains what a group is for.'
+    ]},
+    { v:'2026.07.20.822', date:'September 29, 2026', notes:[
+      '**Plot cards: an Event beside POV and Stakes.** [Jeremy] A card’s popup now has Event next to POV and Stakes — pick one of the story’s events or name a new one (it joins that section). The closed card shows what you chose across its top: the POV’s eye, the event’s mark and the stake’s flag, each with its name.',
+      '**The Plot grid says “Plot”.** [Jeremy] Its top-left corner now reads Plot, in the same serif and size as the map and scene titles in Places, instead of the story’s title.'
+    ]},
     { v:'2026.07.20.821', date:'September 29, 2026', notes:[
       '**Elements: one run of pills, and a family filter.** [Jeremy] On Plan → Elements the bold family names between an element type’s pills are gone — the pills run across and wrap, with the + at the end. Under each type’s name a small Filter pill (ALL) lists its families with their counts; pick one to see only its pills, or All for the lot.',
       '**Book view: smaller section symbols, bigger Part headers.** [Jeremy] In Read’s Book view the numbered symbol above each section is drawn smaller, and the Part header a little larger.',
@@ -66468,6 +66476,84 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
      v.571's lesson was a finished builder nobody called, and a dead function is how that happens.
      The story stake now lives where the writer already looks for it — the Main Plot card's Stake
      field (`plotDefStake`, same store) and every card popup's Stakes line. */
+
+  /* v.899 [Jeremy] — "Add Event along with POV and stakes as an option, and have the chosen POV, event and Stakes show up at the top
+     of the closed card, like the POV currently is" · "event should have an icon then". A card names ONE event — an Event element of
+     the story (chosen from the story's events, or made here, on this card's section) — stored by its key per card. */
+  var _EV_ICON='<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2.8l1.9 4.6 4.9-1.5-2.5 4.4 4.5 2.4-5 .9.7 5-4.1-3-3.3 3.9-.2-5.1-5-.2 3.9-3.3-3-4.1 5 .7z"/></svg>';
+  function cardEventKey(i, col){ return (data.plotCardEvents && data.plotCardEvents[col.id+'|'+i]) || ''; }
+  function cardEventSet(i, col, key){ data.plotCardEvents=data.plotCardEvents||{}; if(key){ data.plotCardEvents[col.id+'|'+i]=key; data.plotCardsMade=data.plotCardsMade||{}; data.plotCardsMade[col.id+'|'+i]=1; } else delete data.plotCardEvents[col.id+'|'+i]; save(); }   /* choosing an event makes the card */
+  function storyEvents(){ var a=api(); var out=[]; try{ ((a&&a.storyElements)?(a.storyElements()||[]):[]).forEach(function(o){ var w=o&&o.w; if(!w && a.npFindEl) w=a.npFindEl(o.key); if(w && w.cat==='event') out.push({ key:o.key, w:w }); }); }catch(e){} return out; }
+  function eventName(key){ var a=api(); try{ var w=(a&&a.npFindEl)?a.npFindEl(key):null; if(!w) return ''; return (typeof elDisplayName==='function')?elDisplayName(w):(w.name||w.word||''); }catch(e){ return ''; } }
+  /* a card's event, resolved: its key and name — or nothing if the element has gone */
+  function cardEvent(i, col){ var k=cardEventKey(i, col); if(!k) return null; var nm=eventName(k); return nm ? { key:k, name:nm } : null; }
+  function newEventOn(i, name){
+    try{ name=String(name||'').trim(); if(!name || typeof ecBuildItem!=='function') return '';
+      var fr=(state.frames||[])[i]; var pr=fr && fr.prompt; if(!pr) return '';
+      var item=ecBuildItem(name, '', Math.min(state.activeSet||0, ((pr.sets||1)-1)), 'event'); item.frame=i;
+      pr.words=pr.words||[]; pr.words.push(item);
+      if(i===(state.frameIdx||0) && state.session) state.session.words=state.prompt.words;
+      try{ if(typeof syncFramesToSession==='function') syncFramesToSession(); }catch(e){}
+      try{ if(typeof layoutConstellation==='function' && i===(state.frameIdx||0)) layoutConstellation(); }catch(e){}
+      try{ if(typeof scheduleAutosave==='function') scheduleAutosave(); }catch(e){}
+      return wordKey(item);
+    }catch(e){ return ''; }
+  }
+  function editEvent(anchor, i, col, cb){
+    if(typeof closeMenus==='function') closeMenus();
+    var cur=cardEventKey(i, col);
+    var m=document.createElement('div'); m.className='plan-menu plan-linkpick pl-evpick'; m.id='plotEventPick';
+    var hd=document.createElement('div'); hd.className='pv-hd'; hd.textContent='Which event?'; m.appendChild(hd);
+    var q=document.createElement('input'); q.type='text'; q.className='lp-search'; q.placeholder='Search or name a new event…'; q.autocomplete='off'; m.appendChild(q);
+    var list=document.createElement('div'); list.className='lp-list'; m.appendChild(list);
+    var done=function(k){ m.remove(); cb(k); };
+    var row=function(label, tag, fn){ var b=document.createElement('button'); b.type='button'; b.className='lp-row'; b.innerHTML=_EV_ICON; var nm=document.createElement('span'); nm.className='lp-row-nm'; nm.textContent=label; b.appendChild(nm); if(tag){ var t=document.createElement('span'); t.className='lp-row-tag'; t.textContent=tag; b.appendChild(t); } b.addEventListener('click', function(e){ e.stopPropagation(); fn(); }); return b; };
+    var render=function(){
+      list.innerHTML=''; var v=(q.value||'').trim(), lq=v.toLowerCase();
+      var evs=storyEvents().map(function(o){ return { key:o.key, name:eventName(o.key) }; }).filter(function(o){ return o.name && (!lq || o.name.toLowerCase().indexOf(lq)>=0); });
+      evs.forEach(function(o){ list.appendChild(row(o.name, o.key===cur?'current':'', function(){ done(o.key); })); });
+      if(v && !evs.some(function(o){ return o.name.toLowerCase()===lq; })) list.appendChild(row('Create “'+v+'”', 'new', function(){ var k=newEventOn(i, v); if(k) done(k); }));
+      if(!list.children.length){ var d=document.createElement('div'); d.className='lp-empty'; d.textContent='No events in the story yet — type one above to make it'; list.appendChild(d); }
+    };
+    q.addEventListener('input', render); q.addEventListener('click', function(e){ e.stopPropagation(); });
+    q.addEventListener('keydown', function(e){ e.stopPropagation(); if(e.key==='Enter'){ var f=list.querySelector('.lp-row'); if(f) f.click(); } if(e.key==='Escape') m.remove(); });
+    m.addEventListener('click', function(e){ e.stopPropagation(); });
+    document.body.appendChild(m); render(); placeMenu(m, anchor || document.querySelector('#planPlot') || document.body);
+    setTimeout(function(){ try{ q.focus(); }catch(e){} document.addEventListener('pointerdown', function h(e){ if(e.target.closest && e.target.closest('.pl-evpick')) return; m.remove(); document.removeEventListener('pointerdown', h, true); }, true); }, 0);
+  }
+  /* the Event row inside the card popup — beside POV and Stakes */
+  function buildCardEventRow(i, col){
+    var row=document.createElement('div'); row.className='pl-cardpop-evrow';
+    var lbl=document.createElement('span'); lbl.className='pl-cardpop-stakelbl pl-cardpop-evlbl'; lbl.textContent=(typeof dystCatLabel==='function' && dystCatLabel('event','one'))||'Event'; row.appendChild(lbl);
+    if(typeof dystCatHidden==='function' && dystCatHidden('event')) row.style.display='none';
+    var refresh=function(){ if(row.parentNode) row.parentNode.replaceChild(buildCardEventRow(i, col), row); };
+    var pick=function(an){ editEvent(an, i, col, function(k){ cardEventSet(i, col, k); refresh(); scheduleReplot(); }); };
+    var ev=cardEvent(i, col);
+    if(ev){
+      var p=document.createElement('span'); p.className='pl-evpill'; p.innerHTML=_EV_ICON; var nm=document.createElement('span'); nm.className='pl-evpill-nm'; nm.textContent=ev.name; p.appendChild(nm);
+      p.title='This card’s event — click to choose another';
+      p.addEventListener('click', function(e){ e.stopPropagation(); pick(p); });
+      var op=document.createElement('span'); op.className='pl-stake-feather pl-evpill-open'; op.title='Open this event’s card'; op.innerHTML=(typeof ICONS!=='undefined'&&ICONS.feather)?ICONS.feather:'✎';
+      var _s=op.querySelector('svg'); if(_s){ _s.setAttribute('width','11'); _s.setAttribute('height','11'); _s.style.width='11px'; _s.style.height='11px'; _s.style.display='block'; }
+      op.addEventListener('click', function(e){ e.stopPropagation(); if(typeof window.openElementDossier==='function') window.openElementDossier(ev.key); }); p.appendChild(op);
+      var x=document.createElement('span'); x.className='pl-stake-x'; x.textContent='×'; x.title='Clear this card’s event'; x.addEventListener('click', function(e){ e.stopPropagation(); cardEventSet(i, col, ''); refresh(); scheduleReplot(); }); p.appendChild(x);
+      row.appendChild(p);
+    } else {
+      var b=document.createElement('span'); b.className='pl-evadd'; b.innerHTML=_EV_ICON; b.appendChild(document.createTextNode(' '+(((typeof dystCatLabel==='function' && dystCatLabel('event','one'))||'Event').toLowerCase()))); b.title='Which event happens here?';
+      b.addEventListener('click', function(e){ e.stopPropagation(); pick(b); }); row.appendChild(b);
+    }
+    return row;
+  }
+  /* the closed card's head line: the POV, the event and the stake chosen for it */
+  function _cardMetaLine(card, i, col){
+    var ln=document.createElement('div'); ln.className='pl-pcard-meta';
+    var pv=card.querySelector(':scope > .pl-pcard-pov'); if(pv) ln.appendChild(pv);
+    var ev=cardEvent(i, col);
+    if(ev){ var e1=document.createElement('div'); e1.className='pl-pcard-ev'; e1.innerHTML=_EV_ICON; e1.appendChild(document.createTextNode(' '+ev.name)); e1.title='Event: '+ev.name; ln.appendChild(e1); }
+    var sk=cardStake(i, col);
+    if(sk){ var s1=document.createElement('div'); s1.className='pl-pcard-stk'; var g=document.createElement('span'); g.className='pl-pcard-stkg'; g.textContent=stakeFlagGlyph(''); s1.appendChild(g); s1.appendChild(document.createTextNode(' '+sk)); s1.title=((typeof dystCatLabel==='function' && dystCatLabel('stakes','one'))||'Stake')+': '+sk; ln.appendChild(s1); }
+    if(ln.children.length) card.appendChild(ln);
+  }
   // The stake row inside the card popup: this card's own stake (editable), or the stake it inherits, with a ＋ to pin a local one.
   function buildCardStakeRow(i, col){
     var a=api();                       /* v.571 — was reading an outer `a`; declare it, as every sibling does */
@@ -66531,8 +66617,13 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     /* v.724 [Jeremy] — "let's not have something called main plot at all. lets just have it called Thread on
        a new story without import". `newThread('Thread')` would come back as "Thread 1" (addThread treats the
        bare word as "unnamed" and numbers it), so it is renamed after: `renameThread` keeps the literal word. */
-    var tid=a.newThread('Thread');
-    if(tid){ addPlotCol('thread', tid); try{ if(a.renameThread) a.renameThread(tid, 'Thread'); }catch(e){} }
+    /* v.900 [Jeremy] — "in a new story, there should be no default first thread. clear that and start with none." A new
+       story's Plot grid starts with no columns; its + adds the first thread when the writer wants one. Only the bundled
+       example stories (Hansel, Alice — ids ".s_…") keep their one thread, so they still show what a thread is. */
+    try{ if(typeof ensureSession==='function') ensureSession(); }catch(e){}   /* the old newThread() made the session as a side effect; a phone's first boot relied on it */
+    var _sid=''; try{ _sid=String((state.session && state.session.id)||''); }catch(e){}
+    if(/^\.s_/.test(_sid)){ var tid=a.newThread('Thread');
+      if(tid){ addPlotCol('thread', tid); try{ if(a.renameThread) a.renameThread(tid, 'Thread'); }catch(e){} } }
     data.starterThreadDone=1; data.mainPlotNamed=1; data.threadNamed724=1;
     save();
   }
@@ -67429,8 +67520,9 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     try{ var st=(a&&a.getState)?a.getState():null; title=(st&&st.session&&st.session.name)||''; }catch(e){}
     if(!title){ try{ var el=document.getElementById('storyName'); if(el) title=(el.value||'').trim(); }catch(e){} }
     var t=document.createElement('div'); t.className='pl-cornertitle';
-    if(title){ c.classList.add('pl-title'); t.textContent=title; t.title=title; }   // the story's own title (Story font) crowns the section column
-    else t.textContent='Section';
+    /* v.899 [Jeremy] "Instead of having the story title in the top left of the plot grid area, have the Word Plot with the same font and
+       size as the scene and map titles in [Places] mode" — the corner names the page, as Places' titles do */
+    c.classList.add('pl-plotcorner'); t.classList.add('pl-plotword'); t.textContent='Plot'; if(title) t.title='The plot of '+title;
     c.appendChild(t);
     // spacer matching the thread headers' hover-controls band, so the story stake below it lands on the SAME row
     // as each thread stake (which sits under its own controls) and the title stays aligned with the thread names
@@ -67797,7 +67889,7 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     /* a goalpost pinned here is content: the cell has something to say even before the
        writer has written a word in it */
     var goalsHere = (col.kind==='arc') ? arcGoalsAt(col.id, i) : [];
-    var anyContent = !!title || goalsHere.length || scenes.some(function(sc){ return !_slotEmpty(_slotRead({i:i, col:col, sid:sc.sid})); });
+    var anyContent = !!title || goalsHere.length || scenes.some(function(sc){ return !_slotEmpty(_slotRead({i:i, col:col, sid:sc.sid})); }) || !!cardEventKey(i, col) || !!cardStake(i, col);   /* v.899 — a chosen event or stake is something to show */
     if(!anyContent){
       var add=_mkAddCard('pl-cardadd', 'Add a card', i, 0, function(e){ e.stopPropagation(); openCardPopup(i, col, null, null); });
       _wireSlotDrop(add, i, col, null);
@@ -67833,6 +67925,7 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
         /* v.766 — the eye on the grid card opens the same chooser, without opening the card */
         (function(_i, _col, _svg){ if(!_svg) return; _svg.setAttribute('role','button'); _svg.addEventListener('click', function(e){ e.stopPropagation(); e.preventDefault(); _povChooser(_svg, { i:_i, col:_col, sid:null, repaint:function(){} }); }); })(i, col, _pv.querySelector('svg')); }
     }catch(e){} }
+    try{ _cardMetaLine(card, i, col); }catch(e){}   /* v.899 — POV · event · stake, across the top of the closed card */
     var scroll=document.createElement('div'); scroll.className='pl-tabcard-body';
     var multi=scenes.length>1;
     /* every scene is still READ, exactly as the stacked card read them — a render that reads fewer cells leaves a
@@ -68673,9 +68766,9 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
   }
   /* one line: POV, then Stakes. The stake row replaces ITSELF on every edit (buildCardStakeRow's refresh), so it
      must be a child of the line, not the line — its replacement lands in the same place, after POV. */
-  function _povStakeLine(slot, stakeRow){
+  function _povStakeLine(slot, stakeRow, evRow){
     var ln=document.createElement('div'); ln.className='pl-cardpop-povstake';
-    ln.appendChild(slot); if(stakeRow) ln.appendChild(stakeRow);
+    ln.appendChild(slot); if(evRow) ln.appendChild(evRow); if(stakeRow) ln.appendChild(stakeRow);   /* v.899 — POV · Event · Stakes */
     return ln;
   }
   /* o: { i, col, sid, on, select(), repaint(), feather() } → { pill, head } */
@@ -68937,7 +69030,7 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
       function el0(t,c,txt){ var e=document.createElement(t); e.className=c; if(txt!=null) e.textContent=txt; return e; }
       renderPills0(); loadNote0(); renderGoals();
       panel.appendChild(sub0);
-      try{ var _csr0=buildCardStakeRow(i, col); panel.appendChild(_povStakeLine(povSlot0, _csr0)); }catch(e){}
+      try{ var _csr0=buildCardStakeRow(i, col); var _cer0=null; try{ _cer0=buildCardEventRow(i, col); }catch(e){} panel.appendChild(_povStakeLine(povSlot0, _csr0, _cer0)); }catch(e){}
       panel.appendChild(pillsRow0);
       if(_isArc && !_sid) panel.appendChild(goalRow);
       panel.appendChild(traitBar0);   // sub + pills + trait chips span full width; the rail begins below them
@@ -68995,7 +69088,7 @@ body.ember:not(.eink) #expMenu #mapContainerBtn:hover, body.ember:not(.eink) #ex
     var traitBar=document.createElement('div'); traitBar.className='pl-cardpop-traits';
     renderPills(); loadNote();
     panel.appendChild(sub);
-    try{ var _csr=buildCardStakeRow(i, col); panel.appendChild(_povStakeLine(povSlot, _csr)); }catch(e){}
+    try{ var _csr=buildCardStakeRow(i, col); var _cer=null; try{ _cer=buildCardEventRow(i, col); }catch(e){} panel.appendChild(_povStakeLine(povSlot, _csr, _cer)); }catch(e){}
     panel.appendChild(pillsRow); panel.appendChild(traitBar);   // sub + pills + trait chips span full width; the rail begins below them
     var mainC=document.createElement('div'); mainC.className='pl-cardpop-main'; mainC.appendChild(ta);
     var bodyC=document.createElement('div'); bodyC.className='pl-cardpop-body'; bodyC.appendChild(mainC); bodyC.appendChild(railEl);
@@ -82719,69 +82812,22 @@ body:not(.eink) #libExportMenu button:hover{ background:rgba(255,255,255,.08) !i
     box.addEventListener('wheel', function(ev){ ev.stopPropagation(); }, { passive:true });
     box.addEventListener('pointerdown', function(ev){ ev.stopPropagation(); });
   }
+  /* v.900 [Jeremy] — "in Connections, instead of having that giant window with all the group types, since connections are the
+     relationships between elements, and groups are just a way of grouping connected elements to make connections between
+     groups, then when you enter this mode for the first time, just let the user know that as soon as they have some elements,
+     they can create connections between them and that the app will remember and understand the connections when helping you
+     to explore ideas and revise your text, and build the wiki." The kinds of group live in the group builder (+ Group). */
   function firstRunCards(m, canvas){
-    var box = el('div','bn-seed bn-fr'); box.id = 'bnFirstRun';
+    var box = el('div','bn-seed bn-fr bn-welcome'); box.id = 'bnFirstRun';
+    var n = 0; try{ n = (typeof npStoryElements === 'function') ? (npStoryElements() || []).length : 0; }catch(e){}
     var head = el('div','bn-fr-head');
-    head.appendChild(el('div','bn-seed-t','What are you mapping?'));
-    head.appendChild(el('div','bn-seed-l bn-fr-lede','A group is a name and the elements in it. Pick the kind you have in mind \u2014 you can look at any group through any structure that fits it later.'));
+    head.appendChild(el('div','bn-seed-t','Connections'));
+    head.appendChild(el('div','bn-seed-l bn-fr-lede','Connections are the relationships between your story\u2019s elements \u2014 who loves whom, who owes what, which place keeps which secret.'));
+    head.appendChild(el('div','bn-seed-l bn-fr-lede bn-wl-2', n
+      ? ('You have ' + n + ' element' + (n === 1 ? '' : 's') + '. Press one in the Story Legend to put it in the middle, then connect the others to it.')
+      : 'As soon as you have some elements, you can connect them here.'));
+    head.appendChild(el('div','bn-seed-l bn-fr-lede bn-wl-3','Dystoria remembers and understands your connections \u2014 it uses them when it helps you explore ideas, revise your text and build the wiki.'));
     box.appendChild(head);
-    var body = el('div','bn-fr-body');
-    var hint = el('div','bn-fr-hint');
-    var HINT0 = 'Point at a kind to see what it maps.';
-    hint.textContent = HINT0;
-    var say = function(t, where){
-      hint.textContent = '';
-      hint.appendChild(el('b', null, t.name));
-      hint.appendChild(document.createTextNode(' \u2014 ' + (t.hint || '')));
-      if (where) hint.appendChild(el('span','bn-fr-where', where));
-    };
-    bucketedSets().forEach(function(bk){
-      var row = el('div','bn-fr-row');
-      row.appendChild(el('div','bn-fr-bh', bk.name || 'Other'));
-      var pills = el('div','bn-fr-pills');
-      bk.bands.forEach(function(bd){
-        var grp = el('div','bn-fr-band'); if (bd.name) grp.title = bd.name;
-        bd.items.forEach(function(t){
-          var p = el('button','bn-fr-pill', t.name); p.type = 'button'; p.dataset.kind = t.id;
-          p.setAttribute('aria-label', t.name + ' \u2014 ' + (t.hint || ''));
-          var where = (bk.name ? bk.name : '') + (bd.name ? ' \u00b7 ' + bd.name : '');
-          p.addEventListener('mouseenter', function(){ say(t, where); });
-          p.addEventListener('focus', function(){ say(t, where); });
-          p.addEventListener('click', function(ev){
-            ev.stopPropagation();
-            /* v.779 [Jeremy] — "it should open the Group builder, not the A New Group pop up. that one is old and no
-               longer in use." The same door as + Group, opened on the kind that was pressed. */
-            newGroupHere(m, t.id);
-          });
-          grp.appendChild(p);
-        });
-        pills.appendChild(grp);
-      });
-      pills.addEventListener('mouseleave', function(){ hint.textContent = HINT0; });
-      row.appendChild(pills);
-      body.appendChild(row);
-    });
-    box.appendChild(body);
-    box.appendChild(hint);
-    var foot = el('div','bn-fr-foot');
-    var g = null;
-    try{ g = BONDS.graph({ kind:'free', scope:{ type:'all' }, loose:false }); }catch(e){}
-    if (g && g.nodes.length > 1){
-      /* the story already holds a shape — one press makes it a group; still only an offer */
-      var seed = el('button','bn-seed-go','Start from the ' + g.nodes.length + ' already connected'); seed.type = 'button';
-      seed.addEventListener('click', function(ev){
-        ev.stopPropagation();
-        var s2 = store();
-        var gp = { id:freshGroupId(s2), name:'Everyone', type:'social', lens:'social',
-                   members:g.nodes.map(function(n){ return n.key; }) };
-        saveGroup(gp); m.ui.group = gp.id; if (!m.mini) m.ui.scope = { type:'all' }; m.ui.kind = 'social'; V.render(m);
-      });
-      foot.appendChild(seed);
-      foot.appendChild(el('span','bn-fr-or','or pick a kind above'));
-    } else {
-      foot.appendChild(el('span','bn-fr-or','Or press \u201c+ Group\u201d to build one step by step.'));
-    }
-    box.appendChild(foot);
     frIsolate(box);
     canvas.appendChild(box);
   }
@@ -82922,8 +82968,9 @@ body:not(.eink) #libExportMenu button:hover{ background:rgba(255,255,255,.08) !i
      another swaps the panel without closing anything. The tabs stay on the edge while the drawer is open (the
      Groups tab used to vanish then, because it was the drawer's only way back). Which panel is per device. */
   var DPANEL_KEY = 'dystoria.bonds.dpanel';
-  function dpanel(){ try{ var v = localStorage.getItem(DPANEL_KEY); return (v === 'text' || v === 'legend') ? v : 'groups'; }catch(e){ return 'groups'; } }
-  function setDpanel(v){ try{ if (v === 'text' || v === 'legend') localStorage.setItem(DPANEL_KEY, v); else localStorage.removeItem(DPANEL_KEY); }catch(e){} }   /* v.880 — 'legend' */
+  /* v.900 [Jeremy] — "the default state when entering for the first time is to have the Story Legend drawer open" */
+  function dpanel(){ try{ var v = localStorage.getItem(DPANEL_KEY); return (v === 'text' || v === 'groups') ? v : 'legend'; }catch(e){ return 'legend'; } }
+  function setDpanel(v){ try{ if (v === 'text' || v === 'groups') localStorage.setItem(DPANEL_KEY, v); else localStorage.removeItem(DPANEL_KEY); }catch(e){} }   /* v.880 — 'legend' */
   function tabPress(which, m){
     try{ if (typeof hideTip === 'function') hideTip(); }catch(e){}   /* the pressed tab is rebuilt; its tooltip must not outlive it */
     if (!drawerHidden() && dpanel() === which){ setDrawerHidden(true); V.render(m); return; }
@@ -83300,7 +83347,7 @@ body:not(.eink) #libExportMenu button:hover{ background:rgba(255,255,255,.08) !i
   function setList(m){
     var list = el('div','bn-dlist');
     var mine = groupsOf(m).filter(function(gp){ return setShown(gp, m); });
-    if (!groupsOf(m).length){ list.appendChild(el('div','bn-dempty','No groups yet \u2014 build one with \u201c+ Group\u201d.')); return list; }
+    if (!groupsOf(m).length){ list.appendChild(el('div','bn-dempty bn-dempty-why','Group elements together into a larger whole \u2014 a family, a crew, a faction, a country. A group can become an element of its own, so you can make connections between groups as well as between elements. Build one with \u201c+ Group\u201d.')); return list; }   /* v.900 [Jeremy] */
     if (!mine.length){ list.appendChild(el('div','bn-dempty','Nothing by that name.')); return list; }
     var by = {}, order = [];
     mine.forEach(function(gp){ var t = typeOf(gp) || ''; if (!by[t]){ by[t] = []; order.push(t); } by[t].push(gp); });
@@ -111029,5 +111076,46 @@ html body #edSubbar #edImgBtn svg{ width:16px !important; height:16px !important
 html body #edSubbar #edImgBtn:hover, html body #edSubbar #edImgWrap.open #edImgBtn{ color:var(--gold) !important; background:none !important; border:none !important; }
 body.ember:not(.eink) #edSubbar #edImgBtn{ color:#8a6a3a !important; border:none !important; }
 body.ember:not(.eink) #edSubbar #edImgBtn:hover, body.ember:not(.eink) #edSubbar #edImgWrap.open #edImgBtn{ color:#ffb347 !important; }
+</style>
+<style id="dyst-plotword-css">
+/* v.899 [Jeremy] — the Plot grid's corner reads "Plot" in the Places titles' face: the serif, 26px, regular weight, no capitals. */
+html body #planPlot .pl-pcorner.pl-plotcorner .pl-cornertitle.pl-plotword{ font-family:var(--serif) !important; font-size:26px !important; line-height:1.15 !important; font-weight:500 !important;
+  font-style:normal !important; letter-spacing:0 !important; text-transform:none !important; color:var(--charcoal) !important; height:30px; }
+body.ember:not(.eink) #planPlot .pl-pcorner.pl-plotcorner .pl-cornertitle.pl-plotword{ color:var(--charcoal) !important; }
+body.eink #planPlot .pl-pcorner.pl-plotcorner .pl-cornertitle.pl-plotword{ color:#000 !important; }
+</style>
+<style id="dyst-plotev-css">
+/* v.899 [Jeremy] — Event beside POV and Stakes in a Plot card's popup; the closed card's head line carries all three. The event's mark is
+   a thin-line burst, drawn like the POV's eye. */
+html body .pl-cardpop .pl-cardpop-evrow .pl-evpill{ display:inline-flex; align-items:center; gap:5px; box-sizing:border-box; border-radius:999px; cursor:pointer; padding:3px 10px; max-width:340px;
+  border:1px solid rgba(90,112,140,.5); color:#3f5570; background:transparent; font:500 11px/17px var(--sans); white-space:nowrap; }
+html body .pl-cardpop .pl-cardpop-evrow .pl-evpill:hover{ background:rgba(90,112,140,.08); border-color:rgba(90,112,140,.8); }
+html body .pl-cardpop .pl-cardpop-evrow .pl-evpill-nm{ overflow:hidden; text-overflow:ellipsis; }
+html body .pl-cardpop .pl-evpill svg, html body .pl-cardpop .pl-evadd svg, html body .pl-evpick .lp-row svg, html body #sky .pl-pcard-ev svg, html body .pl-pcard-ev svg{ width:12px !important; height:12px !important; flex:none; display:block; }
+html body .pl-cardpop .pl-cardpop-evrow .pl-evadd{ display:inline-flex; align-items:center; gap:4px; box-sizing:border-box; border-radius:999px; cursor:pointer; padding:3px 10px;
+  border:1px dotted rgba(90,112,140,.5); color:rgba(63,85,112,.75); font:500 11px/17px var(--sans); }
+html body .pl-cardpop .pl-cardpop-evrow .pl-evadd:hover{ border-color:rgba(90,112,140,.85); color:#3f5570; }
+.pl-cardpop-evrow{ display:flex; align-items:center; gap:9px; padding:8px 0 0 22px; flex:none; }
+.pl-cardpop-povslot[hidden] + .pl-cardpop-evrow{ padding-left:16px; }
+.pl-cardpop-povstake > .pl-cardpop-evrow + .pl-cardpop-stakerow{ padding-left:22px; }
+.pl-evpick{ min-width:240px; }
+.pl-evpick .lp-row{ display:flex; align-items:center; gap:8px; }
+.pl-evpick .lp-row svg{ color:#3f5570; }
+.pl-evpick .lp-row .lp-row-nm{ flex:1; min-width:0; }
+/* the closed card's head line */
+.pl-pcard-meta{ display:flex; flex-wrap:wrap; align-items:center; gap:4px 14px; min-width:0; }
+.pl-pcard-meta > .pl-pcard-pov{ min-width:0; }
+.pl-pcard-ev, .pl-pcard-stk{ display:flex; align-items:center; gap:4px; font-family:var(--sans); font-size:10px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:var(--ink-faint); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:100%; }
+.pl-pcard-ev{ color:#4d6480; }
+.pl-pcard-stk{ color:#8e4a44; }
+.pl-pcard-stk .pl-pcard-stkg{ font-size:11px; line-height:1; }
+body.eink .pl-cardpop .pl-evpill, body.eink .pl-cardpop .pl-evadd, body.eink .pl-pcard-ev, body.eink .pl-pcard-stk{ color:#000; border-color:#000; }
+</style>
+<style id="dyst-bnwelcome-css">
+/* v.900 — the Connections welcome: the question-and-kinds panel became three plain lines */
+#planBonds .bn-seed.bn-fr.bn-welcome{ width:520px; }
+#planBonds .bn-welcome .bn-fr-lede{ margin-top:10px; }
+#planBonds .bn-welcome .bn-wl-3{ font-style:italic; opacity:.85; }
+#planBonds .bn-dempty.bn-dempty-why{ line-height:1.5; }
 </style>
 </body></html>
