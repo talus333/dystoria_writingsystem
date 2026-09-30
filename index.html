@@ -32657,6 +32657,105 @@ function wordExistsSystem(cat, word){
 }
 // Force an imported characteristic down to a 1–2 word value (an adjective/short descriptor); a longer phrase
 // keeps only its first word — the fuller wording lives in the element's note, not in a trait chip.
+/* v.925 [Jeremy] — "the pill should never aim to be descriptive but a word or two that captures the idea, putting the rest of the details
+   in the description". Measured at v.923: events came back as "The Servant's Disobedience and Failure", characters as "Servant (Narrator)"
+   and "The Narrator/Servant", concepts as "No-Will Means / Lack of Will". The prompt now asks for labels; this holds the line whatever
+   comes back. A name the text itself uses (found verbatim in the prose) is left alone up to six words; a character, place, group or thing
+   may run to five; anything else is held to three. A second name or a role goes to the note as "Also called"; a description that had to
+   be shortened goes there whole, so nothing the reader said is lost. */
+var IMPORT_NAMED_CATS = { being:1, setting:1, org:1, object:1 };
+var IMPORT_LABEL_CUT = /\s+(?:and|or|from|of|on|in|into|at|to|with|by|for|about|over|between|against|after|before|during|through|under|as|while|when|that|which|who|where|versus|vs\.?)\s+/i;
+function importLabel(cat, raw, prose){
+  var orig = String(raw || '').replace(/\s+/g, ' ').trim(), s = orig, alts = [], notes = [];
+  s = s.replace(/\s*[\(\[]([^\)\]]*)[\)\]]/g, function(_, x){ x = String(x || '').trim(); if (x) alts.push(x); return ''; }).trim();
+  if (/\//.test(s)){
+    var parts = s.split(/\s*\/\s*/).filter(Boolean);
+    if (parts.length > 1 && parts.every(function(p){ return p.length >= 3; })){ s = parts[0]; alts = alts.concat(parts.slice(1)); }
+  }
+  s = s.replace(/^[\s"'“”‘’]+/, '').replace(/[\s"'“”‘’.;:,!?]+$/, '').trim();
+  if (!s){ s = orig; alts = []; }
+  var clean = s, words = s.split(' '), limit = IMPORT_NAMED_CATS[cat] ? 5 : 3;
+  var inText = !!(prose && String(prose).indexOf(s) >= 0);
+  if (words.length > limit && !(inText && words.length <= 6) && !(words.length === 4 && /^(?:The|An?) [A-Za-z\u2019'-]+ of [A-Za-z\u2019'-]+$/.test(s) && s.length <= 28)){
+    var titleForm = /^(?:The|An?) [A-Za-z\u2019'-]+ of [A-Za-z\u2019'-]+$/.test(s) && s.length <= 28;   /* "The Weight of Water": a title, not a description */
+    var properY = function(y){ return !!(prose && String(prose).indexOf(y) >= 0 && String(prose).indexOf(y.toLowerCase()) < 0); };
+    var m = s.match(/^(?:[Tt]he |[Aa]n? )?([A-Za-z’'-]+(?: [A-Za-z’'-]+)?) of ([A-Z][\w’'-]*(?: [A-Z][\w’'-]*)?)$/);
+    if (titleForm){ /* kept as it is */ }
+    else if (m && properY(m[2]) && (m[1].split(' ').length + m[2].split(' ').length) <= limit){
+      s = m[2] + "'s " + m[1].charAt(0).toUpperCase() + m[1].slice(1);          /* "The Culture of Liboyaere" -> "Liboyaere's Culture" */
+    } else {
+      var poss = '', lead = '', rest = s;
+      var pm = s.match(/^(?:[Tt]he )?([\w-]+(?:'s|’s|s'))\s+(.+)$/);
+      if (pm){ poss = pm[1]; rest = pm[2]; }
+      else { var lm = s.match(/^([Tt]he|[Aa]n?)\s+(.+)$/); if (lm){ lead = lm[1].charAt(0).toUpperCase() + lm[1].slice(1); rest = lm[2]; } }
+      var head = rest.split(IMPORT_LABEL_CUT)[0].trim() || rest;
+      var hw = head.split(' '), room = limit - ((poss || lead) ? 1 : 0);
+      if (hw.length > room) hw = hw.slice(0, room);
+      while (hw.length > 1 && /^(the|a|an|and|or|of|to|in|on|at|for|with|by|from|is|was|are|were)$/i.test(hw[hw.length - 1])) hw.pop();
+      if (!poss && !lead && hw.length === 1 && !IMPORT_NAMED_CATS[cat]) lead = 'The';
+      s = (poss ? poss + ' ' : (lead ? lead + ' ' : '')) + hw.join(' ');
+      s = s.charAt(0).toUpperCase() + s.slice(1);
+    }
+    if (s !== clean) notes.push('Longer name: ' + clean + '.');
+  }
+  if (alts.length) notes.unshift('Also called: ' + alts.join(', ') + '.');
+  return { name: s, clean: clean, changed: s !== orig, notes: notes };
+}
+/* v.925 — a characteristic of one or two words is kept; "tall and thin" becomes two; anything longer ("brain fog and narcolepsy",
+   "struggling to remember train of thought") goes to the note whole, instead of being cut to its first word as shortCharVal did. */
+function importTraitVal(v){
+  var t = String(v || '').replace(/\s+/g, ' ').trim().replace(/^(a |an |the )/i, '').replace(/[.;,!?]+$/, '').trim();
+  if (!t) return { value: '', extra: '' };
+  if (t.split(' ').length <= 2 && t.length <= 24) return { value: t.slice(0, 40), extra: '' };
+  var m = t.match(/^([\w-]+)(?:,\s*|\s+and\s+|\s*&\s*)([\w-]+)$/);
+  if (m) return { value: m[1], also: m[2], extra: '' };
+  return { value: '', extra: t };
+}
+function importNoteAdd(e, lines){
+  (lines || []).forEach(function(l){
+    l = String(l || '').trim(); if (!l || !e) return;
+    var cur = String(e.note || ''); if (cur.toLowerCase().indexOf(l.toLowerCase()) >= 0) return;
+    e.note = cur.trim() ? (cur.replace(/\s*$/, '') + '\n' + l) : l;
+  });
+}
+/* v.925 — at most six lasting characteristics per element and three of any one kind, the ones named most often across the parts of a
+   long book kept first; Sex is its own row and does not count. What does not fit is listed in the note, not thrown away. */
+function importCapTraits(e){
+  if (!e || !Array.isArray(e.traits) || !e.traits.length) return;
+  var idx = e.traits.map(function(t, i){ return { t: t, i: i }; });
+  var sex = idx.filter(function(x){ return x.t.sub === 'Sex'; }).slice(0, 1);
+  var rest = idx.filter(function(x){ return x.t.sub !== 'Sex'; }).sort(function(a, b){ return ((b.t._n || 1) - (a.t._n || 1)) || (a.i - b.i); });
+  var keep = [], per = {}, drop = [];
+  rest.forEach(function(x){ var k = x.t.sub; if (keep.length < 6 && (per[k] || 0) < 3){ keep.push(x); per[k] = (per[k] || 0) + 1; } else drop.push(x.t.value); });
+  keep.sort(function(a, b){ return a.i - b.i; });
+  e.traits = sex.concat(keep).map(function(x){ delete x.t._n; return x.t; });
+  if (drop.length) e._more = (e._more || []).concat(drop);
+}
+/* v.925 — a shortened name must still be found by everything that refers to it by name: the Connections, the storylines, a stake's
+   bearer and threat, a motivator. They are rewritten here, once every part has been read, from the long name to the label. */
+function importFinishLabels(threadsRaw){
+  var al = (typeof IMP !== 'undefined' && IMP._labelAlias) || {}, alN = {};
+  Object.keys(al).forEach(function(k){ alN[importNorm(k)] = al[k]; });
+  var fix = function(n){ var t = String(n || '').trim(); if (!t) return n; return al[t.toLowerCase()] || alN[importNorm(t)] || n; };
+  var seen = {}, out = [];
+  (IMP.relationships || []).forEach(function(r){
+    if (!r) return; r.from = fix(r.from); r.to = fix(r.to);
+    var k = (String(r.from) + '|' + String(r.to)).toLowerCase(); if (seen[k]) return; seen[k] = 1; out.push(r);
+  });
+  IMP.relationships = out;
+  (threadsRaw || []).forEach(function(t){ if (t && Array.isArray(t.elements)) t.elements = t.elements.map(fix); });
+  (IMP.elements || []).forEach(function(e){
+    if (!e) return;
+    if (e.stake){ if (e.stake.bearer) e.stake.bearer = fix(e.stake.bearer); if (e.stake.threat) e.stake.threat = fix(e.stake.threat); }
+    if (e.motivation && e.motivation.motivator) e.motivation.motivator = fix(e.motivation.motivator);
+    importCapTraits(e);
+    if (e._more && e._more.length){
+      var u = [], sn = {}; e._more.forEach(function(x){ var k = String(x).toLowerCase(); if (!sn[k]){ sn[k] = 1; u.push(x); } });
+      importNoteAdd(e, ['Also described as: ' + u.join('; ') + '.']);
+    }
+    delete e._more;
+  });
+}
 function shortCharVal(v){
   v = String(v || '').trim().replace(/^(a |an |the )/i, '').replace(/[.;,]+$/, '').trim();
   if (!v) return '';
@@ -32758,13 +32857,16 @@ async function extractImport(){
      same function the card is built from, so the reader can never be told about a field the card cannot show. */
   const traitVocab = ['being', 'setting', 'object']
     .map(function(c){ return c + ' ∈ [' + importTraitSubs(c).join(',') + ']'; }).join('; ');
-  const traitInfo = 'traits=[{sub,value}] — the characteristics the text states. Which subs are allowed depends on the type: ' + traitVocab + '. value is a SHORT 1–2 word characteristic (an adjective or brief descriptor) — never a sentence or long phrase; collapse several overlapping descriptions into a SINGLE characteristic word and put any fuller explanation in the element’s note, not in a trait. Include ONLY characteristics explicitly stated, never invent. A character’s Sex COUNTS AS STATED when the text refers to them with gendered pronouns or nouns (“she”, “her sister”, “the old man”) — report it as one of [' + SEX_VALUES.join(',') + ']; leave Sex out entirely when the text genuinely never says, and never guess it from a name';
+  const traitInfo = 'traits=[{sub,value}] — the characteristics the text states. Which subs are allowed depends on the type: ' + traitVocab + '. value is a SHORT 1–2 word characteristic (an adjective or brief descriptor) — never a sentence or long phrase; collapse several overlapping descriptions into a SINGLE characteristic word and put any fuller explanation in the element’s note, not in a trait. Include ONLY characteristics explicitly stated, never invent. Keep to what LASTS — who they are, not how they feel in one scene (exhausted, panicked) — and at most SIX per element, the ones the story leans on; a characteristic that needs more than two words belongs in the summary, not in traits. A character’s Sex COUNTS AS STATED when the text refers to them with gendered pronouns or nouns (“she”, “her sister”, “the old man”) — report it as one of [' + SEX_VALUES.join(',') + ']; leave Sex out entirely when the text genuinely never says, and never guess it from a name';
   /* v.712 [Jeremy] — "those elements can clearly be more and important in a story… careful selection from the
      narrative elements". Measured on v.711: "Up to 6 elements of each STORY type" was applied PER CHUNK, so an
      obedient reader on a five-part manuscript returned 30 characters and 30 places, and a twenty-part novel would
      return 120 of each. The number was not just arbitrary, it was scoped backwards — a short story allowed six,
      a novel a hundred and twenty. A ceiling cannot tell a walk-on from a protagonist; only a test can. */
   const elementSelect = ' CHOOSING STORY ELEMENTS \u2014 there is NO quota and no ceiling. Propose a character, place, object, event, in-world term or organization because the story TURNS ON it: it is named, and it recurs or something in the story depends on it. Leave out the walk-on mentioned once, the prop that is only scenery, and the place named only to say where someone stood. If you would be listing it because it appeared rather than because it matters, leave it out. A part with two characters worth naming returns two; a part with fifteen returns fifteen \u2014 never pad to a number, and never trim a genuinely large cast to fit one. ';
+  /* v.925 [Jeremy] — labels, not descriptions. The old line "Use names exactly as written" is right for people and places, which the
+     text names; an event, stake or idea usually has no name in the text, and with no rule for that the reader wrote a description. */
+  const labelRule = ' NAMES ARE SHORT LABELS, NEVER DESCRIPTIONS. A character, place, group or thing the text names keeps that name exactly as written. Anything the text does not name (most events, concepts, stakes, plots and themes) gets a short title of ONE TO THREE WORDS that captures the idea, e.g. "The Disobedience", "The Frame", "No-Will" — never a phrase that describes it ("Discovery of the Dead End", "Council Debates on Emergence"). Never join two names with a slash and never add a role in brackets ("Servant (Narrator)"): choose the one name the text uses most and put the rest in the summary. The name only has to be recognisable; the summary carries the detail. ';
   const notesMode = IMP.kind === 'notes';
   /* v.716 [Jeremy] — declared AFTER `notesMode`, which it reads: `const` is in a temporal dead zone.
      [Jeremy] — "notes freely, prose only when stated". An author's notes are a statement of intent and
@@ -32822,7 +32924,7 @@ async function extractImport(){
       'For beings, places and things: ' + traitInfo + '. Do NOT fill sub for beings. ' + motGuide + stakeGuide + threadGuide +
       'For any non-being type that has one: sub = single best subcategory from: ' + nonBeingSubInfo + (narrSubInfo ? ('; ' + narrSubInfo) : '') + '. ' +
       relSelect + 'type = a short phrase. ' + proposalGuide + goalGuide +
-      'overview = 1\u20132 sentences. Use names exactly as written. Invent nothing \u2014 keep only what the notes say.';
+      'overview = 1\u20132 sentences. ' + labelRule + 'Invent nothing \u2014 keep only what the notes say.';
     user = 'Notes:\n\n' + prose.slice(0, 300000) + '\n\nReturn the JSON.';
   } else {
     sys = 'You analyze a story for a worldbuilding app and return ONLY valid minified JSON — no prose, no code fences. Schema: {"title":string,"overview":string,"sections":[{"title":string,"opening":string}],"elements":[{"type":' + typeUnion + ',"name":string,"summary":string,"sub":string,"section":string,"sections":[string],"traits":[{"sub":string,"value":string}],"motivation":{"wants":[string],"stakes":[string],"obstacles":[string],"motivator":string},"stake":{"bearer":string,"threat":string,"axis":string}}],"relationships":[{"from":string,"to":string,"type":string}],"proposals":[{"cat":string,"word":string,"desc":string,"common":boolean}],"goals":[{"word":string,"note":string}],"threads":[{"name":string,"elements":[string]}]}.' +
@@ -32834,7 +32936,7 @@ async function extractImport(){
     /* v.711 — "Up to 6 elements of each type" was one ceiling for every type, which reads as licence for six
        genres and six themes. Six themes is not "unmistakably clear", it is a checklist. The frame gets its own
        numbers, and they are small on purpose. */
-    'overview = 2 short sentences. Use names exactly as written.' + elementSelect +
+    'overview = 2 short sentences.' + labelRule + elementSelect +
     'The narrative frame is the one layer with hard numbers, and they are small: AT MOST ONE genre, ONE context and ONE plot, and AT MOST TWO concepts/themes and TWO stakes \u2014 for the entire work, not per part. Fewer is better, and none is fine. Invent nothing.';
     user = 'Story:\n\n' + prose.slice(0, 300000) + '\n\nReturn the JSON.';
   }
@@ -32842,7 +32944,7 @@ async function extractImport(){
   // AS they arrive so the user reviews/approves in parallel with the remaining chunks still ingesting.
   const chunks = importChunks(prose, 45000);
   const total = chunks.length;
-  IMP.elements = []; IMP.relationships = []; IMP.sections = []; IMP.genres = [];
+  IMP.elements = []; IMP.relationships = []; IMP.sections = []; IMP.genres = []; IMP._labelAlias = {};   /* v.925 */
   const seenEl = {}, seenR = {};
   let secsRaw = [], propsRaw = [], goalsRaw = [], threadsRaw = [], overview = '', gotTitle = '', gotAny = false;   /* v.719 — storylines arrive per chunk like everything else */
   const confirmBtn = $('importConfirm');
@@ -32882,7 +32984,19 @@ async function extractImport(){
     (normC.elements || []).forEach(el => {
       if (!el || !el.name) return;
       const cat = IMP_TMAP[String(el.type || '').toLowerCase()]; if (!cat) return;
-      const name = String(el.name).trim().slice(0, 60); if (!name) return;
+      /* v.925 — a label, not a description (see importLabel). The same long name from a later part finds the same label; a label that
+         would fold two different long names into one element keeps the longer name instead. */
+      const _lab = importLabel(cat, el.name, IMP.prose);
+      let name = _lab.name.slice(0, 60); if (!name) return;
+      if (_lab.changed){
+        const _al = IMP._labelAlias = IMP._labelAlias || {}, _olc = String(el.name).trim().toLowerCase();
+        if (_al[_olc]) name = _al[_olc];
+        else {
+          if (IMP.elements.some(r => r.cat === cat && r._long && importNameMatch(r.name, name) && importNorm(r._long) !== importNorm(_lab.clean))){ name = _lab.clean.slice(0, 60); _lab.notes = _lab.notes.filter(l => !/^Longer name/.test(l)); }
+          if (name !== String(el.name).trim()) _al[_olc] = name;
+        }
+      }
+      const _traitExtra = [];
       const aiSum = String(el.summary || '').trim(), aiNote = String(el.note || '').trim();
       const summary = notesMode ? (aiSum || aiNote) : aiSum;
       /* v.708 — this was `cat === 'being' ? (…) : []`, so a place's climate and a thing's material were dropped
@@ -32894,7 +33008,7 @@ async function extractImport(){
         /* v.709 — Sex is normalised rather than shortened: `shortCharVal` would keep "trans woman" verbatim and
            the card's Sex row, `cascadeForward` and the figure all read the app's own vocabulary. An unreadable
            value drops out here, so the writer is shown a Sex only when there is a real one to approve. */
-        ? (Array.isArray(el.traits) ? el.traits : []).map(t => (t && typeof t === 'object') ? { sub: importTraitSub(cat, t.sub), value: t.value } : null).filter(t => t && t.sub && String(t.value || '').trim()).map(t => ({ sub: t.sub, value: (t.sub === 'Sex' ? normalizeSexValue(t.value) : shortCharVal(t.value)) })).filter(t => t.value)
+        ? [].concat.apply([], (Array.isArray(el.traits) ? el.traits : []).map(t => (t && typeof t === 'object') ? { sub: importTraitSub(cat, t.sub), value: t.value } : null).filter(t => t && t.sub && String(t.value || '').trim()).map(t => { if (t.sub === 'Sex') return [{ sub: 'Sex', value: normalizeSexValue(t.value) }]; const tv = importTraitVal(t.value); if (tv.extra) _traitExtra.push(tv.extra); return [tv.value ? { sub: t.sub, value: tv.value } : null, tv.also ? { sub: t.sub, value: tv.also } : null]; })).filter(t => t && t.value)   /* v.925 — moved, not cut */
         : [];
       /* v.717 — kept only for a STAKES element. `bearer` and `threat` are NAMES here; they become element keys
          at write time, once every element exists and has one. The axis is normalised against the app's Conflict
@@ -32928,12 +33042,13 @@ async function extractImport(){
       const ex = seenEl[key] || IMP.elements.find(r => r.cat === cat && importNameMatch(r.name, name));   // fuzzy: "The Woodcutter" == "Woodcutter", minor typos
       if (ex){
         if (!seenEl[key]) seenEl[key] = ex;
+        importNoteAdd(ex, _lab.notes); if (_traitExtra.length) ex._more = (ex._more || []).concat(_traitExtra);   /* v.925 */
         // enrich, don't overwrite — the same element usually gains detail across later sections
         if (summary){ if (!ex.summary) ex.summary = summary; else if (ex.summary.toLowerCase().indexOf(summary.toLowerCase()) < 0) ex.summary = ex.summary.replace(/[\s.]*$/, '') + '. ' + summary; }
         { const moreNote = (notesMode && IMP.qa) ? aiNote : '';   // Q&A notes accumulate across answers; NOTES notes are already pulled whole-doc; PROSE has none
           if (moreNote){ if (!ex.note) ex.note = moreNote; else if (ex.note.toLowerCase().indexOf(moreNote.toLowerCase()) < 0) ex.note = ex.note.replace(/\s*$/, '') + '\n\n' + moreNote; } }
         { const sec2 = String(el.section || '').trim(); if (sec2){ ex.sections = ex.sections || (ex.section ? [ex.section] : []); if (ex.sections.map(s => s.toLowerCase()).indexOf(sec2.toLowerCase()) < 0) ex.sections.push(sec2); } }
-        if (elTraits.length){ const have = new Set(ex.traits.map(t => t.sub + '|' + t.value.toLowerCase())); elTraits.forEach(t => { const k = t.sub + '|' + t.value.toLowerCase(); if (!have.has(k)){ ex.traits.push(t); have.add(k); } }); }
+        if (elTraits.length){ elTraits.forEach(t => { const k = t.sub + '|' + t.value.toLowerCase(); const hit = ex.traits.find(x => (x.sub + '|' + String(x.value).toLowerCase()) === k); if (hit) hit._n = (hit._n || 1) + 1; else ex.traits.push(t); }); }   /* v.925 — a trait named again in a later part counts for more when the six are chosen */
         /* v.717 — a later part may name the end the first one could not; never overwrite one already there */
         if (_stk){
           ex.stake = ex.stake || { bearer:'', threat:'', axis:'' };
@@ -32970,6 +33085,7 @@ async function extractImport(){
         if (t && _secsAll.map(function(y){ return y.toLowerCase(); }).indexOf(t.toLowerCase()) < 0) _secsAll.push(t);
       });
       const rec = { cat, name, sub: importMapSub(cat, el.sub, name, aiSum), traits: elTraits, motivation: _mot, stake: _stk, summary, note, section: _secOne, sections: _secsAll, exists: wordExistsSystem(cat, name), existsStory: existsInStory(cat, name), include: true, sys: false };
+      rec._long = _lab.changed ? _lab.clean : ''; importNoteAdd(rec, _lab.notes); if (_traitExtra.length) rec._more = _traitExtra.slice();   /* v.925 */
       seenEl[key] = rec; IMP.elements.push(rec); newEls.push(rec);
     });
     IMP.genres = IMP.elements.filter(e => e.cat === 'genre').map(e => e.name);   // tag imported words for future generation bias
@@ -32982,6 +33098,7 @@ async function extractImport(){
     if (!el || el.cat !== 'being' || (el.traits || []).some(function(t){ return t.sub === 'Sex'; })) return;
     var sx = importInferSex(el, notesMode ? '' : prose); if (sx){ el.traits = el.traits || []; el.traits.unshift({ sub: 'Sex', value: sx }); }
   }); } catch (e){}
+  try { importFinishLabels(threadsRaw); } catch (e){}   /* v.925 — Connections, storylines and stakes follow the shortened names; six traits */
   IMP.overview = $('importOverview') ? ($('importOverview').value.trim() || overview || '') : (overview || '');
   // all parts ingested + merged → NOW reveal the complete, de-duplicated list (each element carries every section's detail)
   if (IMP.elements.length){
@@ -59959,9 +60076,13 @@ body.eink .pl-filterpick .pf-row.on .pf-box{ background:#000; border-color:#000;
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.847';
+  var APP_VERSION = '2026.07.20.848';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.848', date:'September 30, 2026', notes:[
+      '**Imported names are short.** An event or idea the text never names gets a title of a word or three (\u201cThe Disobedience\u201d) instead of a description, and a second name or a role in brackets goes into the notes instead of the pill.',
+      '**Characteristics are moved, not cut.** A characteristic that takes a sentence to say goes into the element\u2019s notes whole, instead of being cut to its first word, and each character keeps the six the story leans on most.'
+    ]},
     { v:'2026.07.20.847', date:'September 30, 2026', notes:[
       '**Imports file things where they belong.** When the reader\u2019s word for a kind of thing isn\u2019t one of Dystoria\u2019s (a \u201ctool\u201d, a \u201cmansion\u201d), it is matched to the nearest one, and anything unclear goes somewhere neutral: no more armchairs filed under Weapons.',
       '**Characteristics that were being dropped are kept.** A trait the reader names loosely (\u201cpersonality\u201d, \u201cphysical\u201d) now lands on the right row, and a character\u2019s sex is filled in when the text is plain about it (\u201cNicholas\u2019s mother\u201d, \u201ca boy who\u2026\u201d), never guessed from a name.',
