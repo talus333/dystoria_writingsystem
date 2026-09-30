@@ -54018,6 +54018,11 @@ body.eink #helpPanel .help-card{border:2px solid #000; box-shadow:none}
     h.addEventListener('click', function(){ var op=body.style.display!=='none'; body.style.display=op?'none':'block'; item.classList.toggle('open', !op); });
     return item;
   }
+  /* v.910 — the words of a question, exactly as the search reads them (stop words out, aliases in) */
+  function helpTerms(q){ var STOP={how:1,'do':1,i:1,a:1,an:1,the:1,to:1,is:1,'in':1,of:1,my:1,me:1,can:1,what:1,on:1,'for':1,and:1,with:1,'this':1,that:1,dystoria:1,app:1,does:1,it:1,you:1,your:1};
+    ['turn','off','get','use','want','where','why','when','which','are','have','see','there','its','can\u2019t',"can't",'find','way','some','all','any','put','out','make','create','add','new','set','able','possible','there\u2019s','should'].forEach(function(w){ STOP[w]=1; });
+    var raw=(q||'').toLowerCase().replace(/[?!.,;:"\u201c\u201d]/g,' ').split(/\s+/).filter(Boolean); var terms=raw.filter(function(t){ return t.length>2 && !STOP[t]; }); var ex=terms.slice();
+    raw.forEach(function(t){ var al=ALIAS[t]; if(al && ex.indexOf(al)<0) ex.push(al); }); return ex; }
   function helpSearch(q){ var res=results(); if(!res) return; res.innerHTML=''; var STOP={how:1,'do':1,i:1,a:1,an:1,the:1,to:1,is:1,'in':1,of:1,my:1,me:1,can:1,what:1,on:1,'for':1,and:1,with:1,'this':1,that:1,dystoria:1,app:1,does:1,it:1,you:1,your:1}; var raw=(q||'').toLowerCase().replace(/[?!.,;:"“”]/g,' ').split(/\s+/).filter(Boolean); ['turn','off','get','use','want','where','why','when','which','are','have','see','there','its','can\u2019t',"can't",'find','way','some','all','any','put','out','make','create','add','new','set','able','possible','there’s','should'].forEach(function(w){ STOP[w]=1; }); var terms=raw.filter(function(t){ return t.length>2 && !STOP[t]; }); var ex=terms.slice(); raw.forEach(function(t){ var al=ALIAS[t]; if(al && ex.indexOf(al)<0) ex.push(al); }); if(!ex.length) ex=raw; terms=ex;   /* v.907 — aliases from every word typed, so "AI" and "POV" count */ var list;
     if(!terms.length){ list=DYSTORIA_GUIDE.map(function(s){ return {s:s, sc:0}; }); }
     else { list=DYSTORIA_GUIDE.map(function(s){ return {s:s, sc:score(s,terms)}; }).filter(function(x){ return x.sc>0; }).sort(function(a,b){ return b.sc-a.sc; }).slice(0,7); }
@@ -54026,9 +54031,19 @@ body.eink #helpPanel .help-card{border:2px solid #000; box-shadow:none}
   }
   function helpFull(){ var res=results(); if(!res) return; res.innerHTML=''; DYSTORIA_GUIDE.forEach(function(s){ res.appendChild(renderItem(s, true, null)); }); var inp=document.getElementById('helpInput'); if(inp) inp.value=''; }
   async function helpAsk(q){ q=(q||'').trim(); if(!q) return; var ans=document.getElementById('helpAnswer'); if(!ans) return; ans.style.display='block'; ans.innerHTML='<span class="help-spin"></span> Looking through the guide\u2026';
-    try{ var guide=DYSTORIA_GUIDE.map(function(s){ return '## '+s.t+'\n'+s.md; }).join('\n\n');
-      var sys='You are the built-in help for Dystoria, a worldbuilding and writing app. Answer the user\u2019s how-to question using ONLY the guide below. Be concise and practical (2\u20135 sentences), name the relevant feature, and give the steps. If the user is asking whether Dystoria has a feature or can do something and the guide shows it does NOT exist, say so warmly in one short line and affirm it would be a good addition, then as the very last line output exactly the token [[SUGGEST]] and nothing after it. If the feature DOES exist or it is a normal how-to question, do not output that token. Never invent features.';
-      var out=await aiCall(sys, 'GUIDE:\n'+guide+'\n\nQUESTION: '+q+'\n\nAnswer:', { feature:'help_ask', maxTokens: 400 });
+    try{
+      /* v.910 — only the sections that answer this question travel, and the question comes first and last. The AI worker keeps the first
+         24,000 characters of a prompt; the whole guide (44k) with the question at the end lost the question, and the model answered one it
+         made up ("a timeline of events" for "How do I make connections?"). */
+      var terms=helpTerms(q), BUDGET=17000, used=0, pick=[];
+      var ranked=DYSTORIA_GUIDE.map(function(sec, i){ return { sec:sec, i:i, sc:terms.length ? score(sec, terms) : 0 }; }).filter(function(x){ return x.sc>0; }).sort(function(a, b){ return b.sc-a.sc; });
+      var take=function(x){ if(pick.some(function(p){ return p.i===x.i; })) return; var len=x.sec.t.length+x.sec.md.length+6; if(used+len>BUDGET) return; pick.push(x); used+=len; };
+      ranked.slice(0, 6).forEach(take);
+      DYSTORIA_GUIDE.forEach(function(sec, i){ if(/^1\. What Dystoria is|^Glossary|Common questions/.test(sec.t)) take({ sec:sec, i:i }); });   /* the map of the app, and the plain answers, when there is room */
+      pick.sort(function(a, b){ return a.i-b.i; });
+      var guide=pick.map(function(x){ return '## '+x.sec.t+'\n'+x.sec.md.replace(/\n---\s*$/, ''); }).join('\n\n');
+      var sys='You are the built-in help for Dystoria, a story-planning and writing app. Answer the user’s QUESTION — exactly the question they asked, nothing else — using ONLY the guide sections provided. Be concise and practical (2–5 sentences): name the feature, where it is in the app (mode, tab, drawer or button, using the guide’s own names), and the steps. If the sections do not cover the question, say plainly that the guide does not describe it and point to the closest thing it does describe. Only if the user is asking whether Dystoria has a feature or can do something, and the sections show it does NOT exist, say so warmly in one short line and affirm it would be a good addition, then as the very last line output exactly the token [[SUGGEST]] and nothing after it. For a normal how-to question never output that token. Never invent features, buttons or steps.';
+      var out=await aiCall(sys, 'QUESTION: '+q+'\n\nGUIDE SECTIONS (the parts of the Dystoria guide that match the question):\n\n'+guide+'\n\n---\nQUESTION (answer exactly this): '+q+'\n\nAnswer:', { feature:'help_ask', maxTokens: 400, temperature: 0.2 });
       var txt=String(out||'').trim(); var suggest=/\[\[SUGGEST\]\]/.test(txt); txt=txt.replace(/\[\[SUGGEST\]\]/g,'').trim(); ans.innerHTML='<div class="help-ans-lbl">Answer</div>'+mdLite(txt); if(suggest){ var fb=document.createElement('button'); fb.className='help-feedback'; fb.innerHTML='✦ Suggest this as a feature'; fb.addEventListener('click', function(){ openFeedbackWith('Feature request (via the How do I? box):\n\n“'+q+'”\n\nWhy it would help: '); }); ans.appendChild(fb); }
     }catch(e){ ans.innerHTML='<div class="help-ans-lbl">Answer</div><p>'+((typeof aiErrMsg==='function')?aiErrMsg(e):'Could not answer right now \u2014 sign in to ask the AI, or browse the guide.')+'</p>'; }
   }
@@ -59801,9 +59816,12 @@ body.eink .pl-filterpick .pf-row.on .pf-box{ background:#000; border-color:#000;
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.832';
+  var APP_VERSION = '2026.07.20.833';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.833', date:'September 30, 2026', notes:[
+      '**Ask ✦ answers the question you asked.** [Jeremy] The “How do I…?” Ask button was sending the whole guide with your question at the very end — longer than the AI accepts, so your question was cut off and it answered one of its own. Now it sends the parts of the guide that match your question, with the question first and last, and answers from those.'
+    ]},
     { v:'2026.07.20.832', date:'September 30, 2026', notes:[
       '**Smaller filter pills.** [Jeremy] The little filter pills under each category on Plan → Elements (All roles, All types…) are a size smaller.'
     ]},
