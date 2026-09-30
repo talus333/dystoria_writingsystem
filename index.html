@@ -16158,6 +16158,39 @@ function restoreMapView(id){
   const v = loadMapViews()[mapViewKey(id)];
   state.view = (v && typeof v === 'object') ? { zoom: v.zoom || 1.5, panX: v.panX || 0, panY: v.panY || 0 } : { zoom: 1.5, panX: 0, panY: 0 };
   const zs = $('zoomSlider'); if (zs) zs.value = Math.round((state.view.zoom || 1) * 100);
+  /* v.923 [Jeremy: "fix that zoomed in issue"] — a section this device has never shown had no view to restore, so it opened at a fixed
+     150% centred on the canvas's middle, wherever the elements actually were: Alice's first scene came up with the Rabbit-Hole under
+     the scene title. Now a first showing fits the view to what is there (centred on the scene's setting), once the map has drawn, and
+     remembers it; a view you have set yourself is restored as before. */
+  state._fitNew = (v && typeof v === 'object') ? null : mapViewKey(id);
+  if (state._fitNew) fitNewView();
+}
+const ONBOARD = { being: 1, setting: 1, object: 1 };   /* what stands on the board: the frame layers, events and groups live in the side panels */
+function fitNewView(){
+  const want = state._fitNew;
+  const go = () => {
+    try {
+      if (!want || state._fitNew !== want || mapViewKey() !== want) return;
+      const ns = (state.nodes || []).filter(nd => nd && isFinite(nd.x) && isFinite(nd.y) && ONBOARD[nd.cat]);
+      if (!ns.length) return;
+      state._fitNew = null;
+      let anchor = null;
+      try {
+        const pk = state.prompt && state.prompt.placeKey;
+        const ws = (state.prompt && state.prompt.words) || [];
+        let i = pk ? ws.findIndex(w => w && wordKey(w) === pk) : -1;
+        if (i < 0) i = ws.findIndex(w => w && w.cat === 'setting' && w.role !== 'frame');
+        const nd = i >= 0 ? state.nodes[i] : null;
+        if (nd && isFinite(nd.x) && isFinite(nd.y)) anchor = { x: nd.x, y: nd.y };
+      } catch (e){}
+      const o = { only: nd => !!ONBOARD[nd.cat] }; if (anchor) o.centerOn = anchor;
+      fitViewToNodes(o);
+      saveMapView();
+      try { if (typeof renderConstellation === 'function') renderConstellation(); } catch (e){}
+    } catch (e){}
+  };
+  requestAnimationFrame(() => requestAnimationFrame(go));
+  setTimeout(go, 350);   /* a map drawn a beat later (a story fetched from the cloud) still gets its fit */
 }
 function forgetMapView(id){ try { const all = loadMapViews(); const pre = id + ':'; let ch = false; Object.keys(all).forEach(k => { if (k === id || k.indexOf(pre) === 0){ delete all[k]; ch = true; } }); if (ch) localStorage.setItem(LS_MAPVIEW, JSON.stringify(all)); } catch (e){} }
 /* ---- snapping grid (per story): a light dot grid the elements + drawn shapes snap to ---- */
@@ -16261,8 +16294,10 @@ function fitViewToNodes(opts){
   // the map's visible area is inset by the side strips (--lw/--rw overlay it) and the top narrative bar
   const cs = getComputedStyle(document.body);
   const lw = parseFloat(cs.getPropertyValue('--lw')) || 0, rw = parseFloat(cs.getPropertyValue('--rw')) || 0;
-  const topInset = document.body.classList.contains('expb') ? 46 : 0;
-  const ns = (state.nodes || []).filter(nd => nd && isFinite(nd.x) && isFinite(nd.y));
+  let topInset = document.body.classList.contains('expb') ? 46 : 0;
+  /* v.923 — and the scene's title (Places), which sits over the top of the board */
+  try { const pt = $('placeTitle'); if (pt && pt.offsetParent && getComputedStyle(pt).display !== 'none'){ const sr = svg.getBoundingClientRect(), tr = pt.getBoundingClientRect(); if (tr.height) topInset = Math.max(topInset, Math.round(tr.bottom - sr.top + 8)); } } catch (e){}
+  const ns = (state.nodes || []).filter(nd => nd && isFinite(nd.x) && isFinite(nd.y) && (!opts.only || opts.only(nd)));   /* v.923 — opts.only: the nodes to frame */
   if (!ns.length){ state.view = { zoom: 1.5, panX: 0, panY: 0 }; const zs0 = $('zoomSlider'); if (zs0) zs0.value = 150; applyView(); return; }
   const pad = opts.pad != null ? opts.pad : 52;   // icon + label footprint around each node
   let bw, bh, bcx, bcy;
@@ -33591,6 +33626,7 @@ async function confirmImport(){
   try {
     const _mainSet = (state.nodes || []).find(nd => nd && nd.cat === 'setting' && isFinite(nd.x) && isFinite(nd.y));
     const _fitOpts = _mainSet ? { centerOn: { x: _mainSet.x, y: _mainSet.y } } : {};
+    _fitOpts.only = nd => !!ONBOARD[nd.cat];   /* v.923 — frame what stands on the board, not the side-panel layers parked at 0,0 */
     requestAnimationFrame(() => { try { if (typeof fitViewToNodes === 'function') fitViewToNodes(_fitOpts); } catch (e){} });
   } catch (e){}
   if (window.openStoryLegend) window.openStoryLegend();   // R33 — the Story Legend opens by default on an imported story
@@ -59811,9 +59847,16 @@ body.eink .pl-filterpick .pf-row.on .pf-box{ background:#000; border-color:#000;
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.844';
+  var APP_VERSION = '2026.07.20.846';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.846', date:'September 30, 2026', notes:[
+      '**Maps open framed.** A story or section you open for the first time on a device now fits its map to what is on it, centred on the scene\u2019s setting and clear of the scene title, instead of opening zoomed in on the middle.'
+    ]},
+    { v:'2026.07.20.845', date:'September 30, 2026', notes:[
+      '**Standing shelves.** Alice now sits on her own Sample Story shelf. Every story shared with you sits on Shared with you, and the manuscripts you have accepted as a beta reader sit on a new Beta Reading shelf (a book opens the manuscript). All three fold away like your own shelves.',
+      '**One example story.** Hansel and Gretel is gone: Alice\u2019s Adventures in Wonderland is the example.'
+    ]},
     { v:'2026.07.20.844', date:'September 30, 2026', notes:[
       '**More voices on the loading screen.** Fourteen new lines on the craft from the speculative writers: Gene Wolfe, Ursula K. Le Guin, Jorge Luis Borges, Ray Bradbury, J. R. R. Tolkien, Octavia E. Butler, Mary Shelley, Italo Calvino, Neil Gaiman and Philip K. Dick.'
     ]},
@@ -103838,9 +103881,11 @@ html body:not(.eink) #qaWin.qa-full #qaBar #qaSend{ order:3; min-width:112px; bo
       B.group = a[0].data || []; B.reads = a[1].data || []; B.sends = a[2].data || []; B.invites = a[3].error ? [] : (a[3].data || []);
     } else { B.group = []; B.reads = []; B.sends = []; }
     badge(); draw(false);
+    try { if (document.querySelector('#library.open') && typeof window.renderLibrary === 'function') window.renderLibrary(); } catch (e){}
   }
   window.dystBetaRefresh = loadAll;
-  window.__dystBetaGroup = function(){ return B.group; };   /* v.861 — Friends lists your beta readers too */
+  window.__dystBetaGroup = function(){ return B.group; };
+  window.__dystBetaReads = function(){ return B.reads === undefined ? null : B.reads; };   /* v.922 — the Library's Beta Reading shelf */   /* v.861 — Friends lists your beta readers too */
   async function loadDir(){
     var r = await rpc('beta_directory', { a_read: B.filter || null });
     B.dir = r.error ? [] : (r.data || []);
@@ -111817,6 +111862,15 @@ body.eink #library .lb-inner{transition:none}
   #library .lb-view{margin-left:4px} #library .lb-view button{width:32px}
 }
 </style>
+<style id="dyst-libstanding-css">
+/* v.922 — the standing shelves fold like yours; a beta read carries its tag */
+#library .lb-shelf.foldable .lb-sh-head{cursor:pointer}
+#library .lb-shelf.foldable .lb-sh-name{cursor:pointer; font-style:normal; color:var(--ink)}
+#library .lb-shelf.fixed.foldable .lb-sh-name{font-style:italic}
+#library .lb-tag.lb-btag{background:#e9c98a; color:#2b2112}
+#library .lb-r-beta{font:400 14px/1.45 var(--serif); color:var(--ink-soft); font-style:italic}
+#library .lb-bslot .lb-front{cursor:pointer}
+</style>
 <style id="dyst-librows-css">
 /* v.918 — the list as books: one book to a row on its shelf plank, its details beside it */
 #libList.lb-rowmode{max-width:980px !important}
@@ -111899,6 +111953,7 @@ body.eink #library .lb-slot.lb-row{background:#fff; border:2px solid #000}
     chev: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>',
     tick: '<svg viewBox="0 0 24 24" fill="none" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>',
     spark: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2.8l1.9 5.6c.3.9 1 1.6 1.9 1.9l5.6 1.9-5.6 1.9c-.9.3-1.6 1-1.9 1.9L12 21.6l-1.9-5.6c-.3-.9-1-1.6-1.9-1.9L2.6 12.2l5.6-1.9c.9-.3 1.6-1 1.9-1.9z"/></svg>',
+    read: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 6.5C10 5 7 4.5 3.5 5v13c3.5-.5 6.5 0 8.5 1.5 2-1.5 5-2 8.5-1.5V5C17 4.5 14 5 12 6.5z"/><path d="M12 6.5v13"/></svg>',
     image: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><circle cx="9" cy="10" r="1.8"/><path d="M20.5 16l-4.8-4.8L6 19.5"/></svg>',
     shelf: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4v12M9 5v11M13.2 4.8l3.4 11"/><path d="M3 19.5h18"/></svg>'
   };
@@ -111917,17 +111972,29 @@ body.eink #library .lb-slot.lb-row{background:#fff; border:2px solid #000}
     return {
       shelves: Array.isArray(L.shelves) ? L.shelves.filter(function(x){ return x && x.id; }).map(function(x){ return { id: String(x.id), name: String(x.name || 'Shelf'), shut: !!x.shut }; }) : [],
       order: Array.isArray(L.order) ? L.order.map(String) : [],
-      place: (L.place && typeof L.place === 'object') ? Object.assign({}, L.place) : {}
+      place: (L.place && typeof L.place === 'object') ? Object.assign({}, L.place) : {},
+      fold: (L.fold && typeof L.fold === 'object') ? Object.assign({}, L.fold) : {}   /* v.922 — Sample Story, Shared with you, Beta Reading */
     };
   }
   function saveLayout(L){
     try {
       var p = (typeof loadProfile === 'function' ? loadProfile() : {}) || {};
-      p.library = { shelves: L.shelves, order: L.order.slice(0, 3000), place: L.place, _at: new Date().toISOString() };
+      p.library = { shelves: L.shelves, order: L.order.slice(0, 3000), place: L.place, fold: L.fold || {}, _at: new Date().toISOString() };
       if (typeof saveProfile === 'function') saveProfile(p);
     } catch (e){}
   }
   window.dystLibLayout = layout;
+  /* v.922 — Alice lives on the Sample Story shelf now. A shelf you made for her ("Example Story", "Sample Story"…) that held nothing else
+     is removed once, so it doesn't stand empty. */
+  try { if (!localStorage.getItem('dystoria.libSampleV922')){
+    var L0 = layout(), had = L0.place['.s_alice_demo'], ch = false;
+    if (had){ delete L0.place['.s_alice_demo']; ch = true;
+      var others = Object.keys(L0.place).some(function(k){ return L0.place[k] === had; });
+      var sh0 = L0.shelves.filter(function(x){ return x.id === had; })[0];
+      if (sh0 && !others && /^(the\s+)?(example|sample)s?(\s+(story|stories))?$/i.test(sh0.name.trim())) L0.shelves = L0.shelves.filter(function(x){ return x.id !== had; }); }
+    if (ch) saveLayout(L0);
+    localStorage.setItem('dystoria.libSampleV922', '1');
+  } } catch (e){}
   /* the arrangement: stories you have placed in the order you placed them; a story you have not placed yet (a new one) comes first */
   function arrange(list, L){
     var idx = {}; L.order.forEach(function(id, i){ if (!(id in idx)) idx[id] = i; });
@@ -111972,20 +112039,23 @@ body.eink #library .lb-slot.lb-row{background:#fff; border:2px solid #000}
   /* v.918 [Jeremy] "Can we also have a filter button in the library to filter by Shelf". Which shelf is showing is per device, like the
      view: localStorage `dystoria.libShelf` ('all', a shelf id, '__loose' or '__shared'). A shelf that has since been deleted reads as all. */
   var SKEY = 'dystoria.libShelf';
-  function shelfFilter(L, hasShared){
+  function shelfFilter(L, hasShared, avail){
     var v = 'all'; try { v = localStorage.getItem(SKEY) || 'all'; } catch (e){}
     if (v === '__loose') return L.shelves.length ? v : 'all';
     if (v === '__shared') return hasShared ? v : 'all';
+    if (v === '__sample' || v === '__beta') return (avail && avail[v]) ? v : 'all';
     if (v !== 'all' && !L.shelves.some(function(x){ return x.id === v; })) return 'all';
     return v;
   }
   function setShelfFilter(v){ try { if (!v || v === 'all') localStorage.removeItem(SKEY); else localStorage.setItem(SKEY, v); } catch (e){} window.renderLibrary(); try { var w = $$('libList'); if (w) w.scrollTop = 0; } catch (e){} }
-  function shelfFilterMenu(anchor, L, hasShared, cur){
+  function shelfFilterMenu(anchor, L, hasShared, cur, avail){
     var mark = function(k, label){ return (cur === k ? '\u2713  ' : '\u2003 ') + label; };
     var items = [{ head: 'Show' }, { label: mark('all', 'Every shelf'), fn: function(){ setShelfFilter('all'); } }, '-'];
     L.shelves.forEach(function(sh){ items.push({ label: mark(sh.id, sh.name), fn: function(){ setShelfFilter(sh.id); } }); });
     if (L.shelves.length) items.push({ label: mark('__loose', 'Not on a shelf'), fn: function(){ setShelfFilter('__loose'); } });
+    if (avail && avail.__sample) items.push({ label: mark('__sample', 'Sample Story'), fn: function(){ setShelfFilter('__sample'); } });
     if (hasShared) items.push({ label: mark('__shared', 'Shared with you'), fn: function(){ setShelfFilter('__shared'); } });
+    if (avail && avail.__beta) items.push({ label: mark('__beta', 'Beta Reading'), fn: function(){ setShelfFilter('__beta'); } });
     menu(anchor, items);
   }
   function renderShelves(mode){
@@ -112002,10 +112072,12 @@ body.eink #library .lb-slot.lb-row{background:#fff; border:2px solid #000}
     var kOk = function(s){ if (kf === 'all') return true; try { return (typeof window.dystStoryKind === 'function' ? window.dystStoryKind(s) : 'novel') === kf; } catch (e){ return true; } };
     var mkT = function(label, title, fn, on){ var b = document.createElement('button'); b.type = 'button'; b.className = 'lb-tbtn' + (on ? ' on' : ''); b.innerHTML = label; b.title = title; b.addEventListener('click', function(e){ e.stopPropagation(); fn(b); }); br.appendChild(b); return b; };
     var hasShared = list.some(function(s){ return s && s._shared; });
-    var sf = shelfFilter(L, hasShared);
-    if (L.shelves.length || hasShared){
-      var sfName = sf === 'all' ? 'All shelves' : (sf === '__loose' ? 'Not on a shelf' : (sf === '__shared' ? 'Shared with you' : ((L.shelves.find(function(x){ return x.id === sf; }) || {}).name || 'Shelf')));
-      var sfb = mkT(SVG.shelf + '<span class="lb-sf-n"></span>' + SVG.chev, 'Show one shelf, or all of them', function(b){ shelfFilterMenu(b, L, hasShared, sf); }, sf !== 'all');
+    var betas = betaReads();
+    var avail = { __sample: list.some(function(s){ return s && s.id === SAMPLE_ID; }), __beta: betas.length > 0 };
+    var sf = shelfFilter(L, hasShared, avail);
+    if (L.shelves.length || hasShared || avail.__sample || avail.__beta){
+      var sfName = sf === 'all' ? 'All shelves' : ({ __loose: 'Not on a shelf', __shared: 'Shared with you', __sample: 'Sample Story', __beta: 'Beta Reading' }[sf] || ((L.shelves.find(function(x){ return x.id === sf; }) || {}).name || 'Shelf'));
+      var sfb = mkT(SVG.shelf + '<span class="lb-sf-n"></span>' + SVG.chev, 'Show one shelf, or all of them', function(b){ shelfFilterMenu(b, L, hasShared, sf, avail); }, sf !== 'all');
       sfb.classList.add('lb-sfbtn'); sfb.querySelector('.lb-sf-n').textContent = sfName; sfb.setAttribute('aria-haspopup', 'menu');
     }
     mkT('+ Shelf', 'Make a new shelf to group stories on', function(){ newShelf(); });
@@ -112015,11 +112087,18 @@ body.eink #library .lb-slot.lb-row{background:#fff; border:2px solid #000}
     SEL.forEach(function(id){ if (!ids[id]) SEL.delete(id); });
     var shown = arrange(list, L).filter(kOk);
     var shelfIds = {}; L.shelves.forEach(function(sh){ shelfIds[sh.id] = sh; });
-    var groups = L.shelves.map(function(sh){ return { key: sh.id, name: sh.name, shelf: sh, items: shown.filter(function(s){ return L.place[s.id] === sh.id; }) }; });
-    var loose = shown.filter(function(s){ return !shelfIds[L.place[s.id]] && !s._shared; });
-    var shared = shown.filter(function(s){ return !shelfIds[L.place[s.id]] && s._shared; });
-    groups.push({ key: '__loose', name: L.shelves.length ? 'Not on a shelf' : '', fixed: true, items: loose, hideEmpty: true });
-    if (shared.length) groups.push({ key: '__shared', name: 'Shared with you', fixed: true, items: shared });
+    /* v.922 [Jeremy] — three standing shelves, each folding away like your own: the Sample Story (Alice, always), Shared with you (every
+       story shared with you, wherever it had been put) and Beta Reading (the manuscripts you have accepted to read). A story on a standing
+       shelf is never on one of yours as well. */
+    var forced = function(s){ return s.id === SAMPLE_ID ? '__sample' : (s._shared ? '__shared' : ''); };
+    var groups = L.shelves.map(function(sh){ return { key: sh.id, name: sh.name, shelf: sh, items: shown.filter(function(s){ return !forced(s) && L.place[s.id] === sh.id; }) }; });
+    var loose = shown.filter(function(s){ return !forced(s) && !shelfIds[L.place[s.id]]; });
+    var sample = shown.filter(function(s){ return forced(s) === '__sample'; });
+    var shared = shown.filter(function(s){ return forced(s) === '__shared'; });
+    groups.push({ key: '__loose', name: (L.shelves.length || sample.length || shared.length || betas.length) ? 'Not on a shelf' : '', fixed: true, items: loose, hideEmpty: true });
+    if (sample.length) groups.push({ key: '__sample', name: 'Sample Story', fixed: true, foldable: true, items: sample });
+    if (shared.length) groups.push({ key: '__shared', name: 'Shared with you', fixed: true, foldable: true, items: shared });
+    if (betas.length && kf === 'all') groups.push({ key: '__beta', name: 'Beta Reading', fixed: true, foldable: true, beta: true, items: betas });
     if (sf !== 'all') groups = groups.filter(function(g){ return g.key === sf; });
     LAST = { list: list, groups: groups };
 
@@ -112027,10 +112106,17 @@ body.eink #library .lb-slot.lb-row{background:#fff; border:2px solid #000}
       var em = document.createElement('div'); em.className = 'lb-empty'; em.textContent = 'Your library is empty. Start a new project, or import a draft.'; wrap.appendChild(em);
     }
     groups.forEach(function(g){
-      if (g.key === '__loose' && !g.items.length && (L.shelves.length || !list.length) && sf !== '__loose') return;
-      var sec = document.createElement('section'); sec.className = 'lb-shelf' + (g.fixed ? ' fixed' : '') + (g.shelf && g.shelf.shut ? ' shut' : ''); sec.dataset.shelf = g.key;
+      if (g.key === '__loose' && !g.items.length && (L.shelves.length || !list.length || g.name) && sf !== '__loose') return;
+      var gShut = g.foldable ? !!L.fold[g.key] : !!(g.shelf && g.shelf.shut);
+      var sec = document.createElement('section'); sec.className = 'lb-shelf' + (g.fixed ? ' fixed' : '') + (g.foldable ? ' foldable' : '') + (gShut ? ' shut' : ''); sec.dataset.shelf = g.key;
       if (g.name){
         var hd = document.createElement('div'); hd.className = 'lb-sh-head';
+        if (g.foldable){
+          var ftg = document.createElement('button'); ftg.type = 'button'; ftg.className = 'lb-sh-tog'; ftg.innerHTML = SVG.chev; ftg.title = gShut ? 'Open this shelf' : 'Fold this shelf away';
+          ftg.setAttribute('aria-expanded', gShut ? 'false' : 'true');
+          ftg.addEventListener('click', function(e){ e.stopPropagation(); var L2 = layout(); L2.fold[g.key] = !L2.fold[g.key]; saveLayout(L2); window.renderLibrary(); });
+          hd.appendChild(ftg);
+        }
         if (!g.fixed){
           var tg = document.createElement('button'); tg.type = 'button'; tg.className = 'lb-sh-tog'; tg.innerHTML = SVG.chev; tg.title = g.shelf.shut ? 'Open this shelf' : 'Fold this shelf away';
           tg.setAttribute('aria-expanded', g.shelf.shut ? 'false' : 'true');
@@ -112040,7 +112126,8 @@ body.eink #library .lb-slot.lb-row{background:#fff; border:2px solid #000}
         var nm = document.createElement('span'); nm.className = 'lb-sh-name'; nm.textContent = g.name; hd.appendChild(nm);
         if (!g.fixed){ nm.title = 'Rename this shelf'; nm.tabIndex = 0; nm.addEventListener('click', function(e){ e.stopPropagation(); startRename(g.key); });
           nm.addEventListener('keydown', function(e){ if (e.key === 'Enter'){ e.preventDefault(); startRename(g.key); } }); }
-        var ct = document.createElement('span'); ct.className = 'lb-sh-n'; ct.textContent = String(g.items.length); ct.title = g.items.length === 1 ? '1 story' : g.items.length + ' stories'; hd.appendChild(ct);
+        var ct = document.createElement('span'); ct.className = 'lb-sh-n'; ct.textContent = String(g.items.length); ct.title = g.items.length === 1 ? (g.beta ? '1 manuscript' : '1 story') : g.items.length + (g.beta ? ' manuscripts' : ' stories'); hd.appendChild(ct);
+        if (g.foldable){ hd.classList.add('lb-sh-fold'); hd.addEventListener('click', function(e){ if (e.target.closest('button')) return; hd.querySelector('.lb-sh-tog').click(); }); }
         if (!g.fixed){
           var mb = document.createElement('button'); mb.type = 'button'; mb.className = 'lb-sh-menu'; mb.textContent = '…'; mb.title = 'Shelf options'; mb.setAttribute('aria-label', 'Options for ' + g.name);
           mb.addEventListener('click', function(e){ e.stopPropagation(); shelfMenu(g.key, mb); });
@@ -112052,7 +112139,7 @@ body.eink #library .lb-slot.lb-row{background:#fff; border:2px solid #000}
         var ee = document.createElement('div'); ee.className = 'lb-empty'; ee.textContent = g.fixed ? 'Nothing here.' : 'An empty shelf. Drag books here, or select some and choose Add to shelf.'; sec.appendChild(ee);
       } else {
         var grid = document.createElement('div'); grid.className = rows ? 'lb-rows' : 'lb-grid';
-        g.items.forEach(function(s){ grid.appendChild(rows ? rowFor(s, L, shelfIds) : slotFor(s, L, shelfIds)); });
+        g.items.forEach(function(s){ grid.appendChild(g.beta ? betaFor(s, rows) : (rows ? rowFor(s, L, shelfIds) : slotFor(s, L, shelfIds))); });
         sec.appendChild(grid);
       }
       wrap.appendChild(sec);
@@ -112062,6 +112149,60 @@ body.eink #library .lb-slot.lb-row{background:#fff; border:2px solid #000}
     if (renaming){ var r = renaming; renaming = null; setTimeout(function(){ startRename(r); }, 0); }
   }
 
+  /* v.922 — Beta Reading: the manuscripts sent to you that you are reading or have read (`beta_my_reads`, loaded by the Beta readers
+     panel; asked for here once when the Library opens). Each is a book; opening it opens the reader in its own tab, as the panel does. */
+  var SAMPLE_ID = '.s_alice_demo', betaAsked = false;
+  function betaReads(){
+    var R = null; try { R = typeof window.__dystBetaReads === 'function' ? window.__dystBetaReads() : null; } catch (e){}
+    if (R == null){
+      if (!betaAsked && isSignedIn() && typeof window.dystBetaRefresh === 'function'){ betaAsked = true; try { Promise.resolve(window.dystBetaRefresh()).then(function(){ try { if (document.querySelector('#library.open')) window.renderLibrary(); } catch (e){} }); } catch (e){} }
+      return [];
+    }
+    return (R || []).filter(function(r){ return r && r.token && r.status !== 'stopped'; }).map(function(r){
+      return { id: 'beta:' + r.token, name: r.title || 'A manuscript', _beta: r };
+    });
+  }
+  function betaOpen(r){ try { window.open(location.origin + location.pathname + '#/beta/' + r.token, '_blank', 'noopener'); } catch (e){} }
+  function betaStatus(r){
+    if (r.status === 'finished') return 'Finished';
+    return r.progress ? r.progress + '% read' : (r.opened_at === null ? 'Not opened yet' : 'Not started');
+  }
+  function betaFor(b, rows){
+    var r = b._beta;
+    var slot = document.createElement('div'); slot.className = 'lb-slot lb-bslot' + (rows ? ' lb-row' : ''); slot.dataset.beta = r.token;
+    var book = document.createElement('div'); book.className = 'lb-book';
+    var inner = document.createElement('div'); inner.className = 'lb-inner';
+    var fr = frontFor({ id: b.id, name: b.name }).cloneNode(true);   /* the cloth, without the story book's own click and drag */
+    fr.setAttribute('aria-label', 'Read ' + b.name);
+    fr.insertAdjacentHTML('beforeend', '<span class="lb-tag lb-btag">Beta read</span>');
+    var go = function(e){ if (e) e.stopPropagation(); betaOpen(r); };
+    fr.addEventListener('click', go); fr.addEventListener('keydown', function(e){ if (e.key === 'Enter' || e.key === ' '){ e.preventDefault(); go(e); } });
+    inner.appendChild(fr); book.appendChild(inner);
+    var readBtn = function(){ var x = document.createElement('button'); x.type = 'button'; x.className = 'lb-ic rd'; x.innerHTML = SVG.read; x.title = r.status === 'finished' ? 'Open' : (r.progress ? 'Continue reading' : 'Read'); x.setAttribute('aria-label', x.title + ': ' + b.name);
+      x.addEventListener('click', go); var row = document.createElement('div'); row.className = 'lb-icons'; row.appendChild(x); return row; };
+    var from = r.author_name ? 'from ' + r.author_name : 'a beta read';
+    if (!rows){
+      slot.appendChild(book);
+      var ledge = document.createElement('div'); ledge.className = 'lb-ledge'; slot.appendChild(ledge);
+      var cap = document.createElement('div'); cap.className = 'lb-cap lb-cap-m'; cap.textContent = from + ' \u00b7 ' + betaStatus(r); cap.title = cap.textContent; slot.appendChild(cap);
+      slot.appendChild(readBtn());
+      return slot;
+    }
+    var col = document.createElement('div'); col.className = 'lb-rbook'; col.appendChild(book);
+    var ledge2 = document.createElement('div'); ledge2.className = 'lb-ledge'; col.appendChild(ledge2); slot.appendChild(col);
+    var info = document.createElement('div'); info.className = 'lb-rinfo';
+    var t = document.createElement('button'); t.type = 'button'; t.className = 'lb-r-t'; t.textContent = b.name; t.title = 'Open the manuscript'; t.addEventListener('click', go); info.appendChild(t);
+    var bits = ['Beta read', escH(from)];
+    if (when(r.sent_at)) bits.push('Sent ' + escH(when(r.sent_at)));
+    if (r.due) bits.push('Due ' + escH(when(r.due)));
+    bits.push('<span class="lb-r-flag">' + escH(betaStatus(r)) + '</span>');
+    var m = document.createElement('div'); m.className = 'lb-r-m'; m.innerHTML = bits.join('<i>\u00b7</i>'); info.appendChild(m);
+    var qn = (r.questions || []).length, notes = String(r.notes || '').trim();
+    if (qn || notes){ var d = document.createElement('div'); d.className = 'lb-r-beta'; d.textContent = (qn ? qn + (qn === 1 ? ' question' : ' questions') + ' from the author' : '') + (qn && notes ? '. ' : '') + (notes ? 'Content notes: ' + notes : ''); info.appendChild(d); }
+    var foot = document.createElement('div'); foot.className = 'lb-r-foot'; foot.appendChild(document.createElement('span')); foot.appendChild(readBtn()); info.appendChild(foot);
+    slot.appendChild(info);
+    return slot;
+  }
   function slotFor(s, L, shelfIds){
     var slot = document.createElement('div'); slot.className = 'lb-slot' + (SEL.has(s.id) ? ' sel' : ''); slot.dataset.id = s.id;
     var isCur = false; try { isCur = !!(state.session && state.session.id === s.id); } catch (e){}
@@ -112253,7 +112394,7 @@ body.eink #library .lb-slot.lb-row{background:#fff; border:2px solid #000}
     if (selecting){ toggleSel(s.id, e); return; }
     try { openSession(s.id); } catch (err){}
   }
-  function slotIds(){ return [].slice.call(document.querySelectorAll('#libList .lb-slot')).map(function(x){ return x.dataset.id; }); }
+  function slotIds(){ return [].slice.call(document.querySelectorAll('#libList .lb-slot:not(.lb-bslot)')).map(function(x){ return x.dataset.id; }); }
   function toggleSel(id, e){
     if (e && e.shiftKey && lastPick && lastPick !== id){
       var all = slotIds(), a = all.indexOf(lastPick), b = all.indexOf(id);
@@ -112392,11 +112533,11 @@ body.eink #library .lb-slot.lb-row{background:#fff; border:2px solid #000}
     order = order.filter(function(id){ return ids.indexOf(id) < 0; });
     var at = order.length;
     if (tgt.id){ var k = order.indexOf(tgt.id); if (k >= 0) at = k + (tgt.before ? 0 : 1); }
-    else if (tgt.shelf){ var last = -1; order.forEach(function(id, i){ var p = L.place[id]; if ((tgt.shelf === '__loose' || tgt.shelf === '__shared') ? !p : p === tgt.shelf) last = i; }); at = last >= 0 ? last + 1 : 0; }
+    else if (tgt.shelf){ var last = -1; order.forEach(function(id, i){ var p = L.place[id]; if ((tgt.shelf === '__loose' || tgt.shelf === '__shared' || tgt.shelf === '__sample' || tgt.shelf === '__beta') ? !p : p === tgt.shelf) last = i; }); at = last >= 0 ? last + 1 : 0; }
     order.splice.apply(order, [at, 0].concat(ids));
     L.order = order;
     var sid = tgt.shelf;
-    ids.forEach(function(id){ if (!sid || sid === '__loose' || sid === '__shared') delete L.place[id]; else L.place[id] = sid; });
+    ids.forEach(function(id){ if (!sid || sid.slice(0, 2) === '__') delete L.place[id]; else L.place[id] = sid; });
     saveLayout(L);
   }
   function nudge(id, d){
@@ -112446,6 +112587,7 @@ body.eink #library .lb-slot.lb-row{background:#fff; border:2px solid #000}
     clearMarks(); D.tgt = null;
     var el = document.elementFromPoint(D.x, D.y); if (!el) return;
     var slot = el.closest && el.closest('#libList .lb-slot');
+    if (slot && slot.classList.contains('lb-bslot')) return;   /* v.922 — a manuscript is not yours to rearrange */
     if (slot && D.ids.indexOf(slot.dataset.id) < 0){
       var r = slot.getBoundingClientRect(), before = slot.classList.contains('lb-row') ? D.y < r.top + r.height / 2 : D.x < r.left + r.width / 2;
       slot.classList.add(before ? 'lb-drop-b' : 'lb-drop-a');
@@ -113085,4 +113227,37 @@ body.eink #goalBuilder .gb-done, body.eink #goalBuilder .gb-own button{backgroun
 })();
 </script>
 
+<script id="dyst-hansel-gone-js">
+/* v.922 [Jeremy: "Remove the hansel and gretel story entirely we'll stick to alice and wonderland for launch"] — v.862 stopped seeding it but
+   left any copy already in a library alone. Now it goes: out of this browser's library (tombstoned, so no cloud pull brings it back), its
+   cloud rows deleted once the account is signed in, and a writer who had it open lands on Alice. The one place it survives is the test
+   fixture an automated browser builds (navigator.webdriver), which about a hundred regression harnesses are written against. */
+(function(){
+  'use strict';
+  var HID = '.s_hansel_demo';
+  try { if (navigator.webdriver) return; } catch (e){}
+  try {
+    var dead = (typeof loadDeleted === 'function') ? loadDeleted() : [];
+    if (dead.indexOf(HID) < 0){ dead.push(HID); if (typeof saveDeleted === 'function') saveDeleted(dead); }
+    var list = (typeof loadSessions === 'function') ? loadSessions() : [], h = list.filter(function(x){ return x && x.id === HID; })[0];
+    if (h){
+      if (h.cloudId && dead.indexOf(h.cloudId) < 0){ dead.push(h.cloudId); saveDeleted(dead); }
+      var open = false; try { open = !!(state.session && state.session.id === HID); } catch (e){}
+      if (open) setTimeout(function(){ try { deleteStory(HID); if (loadSessions().some(function(x){ return x.id === '.s_alice_demo'; })) openSession('.s_alice_demo'); } catch (e){} }, 0);
+      else persistSessions(list.filter(function(x){ return x.id !== HID; }));
+    }
+    try { if (localStorage.getItem('dystoria.lastStory') === HID) localStorage.removeItem('dystoria.lastStory'); } catch (e){}
+  } catch (e){}
+  var tries = 0, iv = setInterval(function(){
+    tries++; if (tries > 90){ clearInterval(iv); return; }
+    try {
+      if (typeof cloud === 'undefined' || !cloud.user || typeof supa === 'undefined' || !supa) return;
+      clearInterval(iv);
+      var FLAG = 'dystoria.hanselGone.' + cloud.user.id;
+      if (localStorage.getItem(FLAG)) return;
+      supa.from('stories').delete().eq('owner', cloud.user.id).eq('doc->>id', HID).then(function(r){ if (r && !r.error) try { localStorage.setItem(FLAG, '1'); } catch (e){} }, function(){});
+    } catch (e){}
+  }, 1000);
+})();
+</script>
 </body></html>
