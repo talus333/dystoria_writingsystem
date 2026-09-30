@@ -32400,7 +32400,7 @@ function seedRelBonds(rels){
     var a = by[String(r.from).trim().toLowerCase()], b = by[String(r.to).trim().toLowerCase()];
     if (!a || !b || a === b) return;
     var type = (r.type && String(r.type).trim()) || '';
-    if (V.writeBond(a, b, type, {})) made++;
+    if (V.writeBond(a, b, type, (r.note && type) ? { dims: [{ type: type, note: String(r.note) }] } : {})) made++;   /* v.927 — the Connection's note */
   });
   return made;
 }
@@ -32734,6 +32734,68 @@ function importMotNoteLines(full){
   (full || []).forEach(function(x){ if (!g[x.f]){ g[x.f] = []; order.push(x.f); } if (g[x.f].indexOf(x.v) < 0) g[x.f].push(x.v); });
   return order.map(function(f){ return f + ', in full: ' + g[f].join('; ') + '.'; });
 }
+/* v.927 [Jeremy] — "for … connections … be conservative and add the strong ones and don't make every small interaction a connection, only
+   things that seem to impact the story". A Connection is a BOND: kin, love, rivalry, service, rule, alliance, membership, a tie to a thing
+   or place the plot turns on, one event causing another. A passing action (uses, finds, retrieves, sees, experiences) is left out, and so
+   is a bond to a whole category ("Objects"). The type is put into the app's own bond words where one fits; a long one keeps its head
+   and the whole phrase goes to the Connection's note. */
+function importRelVocab(){
+  var out = [];
+  try { var c = getCat('relationship'); ((c && c.subcategories) || []).forEach(function(sb){ if (!sb || sb.retired) return;
+    (sb.words || []).forEach(function(x){ var w = (typeof x === 'string') ? x : (x && x.w); if (w && out.indexOf(w) < 0) out.push(w); }); }); } catch (e){}
+  return out;
+}
+function importRelVocabInfo(){
+  var parts = [];
+  try { var c = getCat('relationship'); ((c && c.subcategories) || []).forEach(function(sb){ if (!sb || sb.retired) return;
+    var ws = (sb.words || []).filter(function(x){ return typeof x === 'string'; }).slice(0, 10); if (ws.length) parts.push(sb.name + ': ' + ws.join(', ')); }); } catch (e){}
+  return parts.join('; ');
+}
+var IMPORT_REL_INCIDENTAL = /^(?:uses?|used|using|finds?|found|retrieves?|retrieved|fetches|holds?|held|sees?|saw|seen|watches|looks at|looked at|visits?|visited|enters?|entered|experiences?|experienced|wants?|wanted|desires?|desired|mentions?|mentioned|meets?|met|encounters?|encountered|talks to|talked to|speaks to|speaks with|interacts with|carries|carried|picks up|picked up|opens?|opened|touches|walks to|goes to|went to|arrives at|arrived at|appears in|appears with|is in|is at|was in|located in|present at|near|next to|with|has|had|possesses|receives?|received|gives?|gave|takes?|took|reads?|drinks?|eats?|plays?|played|climbs?|sits in|sat in|inhabits|thinks about|remembers|notices|noticed|hears|heard|calls|called|asks|asked|tells|told)$/i;
+var IMPORT_REL_GENERIC_END = /^(?:the )?(?:objects?|things?|items?|people|persons|characters?|places?|locations?|events?|everyone|everything|others|stuff)$/i;
+var IMPORT_REL_MAP = [
+  [/^(?:servant of|serves|served|servant to|in service to|in the service of|works for|worked for|obeys|obeyed|servitude to)$/i, 'Serves'],
+  [/^(?:rival|rivals|rivalry|rival of|rivalry with|competes with|competitor of)$/i, 'Rivals'],
+  [/^(?:kin|kinship|family|family of|related to|relative of|sibling|siblings|sibling of)$/i, 'Kin to'],
+  [/^(?:friend|friends|friendship|friend of|friends with|befriended)$/i, 'Befriends'],
+  [/^(?:ally|allies|alliance|allied|ally of|allied to|alliance with)$/i, 'Allied with'],
+  [/^(?:member|member of|belongs to|belonged to|part of|in|joined)$/i, 'Belongs to'],
+  [/^(?:leads|led|leader|leader of|head of|heads|commander of)$/i, 'Leads'],
+  [/^(?:mentor|mentor of|mentor to|mentored|teaches|teacher of|tutors)$/i, 'Mentors'],
+  [/^(?:betrayal|betrays|betrayed|betrayer of)$/i, 'Betrays'],
+  [/^(?:enemy|enemies|enmity|enemy of|foe of|nemesis of|hates|hated)$/i, 'Enemy of'],
+  [/^(?:guardian|guardian of|protects|protected|protector of|guards|guarded)$/i, 'Guards'],
+  [/^(?:causes|caused|cause of|led to|leads to|triggers|triggered|results in|resulted in)$/i, 'Caused'],
+  [/^(?:commits|committed|carries out|carried out|perpetrates|perpetrated|instigates|instigated|starts|started)$/i, 'Instigated'],
+  [/^(?:worships|worshipped|venerates|reveres)$/i, 'Worships'],
+  [/^(?:haunted by|haunts)$/i, 'Haunted by']
+];
+function importRelClean(r){
+  if (!r || !r.from || !r.to) return null;
+  var from = String(r.from).trim(), to = String(r.to).trim();
+  if (!from || !to || from.toLowerCase() === to.toLowerCase()) return null;
+  if (IMPORT_REL_GENERIC_END.test(from) || IMPORT_REL_GENERIC_END.test(to)) return null;
+  var raw = String(r.type || '').replace(/\s+/g, ' ').trim(), note = String(r.note || '').replace(/\s+/g, ' ').trim();
+  var t = raw.replace(/^(?:is |are |was |were |has been |the |a |an )+/i, '').replace(/[.;:,!?]+$/, '').trim();
+  if (!t) return null;                                         /* a Connection with no bond named is not a Connection */
+  var lc = t.toLowerCase(), vocab = importRelVocab();
+  var hit = vocab.filter(function(w){ return w.toLowerCase() === lc; })[0];
+  if (!hit){
+    if (IMPORT_REL_INCIDENTAL.test(t)) return null;            /* a passing action, not a bond */
+    for (var i = 0; i < IMPORT_REL_MAP.length; i++){ if (IMPORT_REL_MAP[i][0].test(t)){ hit = IMPORT_REL_MAP[i][1]; break; } }
+  }
+  var type = hit || t;
+  if (!hit && type.split(' ').length > 3){
+    var head = (type.split(IMPORT_LABEL_CUT)[0] || type).split(' ').slice(0, 3);
+    while (head.length > 1 && /^(the|a|an|and|or|of|to|in|on|at|for|with|by|from|who|that)$/i.test(head[head.length - 1])) head.pop();
+    if (!note) note = t.charAt(0).toUpperCase() + t.slice(1) + '.';
+    type = head.join(' ');
+  }
+  type = type.charAt(0).toUpperCase() + type.slice(1);
+  var out = { from: from, to: to, type: type.slice(0, 40) };
+  if (note) out.note = note.slice(0, 240);
+  return out;
+}
 function importNoteAdd(e, lines){
   (lines || []).forEach(function(l){
     l = String(l || '').trim(); if (!l || !e) return;
@@ -32874,7 +32936,7 @@ async function extractImport(){
      168. The same per-part scoping v.712 removed from elements, in the same sentence shape. One relationship
      head, shared by both prompts, so they cannot drift apart. The explanations stay OUT of the string literals:
      a block comment written inside one is not a comment at all, it is prompt text sent to the model. */
-  const relSelect = 'relationships = the bonds the text ESTABLISHES \u2014 where it says who two elements are to each other, not merely that both appear in the same sentence. There is NO quota: a part that establishes two bonds returns two, a part that establishes twelve returns twelve, and a part that establishes none returns none. Never pad to a number and never trim a genuinely connected cast to fit one. from/to are exact element names; ';
+  const relSelect = 'relationships = the bonds the text ESTABLISHES \u2014 where it says who two elements are to each other, not merely that both appear in the same sentence. There is NO quota: a part that establishes two bonds returns two, a part that establishes twelve returns twelve, and a part that establishes none returns none. Never pad to a number and never trim a genuinely connected cast to fit one. ONLY BONDS THAT SHAPE THE STORY: kin, love, friendship, rivalry or enmity, service, rule or command, alliance, membership of a group, a character bound to an object or place the plot turns on, one event causing another. NEVER a passing action — uses, finds, retrieves, holds, sees, visits, enters, experiences, wants, mentions — and never a bond to a whole category ("Objects", "People"). A cast that only shares scenes has no Connections, and that is a correct answer. note = one short sentence on how they are bound, grounded in the text. from/to are exact element names; ';
   const proposalGuide = 'proposals = generic reusable VOCABULARY the source uses that fits a Dystoria pool category but is likely not already a standard option (so it could enrich future generation) — e.g., a genre, a setting-type, an object-type, a being archetype, an adjective, a concept. NOT proper-named story elements (those are elements). Each: {cat ∈ [genre,period,theme,stakes,plot,being,setting,object,event,concept,adjective,relationship,state], word = the generic term (1–3 words), desc = what the word means in 6–14 words (it becomes the word’s tooltip), common = true if it is a widely-known term worth offering in ALL stories, false if it is specific to THIS world}. There is NO quota here either: propose a term only when it would genuinely enrich future generation, and return NONE when this part offers none. Invent nothing. ';
   const goalGuide = 'goals = any clearly-stated authorial GOALS / intentions the source expresses — what the work is about, aims to explore, or wants the reader to feel — ONLY if the source actually states them. Each: {word = a short label (2–6 words), note = the fuller statement in the author’s own words}. Empty [] if none are stated. Do not infer or invent goals. ';
   // Prose (a finished manuscript) never STATES authorial goals — reading them out of the story is inference, which we don't want. Only author notes define goals.
@@ -32946,21 +33008,21 @@ async function extractImport(){
     else if (_Q.names && _Q.names.length) _scopeGuide = ' THIS CONVERSATION IS SPECIFICALLY ABOUT: ' + _Q.names.join(', ') + '. Attach the notes and traits you extract to THOSE existing elements (match by name); only propose a NEW element if the author clearly introduces one. ';
     else if (_Q.label) _scopeGuide = ' THIS CONVERSATION IS SPECIFICALLY ABOUT: ' + _Q.label + '. Keep the extraction focused there. '; }
   if (notesMode){
-    sys = 'You analyze an author\u2019s NOTES / worldbuilding / character sheets (NOT a finished manuscript) for a worldbuilding app and return ONLY valid minified JSON \u2014 no prose, no code fences. Schema: {"title":string,"overview":string,"sections":[{"title":string}],"elements":[{"type":' + typeUnion + ',"name":string,"note":string,"summary":string,"sub":string,"section":string,"sections":[string],"traits":[{"sub":string,"value":string}],"motivation":{"wants":[string],"stakes":[string],"obstacles":[string],"motivator":string},"stake":{"bearer":string,"threat":string,"axis":string}}],"relationships":[{"from":string,"to":string,"type":string}],"proposals":[{"cat":string,"word":string,"desc":string,"common":boolean}],"goals":[{"word":string,"note":string}],"threads":[{"name":string,"elements":[string]}]}.' +
+    sys = 'You analyze an author\u2019s NOTES / worldbuilding / character sheets (NOT a finished manuscript) for a worldbuilding app and return ONLY valid minified JSON \u2014 no prose, no code fences. Schema: {"title":string,"overview":string,"sections":[{"title":string}],"elements":[{"type":' + typeUnion + ',"name":string,"note":string,"summary":string,"sub":string,"section":string,"sections":[string],"traits":[{"sub":string,"value":string}],"motivation":{"wants":[string],"stakes":[string],"obstacles":[string],"motivator":string},"stake":{"bearer":string,"threat":string,"axis":string}}],"relationships":[{"from":string,"to":string,"type":string,"note":string}],"proposals":[{"cat":string,"word":string,"desc":string,"common":boolean}],"goals":[{"word":string,"note":string}],"threads":[{"name":string,"elements":[string]}]}.' +
       'Extract the distinct elements the notes establish — characters, places, objects, events, and in-world concepts/terms — and, only when clearly stated, the narrative frame (genre, context, concepts/themes, stakes, plot). ' + elementSelect + narrThreshold + typeGuide + sectionGuideNotes +
       (IMP.qa ? 'The text is a PLANNING CONVERSATION (interviewer questions + the author\u2019s answers). Treat ONLY the author\u2019s answers as source material. note = a faithful restatement of what the author said about that element, folded together across answers \u2014 keep their exact meaning and specifics, but clean up grammar and spelling and phrase it simply; NEVER quote the questions or copy the answers verbatim. summary = ONE short sentence. ' : 'note = that element\u2019s details taken from the notes, cleaned up and consolidated into 1\u20134 sentences, preserving the author\u2019s specifics. summary = ONE short sentence. ') + _scopeGuide +
       'For beings, places and things: ' + traitInfo + '. Do NOT fill sub for beings. ' + motGuide + stakeGuide + threadGuide +
       'For any non-being type that has one: sub = single best subcategory from: ' + nonBeingSubInfo + (narrSubInfo ? ('; ' + narrSubInfo) : '') + '. ' +
-      relSelect + 'type = a short phrase. ' + proposalGuide + goalGuide +
+      relSelect + 'type = a BOND WORD of one to three words, from these where one fits: ' + importRelVocabInfo() + '; otherwise a short bond phrase of the same kind ("Mother of", "Servant of"). The detail goes in note, never in type. ' + proposalGuide + goalGuide +
       'overview = 1\u20132 sentences. ' + labelRule + 'Invent nothing \u2014 keep only what the notes say.';
     user = 'Notes:\n\n' + prose.slice(0, 300000) + '\n\nReturn the JSON.';
   } else {
-    sys = 'You analyze a story for a worldbuilding app and return ONLY valid minified JSON — no prose, no code fences. Schema: {"title":string,"overview":string,"sections":[{"title":string,"opening":string}],"elements":[{"type":' + typeUnion + ',"name":string,"summary":string,"sub":string,"section":string,"sections":[string],"traits":[{"sub":string,"value":string}],"motivation":{"wants":[string],"stakes":[string],"obstacles":[string],"motivator":string},"stake":{"bearer":string,"threat":string,"axis":string}}],"relationships":[{"from":string,"to":string,"type":string}],"proposals":[{"cat":string,"word":string,"desc":string,"common":boolean}],"goals":[{"word":string,"note":string}],"threads":[{"name":string,"elements":[string]}]}.' +
+    sys = 'You analyze a story for a worldbuilding app and return ONLY valid minified JSON — no prose, no code fences. Schema: {"title":string,"overview":string,"sections":[{"title":string,"opening":string}],"elements":[{"type":' + typeUnion + ',"name":string,"summary":string,"sub":string,"section":string,"sections":[string],"traits":[{"sub":string,"value":string}],"motivation":{"wants":[string],"stakes":[string],"obstacles":[string],"motivator":string},"stake":{"bearer":string,"threat":string,"axis":string}}],"relationships":[{"from":string,"to":string,"type":string,"note":string}],"proposals":[{"cat":string,"word":string,"desc":string,"common":boolean}],"goals":[{"word":string,"note":string}],"threads":[{"name":string,"elements":[string]}]}.' +
     'sections = split the story ONLY where the text itself marks a division: a heading line of its own (a chapter/part/section title, a markdown # header, a numeral) or a scene-break line (***, * * *, ---, #). NEVER split continuous prose by topic, mood or time jump \u2014 a story with no such marks is ONE section. title = the heading exactly as written if there is one, else a short title; opening = the first ~8 words of that section copied EXACTLY/verbatim from the text. ' +
     'Extract the story elements — characters, places, objects, events, and in-world concepts/terms — and only the narrative frame (genre, context, concepts/themes, stakes, plot) that the text makes unmistakably clear. ' + narrThreshold + typeGuide + sectionGuideProse + 'summary = ONE short sentence grounded only in the text. ' +
     'For beings, places and things: ' + traitInfo + '. Do NOT fill sub for beings. ' + motGuide + stakeGuide + threadGuide +
     'For any non-being type that has one: sub = single best subcategory from: ' + nonBeingSubInfo + (narrSubInfo ? ('; ' + narrSubInfo) : '') + '. ' +
-    relSelect + 'type = a short relationship phrase such as "Guardian of","Rivalry","Keeper of","Born of","Betrayal". ' + proposalGuide + goalGuideProse +
+    relSelect + 'type = a BOND WORD of one to three words, from these where one fits: ' + importRelVocabInfo() + '; otherwise a short bond phrase of the same kind ("Mother of", "Servant of"). The detail goes in note, never in type. ' + proposalGuide + goalGuideProse +
     /* v.711 — "Up to 6 elements of each type" was one ceiling for every type, which reads as licence for six
        genres and six themes. Six themes is not "unmistakably clear", it is a checklist. The frame gets its own
        numbers, and they are small on purpose. */
@@ -32972,7 +33034,7 @@ async function extractImport(){
   // AS they arrive so the user reviews/approves in parallel with the remaining chunks still ingesting.
   const chunks = importChunks(prose, 45000);
   const total = chunks.length;
-  IMP.elements = []; IMP.relationships = []; IMP.sections = []; IMP.genres = []; IMP._labelAlias = {};   /* v.925 */
+  IMP.elements = []; IMP.relationships = []; IMP.sections = []; IMP.genres = []; IMP._labelAlias = {}; IMP._relLeftOut = 0;   /* v.925, v.927 */
   const seenEl = {}, seenR = {};
   let secsRaw = [], propsRaw = [], goalsRaw = [], threadsRaw = [], overview = '', gotTitle = '', gotAny = false;   /* v.719 — storylines arrive per chunk like everything else */
   const confirmBtn = $('importConfirm');
@@ -33000,7 +33062,7 @@ async function extractImport(){
       } catch (e){ if (!gotAny){ impStage(null); $('importGo').disabled = false; $('importStatus').textContent = aiErrMsg(e); if (IMP._sessionImport) throw e; return; }   /* v.737: a session scan reports the reason on its pill */ flashStatus(aiErrMsg(e)); break; }   // after at least one good part, a failed part just stops early — keep what we have
     }
     if (!normC) { setConfirmProgress(ci + 1); continue; }   // a part failed to parse — keep what the other parts gave
-    (normC.relationships || []).forEach(r => { if (!r || !r.from || !r.to) return; const k = (String(r.from) + '|' + String(r.to)).toLowerCase(); if (seenR[k]) return; seenR[k] = 1; IMP.relationships.push(r); });
+    (normC.relationships || []).forEach(r0 => { const r = importRelClean(r0); if (!r){ if (r0 && r0.from && r0.to) IMP._relLeftOut = (IMP._relLeftOut || 0) + 1; return; } const k = (String(r.from) + '|' + String(r.to)).toLowerCase(); if (seenR[k]) return; seenR[k] = 1; IMP.relationships.push(r); });   /* v.927 — bonds only */
     if (Array.isArray(normC.sections)) secsRaw = secsRaw.concat(normC.sections);
     if (Array.isArray(normC.proposals)) propsRaw = propsRaw.concat(normC.proposals);
     if (Array.isArray(normC.goals)) goalsRaw = goalsRaw.concat(normC.goals);
@@ -33412,7 +33474,7 @@ function renderImportRels(){
     row.innerHTML =
       '<label class="irr-inc"><input type="checkbox" class="irr-i"' + (relIncluded(r) ? ' checked' : '') + '></label>' +
       '<span class="irr-end">' + esc(r.from || '') + '</span>' +
-      '<input class="irr-type" value="' + esc(r.type || '') + '" placeholder="how they are bound" title="The relation, in your words \u2014 easier to change here than to find on a map later">' +
+      '<input class="irr-type" value="' + esc(r.type || '') + '" placeholder="how they are bound" title="' + (r.note ? esc(r.note) : 'The relation, in your words \u2014 easier to change here than to find on a map later') + '">' +
       '<span class="irr-arr">\u2192</span>' +
       '<span class="irr-end">' + esc(r.to || '') + '</span>' +
       (lands ? '' : '<span class="irr-no" title="Both ends must match an element you are keeping above. Rename the element, or leave this one out.">no match</span>');
@@ -33985,7 +34047,7 @@ function confirmNotesImport(){
     /* v.706 — and the notes path, which parks its connections for later rather than drawing them now: an
        unchecked row must not come back to life when both ends finally exist. */
     var _nrels = (IMP.relationships || []).filter(relIncluded);
-    if (_nrels.length) state.session.importRels = (state.session.importRels || []).concat(_nrels.map(r => ({ from: r.from, to: r.to, type: r.type })));
+    if (_nrels.length) state.session.importRels = (state.session.importRels || []).concat(_nrels.map(r => ({ from: r.from, to: r.to, type: r.type, note: r.note || '' })));
     try { if (IMP._premise){ state.session.summary = IMP._premise; IMP._premise = ''; IMP._keepKind = ''; } else if (_qaEntryLens === 'interview' && IMP.overview && !state.session.summary) state.session.summary = IMP.overview; } catch (e){}   /* v.859 — your lines (or what Explore found) are the premise */
     if (IMP.overview){ state.session.wikiOverview = (state.session.wikiOverview ? (state.session.wikiOverview + ' ') : '') + IMP.overview; }
     // Anything in the source that wasn't turned into an element goes into General Notes so nothing is lost.
@@ -60107,9 +60169,13 @@ body.eink .pl-filterpick .pf-row.on .pf-box{ background:#000; border-color:#000;
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.849';
+  var APP_VERSION = '2026.07.20.850';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.850', date:'September 30, 2026', notes:[
+      '**Fewer, stronger Connections on import.** Only bonds that shape the story come in: family, love, rivalry, service, alliance, belonging to a group, a tie to a thing or place the plot turns on. Passing actions like \u201cuses\u201d or \u201cretrieves\u201d are left out.',
+      '**Connections use Dystoria\u2019s bond words.** \u201cServant of\u201d arrives as Serves and \u201crivalry\u201d as Rivals, and the sentence explaining the bond goes into the Connection\u2019s note.'
+    ]},
     { v:'2026.07.20.849', date:'September 30, 2026', notes:[
       '**Imported motivations are pills.** What a character wants, stands to lose, is blocked by and acts for arrives as a word or three (\u201cImprove services\u201d, \u201cCuriosity\u201d), with the sentence it came from kept in the character\u2019s notes.',
       '**Only the strong motives.** At most two wants, two stakes and two obstacles per character; any more are listed in the notes to add by hand.'
