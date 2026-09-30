@@ -32711,6 +32711,29 @@ function importTraitVal(v){
   if (m) return { value: m[1], also: m[2], extra: '' };
   return { value: '', extra: t };
 }
+/* v.926 [Jeremy] — "for motivations … try to be conservative and add the strong ones". A want, a stake, an obstacle and a motivator are
+   pills of one to three words ("Improve services", "Curiosity"); "X of Y" and "X to Y Z" may run to four ("Inability to save Feo",
+   "Loss of symbiotic link"). A longer phrase is cut to its first clause, then to its head, and the whole sentence is kept in the note. */
+var IMPORT_MOT_CLAUSE = /\s*(?:[,;:]|\s-\s|\s—\s|\s+(?:and|but|or|so|because|while|since|so that|in order to)\s+)\s*/i;
+function importMotPill(raw){
+  var s0 = String(raw || '').replace(/\s+/g, ' ').trim();
+  var s = s0.replace(/\s*[\(\[][^\)\]]*[\)\]]/g, '').trim().replace(/^(?:to |a |an |the )/i, '').replace(/[.;:,!?]+$/, '').trim();
+  if (!s) return s0.slice(0, 40);
+  var s1 = s0.replace(/[.;:,!?]+$/, '').trim(); if (!/[\(\[]/.test(s1) && s1.split(' ').length <= 3) return s1;   /* already a pill: left exactly as the reader gave it */
+  var cap = function(x){ return x.charAt(0).toUpperCase() + x.slice(1); };
+  var fits = function(x){ var n = x.split(' ').length; return n <= 3 || (n === 4 && /^\S+ (?:of|to|for) \S+ \S+$/i.test(x)); };
+  if (fits(s)) return cap(s);
+  var c = s.split(IMPORT_MOT_CLAUSE)[0].trim() || s;
+  if (fits(c)) return cap(c);
+  var w = (c.split(IMPORT_LABEL_CUT)[0].trim() || c).split(' ').slice(0, 3);
+  while (w.length > 1 && /^(the|a|an|and|or|of|to|in|on|at|for|with|by|from|is|was|his|her|their|its)$/i.test(w[w.length - 1])) w.pop();
+  return cap(w.join(' '));
+}
+function importMotNoteLines(full){
+  var g = {}, order = [];
+  (full || []).forEach(function(x){ if (!g[x.f]){ g[x.f] = []; order.push(x.f); } if (g[x.f].indexOf(x.v) < 0) g[x.f].push(x.v); });
+  return order.map(function(f){ return f + ', in full: ' + g[f].join('; ') + '.'; });
+}
 function importNoteAdd(e, lines){
   (lines || []).forEach(function(l){
     l = String(l || '').trim(); if (!l || !e) return;
@@ -32748,6 +32771,11 @@ function importFinishLabels(threadsRaw){
     if (!e) return;
     if (e.stake){ if (e.stake.bearer) e.stake.bearer = fix(e.stake.bearer); if (e.stake.threat) e.stake.threat = fix(e.stake.threat); }
     if (e.motivation && e.motivation.motivator) e.motivation.motivator = fix(e.motivation.motivator);
+    /* v.926 — at most two of each, the first the reader gave (a long book adds them part by part); the rest wait in the note */
+    if (e.motivation){ var M = e.motivation;
+      [['wants', 'Also wants'], ['stakes', 'Also stands to lose']].forEach(function(p){ var a = M[p[0]] || []; if (a.length > 2){ importNoteAdd(e, [p[1] + ': ' + a.slice(2).join('; ') + '.']); M[p[0]] = a.slice(0, 2); } });
+      if ((M.obstacles || []).length > 2){ importNoteAdd(e, ['Also in the way: ' + M.obstacles.slice(2).map(function(o){ return o.word; }).join('; ') + '.']); M.obstacles = M.obstacles.slice(0, 2); }
+    }
     importCapTraits(e);
     if (e._more && e._more.length){
       var u = [], sn = {}; e._more.forEach(function(x){ var k = String(x).toLowerCase(); if (!sn[k]){ sn[k] = 1; u.push(x); } });
@@ -32877,7 +32905,7 @@ async function extractImport(){
     + (notesMode
       ? 'These notes are the author stating their intent, so take what they say. '
       : 'ONLY when the prose STATES it \u2014 "she wanted the ledger back", "he had his sister to lose". NEVER infer a want from what a character does: a manuscript is evidence of what HAPPENS, and reading a motive out of behaviour is exactly the invention to avoid. Most characters in most manuscripts yield nothing here, and {} is the right answer for them. ')
-    + 'Each entry is SHORT \u2014 a phrase, not a sentence. There is no quota: a character the text gives two wants has two, one it gives none has none. For obstacles, prefer the app\u2019s own vocabulary where it fits (Opposition: Rival, Nemesis, Gatekeeper, Authority\u2026; Barrier: Locked Door, Wall, Chasm, Wilderness\u2026; Inner Struggle: Fear, Doubt, Pride, Guilt\u2026; Circumstance: The Law, Poverty, Scarcity, Deadline\u2026); otherwise give the text\u2019s own short words. ';
+    + 'Each entry is a PILL of one to three words that names the thing ("Master’s favour", "Understanding", "Feo’s safety"), never a sentence or a to-phrase; the summary carries the detail. Keep only the STRONG ones, the motives the story turns on: AT MOST TWO wants, two stakes and two obstacles per character, and one the text gives none has none. For obstacles, prefer the app\u2019s own vocabulary where it fits (Opposition: Rival, Nemesis, Gatekeeper, Authority\u2026; Barrier: Locked Door, Wall, Chasm, Wilderness\u2026; Inner Struggle: Fear, Doubt, Pride, Guilt\u2026; Circumstance: The Law, Poverty, Scarcity, Deadline\u2026); otherwise give the text\u2019s own short words. ';
   // Narrative-FRAME extraction is deliberately conservative: genre/context/theme/stakes/plot are high-level and
   // easily over-read from a sentence or two. Story elements (beings/places/objects/events/terms) stay loose.
   var _narrCats = { genre:1, period:1, context:1, theme:1, stakes:1, plot:1 };
@@ -32996,7 +33024,7 @@ async function extractImport(){
           if (name !== String(el.name).trim()) _al[_olc] = name;
         }
       }
-      const _traitExtra = [];
+      const _traitExtra = [], _motFull = [];   /* v.926 */
       const aiSum = String(el.summary || '').trim(), aiNote = String(el.note || '').trim();
       const summary = notesMode ? (aiSum || aiNote) : aiSum;
       /* v.708 — this was `cat === 'being' ? (…) : []`, so a place's climate and a thing's material were dropped
@@ -33029,20 +33057,23 @@ async function extractImport(){
       const _mot = (function(){
         if (cat !== 'being') return null;
         var m = el.motivation; if (!m || typeof m !== 'object') return null;
-        var short = function(x){ return String(x || '').trim().replace(/\s+/g, ' ').slice(0, 80); };
-        var list = function(a){ var out = []; (Array.isArray(a) ? a : []).forEach(function(x){ var t = short(x); if (t && out.map(function(y){ return y.toLowerCase(); }).indexOf(t.toLowerCase()) < 0) out.push(t); }); return out; };
+        /* v.926 — a pill; the sentence it came from goes to the note. A motivator that IS one of the reader's own elements keeps its name. */
+        var _named = {}; ((normC && normC.elements) || []).forEach(function(e2){ if (e2 && e2.name) _named[String(e2.name).trim().toLowerCase()] = 1; });
+        var short = function(x, lbl){ var raw = String(x || '').trim().replace(/\s+/g, ' '); if (!raw) return ''; if (_named[raw.toLowerCase()]) return raw.slice(0, 80);
+          var p = importMotPill(raw); if (lbl && p.split(' ').length < raw.split(' ').length) _motFull.push({ f: lbl, v: raw }); return p; };
+        var list = function(a, lbl){ var out = []; (Array.isArray(a) ? a : []).forEach(function(x){ var t = short(x, lbl); if (t && out.map(function(y){ return y.toLowerCase(); }).indexOf(t.toLowerCase()) < 0) out.push(t); }); return out; };
         var obs = []; (Array.isArray(m.obstacles) ? m.obstacles : []).forEach(function(x){
-          var o = normalizeObstacle(x); if (!o) return;
+          var o = normalizeObstacle(short(x, 'Obstacles')); if (!o) return;
           if (!obs.some(function(y){ return y.word.toLowerCase() === o.word.toLowerCase(); })) obs.push(o);
         });
-        var r = { wants: list(m.wants), stakes: list(m.stakes), obstacles: obs, motivator: short(m.motivator) };
+        var r = { wants: list(m.wants, 'Wants'), stakes: list(m.stakes, 'Stands to lose'), obstacles: obs, motivator: short(m.motivator, 'Driven by') };
         return (r.wants.length || r.stakes.length || r.obstacles.length || r.motivator) ? r : null;
       })();
       const key = cat + '|' + importNorm(name);
       const ex = seenEl[key] || IMP.elements.find(r => r.cat === cat && importNameMatch(r.name, name));   // fuzzy: "The Woodcutter" == "Woodcutter", minor typos
       if (ex){
         if (!seenEl[key]) seenEl[key] = ex;
-        importNoteAdd(ex, _lab.notes); if (_traitExtra.length) ex._more = (ex._more || []).concat(_traitExtra);   /* v.925 */
+        importNoteAdd(ex, _lab.notes.concat(importMotNoteLines(_motFull))); if (_traitExtra.length) ex._more = (ex._more || []).concat(_traitExtra);   /* v.925 */
         // enrich, don't overwrite — the same element usually gains detail across later sections
         if (summary){ if (!ex.summary) ex.summary = summary; else if (ex.summary.toLowerCase().indexOf(summary.toLowerCase()) < 0) ex.summary = ex.summary.replace(/[\s.]*$/, '') + '. ' + summary; }
         { const moreNote = (notesMode && IMP.qa) ? aiNote : '';   // Q&A notes accumulate across answers; NOTES notes are already pulled whole-doc; PROSE has none
@@ -33085,7 +33116,7 @@ async function extractImport(){
         if (t && _secsAll.map(function(y){ return y.toLowerCase(); }).indexOf(t.toLowerCase()) < 0) _secsAll.push(t);
       });
       const rec = { cat, name, sub: importMapSub(cat, el.sub, name, aiSum), traits: elTraits, motivation: _mot, stake: _stk, summary, note, section: _secOne, sections: _secsAll, exists: wordExistsSystem(cat, name), existsStory: existsInStory(cat, name), include: true, sys: false };
-      rec._long = _lab.changed ? _lab.clean : ''; importNoteAdd(rec, _lab.notes); if (_traitExtra.length) rec._more = _traitExtra.slice();   /* v.925 */
+      rec._long = _lab.changed ? _lab.clean : ''; importNoteAdd(rec, _lab.notes.concat(importMotNoteLines(_motFull))); if (_traitExtra.length) rec._more = _traitExtra.slice();   /* v.925 */
       seenEl[key] = rec; IMP.elements.push(rec); newEls.push(rec);
     });
     IMP.genres = IMP.elements.filter(e => e.cat === 'genre').map(e => e.name);   // tag imported words for future generation bias
@@ -60076,9 +60107,13 @@ body.eink .pl-filterpick .pf-row.on .pf-box{ background:#000; border-color:#000;
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.848';
+  var APP_VERSION = '2026.07.20.849';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.849', date:'September 30, 2026', notes:[
+      '**Imported motivations are pills.** What a character wants, stands to lose, is blocked by and acts for arrives as a word or three (\u201cImprove services\u201d, \u201cCuriosity\u201d), with the sentence it came from kept in the character\u2019s notes.',
+      '**Only the strong motives.** At most two wants, two stakes and two obstacles per character; any more are listed in the notes to add by hand.'
+    ]},
     { v:'2026.07.20.848', date:'September 30, 2026', notes:[
       '**Imported names are short.** An event or idea the text never names gets a title of a word or three (\u201cThe Disobedience\u201d) instead of a description, and a second name or a role in brackets goes into the notes instead of the pill.',
       '**Characteristics are moved, not cut.** A characteristic that takes a sentence to say goes into the element\u2019s notes whole, instead of being cut to its first word, and each character keeps the six the story leans on most.'
