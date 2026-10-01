@@ -32745,19 +32745,42 @@ function importTraitVal(v){
    pills of one to three words ("Improve services", "Curiosity"); "X of Y" and "X to Y Z" may run to four ("Inability to save Feo",
    "Loss of symbiotic link"). A longer phrase is cut to its first clause, then to its head, and the whole sentence is kept in the note. */
 var IMPORT_MOT_CLAUSE = /\s*(?:[,;:]|\s-\s|\s—\s|\s+(?:and|but|or|so|because|while|since|so that|in order to)\s+)\s*/i;
-function importMotPill(raw){
+function importMotPill(raw, prose, isWant){
+  /* v.932 — never a fragment. Each part must read in the Drives sentence ("Delphia wants to find structure, but is held back by
+     her scattered mind, with her own identity hanging in the balance, driven by grief for Feo."), so a want keeps its "to", and the
+     first letter is lower case unless it starts a name the text capitalises mid-sentence. Up to eight words are kept whole; a longer
+     run-on keeps its first whole clause when that clause has three to eight words and does not end on a dangling word; otherwise it
+     is kept whole, because a clear longer phrase beats a short one that means nothing. Whatever is shortened goes to the note. */
   var s0 = String(raw || '').replace(/\s+/g, ' ').trim();
-  var s = s0.replace(/\s*[\(\[][^\)\]]*[\)\]]/g, '').trim().replace(/^(?:to |a |an |the )/i, '').replace(/[.;:,!?]+$/, '').trim();
-  if (!s) return s0.slice(0, 40);
-  var s1 = s0.replace(/[.;:,!?]+$/, '').trim(); if (!/[\(\[]/.test(s1) && s1.split(' ').length <= 3) return s1;   /* already a pill: left exactly as the reader gave it */
-  var cap = function(x){ return x.charAt(0).toUpperCase() + x.slice(1); };
-  var fits = function(x){ var n = x.split(' ').length; return n <= 3 || (n === 4 && /^\S+ (?:of|to|for) \S+ \S+$/i.test(x)); };
-  if (fits(s)) return cap(s);
-  var c = s.split(IMPORT_MOT_CLAUSE)[0].trim() || s;
-  if (fits(c)) return cap(c);
-  var w = (c.split(IMPORT_LABEL_CUT)[0].trim() || c).split(' ').slice(0, 3);
-  while (w.length > 1 && /^(the|a|an|and|or|of|to|in|on|at|for|with|by|from|is|was|his|her|their|its)$/i.test(w[w.length - 1])) w.pop();
-  return cap(w.join(' '));
+  var s = s0.replace(/\s*[\(\[][^\)\]]*[\)\]]/g, '').trim().replace(/[.;:,!?]+$/, '').trim();
+  if (!s) return s0.slice(0, 80);
+  var lc = function(x){
+    var w = x.split(' ')[0].replace(/['’]s$/i, '');
+    if (!/^[A-Z][a-z]/.test(w)) return x;
+    try { if (prose && new RegExp('[a-z,;] ' + w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b').test(String(prose))) return x; } catch (e){}
+    return x.charAt(0).toLowerCase() + x.slice(1);
+  };
+  var n = function(x){ return x.split(' ').length; };
+  /* a want that starts on a bare verb ("understand what they have become") reads "<Name> wants to understand…" */
+  if (isWant && /^(understand|find|protect|save|escape|become|know|learn|return|keep|win|prove|avenge|reach|leave|sort|stop|make|get|be|have|see|discover|rescue|destroy|free|earn|regain|restore|belong|survive|help|reunite|live|tell|go|bring|break|end|forget|remember|serve|please|finish|build|create|change|undo|recover|reclaim|uncover|master|control|defeat|honour|honor|join|marry|reconcile|redeem|heal|hide|flee|avoid|stay|matter|connect|define|organize|organise)\b/i.test(s)) s = 'to ' + s.charAt(0).toLowerCase() + s.slice(1);
+  if (n(s) <= 8) return lc(s);
+  var c = (s.split(IMPORT_MOT_CLAUSE)[0] || '').trim();
+  if (c && n(c) >= 3 && n(c) <= 8 && !/\b(the|a|an|and|or|of|to|in|on|at|for|with|by|from|is|was|his|her|their|its|what|that|which|who)$/i.test(c)) return lc(c);
+  return lc(s).slice(0, 120);
+}
+/* v.932 [Jeremy: "make Drive sentence with it to see that it make sense - show the example sentence in the importer review"] — the
+   motivation read back as the app's Drives line, plus its motivator, so a part that does not make sense shows at once. */
+function importMotSentence(el){
+  var m = el && el.motivation; if (!m) return '';
+  var w = (m.wants || [])[0], s = (m.stakes || [])[0], ob = (m.obstacles || [])[0], d = m.motivator, nm = String((el && el.name) || 'They').trim();
+  var o = ob ? (ob.isNew ? ob.word : String(ob.word || '').toLowerCase()) : '';
+  if (!w && !s && !o && !d) return '';
+  var t;
+  if (w){ t = nm + ' wants ' + w; if (o) t += ', but is held back by ' + o; if (s) t += ', with ' + s + ' hanging in the balance'; if (d) t += ', driven by ' + d; }
+  else if (o){ t = nm + ' contends with ' + o + (s ? ', and ' + s + ' hangs in the balance' : ''); if (d) t += ', driven by ' + d; }
+  else if (s){ t = 'For ' + nm + ', ' + s + ' hangs in the balance'; if (d) t += ', driven by ' + d; }
+  else t = nm + ' is driven by ' + d;
+  return t + '.';
 }
 function importMotNoteLines(full){
   var g = {}, order = [];
@@ -32911,8 +32934,8 @@ function importFinishLabels(threadsRaw){
     if (e.motivation && e.motivation.motivator) e.motivation.motivator = fix(e.motivation.motivator);
     /* v.926 — at most two of each, the first the reader gave (a long book adds them part by part); the rest wait in the note */
     if (e.motivation){ var M = e.motivation;
-      [['wants', 'Also wants'], ['stakes', 'Also stands to lose']].forEach(function(p){ var a = M[p[0]] || []; if (a.length > 2){ importNoteAdd(e, [p[1] + ': ' + a.slice(2).join('; ') + '.']); M[p[0]] = a.slice(0, 2); } });
-      if ((M.obstacles || []).length > 2){ importNoteAdd(e, ['Also in the way: ' + M.obstacles.slice(2).map(function(o){ return o.word; }).join('; ') + '.']); M.obstacles = M.obstacles.slice(0, 2); }
+      [['wants', 'Also wants'], ['stakes', 'Also stands to lose']].forEach(function(p){ var a = M[p[0]] || []; if (a.length > 1){ importNoteAdd(e, [p[1] + ': ' + a.slice(1).join('; ') + '.']); M[p[0]] = a.slice(0, 1); } });   /* v.932 — one of each */
+      if ((M.obstacles || []).length > 1){ importNoteAdd(e, ['Also in the way: ' + M.obstacles.slice(1).map(function(o){ return o.word; }).join('; ') + '.']); M.obstacles = M.obstacles.slice(0, 1); }
     }
     importCapTraits(e);
     if (e._more && e._more.length){
@@ -33043,7 +33066,7 @@ async function extractImport(){
     + (notesMode
       ? 'These notes are the author stating their intent, so take what they say. '
       : 'ONLY when the prose STATES it \u2014 "she wanted the ledger back", "he had his sister to lose". NEVER infer a want from what a character does: a manuscript is evidence of what HAPPENS, and reading a motive out of behaviour is exactly the invention to avoid. Most characters in most manuscripts yield nothing here, and {} is the right answer for them. ')
-    + 'Each entry is a PILL of one to three words that names the thing ("Master’s favour", "Understanding", "Feo’s safety"), never a sentence or a to-phrase; the summary carries the detail. Keep only the STRONG ones, the motives the story turns on: AT MOST TWO wants, two stakes and two obstacles per character, and one the text gives none has none. For obstacles, prefer the app\u2019s own vocabulary where it fits (Opposition: Rival, Nemesis, Gatekeeper, Authority\u2026; Barrier: Locked Door, Wall, Chasm, Wilderness\u2026; Inner Struggle: Fear, Doubt, Pride, Guilt\u2026; Circumstance: The Law, Poverty, Scarcity, Deadline\u2026); otherwise give the text\u2019s own short words. ';
+    + 'Each entry is the SHORTEST PHRASE THAT STILL MAKES SENSE ON ITS OWN: usually two to five words ("Master’s favour", "Feo’s safety", "Understand her own mind"), never a whole sentence. Never cut a phrase short to save words: if a shorter version would be unclear, use more words. The summary carries the detail. Give ONE of each, the major one the story turns on: one want, one stake, one obstacle and one motivator; the author adds minor ones. A character the text gives none has none. Each part must read correctly in this sentence: "<Name> wants <want>, but is held back by <obstacle>, with <stake> hanging in the balance, driven by <motivator>." So a want is "to …" or a thing ("to find structure", "her master’s favour"), and an obstacle, a stake and a motivator are things ("her own doubt", "Feo’s safety", "grief for her sister"). For obstacles, prefer the app\u2019s own vocabulary where it fits (Opposition: Rival, Nemesis, Gatekeeper, Authority\u2026; Barrier: Locked Door, Wall, Chasm, Wilderness\u2026; Inner Struggle: Fear, Doubt, Pride, Guilt\u2026; Circumstance: The Law, Poverty, Scarcity, Deadline\u2026); otherwise give the text\u2019s own short words. ';
   // Narrative-FRAME extraction is deliberately conservative: genre/context/theme/stakes/plot are high-level and
   // easily over-read from a sentence or two. Story elements (beings/places/objects/events/terms) stay loose.
   var _narrCats = { genre:1, period:1, context:1, theme:1, stakes:1, plot:1 };
@@ -33198,7 +33221,7 @@ async function extractImport(){
         /* v.926 — a pill; the sentence it came from goes to the note. A motivator that IS one of the reader's own elements keeps its name. */
         var _named = {}; ((normC && normC.elements) || []).forEach(function(e2){ if (e2 && e2.name) _named[String(e2.name).trim().toLowerCase()] = 1; });
         var short = function(x, lbl){ var raw = String(x || '').trim().replace(/\s+/g, ' '); if (!raw) return ''; if (_named[raw.toLowerCase()]) return raw.slice(0, 80);
-          var p = importMotPill(raw); if (lbl && p.split(' ').length < raw.split(' ').length) _motFull.push({ f: lbl, v: raw }); return p; };
+          var p = importMotPill(raw, prose, lbl === 'Wants'); if (lbl && p.toLowerCase() !== raw.replace(/[.;:,!?]+$/, '').trim().toLowerCase()) _motFull.push({ f: lbl, v: raw });   /* v.932 — the full wording is kept only when words were actually left out */ return p; };
         var list = function(a, lbl){ var out = []; (Array.isArray(a) ? a : []).forEach(function(x){ var t = short(x, lbl); if (t && out.map(function(y){ return y.toLowerCase(); }).indexOf(t.toLowerCase()) < 0) out.push(t); }); return out; };
         var obs = []; (Array.isArray(m.obstacles) ? m.obstacles : []).forEach(function(x){
           var o = normalizeObstacle(short(x, 'Obstacles')); if (!o) return;
@@ -33408,6 +33431,7 @@ function buildMotArea(d, el){
   if (!parts.length){ wrap.innerHTML = ''; wrap.style.display = 'none'; return; }
   wrap.style.display = '';
   wrap.innerHTML = (m.maybe ? '<label class="ir-mot-maybe" style="display:block;font-size:11px;opacity:.85;margin:2px 0 4px"><input type="checkbox" class="ir-mot-add"' + (m.off ? '' : ' checked') + '> Less certain: add this motivation</label>' : '') +
+    (importMotSentence(el) ? '<div class="ir-mot-say" style="font-family:var(--serif);font-style:italic;font-size:15px;line-height:1.45;opacity:' + (m.off ? '.45' : '.9') + ';margin:2px 0 8px">' + esc(importMotSentence(el)) + '</div>' : '') +
     '<div class="ir-traits"' + (m.off ? ' style="opacity:.45"' : '') + '>' + parts.map(function(p, k){
     return '<span class="ir-trait-pill ir-mot-pill">' +
       '<span class="ir-trait-sub">' + esc(p.lbl) + '</span>' + esc(p.txt) +
@@ -60267,9 +60291,13 @@ body.eink .pl-filterpick .pf-row.on .pf-box{ background:#000; border-color:#000;
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.854';
+  var APP_VERSION = '2026.07.20.855';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.855', date:'October 1, 2026', notes:[
+      '**Imported motivations make sense.** A motive is now the shortest phrase that still reads clearly (\u201cto understand her own mind\u201d), never cut off mid-thought, and each character gets one of each: the main want, stake, obstacle and motivator. You can add minor ones yourself.',
+      '**Read it back.** Each character\u2019s card in the import review now shows its motivation as a sentence, so a part that doesn\u2019t make sense stands out.'
+    ]},
     { v:'2026.07.20.853', date:'October 1, 2026', notes:[
       '**Imports keep going when one AI model is busy.** If a model is at its limit, the next one reads your story instead, and if every one is busy you are asked to try again shortly. Nothing tells you the whole site is out of AI for the day any more.',
       '**The story summary opens in full** on the What was found page, as tall as the window allows; a very long one scrolls inside its box.',
