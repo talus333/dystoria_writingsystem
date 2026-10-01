@@ -310,7 +310,12 @@ async function runGemini(env, system, prompt, maxTokens, temperature, model, jso
   try {
     const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
     const data = await r.json().catch(() => null);
-    if (!r.ok) return { text: '', error: (data && data.error && data.error.message) || ('HTTP ' + r.status), status: r.status };
+    if (!r.ok){
+      // v.930 — Gemini says WHICH quota in error.details (…PerMinute… vs …PerDay…), not in the message; keep it so a
+      // per-minute limit is retried instead of being mistaken for the day's quota.
+      let q = ''; try { q = (data.error.details || []).map(d => (d.violations || []).map(v => v.quotaId || '').join(',')).filter(Boolean).join(','); } catch (_){}
+      return { text: '', error: ((data && data.error && data.error.message) || ('HTTP ' + r.status)) + (q ? ' [' + q + ']' : ''), status: r.status };
+    }
     let text = '';
     try { text = (data.candidates[0].content.parts || []).map(p => p.text || '').join(''); } catch (e) {}
     return { text: (text || '').trim(), raw: data };
