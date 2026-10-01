@@ -32753,6 +32753,11 @@ function importMotPill(raw, prose, isWant){
      is kept whole, because a clear longer phrase beats a short one that means nothing. Whatever is shortened goes to the note. */
   var s0 = String(raw || '').replace(/\s+/g, ' ').trim();
   var s = s0.replace(/\s*[\(\[][^\)\]]*[\)\]]/g, '').trim().replace(/[.;:,!?]+$/, '').trim();
+  /* v.933 — a sentence about the character is not a part of one: "he is motivated by a desire to…" -> "a desire to…",
+     "she wants to…" -> "to…", "he is held back by…" -> what holds him */
+  s = s.replace(/^(?:he|she|they|it|we|i)\s+(?:is|are|was|were|feels|felt|seems|remains)\s+(?:(?:mainly|mostly|deeply|largely|ultimately)\s+)?(?:motivated|driven|moved|spurred|pushed|compelled|propelled|held back|hindered|blocked|haunted)\s+by\s+/i, '')
+       .replace(/^(?:he|she|they|it|we|i)\s+(?:wants|wanted|desires|desired|seeks|sought|longs|hopes|yearns|needs)\s+(?=to\s|for\s|a\s|an\s|the\s|his\s|her\s|their\s)/i, '')
+       .replace(/^(?:he|she|they)\s+(?:stands|stand)\s+to\s+lose\s+/i, '').replace(/^for\s+(?=[a-z])/i, '').trim();
   if (!s) return s0.slice(0, 80);
   var lc = function(x){
     var w = x.split(' ')[0].replace(/['’]s$/i, '');
@@ -32766,7 +32771,11 @@ function importMotPill(raw, prose, isWant){
   if (n(s) <= 8) return lc(s);
   var c = (s.split(IMPORT_MOT_CLAUSE)[0] || '').trim();
   if (c && n(c) >= 3 && n(c) <= 8 && !/\b(the|a|an|and|or|of|to|in|on|at|for|with|by|from|is|was|his|her|their|its|what|that|which|who)$/i.test(c)) return lc(c);
-  return lc(s).slice(0, 120);
+  /* still long: the first clause of up to fourteen words, else the first fourteen words — cut between words, never inside one;
+     the tidy pass (importTidyMotivations) is what makes these read well */
+  var c2 = (s.split(IMPORT_MOT_CLAUSE)[0] || '').trim();
+  if (c2 && n(c2) >= 3 && n(c2) <= 14) return lc(c2);
+  return lc(s.split(' ').slice(0, 14).join(' ').replace(/[,;:]+$/, ''));
 }
 /* v.932 [Jeremy: "make Drive sentence with it to see that it make sense - show the example sentence in the importer review"] — the
    motivation read back as the app's Drives line, plus its motivator, so a part that does not make sense shows at once. */
@@ -32781,6 +32790,37 @@ function importMotSentence(el){
   else if (s){ t = 'For ' + nm + ', ' + s + ' hangs in the balance'; if (d) t += ', driven by ' + d; }
   else t = nm + ' is driven by ' + d;
   return t + '.';
+}
+/* v.933 [Jeremy] — the reader tidies its own motivation parts, once, only where they need it: a part of more than five words, or one
+   that reads as a sentence. It is asked to keep the meaning, keep names, add nothing, and make each part fit the Drives sentence.
+   One small call for the whole cast; if it fails or answers badly, the parts stay as they were (the full wording is in the note). */
+async function importTidyMotivations(prose){
+  var NEEDS = function(x){ x = String(x || '').trim(); return !!x && (x.split(/\s+/).length > 5 || /^(?:he|she|they|it|i|we)\s/i.test(x) || /\s(?:is|are|was|were)\s/i.test(x)); };
+  var items = [];
+  (IMP.elements || []).forEach(function(e, i){
+    if (!e || e.cat !== 'being' || !e.motivation) return;
+    var m = e.motivation, o = ((m.obstacles || [])[0] || {}).word || '';
+    var it = { id: i, name: e.name, want: (m.wants || [])[0] || '', stake: (m.stakes || [])[0] || '', obstacle: o, motivator: m.motivator || '' };
+    if (NEEDS(it.want) || NEEDS(it.stake) || NEEDS(it.obstacle) || NEEDS(it.motivator)) items.push(it);
+  });
+  if (!items.length || typeof aiCall !== 'function') return 0;
+  try { if (typeof impWorkSay === 'function') impWorkSay('Tidying what drives each character', null); } catch (e){}
+  var sys = 'You tidy the parts of story characters’ motivations for a writing app. For each character you are given a want, a stake, an obstacle and a motivator as read from a manuscript. Rewrite EACH non-empty part as the shortest phrase that keeps its meaning and reads correctly in this sentence: "<name> wants <want>, but is held back by <obstacle>, with <stake> hanging in the balance, driven by <motivator>." A want is "to …" or a thing; an obstacle, a stake and a motivator are things (noun phrases), never a sentence about the character. Usually two to six words; use more only if fewer would lose the meaning. Keep names exactly as written. Add nothing the part does not say. Leave an empty part empty. Return ONLY JSON: {"items":[{"id":number,"want":string,"stake":string,"obstacle":string,"motivator":string}]}.';
+  var user = JSON.stringify({ items: items });
+  var out = null;
+  try { out = parseJsonLoose(await aiCall(sys, user, { feature: 'import', kind: 'text', json: true, maxTokens: 1500, timeoutMs: 45000 })); } catch (e){ return 0; }
+  var list = (out && Array.isArray(out.items)) ? out.items : [];
+  var ok = function(v){ v = String(v == null ? '' : v).replace(/\s+/g, ' ').trim().replace(/[.;:,!?]+$/, ''); return (v && v.split(' ').length <= 10 && !/^(?:he|she|they)\s/i.test(v)) ? v : ''; };
+  var n = 0;
+  list.forEach(function(r){
+    var it = items.filter(function(x){ return x.id === r.id; })[0], e = it && IMP.elements[it.id]; if (!e || !e.motivation) return;
+    var m = e.motivation, v;
+    if (it.want && (v = ok(r.want)) && v !== it.want){ m.wants[0] = importMotPill(v, prose, true); n++; }
+    if (it.stake && (v = ok(r.stake)) && v !== it.stake){ m.stakes[0] = importMotPill(v, prose); n++; }
+    if (it.motivator && (v = ok(r.motivator)) && v !== it.motivator && !(typeof importNameMatch === 'function' && IMP.elements.some(function(x){ return x && importNameMatch(x.name, it.motivator); }))){ m.motivator = importMotPill(v, prose); n++; }
+    if (it.obstacle && (v = ok(r.obstacle)) && v !== it.obstacle && typeof normalizeObstacle === 'function'){ var o = normalizeObstacle(importMotPill(v, prose)); if (o){ m.obstacles[0] = o; n++; } }
+  });
+  return n;
 }
 function importMotNoteLines(full){
   var g = {}, order = [];
@@ -33066,7 +33106,7 @@ async function extractImport(){
     + (notesMode
       ? 'These notes are the author stating their intent, so take what they say. '
       : 'ONLY when the prose STATES it \u2014 "she wanted the ledger back", "he had his sister to lose". NEVER infer a want from what a character does: a manuscript is evidence of what HAPPENS, and reading a motive out of behaviour is exactly the invention to avoid. Most characters in most manuscripts yield nothing here, and {} is the right answer for them. ')
-    + 'Each entry is the SHORTEST PHRASE THAT STILL MAKES SENSE ON ITS OWN: usually two to five words ("Master’s favour", "Feo’s safety", "Understand her own mind"), never a whole sentence. Never cut a phrase short to save words: if a shorter version would be unclear, use more words. The summary carries the detail. Give ONE of each, the major one the story turns on: one want, one stake, one obstacle and one motivator; the author adds minor ones. A character the text gives none has none. Each part must read correctly in this sentence: "<Name> wants <want>, but is held back by <obstacle>, with <stake> hanging in the balance, driven by <motivator>." So a want is "to …" or a thing ("to find structure", "her master’s favour"), and an obstacle, a stake and a motivator are things ("her own doubt", "Feo’s safety", "grief for her sister"). For obstacles, prefer the app\u2019s own vocabulary where it fits (Opposition: Rival, Nemesis, Gatekeeper, Authority\u2026; Barrier: Locked Door, Wall, Chasm, Wilderness\u2026; Inner Struggle: Fear, Doubt, Pride, Guilt\u2026; Circumstance: The Law, Poverty, Scarcity, Deadline\u2026); otherwise give the text\u2019s own short words. ';
+    + 'Each entry is the SHORTEST PHRASE THAT STILL MAKES SENSE ON ITS OWN: usually two to five words ("Master’s favour", "Feo’s safety", "Understand her own mind"), never a whole sentence. Never cut a phrase short to save words: if a shorter version would be unclear, use more words. The summary carries the detail. Give ONE of each, the major one the story turns on: one want, one stake, one obstacle and one motivator; the author adds minor ones. A character the text gives none has none. Each part must read correctly in this sentence: "<Name> wants <want>, but is held back by <obstacle>, with <stake> hanging in the balance, driven by <motivator>." So a want is "to …" or a thing ("to find structure", "her master’s favour"), and an obstacle, a stake and a motivator are things ("her own doubt", "Feo’s safety", "grief for her sister"), never a sentence about the character ("a desire to escape the rightists", not "he is motivated by a desire to escape…"). For obstacles, prefer the app\u2019s own vocabulary where it fits (Opposition: Rival, Nemesis, Gatekeeper, Authority\u2026; Barrier: Locked Door, Wall, Chasm, Wilderness\u2026; Inner Struggle: Fear, Doubt, Pride, Guilt\u2026; Circumstance: The Law, Poverty, Scarcity, Deadline\u2026); otherwise give the text\u2019s own short words. ';
   // Narrative-FRAME extraction is deliberately conservative: genre/context/theme/stakes/plot are high-level and
   // easily over-read from a sentence or two. Story elements (beings/places/objects/events/terms) stay loose.
   var _narrCats = { genre:1, period:1, context:1, theme:1, stakes:1, plot:1 };
@@ -33297,7 +33337,8 @@ async function extractImport(){
   }); } catch (e){}
   try { importFinishLabels(threadsRaw); } catch (e){}
   if (!notesMode) try { importConceptTier(prose); } catch (e){}   /* v.928 */
-  try { importMaybeTier(); } catch (e){}   /* v.929 */   /* v.925 — Connections, storylines and stakes follow the shortened names; six traits */
+  try { importMaybeTier(); } catch (e){}   /* v.929 */
+  try { await importTidyMotivations(prose); } catch (e){}   /* v.933 */   /* v.925 — Connections, storylines and stakes follow the shortened names; six traits */
   IMP.overview = $('importOverview') ? ($('importOverview').value.trim() || overview || '') : (overview || '');
   // all parts ingested + merged → NOW reveal the complete, de-duplicated list (each element carries every section's detail)
   if (IMP.elements.length){
@@ -60291,9 +60332,12 @@ body.eink .pl-filterpick .pf-row.on .pf-box{ background:#000; border-color:#000;
 <script id="safeUpdateJS">
 (function(){
   'use strict';
-  var APP_VERSION = '2026.07.20.855';
+  var APP_VERSION = '2026.07.20.856';
   try{ window.__dystVersion = APP_VERSION; }catch(e){}   /* v.555: the ☰ beta line reads this; localStorage's copy only exists after an update has run */
   var APP_CHANGELOG = [
+    { v:'2026.07.20.856', date:'October 1, 2026', notes:[
+      '**Motivations read as a sentence.** When the reader writes a motive as a long sentence (\u201che is motivated by a desire to\u2026\u201d), it is now tidied into a short phrase that fits (\u201ca desire to escape the rightists\u201d) instead of being kept whole or cut off mid-word. The full wording still waits in the notes.'
+    ]},
     { v:'2026.07.20.855', date:'October 1, 2026', notes:[
       '**Imported motivations make sense.** A motive is now the shortest phrase that still reads clearly (\u201cto understand her own mind\u201d), never cut off mid-thought, and each character gets one of each: the main want, stake, obstacle and motivator. You can add minor ones yourself.',
       '**Read it back.** Each character\u2019s card in the import review now shows its motivation as a sentence, so a part that doesn\u2019t make sense stands out.'
