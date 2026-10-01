@@ -442,14 +442,22 @@ function modelChain(env) {
   // Cerebras (gpt-oss-120b) — high-capacity free fallback, ranked above Groq. ctxCap skips it on calls too
   // big for its ~8K free-tier window (they fall through to a large-context model). Used for text + icons.
   if (env.CEREBRAS_API_KEY)   c.push({ name: 'cerebras', ctxCap: 8000, run: (s, p, mt, t, j) => runOpenAICompat(env.CEREBRAS_API_KEY, CEREBRAS_URL, CEREBRAS_MODEL, s, p, mt, t, null, j) });
-  if (env.GROQ_API_KEY)       c.push({ name: 'groq-llama-70b',   run: (s, p, mt, t, j) => runOpenAICompat(env.GROQ_API_KEY, 'https://api.groq.com/openai/v1/chat/completions', 'llama-3.3-70b-versatile', s, p, mt, t, null, j) });
+  if (env.GROQ_API_KEY)       c.push({ name: 'groq-llama-70b',   ctxCap: 12000, run: (s, p, mt, t, j) => runOpenAICompat(env.GROQ_API_KEY, 'https://api.groq.com/openai/v1/chat/completions', 'llama-3.3-70b-versatile', s, p, mt, t, null, j) });
   if (env.MISTRAL_API_KEY)    c.push({ name: 'mistral-large',    run: (s, p, mt, t, j) => runOpenAICompat(env.MISTRAL_API_KEY, 'https://api.mistral.ai/v1/chat/completions', 'mistral-large-latest', s, p, mt, t, null, j) });
   if (env.OPENROUTER_API_KEY) c.push({ name: 'openrouter-free',  run: (s, p, mt, t, j) => runOpenAICompat(env.OPENROUTER_API_KEY, 'https://openrouter.ai/api/v1/chat/completions', 'openrouter/free', s, p, mt, t, { 'HTTP-Referer': 'https://dystoria.net', 'X-Title': 'Dystoria' }, j) });
-  if (env.AI)                 c.push({ name: 'workers-ai', last: true, run: (s, p, mt, t, j) => runWorkersChat(env, s, p, mt, t, j) });
+  if (env.AI)                 c.push({ name: 'workers-ai', last: true, ctxCap: 24000, run: (s, p, mt, t, j) => runWorkersChat(env, s, p, mt, t, j) });
   return c;
 }
 const _cooldown = new Map();   // provider name → epoch ms until which to skip it (set when it hits a DAILY quota)
-function isQuotaErr(e) { return /per ?day|daily|quota|exhaust|4006|neuron|insufficient|billing|credit/i.test(String(e || '')); }
+// v.930 — a per-MINUTE limit (Gemini's RESOURCE_EXHAUSTED says "PerMinute") is not a daily one. Treating it as daily rested a
+// healthy provider for an hour and told the writer the whole site was out of AI for the day.
+function isQuotaErr(e) {
+  e = String(e || '');
+  if (/PerMinute|per ?minute|tokens per min|requests per min|\bRPM\b|\bTPM\b/i.test(e) && !/PerDay|per ?day/i.test(e)) return false;
+  return /per ?day|daily|quota|exhaust|4006|neuron|insufficient|billing|credit|limit: ?0\b/i.test(e);
+}
+function isBusyErr(e) { return /PerMinute|per ?minute|rate.?limit|too many requests|\b429\b|overloaded|UNAVAILABLE|\b503\b|high demand|try again/i.test(String(e || '')); }
+function retryWaitMs(e) { const m = String(e || '').match(/retry (?:in|after)\s*([\d.]+)\s*s/i); const s = m ? parseFloat(m[1]) : 2; return Math.min(Math.max(s, 1), 6) * 1000; }
 
 // Try the chain in quality order; skip cooled-down providers; fall through on busy/empty/quota to the next.
 // opts.allowPaid=false → free tier (skip Claude); opts.allowLast=false → skip the Workers-AI llama (used for icon SVG).
@@ -515,7 +523,10 @@ async function runFrontier(env, system, prompt, maxTokens, temperature, opts) {
     // Import = a rare, very large-context extraction. Lead with Claude (when a key is set + the caller is entitled) for the
     // richest reading of a whole worldbuilding doc, then the large-context free fallbacks. Small-window models (Cerebras 8K,
     // OpenRouter, Workers-AI) are excluded so a whole document never truncates.
-    const IMPORT_MODELS = ['claude', 'gemini-2.5-pro', 'gemini-2.5-flash', 'mistral-large', 'groq-llama-70b'];
+    // v.930 [Jeremy: "can we not use the other models? i don't want a user to come across ... a site-wide limitation"] — every
+    // free model is now a fallback for import; the size caps (ctxCap) skip the small-window ones on a part too big for them,
+    // so nothing truncates, and a short story or a single chapter can still be read when the large models are out.
+    const IMPORT_MODELS = ['claude', 'gemini-2.5-pro', 'gemini-2.5-flash', 'mistral-large', 'cerebras', 'groq-llama-70b', 'openrouter-free', 'workers-ai'];
     chain = chain.filter(p => IMPORT_MODELS.includes(p.name));
     if (!opts.allowPaid) chain = chain.filter(p => !p.paid);   // Claude (paid) only for admin/Pro; free users lead with Gemini 2.5 Pro
   } else {
@@ -532,7 +543,8 @@ async function runFrontier(env, system, prompt, maxTokens, temperature, opts) {
   }
   const now = Date.now();
   const tried = [];
-  let exhausted = false;
+  let exhausted = false, allDaily = true, attempted = 0;   // v.930 — "exhausted" only when EVERY provider tried is out for the day
+  const _start = Date.now();
   // Tokens burned by attempts that produced nothing. A provider can read the whole prompt and hand
   // back an empty reply, and the chain then tries the next one — so a "failed" call is not a free
   // call, and #31's budget has to know that. Only REPORTED counts are added here; the estimate in
@@ -542,17 +554,26 @@ async function runFrontier(env, system, prompt, maxTokens, temperature, opts) {
   // a whole-story wiki/import then lands on a large-context model instead of truncating mid-sentence.
   const estTokens = Math.ceil(((system || '').length + (prompt || '').length) / 4) + (maxTokens || 0);
   for (const p of chain) {
-    if (p.ctxCap && estTokens > p.ctxCap * 0.9){ tried.push(p.name + ': prompt too large for its ' + p.ctxCap + '-token context'); continue; }   // too big for this model's window → next provider
-    if (!testing && (_cooldown.get(p.name) || 0) > now){ tried.push(p.name + ': cooling down'); continue; }   // skip recently-exhausted (but always try in testing)
+    if (p.ctxCap && estTokens > p.ctxCap * 0.9){ tried.push(p.name + ': prompt too large for its ' + p.ctxCap + '-token context'); continue; }   // (size, not quota: does not count as tried)   // too big for this model's window → next provider
+    if (!testing && (_cooldown.get(p.name) || 0) > now){ tried.push(p.name + ': cooling down'); attempted++; continue; }   // skip recently-exhausted (but always try in testing)
     let r;
+    attempted++;
     try { r = await p.run(system, prompt, maxTokens, temperature, opts.json); }
     catch (e){ r = { text: '', error: String(e) }; }
+    // v.930 — busy for a moment (per-minute limit, overloaded): one short wait and a second try before moving on
+    if (!(r && r.text) && r && r.error && isBusyErr(r.error) && !isQuotaErr(r.error) && Date.now() - _start < 60000){
+      await new Promise(z => setTimeout(z, retryWaitMs(r.error)));
+      try { r = await p.run(system, prompt, maxTokens, temperature, opts.json); }
+      catch (e){ r = { text: '', error: String(e) }; }
+    }
     if (r && r.text) return { text: r.text, via: p.name, raw: r.raw, burned };   // raw carries the provider's usage block (see usageFrom)
     if (r && r.raw){ try { const u = usageFrom(r.raw, system, prompt, ''); if (!u.estimated) burned += u.in + u.out; } catch (_){} }
     const e = (r && r.error) || 'empty response';
     tried.push(p.name + ': ' + e);
-    if (isQuotaErr(e)){ exhausted = true; if (!testing) _cooldown.set(p.name, now + 60 * 60 * 1000); }   // daily-ish quota → rest this provider an hour
+    if (isQuotaErr(e)){ if (!testing) _cooldown.set(p.name, now + 60 * 60 * 1000); }   // daily-ish quota → rest this provider an hour
+    else allDaily = false;
   }
+  exhausted = attempted > 0 && allDaily;
   return { text: '', error: tried.join('  |  ') || 'no models configured', exhausted, burned };
 }
 
@@ -673,8 +694,7 @@ async function handleAI(request, env, ctx) {
     if (fr.text){ meter(fr, body.kind, true); return new Response(JSON.stringify({ text: fr.text, via: fr.via }), { headers }); }
     const err = fr.error || '';
     meter(fr, body.kind, false, fr.exhausted ? 'limit' : 'error');
-    if (fr.exhausted) return new Response(JSON.stringify({ error: 'Free AI models at today’s limit — ' + err, limit: 'day' }), { status: 429, headers });
-    return new Response(JSON.stringify({ error: 'Image model error — ' + (err || 'try again') }), { status: 502, headers });
+    return new Response(JSON.stringify({ error: 'Dystoria’s AI is busy right now. Please try again in a little while.', limit: 'busy', detail: admin ? err : undefined }), { status: 503, headers });   // v.930
   }
 
   // ---- Import extraction: dedicated large-context model (Gemini 2.5 Pro), reserved so its free quota isn't spent on frequent small calls ----
@@ -683,8 +703,7 @@ async function handleAI(request, env, ctx) {
     if (fr.text){ meter(fr, 'import', true); return new Response(JSON.stringify({ text: fr.text, via: fr.via }), { headers }); }
     const err = fr.error || '';
     meter(fr, 'import', false, fr.exhausted ? 'limit' : 'error');
-    if (fr.exhausted) return new Response(JSON.stringify({ error: 'The import model is at today’s limit — it resets tomorrow.', limit: 'day' }), { status: 429, headers });
-    return new Response(JSON.stringify({ error: 'Import model error — ' + (err || 'try again') }), { status: 502, headers });
+    return new Response(JSON.stringify({ error: 'Dystoria’s AI readers are all busy right now. Your text is still here: please try again in a little while.', limit: 'busy', detail: admin ? err : undefined }), { status: 503, headers });   // v.930
   }
 
   // ---- Research (the ✦ Research drawer): grounded web answers with real citations.
@@ -720,8 +739,7 @@ async function handleAI(request, env, ctx) {
   if (tr.text){ meter(tr, 'text', true); return new Response(JSON.stringify({ text: tr.text, via: tr.via }), { headers }); }
   const terr = tr.error || '';
   meter(tr, 'text', false, tr.exhausted ? 'limit' : 'error');
-  if (tr.exhausted) return new Response(JSON.stringify({ error: 'Dystoria’s free AI models are all at today’s limit — they reset tomorrow.', limit: 'day' }), { status: 429, headers });
-  return new Response(JSON.stringify({ error: 'AI error: ' + terr }), { status: 502, headers });
+  return new Response(JSON.stringify({ error: 'Dystoria’s AI is busy right now. Please try again in a little while.', limit: 'busy', detail: admin ? terr : undefined }), { status: 503, headers });   // v.930
 }
 
 // ============================================================
