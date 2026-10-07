@@ -179,7 +179,7 @@ async function betaNotices(): Promise<string> {
       const k = r.title || "swap";
       subject = k === "read" ? `${r.from_name} asked if you'd beta read for them` : k === "offer" ? `${r.from_name} offered to beta read for you` : `${r.from_name} asked to swap beta reads with you`;
       const head = k === "read" ? `${esc(r.from_name)} would like you to read for them` : k === "offer" ? `${esc(r.from_name)} would like to read your work` : `${esc(r.from_name)} would like to swap beta reads`;
-      const body = k === "read" ? "You said you're happy to read for other writers. Accept, and they can send you their work — nothing is owed back."
+      const body = k === "read" ? "Accept, and they can send you their work to read. Nothing is owed back. You decide each time, and whether other writers can find you too."   /* v.935: also true for a friend who asks someone not in the exchange (migration 22) */
                  : k === "offer" ? "They'd read what you send and tell you how it lands — nothing is owed back. Accept, and you can send them your work."
                  : "You're both in Dystoria's beta-reader exchange. Accept, and you can send each other manuscripts to read — a favour for a favour.";
       html = shell(
@@ -187,7 +187,7 @@ async function betaNotices(): Promise<string> {
          ${r.note ? quote(r.note, r.from_name) : ""}
          <p style="font-size:16px;line-height:1.55;color:#4a4236;margin:0 0 18px">${body}</p>
          ${btn(`${APP_URL}/#/beta`, "See the request")}`,
-        `Sent by Dystoria because you joined the beta-reader exchange. We email once per request.`);
+        `Sent by Dystoria because ${esc(r.from_name)} asked you through the beta readers. We email once per request.`);
     }
     if (await sendEmail(r.email, subject, html)) done.push(r.id);
   }
