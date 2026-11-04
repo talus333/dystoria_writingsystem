@@ -231,7 +231,7 @@ const VISION_MODEL = '@cf/google/gemma-4-26b-a4b-it';
 // Claude is used when ANTHROPIC_API_KEY is set (pay-per-use, far more reliable than the Gemini free tier);
 // otherwise falls back to Gemini if GEMINI_API_KEY is set, otherwise to Workers AI.
 const CLAUDE_MODEL = 'claude-sonnet-4-6';   // swap to 'claude-haiku-4-5-20251001' for lower cost, or 'claude-opus-4-8' for top quality
-const FRONTIER_MODEL = 'gemini-2.5-flash';  // Gemini fallback model (free tier)
+const FRONTIER_MODEL = 'gemini-3.8-flash';  // Gemini free workhorse (large context, JSON mode). Was gemini-2.5-flash — Google now steers new projects to 3.x Flash and restricts 2.5 to prior users. Verify current slug at ai.google.dev/gemini-api/docs/deprecations
 
 // Cerebras free tier: ~1M tokens/day, no credit card, OpenAI-compatible, very fast — but an ~8K-token
 // CONTEXT cap on free, so the biggest calls (full-story wiki update, large imports) overflow and fall
@@ -356,7 +356,7 @@ async function runSonarResearch(env, system, prompt, maxTokens, recency) {
 async function runGeminiResearch(env, system, prompt, maxTokens) {
   const key = env.GEMINI_API_KEY;
   if (!key) return { text: '', error: 'no GEMINI_API_KEY' };
-  const url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=' + encodeURIComponent(key);
+  const url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=' + encodeURIComponent(key);
   const payload = {
     contents: [{ role: 'user', parts: [{ text: prompt }] }],
     tools: [{ google_search: {} }],
@@ -442,18 +442,50 @@ async function runWorkersChat(env, system, prompt, maxTokens, temperature, jsonM
 function modelChain(env) {
   const c = [];
   if (env.ANTHROPIC_API_KEY)  c.push({ name: 'claude', paid: true, run: (s, p, mt, t, j) => runClaude(env, s, p, mt, t) });
-  if (env.GEMINI_API_KEY)     c.push({ name: 'gemini-2.5-pro',   heavy: true, run: (s, p, mt, t, j) => runGemini(env, s, p, mt, t, 'gemini-2.5-pro', j) });   // heavy = reserved for the big, rare Import extraction; kept OUT of the frequent low-token paths
-  if (env.GEMINI_API_KEY)     c.push({ name: 'gemini-2.5-flash', run: (s, p, mt, t, j) => runGemini(env, s, p, mt, t, 'gemini-2.5-flash', j) });
+  // Gemini free tier (Nov 2026): 2.5 Pro/Flash are being phased out of the free tier and restricted to prior users;
+  // Google steers new projects to 3.x Flash. gemini-3.8-flash is the current free workhorse (fast, large context,
+  // JSON mode) and is strong at the Import extraction, so no separate reserved "heavy" model is needed anymore.
+  // 3.5-flash-lite is a lighter, cheaper secondary. Verify slugs at ai.google.dev/gemini-api/docs/deprecations.
+  if (env.GEMINI_API_KEY)     c.push({ name: 'gemini-3.8-flash',      run: (s, p, mt, t, j) => runGemini(env, s, p, mt, t, 'gemini-3.8-flash', j) });
+  if (env.GEMINI_API_KEY)     c.push({ name: 'gemini-3.5-flash-lite', run: (s, p, mt, t, j) => runGemini(env, s, p, mt, t, 'gemini-3.5-flash-lite', j) });
   // Cerebras (gpt-oss-120b) — high-capacity free fallback, ranked above Groq. ctxCap skips it on calls too
   // big for its ~8K free-tier window (they fall through to a large-context model). Used for text + icons.
   if (env.CEREBRAS_API_KEY)   c.push({ name: 'cerebras', ctxCap: 8000, run: (s, p, mt, t, j) => runOpenAICompat(env.CEREBRAS_API_KEY, CEREBRAS_URL, CEREBRAS_MODEL, s, p, mt, t, null, j) });
-  if (env.GROQ_API_KEY)       c.push({ name: 'groq-llama-70b',   ctxCap: 12000, run: (s, p, mt, t, j) => runOpenAICompat(env.GROQ_API_KEY, 'https://api.groq.com/openai/v1/chat/completions', 'llama-3.3-70b-versatile', s, p, mt, t, null, j) });
+  // Groq free tier (Nov 2026): llama-3.3-70b-versatile was removed; the free chat catalog is now gpt-oss-120b/20b
+  // and Qwen3 27B (~1,000 req/day, 131K context). Verify the slug at console.groq.com/docs/models.
+  if (env.GROQ_API_KEY)       c.push({ name: 'groq-gpt-oss-120b', ctxCap: 120000, run: (s, p, mt, t, j) => runOpenAICompat(env.GROQ_API_KEY, 'https://api.groq.com/openai/v1/chat/completions', 'openai/gpt-oss-120b', s, p, mt, t, null, j) });
   if (env.MISTRAL_API_KEY)    c.push({ name: 'mistral-large',    run: (s, p, mt, t, j) => runOpenAICompat(env.MISTRAL_API_KEY, 'https://api.mistral.ai/v1/chat/completions', 'mistral-large-latest', s, p, mt, t, null, j) });
   if (env.OPENROUTER_API_KEY) c.push({ name: 'openrouter-free',  run: (s, p, mt, t, j) => runOpenAICompat(env.OPENROUTER_API_KEY, 'https://openrouter.ai/api/v1/chat/completions', 'openrouter/free', s, p, mt, t, { 'HTTP-Referer': 'https://dystoria.net', 'X-Title': 'Dystoria' }, j) });
   if (env.AI)                 c.push({ name: 'workers-ai', last: true, ctxCap: 24000, run: (s, p, mt, t, j) => runWorkersChat(env, s, p, mt, t, j) });
   return c;
 }
 const _cooldown = new Map();   // provider name → epoch ms until which to skip it (set when it hits a DAILY quota)
+// ── Model health (so a model that has gone away is visible, not silent). Updated on every attempt in runFrontier.
+// In-memory per isolate; mirrored to KV on a state change so /ai/health (and the daily digest) see it across isolates.
+const _health = new Map();   // name → { ok, ts, status, err, fails, lastOk, lastFail }
+function _recordHealth(env, ctx, name, ok, err, status){
+  const prev = _health.get(name) || { ok: true, fails: 0, lastOk: 0, lastFail: 0, err: '' };
+  const now = Date.now();
+  const flipped = (prev.ok !== ok) || (!ok && String(err || '').slice(0, 180) !== (prev.err || ''));
+  const cur = {
+    ok: ok, ts: now, status: status || prev.status || 0,
+    err: ok ? '' : String(err || 'empty response').slice(0, 180),
+    fails: ok ? 0 : (prev.fails || 0) + 1,
+    lastOk: ok ? now : (prev.lastOk || 0),
+    lastFail: ok ? (prev.lastFail || 0) : now,
+  };
+  _health.set(name, cur);
+  if (flipped && env && env.AILIMITS){   // write to KV only when the state actually changes → cheap
+    const job = (async () => {
+      try {
+        const blob = JSON.parse((await env.AILIMITS.get('ai_health')) || '{}') || {};
+        blob[name] = cur;
+        await env.AILIMITS.put('ai_health', JSON.stringify(blob), { expirationTtl: 3 * 86400 });
+      } catch (e) {}
+    })();
+    try { if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(job); else job.catch(() => {}); } catch (e) {}
+  }
+}
 // v.930 — a per-MINUTE limit (Gemini's RESOURCE_EXHAUSTED says "PerMinute") is not a daily one. Treating it as daily rested a
 // healthy provider for an hour and told the writer the whole site was out of AI for the day.
 function isQuotaErr(e) {
@@ -531,7 +563,7 @@ async function runFrontier(env, system, prompt, maxTokens, temperature, opts) {
     // v.930 [Jeremy: "can we not use the other models? i don't want a user to come across ... a site-wide limitation"] — every
     // free model is now a fallback for import; the size caps (ctxCap) skip the small-window ones on a part too big for them,
     // so nothing truncates, and a short story or a single chapter can still be read when the large models are out.
-    const IMPORT_MODELS = ['claude', 'gemini-2.5-pro', 'gemini-2.5-flash', 'mistral-large', 'cerebras', 'groq-llama-70b', 'openrouter-free', 'workers-ai'];
+    const IMPORT_MODELS = ['claude', 'gemini-3.8-flash', 'gemini-3.5-flash-lite', 'mistral-large', 'cerebras', 'groq-gpt-oss-120b', 'openrouter-free', 'workers-ai'];
     chain = chain.filter(p => IMPORT_MODELS.includes(p.name));
     if (!opts.allowPaid) chain = chain.filter(p => !p.paid);   // Claude (paid) only for admin/Pro; free users lead with Gemini 2.5 Pro
   } else {
@@ -571,9 +603,10 @@ async function runFrontier(env, system, prompt, maxTokens, temperature, opts) {
       try { r = await p.run(system, prompt, maxTokens, temperature, opts.json); }
       catch (e){ r = { text: '', error: String(e) }; }
     }
-    if (r && r.text) return { text: r.text, via: p.name, raw: r.raw, burned };   // raw carries the provider's usage block (see usageFrom)
+    if (r && r.text){ _recordHealth(env, opts.ctx, p.name, true); return { text: r.text, via: p.name, raw: r.raw, burned }; }   // raw carries the provider's usage block (see usageFrom)
     if (r && r.raw){ try { const u = usageFrom(r.raw, system, prompt, ''); if (!u.estimated) burned += u.in + u.out; } catch (_){} }
     const e = (r && r.error) || 'empty response';
+    _recordHealth(env, opts.ctx, p.name, false, e, r && r.status);   // a model that errors or returns empty is recorded so /ai/health + the daily digest surface it
     tried.push(p.name + ': ' + e);
     if (isQuotaErr(e)){ if (!testing) _cooldown.set(p.name, now + 60 * 60 * 1000); }   // daily-ish quota → rest this provider an hour
     else allDaily = false;
@@ -695,7 +728,7 @@ async function handleAI(request, env, ctx) {
   // The chain auto-falls-through when a model is busy or its daily quota is used up. Icons skip the Workers-AI llama (too low quality);
   // briefs may use it as a final resort. allowPaid (= admin || Pro) decides whether Claude leads; free users get the free chain.
   if (body.kind === 'icon' || body.kind === 'brief') {
-    const fr = await runFrontier(env, system, prompt, maxTokens, temperature, { admin, allowPaid: paid, allowLast: body.kind !== 'icon', only: body.models, exclude, kind: body.kind });
+    const fr = await runFrontier(env, system, prompt, maxTokens, temperature, { admin, allowPaid: paid, allowLast: body.kind !== 'icon', only: body.models, exclude, kind: body.kind, ctx });
     if (fr.text){ meter(fr, body.kind, true); return new Response(JSON.stringify({ text: fr.text, via: fr.via }), { headers }); }
     const err = fr.error || '';
     meter(fr, body.kind, false, fr.exhausted ? 'limit' : 'error');
@@ -704,7 +737,7 @@ async function handleAI(request, env, ctx) {
 
   // ---- Import extraction: dedicated large-context model (Gemini 2.5 Pro), reserved so its free quota isn't spent on frequent small calls ----
   if (body.kind === 'import'){
-    const fr = await runFrontier(env, system, prompt, maxTokens, temperature, { admin, allowPaid: paid, importOnly: true, json: !!body.json, only: body.models, exclude });
+    const fr = await runFrontier(env, system, prompt, maxTokens, temperature, { admin, allowPaid: paid, importOnly: true, json: !!body.json, only: body.models, exclude, ctx });
     if (fr.text){ meter(fr, 'import', true); return new Response(JSON.stringify({ text: fr.text, via: fr.via }), { headers }); }
     const err = fr.error || '';
     meter(fr, 'import', false, fr.exhausted ? 'limit' : 'error');
@@ -740,7 +773,7 @@ async function handleAI(request, env, ctx) {
   // EVERYONE, including Pro. Gemini 2.5 Pro leads and is already frontier-grade, and text is high-volume, so Claude
   // stays reserved for the premium ICON path to bound cost. (Only admins get Claude here, for testing.) To also give
   // Pro subscribers Claude for text, change `allowPaid: admin` → `allowPaid: paid`. Pass json mode through.
-  const tr = await runFrontier(env, system, prompt, maxTokens, temperature, { admin, allowPaid: admin, json: !!body.json, only: body.models, exclude });
+  const tr = await runFrontier(env, system, prompt, maxTokens, temperature, { admin, allowPaid: admin, json: !!body.json, only: body.models, exclude, ctx });
   if (tr.text){ meter(tr, 'text', true); return new Response(JSON.stringify({ text: tr.text, via: tr.via }), { headers }); }
   const terr = tr.error || '';
   meter(tr, 'text', false, tr.exhausted ? 'limit' : 'error');
@@ -1042,6 +1075,30 @@ export default {
         }
       } catch (e){ globalThis.__dystVer = globalThis.__dystVer || 'unknown'; }
       return new Response(globalThis.__dystVer, { headers: { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*' } });
+    }
+    // Model health — which models in the chains are up/down right now. Public + minimal (model name, up/down,
+    // short last error, timestamps) so the in-app admin banner AND the daily digest task can read it with no auth.
+    if (url.pathname === '/ai/health'){
+      const hh = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*' };
+      if (request.method === 'OPTIONS') return new Response(null, { headers: hh });
+      let blob = {};
+      try { blob = JSON.parse((env.AILIMITS && await env.AILIMITS.get('ai_health')) || '{}') || {}; } catch (e) {}
+      for (const [k, v] of _health) blob[k] = v;   // this isolate's live view on top of the shared KV view
+      const now = Date.now();
+      const models = Object.keys(blob).sort().map(name => {
+        const v = blob[name] || {};
+        return {
+          model: name,
+          ok: v.ok !== false,
+          fails: v.fails || 0,
+          error: v.ok === false ? (v.err || '') : '',
+          cooling: (_cooldown.get(name) || 0) > now,
+          lastOk: v.lastOk ? new Date(v.lastOk).toISOString() : null,
+          lastFail: v.lastFail ? new Date(v.lastFail).toISOString() : null,
+        };
+      });
+      const down = models.filter(m => !m.ok || m.cooling).map(m => m.model);
+      return new Response(JSON.stringify({ updated: new Date(now).toISOString(), degraded: down.length > 0, down, models }, null, 2), { headers: hh });
     }
     if (url.pathname === '/ai'){
       // Never let an unhandled exception become an opaque 500 — return the real reason so the client can show it.

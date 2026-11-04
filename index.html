@@ -33409,7 +33409,7 @@ async function extractImport(){
     if (!notesMode) IMP.threads = IMP.threads.slice(0, 2);
   }
   $('importGo').disabled = false;
-  if (!IMP.elements.length){ impStage(null); $('importStatus').textContent = 'Couldn’t read the structure — try again, or shorten the text.'; return; }
+  if (!IMP.elements.length){ impStage(null); $('importStatus').textContent = 'The AI reader came back empty this time — it may be briefly busy. Please try again in a moment.'; return; }
   if (typeof renderImportProposals === 'function') renderImportProposals();
   if (typeof renderImportThreads === 'function') try{ renderImportThreads(); }catch(e){}   /* v.719 */
   if (typeof renderImportRels === 'function') try{ renderImportRels(); }catch(e){}   /* v.706 — chunks arrive one at a time and each brings more connections */
@@ -43887,10 +43887,10 @@ function promptAiSignup(){
 const AI_MODEL_LIST = [
   { id: 'claude', label: 'Claude (paid)' },
   { id: 'perplexity-sonar', label: 'Perplexity · Sonar (research)' },
-  { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
-  { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
+  { id: 'gemini-3.8-flash', label: 'Gemini 3.8 Flash' },
+  { id: 'gemini-3.5-flash-lite', label: 'Gemini 3.5 Flash-Lite' },
   { id: 'cerebras', label: 'Cerebras · GPT-OSS-120B' },
-  { id: 'groq-llama-70b', label: 'Groq · Llama-70B' },
+  { id: 'groq-gpt-oss-120b', label: 'Groq · GPT-OSS-120B' },
   { id: 'mistral-large', label: 'Mistral Large' },
   { id: 'openrouter-free', label: 'OpenRouter (free)' },
   { id: 'workers-ai', label: 'Workers AI (llama)' },
@@ -43905,7 +43905,7 @@ function aiEnabledModels(){ const c = aiModelsCfg(); if (!c) return null; return
 // off (they never train on prose) so the AI features always keep working. Ownership of the writing is never affected.
 // Providers whose FREE tier may train on / human-review submitted prose (opt-out available):
 const AI_TRAINING_PROVIDERS = [
-  { key: 'gemini',          label: 'Google Gemini',      note: 'Google may use your writing to train its models on the free tier (and may review it by hand).', ids: ['gemini-2.5-pro', 'gemini-2.5-flash'] },
+  { key: 'gemini',          label: 'Google Gemini',      note: 'Google may use your writing to train its models on the free tier (and may review it by hand).', ids: ['gemini-3.8-flash', 'gemini-3.5-flash-lite'] },
   { key: 'mistral-large',   label: 'Mistral',            note: 'Mistral may use your writing to train its models on the free tier.',                             ids: ['mistral-large'] },
   { key: 'openrouter-free', label: 'OpenRouter',         note: 'OpenRouter’s free models may be used to train the provider behind them.',                        ids: ['openrouter-free'] },
 ];
@@ -43965,7 +43965,7 @@ const OWNER_EMAILS = ['jeremyplante7@gmail.com'];
 function aiIsOwner(){ try { return !!(typeof cloud !== 'undefined' && cloud.user && OWNER_EMAILS.includes(String(cloud.user.email || '').toLowerCase())); } catch(e){ return false; } }
 function aiIsAdmin(){ try { return aiIsOwner() || !!(typeof cloud !== 'undefined' && cloud.user && ADMIN_EMAILS.includes(String(cloud.user.email || '').toLowerCase())); } catch(e){ return false; } }
 // Friendly label for the model that served the last call.
-function aiViaLabel(v){ const M = { 'claude': 'Claude', 'perplexity-sonar': 'Perplexity', 'gemini-grounded': 'Gemini (grounded)', 'gemini-2.5-pro': 'Gemini Pro', 'gemini-2.5-flash': 'Gemini Flash', 'cerebras': 'Cerebras','groq-llama-70b': 'Groq', 'mistral-large': 'Mistral', 'openrouter-free': 'OpenRouter', 'workers-ai': 'Workers AI' }; return M[v] || v || ''; }
+function aiViaLabel(v){ const M = { 'claude': 'Claude', 'perplexity-sonar': 'Perplexity', 'gemini-grounded': 'Gemini (grounded)', 'gemini-3.8-flash': 'Gemini 3.8 Flash', 'gemini-3.5-flash-lite': 'Gemini Flash-Lite', 'cerebras': 'Cerebras','groq-gpt-oss-120b': 'Groq GPT-OSS', 'mistral-large': 'Mistral', 'openrouter-free': 'OpenRouter', 'workers-ai': 'Workers AI' }; return M[v] || v || ''; }
 // Testing panel: per-model toggles for the worker's fallback chain. Off = skipped (in this browser only).
 function openAiModelsPanel(){
   const am = $('appMenu'); if (am) am.classList.remove('show');
@@ -114069,6 +114069,27 @@ body.eink #goalBuilder .gb-done, body.eink #goalBuilder .gb-own button{backgroun
       supa.from('stories').delete().eq('owner', cloud.user.id).eq('doc->>id', HID).then(function(r){ if (r && !r.error) try { localStorage.setItem(FLAG, '1'); } catch (e){} }, function(){});
     } catch (e){}
   }, 1000);
+})();
+</script>
+<script>
+/* Admin-only AI model-health banner. Polls /ai/health (public, minimal) and, for the owner, shows a dismissible
+   bar when any model in a chain is down or cooling — so a model that quietly disappears from a provider is visible. */
+(function(){
+  var ADMIN=/jeremyplante7@gmail\.com/i, KEY='dystoria.aiHealthDismiss';
+  function isAdmin(){ try { return !!(window.cloud && cloud.user && cloud.user.email && ADMIN.test(cloud.user.email)); } catch(e){ return false; } }
+  function show(data){
+    var bar=document.getElementById('aiHealthBar');
+    if (!data || !data.degraded || !(data.down&&data.down.length)){ if(bar) bar.remove(); return; }
+    try { if (sessionStorage.getItem(KEY)===data.down.join(',')) return; } catch(e){}
+    if(!bar){ bar=document.createElement('div'); bar.id='aiHealthBar'; document.body.appendChild(bar); }
+    bar.setAttribute('style','position:fixed;top:0;left:0;right:0;z-index:99999;background:#2a1d0c;color:#f0d9a8;border-bottom:1px solid #6b4e20;font:13px/1.45 -apple-system,system-ui,sans-serif;padding:7px 40px 7px 14px;text-align:center;box-shadow:0 2px 10px rgba(0,0,0,.4)');
+    var det=(data.models||[]).filter(function(m){return !m.ok||m.cooling;}).map(function(m){return m.model+(m.error?(' — '+String(m.error).slice(0,60)):(m.cooling?' — cooling down':''));});
+    bar.innerHTML='⚠️ AI model'+(data.down.length>1?'s':'')+' degraded: '+det.join('  ·  ')+'. Fallbacks are active. <a href="/ai/health" target="_blank" style="color:#ffcf7a;text-decoration:underline">details</a>'
+      +'<span id="aiHealthX" title="Dismiss" style="position:absolute;right:12px;top:5px;cursor:pointer;font-size:17px;line-height:1">×</span>';
+    var x=document.getElementById('aiHealthX'); if(x) x.onclick=function(){ try{ sessionStorage.setItem(KEY,data.down.join(',')); }catch(e){} bar.remove(); };
+  }
+  function check(){ if(!isAdmin()) return; fetch('/ai/health',{cache:'no-store'}).then(function(r){return r.json();}).then(show).catch(function(){}); }
+  var tries=0, iv=setInterval(function(){ tries++; if(isAdmin()){ clearInterval(iv); check(); setInterval(check,15*60*1000); } else if(tries>90){ clearInterval(iv); } },2000);
 })();
 </script>
 </body></html>
