@@ -422,16 +422,17 @@ async function runOpenAICompat(key, url, model, system, prompt, maxTokens, tempe
   } catch (e) { return { text: '', error: String(e) }; }
 }
 // Workers AI (the always-available last resort).
-async function runWorkersChat(env, system, prompt, maxTokens, temperature, jsonMode) {
+async function runWorkersChat(env, system, prompt, maxTokens, temperature, jsonMode, model) {
   if (!env.AI) return { text: '', error: 'no Workers AI' };
+  model = model || MODEL;
   const messages = [];
   if (system) messages.push({ role: 'system', content: system });
   messages.push({ role: 'user', content: prompt });
-  const base = { messages, max_tokens: Math.min(maxTokens, 4096), temperature: isFinite(temperature) ? temperature : 0.4 };
+  const base = { messages, max_tokens: Math.min(maxTokens, 8192), temperature: isFinite(temperature) ? temperature : 0.4 };
   try {
     let resp;
-    if (jsonMode) { try { resp = await env.AI.run(MODEL, { ...base, response_format: { type: 'json_object' } }); } catch (e) { resp = await env.AI.run(MODEL, base); } }
-    else resp = await env.AI.run(MODEL, base);
+    if (jsonMode) { try { resp = await env.AI.run(model, { ...base, response_format: { type: 'json_object' } }); } catch (e) { resp = await env.AI.run(model, base); } }
+    else resp = await env.AI.run(model, base);
     return { text: extractText(resp), raw: resp };
   } catch (e) { return { text: '', error: String(e) }; }
 }
@@ -447,15 +448,24 @@ function modelChain(env) {
   // JSON mode) and is strong at the Import extraction, so no separate reserved "heavy" model is needed anymore.
   // 3.5-flash-lite is a lighter, cheaper secondary. Verify slugs at ai.google.dev/gemini-api/docs/deprecations.
   if (env.GEMINI_API_KEY)     c.push({ name: 'gemini-3.8-flash',      run: (s, p, mt, t, j) => runGemini(env, s, p, mt, t, 'gemini-3.8-flash', j) });
-  if (env.GEMINI_API_KEY)     c.push({ name: 'gemini-3.5-flash-lite', run: (s, p, mt, t, j) => runGemini(env, s, p, mt, t, 'gemini-3.5-flash-lite', j) });
+  if (env.GEMINI_API_KEY)     c.push({ name: 'gemini-3.6-flash',      run: (s, p, mt, t, j) => runGemini(env, s, p, mt, t, 'gemini-3.6-flash', j) });   // 3.5-flash-lite returned 400 INVALID_ARGUMENT live; 3.6-flash is a full Flash that takes the same payload as 3.8-flash and gives a second Gemini when 3.8 is at capacity
   // Cerebras (gpt-oss-120b) — high-capacity free fallback, ranked above Groq. ctxCap skips it on calls too
   // big for its ~8K free-tier window (they fall through to a large-context model). Used for text + icons.
   if (env.CEREBRAS_API_KEY)   c.push({ name: 'cerebras', ctxCap: 8000, run: (s, p, mt, t, j) => runOpenAICompat(env.CEREBRAS_API_KEY, CEREBRAS_URL, CEREBRAS_MODEL, s, p, mt, t, null, j) });
   // Groq free tier (Nov 2026): llama-3.3-70b-versatile was removed; the free chat catalog is now gpt-oss-120b/20b
   // and Qwen3 27B (~1,000 req/day, 131K context). Verify the slug at console.groq.com/docs/models.
-  if (env.GROQ_API_KEY)       c.push({ name: 'groq-gpt-oss-120b', ctxCap: 120000, run: (s, p, mt, t, j) => runOpenAICompat(env.GROQ_API_KEY, 'https://api.groq.com/openai/v1/chat/completions', 'openai/gpt-oss-120b', s, p, mt, t, null, j) });
-  if (env.MISTRAL_API_KEY)    c.push({ name: 'mistral-large',    run: (s, p, mt, t, j) => runOpenAICompat(env.MISTRAL_API_KEY, 'https://api.mistral.ai/v1/chat/completions', 'mistral-large-latest', s, p, mt, t, null, j) });
-  if (env.OPENROUTER_API_KEY) c.push({ name: 'openrouter-free',  run: (s, p, mt, t, j) => runOpenAICompat(env.OPENROUTER_API_KEY, 'https://openrouter.ai/api/v1/chat/completions', 'openrouter/free', s, p, mt, t, { 'HTTP-Referer': 'https://dystoria.net', 'X-Title': 'Dystoria' }, j) });
+  // ctxCap 7000: Groq's FREE tier is ~8,000 tokens/MINUTE, so a call much over that 400s ("Request too large… TPM Limit 8000").
+  // Capping here skips Groq for big calls (import, whole-story wiki) so they go to a large-context model, and keeps it for the
+  // frequent small calls (prompts, icons, short feedback) where it's fast and useful.
+  if (env.GROQ_API_KEY)       c.push({ name: 'groq-gpt-oss-120b', ctxCap: 7000, run: (s, p, mt, t, j) => runOpenAICompat(env.GROQ_API_KEY, 'https://api.groq.com/openai/v1/chat/completions', 'openai/gpt-oss-120b', s, p, mt, t, null, j) });
+  // mistral-large-latest returned HTTP 403 live (not on the free plan); mistral-small-latest is the free-tier model. Verify at console.mistral.ai.
+  if (env.MISTRAL_API_KEY)    c.push({ name: 'mistral-small',    run: (s, p, mt, t, j) => runOpenAICompat(env.MISTRAL_API_KEY, 'https://api.mistral.ai/v1/chat/completions', 'mistral-small-latest', s, p, mt, t, null, j) });
+  // 'openrouter/free' is not a real model id (it returned empty); deepseek-chat-v3 is a strong free OpenRouter model good at JSON. Free :free slugs rotate — verify at openrouter.ai/models?max_price=0.
+  if (env.OPENROUTER_API_KEY) c.push({ name: 'openrouter-free',  run: (s, p, mt, t, j) => runOpenAICompat(env.OPENROUTER_API_KEY, 'https://openrouter.ai/api/v1/chat/completions', 'deepseek/deepseek-chat-v3-0324:free', s, p, mt, t, { 'HTTP-Referer': 'https://dystoria.net', 'X-Title': 'Dystoria' }, j) });
+  // No-key LARGE-context fallback (131K) for the big jobs (import, whole-story wiki). gpt-oss-120b is far better at the import JSON
+  // than the small llama. `heavy` keeps it OUT of the frequent small paths (so they stay on the cheaper llama last-resort below) while
+  // IMPORT_MODELS lets import use it. Verify the @cf slug on developers.cloudflare.com/workers-ai/models.
+  if (env.AI)                 c.push({ name: 'workers-ai-oss', heavy: true, ctxCap: 120000, run: (s, p, mt, t, j) => runWorkersChat(env, s, p, mt, t, j, '@cf/openai/gpt-oss-120b') });
   if (env.AI)                 c.push({ name: 'workers-ai', last: true, ctxCap: 24000, run: (s, p, mt, t, j) => runWorkersChat(env, s, p, mt, t, j) });
   return c;
 }
@@ -563,7 +573,7 @@ async function runFrontier(env, system, prompt, maxTokens, temperature, opts) {
     // v.930 [Jeremy: "can we not use the other models? i don't want a user to come across ... a site-wide limitation"] — every
     // free model is now a fallback for import; the size caps (ctxCap) skip the small-window ones on a part too big for them,
     // so nothing truncates, and a short story or a single chapter can still be read when the large models are out.
-    const IMPORT_MODELS = ['claude', 'gemini-3.8-flash', 'gemini-3.5-flash-lite', 'mistral-large', 'cerebras', 'groq-gpt-oss-120b', 'openrouter-free', 'workers-ai'];
+    const IMPORT_MODELS = ['claude', 'gemini-3.8-flash', 'gemini-3.6-flash', 'mistral-small', 'cerebras', 'groq-gpt-oss-120b', 'openrouter-free', 'workers-ai-oss', 'workers-ai'];
     chain = chain.filter(p => IMPORT_MODELS.includes(p.name));
     if (!opts.allowPaid) chain = chain.filter(p => !p.paid);   // Claude (paid) only for admin/Pro; free users lead with Gemini 2.5 Pro
   } else {
