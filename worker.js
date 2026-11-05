@@ -501,7 +501,9 @@ function _recordHealth(env, ctx, name, ok, err, status){
 function isQuotaErr(e) {
   e = String(e || '');
   if (/PerMinute|per ?minute|tokens per min|requests per min|\bRPM\b|\bTPM\b/i.test(e) && !/PerDay|per ?day/i.test(e)) return false;
-  return /per ?day|daily|quota|exhaust|4006|neuron|insufficient|billing|credit|limit: ?0\b/i.test(e);
+  // 402 (payment required — e.g. Cerebras free credits exhausted) and 403 (no plan access — e.g. Mistral large) are stable
+  // "this provider won't serve you" states, so cool them down for an hour instead of re-hitting them on every single call.
+  return /per ?day|daily|quota|exhaust|4006|neuron|insufficient|billing|credit|payment ?required|balance ?too ?low|\b402\b|\b403\b|limit: ?0\b/i.test(e);
 }
 function isBusyErr(e) { return /PerMinute|per ?minute|rate.?limit|too many requests|\b429\b|overloaded|UNAVAILABLE|\b503\b|high demand|try again/i.test(String(e || '')); }
 function retryWaitMs(e) { const m = String(e || '').match(/retry (?:in|after)\s*([\d.]+)\s*s/i); const s = m ? parseFloat(m[1]) : 2; return Math.min(Math.max(s, 1), 6) * 1000; }
@@ -1094,8 +1096,9 @@ export default {
       let blob = {};
       try { blob = JSON.parse((env.AILIMITS && await env.AILIMITS.get('ai_health')) || '{}') || {}; } catch (e) {}
       for (const [k, v] of _health) blob[k] = v;   // this isolate's live view on top of the shared KV view
+      const live = new Set(modelChain(env).map(p => p.name));   // only report models that are IN the chain now, so a renamed/removed model (e.g. an old slug) doesn't linger for its 3-day TTL as a false "down"
       const now = Date.now();
-      const models = Object.keys(blob).sort().map(name => {
+      const models = Object.keys(blob).filter(n => live.has(n)).sort().map(name => {
         const v = blob[name] || {};
         return {
           model: name,
