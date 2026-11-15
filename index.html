@@ -114301,7 +114301,7 @@ function redraw(){svg.setAttribute('width',innerWidth);svg.setAttribute('height'
   if(showConnEl)connsOf(showConnEl).forEach(cn=>{const ca=dc(cn.a),cb=dc(cn.b);const A=ringPointTo(cn.a,cb.x,cb.y),B=ringPointTo(cn.b,ca.x,ca.y);line(A.x,A.y,B.x,B.y,'#fbcf83',cn.note?.5:.28,cn.note?null:'4 6');
     if(cn.note){const t=document.createElementNS('http://www.w3.org/2000/svg','text');t.setAttribute('x',(A.x+B.x)/2);t.setAttribute('y',(A.y+B.y)/2-4);t.setAttribute('text-anchor','middle');t.setAttribute('class','tlabel');t.textContent=cn.note.length>24?cn.note.slice(0,22)+'…':cn.note;svg.appendChild(t);}});}
 function showConnections(el){showConnEl=el.id;ELEMENTS.forEach(e=>nodes[e.id].classList.remove('lit','conn'));nodes[el.id].classList.add('conn');connsOf(el.id).forEach(cn=>nodes[other(cn,el.id)].classList.add('conn'));document.body.classList.add('writing');redraw();}
-pad.addEventListener('click',ev=>{ev.stopPropagation();closePop();if(!document.caretRangeFromPoint)return;
+pad.addEventListener('click',ev=>{ev.stopPropagation();closePop();clearSel();if(!document.caretRangeFromPoint)return;
   const r=document.caretRangeFromPoint(ev.clientX,ev.clientY);if(!r||r.startContainer.nodeType!==3)return;
   const node=r.startContainer,txt=node.textContent;let o=r.startOffset,s=o,e2=o,gran=ev.detail>=3?'paragraph':ev.detail===2?'sentence':'word';
   if(gran==='word'){const isW=c=>/[A-Za-z']/.test(c);while(s>0&amp;&amp;isW(txt[s-1]))s--;while(e2<txt.length&amp;&amp;isW(txt[e2]))e2++;}
@@ -114475,6 +114475,7 @@ setTimeout(()=>{if(!window.__projLoaded)toastMsg('Click a word — try “roads�
 /* ---- host bridge: receive the real project (read-only) and rebuild the canvas from it ---- */
 function loadProject(data){try{
   if(!data||!data.elements||!data.elements.length)return;
+  if(window.__projLoaded)return;/* load once per session — later pushes (retries / same data) must never wipe in-progress work */
   window.__projLoaded=true;
   ELEMENTS.forEach(e=>nodes[e.id]&amp;&amp;nodes[e.id].remove());ELEMENTS=[];CONNS=[];nodes={};NOTES=[];if(stash)stash.innerHTML='';
   focusSet=[];viewLevel=0;state='free';focusEl=null;showConnEl=null;userTyped=false;document.body.classList.remove('writing','prose','focusnote');
@@ -114514,11 +114515,11 @@ if(window.parent&amp;&amp;window.parent!==window){
 #organicLab #olTitle{flex:none;font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:#8f866f}
 #organicLab #olTitle strong{color:#f6edda;font-weight:600}
 #organicLab #olTitle em{font-style:normal;color:#fa9a31;margin-left:8px;border:1px solid #5a4522;border-radius:999px;padding:2px 8px;font-size:9.5px;letter-spacing:.1em;vertical-align:middle}
-#organicLab #olLink{flex:none;font-size:11px;color:#6d6450;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#organicLab #olLink{flex:none;font-size:11px;color:#6d6450;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer}
 #organicLab #olLink.live{color:#7fd6a6}
 #organicLab #olTag{flex:1;min-width:0;font-size:12px;font-style:italic;color:#6d6450;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #organicLab #olSave,#organicLab #olExit{flex:none;background:#241a10;border:1px solid #43361f;color:#c3bcac;font-size:12px;letter-spacing:.04em;border-radius:999px;padding:6px 14px;cursor:pointer;font-family:inherit}
-#organicLab #olSave:hover,#organicLab #olExit:hover{color:#f6edda;border-color:#b9822e}
+#organicLab #olExit:hover{color:#f6edda;border-color:#b9822e}
 #organicLab #olSave{border-color:#3a5a3a;color:#9fd6b0}
 #organicLab #olSave:hover{border-color:#7fd6a6;color:#d6f0e0}
 #organicLab #olFrame{flex:1;width:100%;border:0;background:#130e08}
@@ -114529,24 +114530,24 @@ body.ol-open{overflow:hidden}
 (function(){
   var root=document.getElementById("organicLab");var LS="dystoria.lab";var lastHad=false;
   function reflect(on){ var b=document.getElementById("labBtn"); if(b) b.classList.toggle("active",!!on); var h=document.getElementById("thinkModeBtn"); if(h) h.classList.toggle("on",!!on); root.classList.toggle("show",!!on); root.setAttribute("aria-hidden",on?"false":"true"); document.body.classList.toggle("ol-open",!!on); }
-  function getState(){ try{ if(typeof state!=="undefined"&&state) return state; }catch(e){} return window.state||null; }
+  function getState(){ try{ if(typeof state!=="undefined"&&state) return state; }catch(e){} try{ return window.state||null; }catch(e){} return null; }
   function collect(){ try{
-    var st=getState(); if(!st||!st.prompt||!Array.isArray(st.prompt.words)) return {elements:[],connections:[]};
-    var words=st.prompt.words, ok={}, els=[];
-    words.forEach(function(w,i){ if(!w) return; if(w.role!=="being"&&w.role!=="word") return;
-      var name=w.word||w.label||("Element "+(i+1));
+    var st=getState(); if(!st) return {elements:[],connections:[],_diag:"no-state"};
+    var P=st.prompt;
+    if((!P||!P.words||!P.words.length)&&st.frames){ var fr=st.frames[st.frameIdx||0]; if(fr&&fr.prompt&&fr.prompt.words&&fr.prompt.words.length) P=fr.prompt; }
+    if(!P||!Array.isArray(P.words)) return {elements:[],connections:[],_diag:"state-ok,no-words"};
+    var words=P.words, ok={}, els=[];
+    words.forEach(function(w,i){ if(!w) return; if(w.role==="constraint"||w.role==="frame") return; var nm=w.word||w.label; if(!nm) return;
       var color="#9c95b6"; try{ if(typeof catColor==="function") color=catColor(w.cat)||color; }catch(e){}
       var catName=w.cat||"element"; try{ if(typeof getCat==="function"&&getCat(w.cat)&&getCat(w.cat).name) catName=String(getCat(w.cat).name).toLowerCase(); }catch(e){}
       var subs=[]; try{ if(Array.isArray(w.identity)) subs=w.identity.map(function(x){return (x&&x.word)||"";}).filter(Boolean).slice(0,6); }catch(e){}
-      ok[i]=true; els.push({id:"w"+i,name:name,cat:catName,color:color,keys:[String(name).toLowerCase()],subs:subs}); });
-    var conns=[]; (st.prompt.links||[]).forEach(function(l){ if(!l||!ok[l.a]||!ok[l.b]) return;
-      var note=""; try{ var t=(l.fwd&&l.fwd.type)||(l.rev&&l.rev.type)||""; note=t?String(t):""; }catch(e){}
-      conns.push({a:"w"+l.a,b:"w"+l.b,note:note}); });
+      ok[i]=true; els.push({id:"w"+i,name:nm,cat:catName,color:color,keys:[String(nm).toLowerCase()],subs:subs}); });
+    var conns=[]; (P.links||[]).forEach(function(l){ if(!l||!ok[l.a]||!ok[l.b]) return; var note=""; try{ var t=(l.fwd&&l.fwd.type)||(l.rev&&l.rev.type)||""; note=t?String(t):""; }catch(e){} conns.push({a:"w"+l.a,b:"w"+l.b,note:note}); });
     var title=""; try{ title=(st.session&&(st.session.title||st.session.name))||""; }catch(e){}
-    return {elements:els,connections:conns,title:title||"Your story"};
-  }catch(e){ return {elements:[],connections:[]}; } }
+    return {elements:els,connections:conns,title:title||"Your story",_diag:"words:"+words.length+" kept:"+els.length};
+  }catch(e){ return {elements:[],connections:[],_diag:"err:"+((e&&e.message)||"?")}; } }
   function status(d){ var lk=document.getElementById("olLink"), sv=document.getElementById("olSave"); var had=d&&d.elements&&d.elements.length>0; lastHad=had;
-    if(lk){ lk.textContent = had ? ("· linked: "+d.title+" ("+d.elements.length+")") : "· example — no story loaded"; lk.classList.toggle("live",had); }
+    if(lk){ lk.textContent = had ? ("· linked: "+d.title+" ("+d.elements.length+")") : ("· example — "+(d._diag||"no story")); lk.classList.toggle("live",had); }
     if(sv) sv.style.display = had ? "" : "none"; }
   function push(){ try{ var f=document.getElementById("olFrame"); if(!f||!f.contentWindow) return; var d=collect(); status(d); f.contentWindow.postMessage({type:"think:data",payload:d},"*"); }catch(e){} }
   function pushSoon(){ [60,400,1200,2500,5000].forEach(function(t){ setTimeout(push,t); }); }
@@ -114578,6 +114579,7 @@ body.ol-open{overflow:hidden}
     else if(e.data.type==="think:graph") applyGraph(e.data.payload); });
   document.addEventListener("click",function(e){ if(!e.target||!e.target.closest)return;
     if(e.target.closest("#labBtn")||e.target.closest("#thinkModeBtn")){ e.preventDefault(); e.stopPropagation(); toggle(); return; }
+    if(e.target.closest("#olLink")){ push(); return; }
     if(e.target.closest("#olSave")){ e.preventDefault(); var f=document.getElementById("olFrame"); if(f&&f.contentWindow) f.contentWindow.postMessage({type:"think:collect-save"},"*"); return; }
     if(e.target.closest("#olExit")){ e.preventDefault(); close(); return; } });
   document.addEventListener("keydown",function(e){ if(e.key==="Escape"&&root.classList.contains("show")&&document.activeElement&&(document.activeElement.id==="olExit"||document.activeElement.id==="olSave")){ close(); } });
