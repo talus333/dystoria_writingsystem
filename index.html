@@ -114470,7 +114470,28 @@ if(S('lvlDown'))S('lvlDown').addEventListener('click',ev=>{ev.stopPropagation();
 document.addEventListener('keydown',ev=>{if(maxLevel()===0)return;
   const alt=ev.altKey;if((ev.key==='ArrowUp'||ev.key==='ArrowDown')&amp;&amp;(alt||document.activeElement!==pad)){ev.preventDefault();goLevel(ev.key==='ArrowUp'?1:-1);}});
 pad.textContent=POEM;renderLevel();
-setTimeout(()=>toastMsg('Click a word — try “roads” or “traveler” — to see its web. Then write your own.'),900);
+setTimeout(()=>{if(!window.__projLoaded)toastMsg('Click a word — try “roads” or “traveler” — to see its web. Then write your own.');},900);
+/* ---- host bridge: receive the real project (read-only) and rebuild the canvas from it ---- */
+function loadProject(data){try{
+  if(!data||!data.elements||!data.elements.length)return;
+  window.__projLoaded=true;
+  ELEMENTS.forEach(e=>nodes[e.id]&amp;&amp;nodes[e.id].remove());ELEMENTS=[];CONNS=[];nodes={};NOTES=[];if(stash)stash.innerHTML='';
+  focusSet=[];viewLevel=0;state='free';focusEl=null;showConnEl=null;userTyped=false;document.body.classList.remove('writing','prose','focusnote');
+  const N=data.elements.length;
+  data.elements.forEach((e,i)=>{const ang=i*2.399963267,rad=7+(i/Math.max(N,1))*36;const x=50+Math.cos(ang)*rad*1.35,y=48+Math.sin(ang)*rad;
+    ELEMENTS.push({id:e.id,name:e.name||('Element '+(i+1)),cat:e.cat||'element',c:e.color||'#9c95b6',x:Math.max(10,Math.min(90,x)),y:Math.max(13,Math.min(82,y)),keys:(e.keys&amp;&amp;e.keys.length)?e.keys:[String(e.name||'').toLowerCase()],subs:e.subs||[]});});
+  (data.connections||[]).forEach(c=>{if(ELEMENTS.find(e=>e.id===c.a)&amp;&amp;ELEMENTS.find(e=>e.id===c.b))CONNS.push({a:c.a,b:c.b,note:c.note||''});});
+  ELEMENTS.forEach(mkBub);hdr.innerHTML='';crumb.textContent='';back.classList.remove('show');
+  pad.textContent='';pad.setAttribute('data-ph','begin anywhere — your story is here…');
+  renderLevel();setTimeout(redraw,60);
+  const hud=S('hud');if(hud)hud.innerHTML='<b>'+(data.title||'your story')+'</b> — click an element to think about it · write freely · shift-click to tie elements · <kbd>esc</kbd> back';
+  const tl=document.querySelector('.tagline');if(tl)tl.style.display='none';
+  toastMsg((data.title?data.title+' — ':'')+N+' element'+(N===1?'':'s')+' loaded. Click one to begin.');
+}catch(e){}}
+if(window.parent&amp;&amp;window.parent!==window){
+  window.addEventListener('message',function(ev){const d=ev.data;if(d&amp;&amp;d.type==='think:data')loadProject(d.payload);});
+  try{window.parent.postMessage({type:'think:ready'},'*');}catch(e){}
+}
 </script></body></html>
 "></iframe>
 </div>
@@ -114492,14 +114513,32 @@ body.ol-open{overflow:hidden}
 (function(){
   var root=document.getElementById("organicLab");var LS="dystoria.lab";
   function reflect(on){ var b=document.getElementById("labBtn"); if(b) b.classList.toggle("active",!!on); root.classList.toggle("show",!!on); root.setAttribute("aria-hidden",on?"false":"true"); document.body.classList.toggle("ol-open",!!on); }
-  function open(){ try{localStorage.setItem(LS,"1");}catch(e){} reflect(true); }
+  function getState(){ try{ if(typeof state!=="undefined"&&state) return state; }catch(e){} return window.state||null; }
+  function collect(){ try{
+    var st=getState(); if(!st||!st.prompt||!Array.isArray(st.prompt.words)) return {elements:[],connections:[]};
+    var words=st.prompt.words, ok={}, els=[];
+    words.forEach(function(w,i){ if(!w) return; if(w.role!=="being"&&w.role!=="word") return;
+      var name=w.word||w.label||("Element "+(i+1));
+      var color="#9c95b6"; try{ if(typeof catColor==="function") color=catColor(w.cat)||color; }catch(e){}
+      var catName=w.cat||"element"; try{ if(typeof getCat==="function"&&getCat(w.cat)&&getCat(w.cat).name) catName=String(getCat(w.cat).name).toLowerCase(); }catch(e){}
+      var subs=[]; try{ if(Array.isArray(w.identity)) subs=w.identity.map(function(x){return (x&&x.word)||"";}).filter(Boolean).slice(0,6); }catch(e){}
+      ok[i]=true; els.push({id:"w"+i,name:name,cat:catName,color:color,keys:[String(name).toLowerCase()],subs:subs}); });
+    var conns=[]; (st.prompt.links||[]).forEach(function(l){ if(!l||!ok[l.a]||!ok[l.b]) return;
+      var note=""; try{ var t=(l.fwd&&l.fwd.type)||(l.rev&&l.rev.type)||""; note=t?String(t):""; }catch(e){}
+      conns.push({a:"w"+l.a,b:"w"+l.b,note:note}); });
+    var title=""; try{ title=(st.session&&(st.session.title||st.session.name))||""; }catch(e){}
+    return {elements:els,connections:conns,title:title||"Your story"};
+  }catch(e){ return {elements:[],connections:[]}; } }
+  function push(){ try{ var f=document.getElementById("olFrame"); if(f&&f.contentWindow) f.contentWindow.postMessage({type:"think:data",payload:collect()},"*"); }catch(e){} }
+  function open(){ try{localStorage.setItem(LS,"1");}catch(e){} reflect(true); setTimeout(push,60); }
   function close(){ try{localStorage.setItem(LS,"0");}catch(e){} reflect(false); }
   function toggle(){ root.classList.contains("show")?close():open(); }
+  window.addEventListener("message",function(e){ if(e&&e.data&&e.data.type==="think:ready") push(); });
   document.addEventListener("click",function(e){ if(!e.target||!e.target.closest)return;
     if(e.target.closest("#labBtn")){ e.preventDefault(); e.stopPropagation(); toggle(); return; }
     if(e.target.closest("#olExit")){ e.preventDefault(); close(); return; } });
   document.addEventListener("keydown",function(e){ if(e.key==="Escape"&&root.classList.contains("show")&&document.activeElement&&document.activeElement.id==="olExit"){ close(); } });
-  function init(){ var on=false; try{ on=localStorage.getItem(LS)==="1"; }catch(e){} reflect(on); }
+  function init(){ var on=false; try{ on=localStorage.getItem(LS)==="1"; }catch(e){} reflect(on); if(on) setTimeout(push,120); }
   if(document.readyState!=="loading") init(); else document.addEventListener("DOMContentLoaded", init);
 })();
 </script>
