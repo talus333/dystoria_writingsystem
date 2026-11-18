@@ -114225,6 +114225,8 @@ body.eink #goalBuilder .gb-done, body.eink #goalBuilder .gb-own button{backgroun
   body.prose #proseLabel{display:block;position:absolute;top:2.8vh;left:50%;transform:translateX(-50%);width:var(--pw);text-align:left;z-index:20;padding-left:2px;font-family:'Cormorant Garamond',Georgia,serif;font-size:14px;font-style:italic;font-variant:small-caps;letter-spacing:.14em;color:#b9822e}
   body.prose #crumb{display:none}
   body.prose #hud,body.prose .tagline{display:none}
+  body.prose #pad>div{margin:0 0 .85em}
+  body.prose #pad .pblk-op{opacity:.55;font-style:italic;color:#8a8068;font-size:13.5px;border:1px dashed #3a2e1a;border-radius:7px;padding:4px 10px;display:inline-block;user-select:none;margin:.3em 0}
   .paper{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(700px,94vw);height:88vh;border-radius:8px;background:linear-gradient(180deg,#1b150e,#17110b);border:1px solid var(--line);opacity:0;transition:opacity .5s;pointer-events:none}
   body.prose .paper{opacity:1;width:var(--pw);background:linear-gradient(180deg,#241d12,#1f190f);border-color:#3a2e1a;box-shadow:0 24px 60px rgba(0,0,0,.45),inset 0 1px 0 rgba(255,248,232,.04)}
   /* page-view gutters — the side spaces beside the page */
@@ -114953,7 +114955,30 @@ function notesPick(e,shift){if(!notesMode)return;
 function enterProse(){closePop();state='prose';document.body.classList.add('prose');const pl=S('proseLabel');if(pl)pl.textContent=((window.__bridged&amp;&amp;projTitle)?projTitle:'The Road Not Taken')+' — a page';pad.setAttribute('data-ph','write the scene…');pad.focus();back.classList.add('show');
   pad.scrollTop=0;buildProseNav();renderMnotes();layoutProseFolios();
   if(!pad._proseScroll){pad._proseScroll=true;pad.addEventListener('scroll',()=>{if(state==='prose'){syncProseCurrent();layoutProseFolios();}});}
-  requestAnimationFrame(()=>{buildProseNav();renderMnotes();layoutProseFolios();});redraw();}
+  requestAnimationFrame(()=>{buildProseNav();renderMnotes();layoutProseFolios();});redraw();
+  proseSyncStart();/* bridged: pull the app's real prose + keep it in sync */}
+/* ---- live two-way prose sync with the app's real manuscript (#editor) ---- */
+let proseSyncOn=false,_proseLocalT=null,_proseLastLocal=0,_proseApplyingPull=false;
+function proseSyncStart(){if(!window.__bridged)return;proseSyncOn=true;try{if(window.parent&amp;&amp;window.parent!==window)window.parent.postMessage({type:'think:prose-pull'},'*');}catch(_){}}
+function proseSyncStop(){proseSyncOn=false;clearTimeout(_proseLocalT);}
+function loadProseBlocks(blocks){_proseApplyingPull=true;pad.innerHTML='';
+  (blocks||[]).forEach(b=>{const d=document.createElement('div');
+    if(b.o){d.className='pblk-op';d.setAttribute('contenteditable','false');d.textContent='◇ '+((b.text||'media'));}
+    else if(b.h){const sp=document.createElement('span');sp.className='hd';sp.textContent=b.text||'';d.appendChild(sp);}
+    else if(b.text){d.textContent=b.text;}else{d.innerHTML='<br>';}
+    pad.appendChild(d);});
+  if(!pad.children.length){const d=document.createElement('div');d.innerHTML='<br>';pad.appendChild(d);}
+  pad.scrollTop=0;buildProseNav();renderMnotes();layoutProseFolios();
+  setTimeout(()=>{_proseApplyingPull=false;},60);}
+function padToBlocks(){const out=[];Array.prototype.forEach.call(pad.children,ch=>{
+  if(ch.classList&amp;&amp;ch.classList.contains('pblk-op')){out.push({o:true,h:false,text:''});return;}
+  const hd=ch.querySelector?ch.querySelector('.ttl,.hd,.subhd'):null;
+  if(hd){out.push({h:true,o:false,text:(hd.textContent||'').replace(/​/g,'').trim()});}
+  else{out.push({h:false,o:false,text:(ch.textContent||'').replace(/​/g,'').replace(/\s+/g,' ').trim()});}});
+  return out;}
+function proseEditDebounced(){if(!proseSyncOn||!window.__bridged||_proseApplyingPull)return;_proseLastLocal=Date.now();
+  clearTimeout(_proseLocalT);_proseLocalT=setTimeout(()=>{try{if(window.parent&amp;&amp;window.parent!==window)window.parent.postMessage({type:'think:prose-edit',blocks:padToBlocks()},'*');}catch(_){}},650);}
+function proseAppPush(blocks){if(!proseSyncOn)return;if(Date.now()-_proseLastLocal<1600)return;/* don't clobber mid-edit */loadProseBlocks(blocks);toastMsg('prose updated from your story');}
 /* ---- prose page view: sections = the titles/headers in the manuscript ---- */
 function proseSections(){const out=[];pad.querySelectorAll('.ttl,.hd,.subhd').forEach(sp=>{
   if(sp.parentElement&amp;&amp;sp.parentElement.closest&amp;&amp;sp.parentElement.closest('.ttl,.hd,.subhd'))return;/* skip a heading nested in another — avoids merged duplicates */
@@ -115021,7 +115046,7 @@ function proseGoPalette(){const secs=proseSections();if(!secs.length){toastMsg('
     else if(ev.key==='ArrowUp'){ev.preventDefault();sel=Math.max(0,sel-1);items.forEach((n,r)=>n.classList.toggle('on',r===sel));}
     else if(ev.key==='Enter'){ev.preventDefault();const h=(p._hits||[])[sel];if(h){jumpToSection(h.i);close();}}};
   setTimeout(()=>inp.focus(),10);}
-function stepBack(){closePop();if(S('rfxWrap')){closeRfx();return;}if(S('explPanel')){closeEx();return;}
+function stepBack(){closePop();if(S('rfxWrap')){closeRfx();return;}if(S('explPanel')){closeEx();return;}if(state==='prose')proseSyncStop();
   if(state==='prose'){document.body.classList.remove('prose');if(focusSet.length){applyFocus();}else{state='free';hdr.innerHTML='';back.classList.remove('show');crumb.textContent='';pad.focus();redraw();}return;}
   if(state==='focus'||showConnEl){document.body.classList.remove('writing','focusnote');state='free';focusEl=null;showConnEl=null;focusSet=[];hdr.innerHTML='';pad.setAttribute('data-ph','begin anywhere…');ELEMENTS.forEach(e=>nodes[e.id].classList.remove('dimaway','conn','lit','pick','focusmem'));restoreHomes();back.classList.remove('show');crumb.textContent='';pad.focus();if(!userTyped)document.body.classList.remove('writing');redraw();setTimeout(redraw,580);return;}}
 function startFresh(){closePop();clearNascent();pad.textContent='';ELEMENTS.forEach(e=>nodes[e.id].remove());ELEMENTS=[];CONNS=[];nodes={};NOTES=[];stash.innerHTML='';state='free';focusEl=null;showConnEl=null;focusSet=[];userTyped=false;hdr.innerHTML='';crumb.textContent='';back.classList.remove('show');document.body.classList.remove('writing','prose','focusnote');pad.setAttribute('data-ph','begin anywhere…');viewLevel=0;renderLevel();pad.focus();toastMsg('a blank field — begin anywhere');}
@@ -115140,7 +115165,7 @@ function showAiUndo(count){const u=S('undoToast');if(!u)return;u.querySelector('
 pad.addEventListener('input',()=>{userTyped=true;closePop();if(showConnEl&amp;&amp;state!=='focus'){showConnEl=null;ELEMENTS.forEach(e=>nodes[e.id].classList.remove('conn'));}
   const cl=(pad.textContent||'').trim();if(cl.charAt(0)==='/'&amp;&amp;state==='free'&amp;&amp;!notesMode&amp;&amp;!connectMode)showCmd();else hideCmd();evaluate();
   clearTimeout(nascTimer);nascTimer=setTimeout(scanNascent,420);
-  if(state==='prose'){clearTimeout(window._proseNavT);window._proseNavT=setTimeout(()=>{buildProseNav();layoutProseFolios();},300);}});
+  if(state==='prose'){clearTimeout(window._proseNavT);window._proseNavT=setTimeout(()=>{buildProseNav();layoutProseFolios();},300);proseEditDebounced();}});
 pad.addEventListener('keydown',ev=>{userTyped=true;
   if((ev.key==='Enter'||ev.key==='Escape')&amp;&amp;pad.querySelector('.sel')&amp;&amp;!notesMode&amp;&amp;!connectMode){ev.preventDefault();dismissSel();return;}
   if(ev.key==='Tab'){ev.preventDefault();if(state==='prose')return;(state==='focus'&amp;&amp;focusSet.length)?finishThought():tuckNote();return;}
@@ -115272,6 +115297,8 @@ if(window.parent&amp;&amp;window.parent!==window){
     else if(d.type==='think:aifill-done'){showAiUndo(d.count||0);}
     else if(d.type==='think:refracted'){if(d.error)rfxError(d.reqId,d.error);else renderRfx(d.reqId,d.text,d.result);}
     else if(d.type==='think:merge'){mergeProject(d.payload);}
+    else if(d.type==='think:prose-data'){loadProseBlocks(d.blocks);}
+    else if(d.type==='think:prose-app'){proseAppPush(d.blocks);}
     else if(d.type==='think:explored'){if(d.error)exError(d.reqId,d.error);else renderEx(d.reqId,d.name,d.items);}
     else if(d.type==='think:scan-done'){if(d.ok===false)toastMsg('couldn’t scan here');}});
 function mergeProject(data){try{if(!data||!data.elements)return;const have=new Set(ELEMENTS.map(e=>e.wk).filter(Boolean));const haveId=new Set(ELEMENTS.map(e=>e.id));let added=0;const addedEls=[];
@@ -115475,8 +115502,15 @@ body.ol-open{overflow:hidden}
       var text=((h3?h3.textContent:ch.textContent)||"").replace(/ /g," ").replace(/\s+/g," ").trim();
       out.push({h:!!isHead,o:!!opaque,text:text}); });
     return out; }
-  function proseApply(blocks){ try{ var ed=document.getElementById("editor"); if(!ed||!Array.isArray(blocks)) return; _proseEcho=true;
+  function proseApply(blocks){ try{ var ed=document.getElementById("editor"); if(!ed||!Array.isArray(blocks)) return;
     var kids=Array.prototype.slice.call(ed.children);
+    /* SAFETY: only write when the heading/opaque skeleton still lines up — otherwise a paragraph
+       could be overwritten onto the wrong block. On any structural divergence, abort and let the
+       app's own content re-sync to Think instead of risking the manuscript. */
+    var isHeadK=function(ch){ return ch.tagName==="H3"||!!(ch.querySelector&&ch.querySelector("h3"))||(ch.classList&&ch.classList.contains("sec-mark")); };
+    var isOpaqueK=function(ch){ return !!(ch.querySelector&&ch.querySelector("img"))||(ch.classList&&ch.classList.contains("scene-mark"))||ch.tagName==="HR"; };
+    for(var q=0;q<Math.min(kids.length,blocks.length);q++){ if(!!blocks[q].h!==isHeadK(kids[q])||!!blocks[q].o!==isOpaqueK(kids[q])){ proseSendToThink(); return; } }
+    _proseEcho=true;
     blocks.forEach(function(b,i){ var ch=kids[i];
       if(ch){ if(b.o) return; var h3=ch.tagName==="H3"?ch:(ch.querySelector?ch.querySelector("h3"):null);
         if(b.h&&h3){ if(h3.textContent!==b.text) h3.textContent=b.text; }
